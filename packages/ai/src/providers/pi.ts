@@ -10,22 +10,48 @@ const GEMINI_BASE_URL =
 
 export const GEMINI_PROVIDER = 'gemini';
 
-// Curated fallback order, best-first. We deliberately do NOT fan out through
-// every available model — just a few strong ones per provider:
-//   1) HackClub (HACKCLUB_API_KEY) — Kimi first (preferred over MiniMax), then GLM
-//   2) baishui  (OPENROUTER_API_KEY @ OPENROUTER_BASE_URL) — Kimi
-//   3) Gemini   (GEMINI_API_KEY) — a couple of good Flash/Pro models, last resort
-// On any error the agent advances to the next entry (see lib/ai/attempts.ts).
+// Curated ~20-model fallback, best-first for tool-calling / agentic / coding.
+// Ranking informed by arena.ai (LMArena): GLM 5.2 is the strongest open model
+// (coding #2, agentic #10), Qwen3.7-Max coding #10; Kimi K2.7-Code is purpose-
+// built for agentic coding. No MiniMax (Kimi preferred). On any error the agent
+// advances to the next entry (see apps/bot/src/lib/ai/attempts.ts).
+//
+// Routing: everything goes through HackClub first, then baishui as a deeper
+// backup for the same model families; Gemini is last and uses the Gemini key
+// (preferring the higher-limit 3.x models).
 
+// HackClub (HACKCLUB_API_KEY @ ai.hackclub.com/proxy/v1, OpenRouter-compatible).
 const HACKCLUB_MODELS = [
+  'z-ai/glm-5.2',
   'moonshotai/kimi-k2.7-code',
+  'deepseek/deepseek-v4-pro',
   'moonshotai/kimi-k2.6',
+  'z-ai/glm-5.1',
+  'qwen/qwen3.7-max',
+  'z-ai/glm-5',
+  'deepseek/deepseek-v3.2',
   'z-ai/glm-4.7',
+  'openai/gpt-oss-120b',
 ] as const;
 
-const BAISHUI_MODELS = ['kimi-k2.6'] as const;
+// baishui (OPENROUTER_API_KEY @ OPENROUTER_BASE_URL) — uses its own short ids.
+const BAISHUI_MODELS = [
+  'glm5.2-normal',
+  'k2.7-code-normal',
+  'deepseek-v4-pro',
+  'kimi-k2.6',
+  'glm5.1-normal',
+  'deepseek-3.2',
+] as const;
 
-const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.5-pro'] as const;
+// Gemini (GEMINI_API_KEY) — prefer 3.x (higher rate limits); 3.1-flash-lite has
+// the highest daily quota so it sits before the 2.5 models.
+const GEMINI_MODELS = [
+  'gemini-3.5-flash',
+  'gemini-3.1-flash-lite',
+  'gemini-3-flash-preview',
+  'gemini-2.5-flash',
+] as const;
 
 const hackclubAttempts: PiAttempt[] = HACKCLUB_MODELS.map((model) => ({
   customEnv: {
