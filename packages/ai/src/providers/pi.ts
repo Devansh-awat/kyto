@@ -21,16 +21,17 @@ export const GEMINI_PROVIDER = 'gemini';
 // (preferring the higher-limit 3.x models).
 
 // HackClub (HACKCLUB_API_KEY @ ai.hackclub.com/proxy/v1, OpenRouter-compatible).
+// NOTE: glm-5.2 and glm-4.7 currently 504 on this proxy, so they are NOT listed
+// here; GLM 5.2 is still reachable via the baishui tier below. Order leads with
+// models verified to return content. Re-test and re-add if HackClub fixes them.
 const HACKCLUB_MODELS = [
-  'z-ai/glm-5.2',
   'moonshotai/kimi-k2.7-code',
-  'deepseek/deepseek-v4-pro',
   'moonshotai/kimi-k2.6',
+  'deepseek/deepseek-v4-pro',
   'z-ai/glm-5.1',
   'qwen/qwen3.7-max',
   'z-ai/glm-5',
   'deepseek/deepseek-v3.2',
-  'z-ai/glm-4.7',
   'openai/gpt-oss-120b',
 ] as const;
 
