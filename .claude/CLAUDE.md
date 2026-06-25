@@ -124,3 +124,75 @@ Biome's linter will catch most issues automatically. Focus your attention on:
 ---
 
 Most formatting and common issues are automatically fixed by Biome. Run `bun x ultracite fix` before committing to ensure compliance.
+
+---
+
+## Project Notes (Gorkie Slack bot)
+
+> **Keep this section current.** Whenever you add, remove, or change a feature
+> (a new agent tool, a changed scope, a config flag, gating rules, etc.), update
+> the relevant note below in the same change — do this proactively, without
+> asking for permission. Treat these notes as living documentation — stale notes
+> are worse than none.
+
+### Committing & pull requests
+- **Local commits: no permission needed.** Once a change is made, commit it
+  locally without asking. Use a clear conventional-commit message and keep these
+  doc notes updated in the same commit. Don't push or open a PR as part of this.
+- **Pushing / opening a PR: always ask first.** Anything that publishes to
+  GitHub (`git push`, `gh pr create`) requires explicit user confirmation.
+
+### AI tools
+- Agent tools live in `apps/bot/src/lib/ai/tools/` and are registered in
+  `apps/bot/src/lib/ai/toolset.ts`. Raw Slack Web API access is via
+  `slack.webClient.apiCall(method, args)` from `@/lib/chat`; error helpers are
+  `errorMessage()`/`toLogError()` from `@/lib/utils/error`.
+- Fork-added tools: `canvasRead/Write/List/Delete`, `pinMessage`, `unpinMessage`,
+  `bookmarkLink`, `createChannel`, `setChannelTopic`, `poll`, `getPermalink`,
+  `fetchUrl`, `deploySite`, `removeSite`, `skip`, `sendAsUser`, `editAsUser`.
+- Slack scopes are declared in `slack-manifest.json` — update it when a tool
+  needs a new scope.
+
+### Pins (pin in any channel, as bot or owner)
+- `pinMessage`/`unpinMessage` take an optional `channelId` (defaults to the
+  current channel) and an optional `as: 'bot' | 'user'`. As the bot, a
+  `not_in_channel` error triggers one `conversations.join` + retry (public
+  channels). `as: 'user'` pins as the owner via `SLACK_USER_TOKEN` and is
+  owner-gated (re-checked in-tool). Needs bot `pins:write` and, for `as:'user'`,
+  the `pins:write` **user** scope.
+
+### Send/edit-as-owner
+- `sendAsUser`/`editAsUser` act AS the owner via `SLACK_USER_TOKEN` (xoxp). Only
+  **registered** when `message.author.userId === OWNER_USER_ID` (toolset.ts) and
+  each re-checks the author at execute time. Config: `SLACK_USER_TOKEN`,
+  `OWNER_USER_ID`; requires the `chat:write` **user** scope.
+
+### Static site hosting
+- `deploySite`/`removeSite` publish prebuilt static sites at
+  `https://<host>/gorkiesites/<name>/`. Code in `apps/bot/src/lib/sites/`. The
+  host NEVER executes site code — building/testing happen in the E2B sandbox;
+  only static output is copied out (`resolveWithin` path containment).
+- Server starts from `apps/bot/src/index.ts` (`startSitesServer`), binds
+  `SITES_PORT` (default 443). Serves **plain HTTP by default** because it sits
+  behind Nest's TLS-terminating proxy (serving HTTPS there → 502). Set
+  `SITES_TLS=true` for a self-signed HTTPS cert (standalone/local).
+  `SITES_PUBLIC_HOST` builds the public URL (always `https://`). Config:
+  `SITES_ENABLED`, `SITES_PORT`, `SITES_TLS`, `SITES_ROOT`, `SITES_PUBLIC_HOST`.
+
+### Manifest sync
+- `bun run sync:manifest` (apps/bot) pushes `slack-manifest.json` to the Slack
+  app config via `apps.manifest.update`. Needs a Slack **app configuration
+  token** (not the bot/user token): `SLACK_APP_ID`, `SLACK_CONFIG_ACCESS_TOKEN`,
+  and optional `SLACK_CONFIG_REFRESH_TOKEN` (auto-rotates the short-lived access
+  token first). Scope changes require reinstalling the app.
+
+### Models / provider fallback
+- Provider chain in `packages/ai/src/providers/pi.ts`; retry/fallback in
+  `apps/bot/src/lib/ai/attempts.ts`. `nextAttempt` advances to the next
+  configured provider on **any** error (incl. 401/403/429), so a dead upstream
+  key auto-degrades to the next provider. Primary is `hackclub/minimax-m3` via
+  `HACKCLUB_API_KEY`.
+
+### Sandbox / E2B
+- Config in `packages/sandbox/src/config.ts`. Only sandbox/code-execution work
+  bills E2B; the Slack tools above are free HTTP calls.

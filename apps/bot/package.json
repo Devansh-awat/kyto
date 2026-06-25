@@ -6,6 +6,7 @@
     "clean": "git clean -xdf .turbo dist node_modules",
     "dev": "bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
+    "sync:manifest": "bun run src/scripts/sync-manifest.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
