@@ -186,12 +186,22 @@ Most formatting and common issues are automatically fixed by Biome. Run `bun x u
   and optional `SLACK_CONFIG_REFRESH_TOKEN` (auto-rotates the short-lived access
   token first). Scope changes require reinstalling the app.
 
-### Models / provider fallback
-- Provider chain in `packages/ai/src/providers/pi.ts`; retry/fallback in
-  `apps/bot/src/lib/ai/attempts.ts`. `nextAttempt` advances to the next
-  configured provider on **any** error (incl. 401/403/429), so a dead upstream
-  key auto-degrades to the next provider. Primary is `hackclub/minimax-m3` via
-  `HACKCLUB_API_KEY`.
+### Models / provider fallback + complexity routing
+- Provider chain in `packages/ai/src/providers/pi.ts` (~20 models, arena.ai-
+  ranked): HackClub (`HACKCLUB_API_KEY`) → baishui (`OPENROUTER_API_KEY` @
+  `OPENROUTER_BASE_URL`) → Gemini (`GEMINI_API_KEY`). No MiniMax (Kimi preferred).
+- **Complexity routing** (`apps/bot/src/lib/ai/classify.ts`): each turn is
+  classified `simple`/`complex` by a FREE Gemini model (`gemini-3.1-flash-lite`,
+  500/day — costs nothing against the ~$3/day HackClub budget). `attemptsFor(tier)`
+  builds the chain: **complex** leads with `PREMIUM_MODEL` (`z-ai/glm-5.2`, arena
+  coding #2); **simple** skips it (starts at `kimi-k2.7-code`) to save budget.
+  Classifier failure defaults to `simple` (budget-safe).
+- Fallback advances on **any** error AND on an **empty completion** — a model
+  that finishes producing nothing (e.g. a HackClub 504 swallowed into an empty
+  stream) is treated as a failed attempt, not a silent success (`agent/index.ts`).
+- `glm-4.7` is omitted from HackClub (persistent 504); `glm-5.2` 504s
+  intermittently there but degrades via the empty-completion fallback, and is
+  also reachable via baishui (`glm5.2-normal`).
 
 ### Sandbox / E2B
 - Config in `packages/sandbox/src/config.ts`. Only sandbox/code-execution work
