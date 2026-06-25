@@ -20,11 +20,16 @@ export const GEMINI_PROVIDER = 'gemini';
 // backup for the same model families; Gemini is last and uses the Gemini key
 // (preferring the higher-limit 3.x models).
 
+// The premium model: best quality (arena coding #2) but expensive on HackClub's
+// limited daily budget, so it is only used for queries classified "complex"
+// (see attemptsFor + lib/ai/classify). It also intermittently 504s on HackClub;
+// when it does, the empty-completion fallback degrades to the next entry.
+export const PREMIUM_MODEL = 'z-ai/glm-5.2';
+
 // HackClub (HACKCLUB_API_KEY @ ai.hackclub.com/proxy/v1, OpenRouter-compatible).
-// NOTE: glm-5.2 and glm-4.7 currently 504 on this proxy, so they are NOT listed
-// here; GLM 5.2 is still reachable via the baishui tier below. Order leads with
-// models verified to return content. Re-test and re-add if HackClub fixes them.
+// glm-5.2 leads (premium); glm-4.7 is omitted (persistent 504 on this proxy).
 const HACKCLUB_MODELS = [
+  PREMIUM_MODEL,
   'moonshotai/kimi-k2.7-code',
   'moonshotai/kimi-k2.6',
   'deepseek/deepseek-v4-pro',
@@ -94,4 +99,20 @@ export const chatAttempts: PiAttempt[] = [
 
 if (chatAttempts.length === 0) {
   throw new Error('No Pi model attempts configured.');
+}
+
+/**
+ * The ordered attempt chain to use for a query of the given complexity.
+ * "complex" gets the full chain (PREMIUM_MODEL first). "simple" skips the
+ * expensive HackClub premium model entirely to protect the daily budget — it
+ * starts at the cheaper kimi-k2.7-code and falls back from there.
+ */
+export function attemptsFor(tier: 'simple' | 'complex'): PiAttempt[] {
+  if (tier === 'complex') {
+    return chatAttempts;
+  }
+  return chatAttempts.filter(
+    (attempt) =>
+      !(attempt.provider === 'hackclub' && attempt.model === PREMIUM_MODEL)
+  );
 }

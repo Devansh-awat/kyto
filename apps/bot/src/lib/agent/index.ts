@@ -1,5 +1,5 @@
 import {
-  chatAttempts,
+  attemptsFor,
   createAgent,
   openSession,
   type PiAttempt,
@@ -22,6 +22,7 @@ import { clearTurn, getTurn, setTurn } from '@/lib/agent/turns';
 import { startThinking } from '@/lib/agent/utils';
 import { promptWithAttachments, seedAttachments } from '@/lib/ai/attachments';
 import { nextAttempt } from '@/lib/ai/attempts';
+import { classifyComplexity } from '@/lib/ai/classify';
 import { requestHints } from '@/lib/ai/hints';
 import { renderStream } from '@/lib/ai/stream';
 import { buildTools } from '@/lib/ai/toolset';
@@ -167,7 +168,15 @@ async function executeTurn(
     let attachments: Awaited<ReturnType<typeof seedAttachments>> = [];
     let streamed = false;
     const attempts: AttemptFailure[] = [];
-    let attempt = chatAttempts[0];
+    // Route by complexity: simple queries skip the expensive premium model to
+    // protect the daily HackClub budget; complex ones lead with it.
+    const tier = await classifyComplexity(messageText);
+    const chain = attemptsFor(tier);
+    logger.info(
+      { model: chain[0]?.model, threadId, tier },
+      '[agent] routed turn'
+    );
+    let attempt = chain[0];
     while (attempt) {
       const currentAttempt = attempt;
       try {
@@ -223,11 +232,19 @@ async function executeTurn(
           controls ??= await postControls({ thread });
         }
 
+        // A model that finishes without producing anything (e.g. an upstream
+        // 504 the harness swallowed into an empty stream) must NOT be treated
+        // as a successful turn — throw so the fallback chain advances.
+        if (!streamed) {
+          throw new Error(
+            `Model ${currentAttempt.model} returned an empty response.`
+          );
+        }
         return;
       } catch (error) {
         attempts.push({ attempt: currentAttempt, error });
         const retryAttempt = nextAttempt({
-          attempts: chatAttempts,
+          attempts: chain,
           failures: attempts,
         });
         if (controller.signal.aborted || streamed || !retryAttempt) {
