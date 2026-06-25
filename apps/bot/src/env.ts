@@ -15,8 +15,33 @@ export const env = createEnv({
     SLACK_BOT_TOKEN: z.string().min(1),
     SLACK_SIGNING_SECRET: z.string().min(1),
     SLACK_APP_TOKEN: z.string().optional(),
+    // User OAuth token (xoxp-) used to post/edit AS the owner. Only ever applied
+    // when the turn was triggered by OWNER_USER_ID; see the sendAsUser tool.
+    SLACK_USER_TOKEN: z.string().optional(),
+    // Slack user id allowed to act as themselves via SLACK_USER_TOKEN.
+    OWNER_USER_ID: z.string().optional(),
     PORT: z.coerce.number().default(3000),
     OPT_IN_CHANNEL: z.string().optional(),
+
+    // Static site hosting (see lib/sites). The host only ever serves prebuilt
+    // static files from SITES_ROOT — it never executes site code. Building and
+    // testing happen exclusively in the E2B sandbox.
+    SITES_ENABLED: z
+      .enum(['true', 'false'])
+      .default('true')
+      .transform((value) => value === 'true'),
+    SITES_PORT: z.coerce.number().default(443),
+    // Serve HTTPS with a self-signed cert. Leave false when running behind a
+    // TLS-terminating reverse proxy (e.g. Nest), which forwards plain HTTP to
+    // the container — serving HTTPS there causes 502 Bad Gateway.
+    SITES_TLS: z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((value) => value === 'true'),
+    SITES_ROOT: z.string().default('/var/gorkiesites'),
+    // Public host used to build the public site URL returned to the agent, e.g.
+    // "devansh.hackclub.app". The URL is always https:// (Nest terminates TLS).
+    SITES_PUBLIC_HOST: z.string().optional(),
 
     E2B_API_KEY: z.string().min(1),
     AGENTMAIL_API_KEY: z.string().min(1).optional(),

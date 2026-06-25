@@ -3,6 +3,14 @@ import type { SandboxContext } from '@repo/ai';
 import type { ToolSet } from 'ai';
 import type { Chat, Message, Thread } from 'chat';
 import { env } from '@/env';
+import {
+  canvasDeleteTool,
+  canvasListTool,
+  canvasReadTool,
+  canvasWriteTool,
+} from './tools/canvas';
+import { createChannelTool, setChannelTopicTool } from './tools/channels';
+import { deploySiteTool, removeSiteTool } from './tools/deploy-site';
 import { generateImageTool } from './tools/generate-image';
 import { getChannelInfoTool } from './tools/get-channel-info';
 import { getFileTool } from './tools/get-file';
@@ -10,14 +18,23 @@ import { getUserTool } from './tools/get-user';
 import { leaveThreadTool } from './tools/leave-thread';
 import { listThreadsTool } from './tools/list-threads';
 import { mermaidTool } from './tools/mermaid';
+import {
+  bookmarkLinkTool,
+  pinMessageTool,
+  unpinMessageTool,
+} from './tools/pins';
+import { pollTool } from './tools/poll';
 import { postMessageTool } from './tools/post-message';
 import { reactTool } from './tools/react';
 import { readConversationHistoryTool } from './tools/read-conversation-history';
 import { scheduleReminderTool } from './tools/schedule-reminder';
 import { searchSlackTool } from './tools/search-slack';
 import { searchWebTool } from './tools/search-web';
+import { editAsUserTool, sendAsUserTool } from './tools/send-as-user';
+import { skipTool } from './tools/skip';
 import { summarizeThreadTool } from './tools/summarize-thread';
 import { uploadFileTool } from './tools/upload-file';
+import { fetchUrlTool, getPermalinkTool } from './tools/url';
 
 export function buildTools({
   bot,
@@ -30,12 +47,39 @@ export function buildTools({
   message: Message;
   thread: Thread;
 }): ToolSet {
+  // Only expose "act as the owner" tools when this turn was triggered by the
+  // owner. Registering them conditionally means other users never get access.
+  const authorUserId = message.author.userId;
+  const canActAsOwner =
+    Boolean(env.SLACK_USER_TOKEN) &&
+    Boolean(env.OWNER_USER_ID) &&
+    authorUserId === env.OWNER_USER_ID;
+
   return {
     react: reactTool({ bot }),
     getUser: getUserTool(),
     postMessage: postMessageTool({ bot }),
     getFile: getFileTool({ getSandboxContext }),
     leaveThread: leaveThreadTool({ thread }),
+    ...(canActAsOwner && {
+      sendAsUser: sendAsUserTool({ authorUserId, thread }),
+      editAsUser: editAsUserTool({ authorUserId, thread }),
+    }),
+    canvasRead: canvasReadTool(),
+    canvasWrite: canvasWriteTool({ thread }),
+    canvasList: canvasListTool({ thread }),
+    canvasDelete: canvasDeleteTool(),
+    pinMessage: pinMessageTool({ thread }),
+    unpinMessage: unpinMessageTool({ thread }),
+    bookmarkLink: bookmarkLinkTool({ thread }),
+    createChannel: createChannelTool(),
+    setChannelTopic: setChannelTopicTool({ thread }),
+    poll: pollTool({ thread }),
+    getPermalink: getPermalinkTool({ thread }),
+    fetchUrl: fetchUrlTool(),
+    deploySite: deploySiteTool({ getSandboxContext }),
+    removeSite: removeSiteTool(),
+    skip: skipTool({ threadId: thread.id }),
     listThreads: listThreadsTool({ currentThreadId: thread.id }),
     readConversationHistory: readConversationHistoryTool({
       currentThreadId: thread.id,

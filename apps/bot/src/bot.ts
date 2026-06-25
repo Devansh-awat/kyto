@@ -9,6 +9,7 @@ import { toLogError } from '@/lib/utils/error';
 import { rawText, withoutLeadingMentions } from '@/lib/utils/message';
 import '@/features/assistant';
 import '@/features/customizations';
+import '@/features/poll';
 
 export { bot } from '@/lib/chat';
 
