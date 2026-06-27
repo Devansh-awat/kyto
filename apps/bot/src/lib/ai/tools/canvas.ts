@@ -108,7 +108,9 @@ export function canvasWriteTool({ thread }: { thread: Thread }) {
         .min(1)
         .max(255)
         .optional()
-        .describe('Title for a standalone canvas.'),
+        .describe(
+          'Canvas title, shown as the tab/document name. Used by both create-standalone and create-channel; without it a channel canvas shows as "Untitled".'
+        ),
       markdown: z
         .string()
         .min(1)
@@ -173,6 +175,7 @@ export function canvasWriteTool({ thread }: { thread: Thread }) {
             await slack.webClient.apiCall('conversations.canvases.create', {
               channel_id: channelId,
               document_content: documentContent,
+              ...(title && { title }),
             })
           );
           if (!result.ok) {
@@ -184,7 +187,7 @@ export function canvasWriteTool({ thread }: { thread: Thread }) {
           return {
             canvasId: result.canvas_id,
             success: true,
-            summary: 'Created a canvas in this channel.',
+            summary: `Created a canvas${title ? ` "${title}"` : ''} in this channel.`,
           };
         }
 

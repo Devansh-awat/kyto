@@ -223,6 +223,11 @@ Run these automatically after each completed change, in order, **without asking*
 - The chosen model (and any fallback model) is surfaced as a **`Model` task in
   the thinking section** — never announced in the reply text. Useful for seeing
   which model actually served a turn.
+- Each routing pass (initial + every fallback) yields an in-progress **`Routing`
+  task** around the `pickModel` await (`routeNextAttempt` in `agent/index.ts`).
+  Without it the thinking disclosure has only completed `Model` tasks during the
+  router LLM call and Slack collapses it to "Thinking completed" mid-turn; the
+  in-progress task keeps the disclosure open and makes route latency visible.
 - `chatAttempts`/`attemptsFor`/`PREMIUM_MODEL` remain exported (used by
   `compaction.ts`, which always runs on `chatAttempts[0]`).
 - Fallback advances on **any** error AND on an **empty completion** — a model

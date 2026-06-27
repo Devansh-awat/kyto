@@ -181,21 +181,44 @@ async function executeTurn(
       fallbackText: messageText,
       threadId,
     });
-    const nextRoutedAttempt = async (): Promise<PiAttempt | undefined> => {
+    // Tracks how many times we've routed, so each routing pass gets a distinct
+    // task id (the thinking disclosure keys updates by id).
+    let routingPass = 0;
+    let attempt: PiAttempt | undefined;
+    // A routing pass awaits an LLM call (pickModel). Without a visible in-progress
+    // task during that await, the thinking disclosure has only completed Model
+    // tasks and collapses to "completed" mid-turn. Yielding an in-progress
+    // "Routing" task bridges every routing/fallback gap and surfaces route time.
+    // It assigns `attempt` as a side effect so callers can `yield*` the progress.
+    async function* routeNextAttempt() {
       const remaining = CATALOG_IDS.filter((id) => !failedModels.includes(id));
-      if (remaining.length > 0) {
-        const model = await pickModel({
-          exclude: failedModels,
-          text: routingText,
-        });
-        return catalogAttempt(model);
+      if (remaining.length === 0) {
+        attempt = deepFallbackAttempts.find(
+          (candidate) =>
+            !failedKeys.has(`${candidate.provider}:${candidate.model}`)
+        );
+        return;
       }
-      return deepFallbackAttempts.find(
-        (candidate) =>
-          !failedKeys.has(`${candidate.provider}:${candidate.model}`)
-      );
-    };
-    let attempt = await nextRoutedAttempt();
+      const routeId = `routing-${routingPass++}`;
+      yield {
+        id: routeId,
+        status: 'in_progress',
+        title: 'Routing',
+        type: 'task_update',
+      };
+      const model = await pickModel({
+        exclude: failedModels,
+        text: routingText,
+      });
+      yield {
+        id: routeId,
+        status: 'complete',
+        title: 'Routing',
+        type: 'task_update',
+      };
+      attempt = catalogAttempt(model);
+    }
+    yield* routeNextAttempt();
     logger.info(
       { model: attempt?.model, provider: attempt?.provider, threadId },
       '[agent] routed turn'
@@ -284,7 +307,8 @@ async function executeTurn(
         if (currentAttempt.provider === 'hackclub') {
           failedModels.push(currentAttempt.model);
         }
-        const retryAttempt = await nextRoutedAttempt();
+        yield* routeNextAttempt();
+        const retryAttempt = attempt;
         if (controller.signal.aborted || streamed || !retryAttempt) {
           throw error;
         }
