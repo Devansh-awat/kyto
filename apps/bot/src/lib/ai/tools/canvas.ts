@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { env } from '@/env';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
+import { toChatSlackChannelId, toRawSlackChannelId } from '@/lib/slack/ids';
 import { errorMessage } from '@/lib/utils/error';
 
 const canvasResponseSchema = z.looseObject({
@@ -42,11 +43,21 @@ function channelIdFromThread(thread: Thread): string | undefined {
 export function canvasListTool({ thread }: { thread: Thread }) {
   return tool({
     description:
-      'List existing Slack canvases in the current channel so you can discover one to read or edit. Returns canvas ids and titles.',
-    inputSchema: z.object({}),
-    execute: async () => {
+      'List existing Slack canvases in a channel so you can discover one to read or edit. Defaults to the current channel; pass channelId to inspect another channel (e.g. to review a canvas in #some-channel). Returns canvas ids and titles.',
+    inputSchema: z.object({
+      channelId: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          'Channel to list canvases in. Accepts a raw id (C0123ABC), a slack: id, or a #channel mention. Defaults to the current channel.'
+        ),
+    }),
+    execute: async ({ channelId: requestedChannelId }) => {
       try {
-        const channelId = channelIdFromThread(thread);
+        const channelId = requestedChannelId
+          ? toRawSlackChannelId(toChatSlackChannelId(requestedChannelId))
+          : channelIdFromThread(thread);
         if (!channelId) {
           return {
             error: 'Could not resolve a Slack channel for this thread.',
