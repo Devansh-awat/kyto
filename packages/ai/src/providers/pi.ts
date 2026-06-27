@@ -138,12 +138,12 @@ export interface CatalogModel {
 
 export const MODEL_CATALOG: CatalogModel[] = [
   {
-    id: 'openai/gpt-oss-120b',
-    label: 'GPT-OSS 120B',
+    id: 'meta-llama/llama-3.3-70b-instruct',
+    label: 'Llama 3.3 70B',
     tier: 'fast',
-    cost: '$0.15',
+    cost: '$0.10',
     blurb:
-      "OpenAI's open 117B MoE. Fastest and cheapest here, with solid reasoning for its size. Choose for greetings, small talk, short factual questions, and quick lookups that need no heavy reasoning or coding.",
+      "Meta's fast, reliable 70B instruct model. Cheapest here and streams text dependably. Choose for greetings, small talk, short factual questions, and quick lookups that need no heavy reasoning or coding.",
   },
   {
     id: 'minimax/minimax-m2.7',
