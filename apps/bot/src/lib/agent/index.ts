@@ -1,6 +1,8 @@
 import {
-  attemptsFor,
+  CATALOG_IDS,
+  catalogAttempt,
   createAgent,
+  deepFallbackAttempts,
   openSession,
   type PiAttempt,
   persistSession,
@@ -21,9 +23,8 @@ import {
 import { clearTurn, getTurn, setTurn } from '@/lib/agent/turns';
 import { startThinking } from '@/lib/agent/utils';
 import { promptWithAttachments, seedAttachments } from '@/lib/ai/attachments';
-import { nextAttempt } from '@/lib/ai/attempts';
-import { classifyComplexity } from '@/lib/ai/classify';
 import { requestHints } from '@/lib/ai/hints';
+import { pickModel } from '@/lib/ai/router';
 import { renderStream } from '@/lib/ai/stream';
 import { buildTools } from '@/lib/ai/toolset';
 import { runQueuedTurn } from '@/lib/ai/turn-queue';
@@ -168,15 +169,31 @@ async function executeTurn(
     let streamed = false;
     let skipped = false;
     const attempts: AttemptFailure[] = [];
-    // Route by complexity: simple queries skip the expensive premium model to
-    // protect the daily HackClub budget; complex ones lead with it.
-    const tier = await classifyComplexity(messageText);
-    const chain = attemptsFor(tier);
+    // The main query always runs on a PAID model chosen by the router LLM from
+    // MODEL_CATALOG. On failure we re-ask the router, excluding models that
+    // already failed; once the whole catalog is exhausted we fall through to the
+    // baishui/Gemini deep backup so the bot still answers if HackClub is down.
+    const failedModels: string[] = [];
+    const failedKeys = new Set<string>();
+    const nextRoutedAttempt = async (): Promise<PiAttempt | undefined> => {
+      const remaining = CATALOG_IDS.filter((id) => !failedModels.includes(id));
+      if (remaining.length > 0) {
+        const model = await pickModel({
+          exclude: failedModels,
+          text: messageText,
+        });
+        return catalogAttempt(model);
+      }
+      return deepFallbackAttempts.find(
+        (candidate) =>
+          !failedKeys.has(`${candidate.provider}:${candidate.model}`)
+      );
+    };
+    let attempt = await nextRoutedAttempt();
     logger.info(
-      { model: chain[0]?.model, threadId, tier },
+      { model: attempt?.model, provider: attempt?.provider, threadId },
       '[agent] routed turn'
     );
-    let attempt = chain[0];
     while (attempt) {
       const currentAttempt = attempt;
       try {
@@ -257,10 +274,11 @@ async function executeTurn(
         return;
       } catch (error) {
         attempts.push({ attempt: currentAttempt, error });
-        const retryAttempt = nextAttempt({
-          attempts: chain,
-          failures: attempts,
-        });
+        failedKeys.add(`${currentAttempt.provider}:${currentAttempt.model}`);
+        if (currentAttempt.provider === 'hackclub') {
+          failedModels.push(currentAttempt.model);
+        }
+        const retryAttempt = await nextRoutedAttempt();
         if (controller.signal.aborted || streamed || !retryAttempt) {
           throw error;
         }

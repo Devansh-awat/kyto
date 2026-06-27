@@ -199,20 +199,29 @@ Run these automatically after each completed change, in order, **without asking*
   and optional `SLACK_CONFIG_REFRESH_TOKEN` (auto-rotates the short-lived access
   token first). Scope changes require reinstalling the app.
 
-### Models / provider fallback + complexity routing
-- Provider chain in `packages/ai/src/providers/pi.ts` (~20 models, arena.ai-
-  ranked): HackClub (`HACKCLUB_API_KEY`) → baishui (`OPENROUTER_API_KEY` @
-  `OPENROUTER_BASE_URL`) → Gemini (`GEMINI_API_KEY`). No MiniMax (Kimi preferred).
-- **Complexity routing** (`apps/bot/src/lib/ai/classify.ts`): each turn is
-  classified `simple`/`complex` by a free model on HackClub's OpenRouter-
-  compatible proxy (`openai/gpt-oss-120b` — free there, so it costs nothing
-  against the ~$3/day budget). `attemptsFor(tier)` builds the chain: **complex**
-  leads with `PREMIUM_MODEL` (`z-ai/glm-5.2`, arena coding #2); **simple** skips
-  it (starts at `kimi-k2.7-code`) to save budget. Classifier failure (or no
-  `HACKCLUB_API_KEY`) defaults to `simple` (budget-safe).
+### Models / LLM model router + fallback
+- **The main query always runs on a PAID model chosen per-request by an LLM
+  router.** `MODEL_CATALOG` in `packages/ai/src/providers/pi.ts` lists ~10 paid
+  HackClub models (fast → frontier) each with a capability `blurb` (sourced from
+  the proxy's official `/models` descriptions) plus a cost hint. To change the
+  lineup or descriptions, edit `MODEL_CATALOG`.
+- **Router** (`apps/bot/src/lib/ai/router.ts`): `pickModel({ text, exclude })`
+  sends the catalog blurbs + the user message to a cheap, fast NON-reasoning
+  model (`mistralai/mistral-small-3.2-24b-instruct`, ~$0.07/1M, ~0.5s) and
+  returns the chosen catalog id. Reasoning models are unusable here — their
+  hidden thinking eats the tiny token budget and yields empty content. On any
+  failure (or no `HACKCLUB_API_KEY`) it falls back to the cheapest non-excluded
+  catalog model (`DEFAULT_MODEL` = `deepseek/deepseek-v4-pro`), never throwing.
+- **Fallback on failure** (`agent/index.ts`): when a chosen model errors/empties,
+  it's added to an `exclude` list and the router is re-asked for a different
+  model. Once the whole catalog is exhausted, it falls through to the
+  `deepFallbackAttempts` deep backup (baishui → Gemini) so the bot still answers
+  if HackClub is down.
 - The chosen model (and any fallback model) is surfaced as a **`Model` task in
   the thinking section** — never announced in the reply text. Useful for seeing
   which model actually served a turn.
+- `chatAttempts`/`attemptsFor`/`PREMIUM_MODEL` remain exported (used by
+  `compaction.ts`, which always runs on `chatAttempts[0]`).
 - Fallback advances on **any** error AND on an **empty completion** — a model
   that finishes producing nothing (e.g. a HackClub 504 swallowed into an empty
   stream) is treated as a failed attempt, not a silent success. A deliberate

@@ -116,3 +116,129 @@ export function attemptsFor(tier: 'simple' | 'complex'): PiAttempt[] {
       !(attempt.provider === 'hackclub' && attempt.model === PREMIUM_MODEL)
   );
 }
+
+// ── LLM model router ──────────────────────────────────────────────────────
+// The main query always runs on a PAID model. Instead of a fixed tier chain, a
+// cheap router LLM picks the best model for each query from this catalog (see
+// apps/bot/src/lib/ai/router.ts). On failure it is re-asked, excluding models
+// that already failed. Blurbs are sourced from each model's official catalog
+// description (verified against HackClub's /models endpoint, June 2026) and
+// drive the router's choice, so keep them accurate and capability-focused.
+export type ModelTier = 'fast' | 'balanced' | 'capable' | 'frontier';
+
+export interface CatalogModel {
+  /** What it's good at and when the router should choose it. */
+  blurb: string;
+  /** Relative cost hint shown to the router (out $/1M tokens). */
+  cost: string;
+  id: string;
+  label: string;
+  tier: ModelTier;
+}
+
+export const MODEL_CATALOG: CatalogModel[] = [
+  {
+    id: 'openai/gpt-oss-120b',
+    label: 'GPT-OSS 120B',
+    tier: 'fast',
+    cost: '$0.15',
+    blurb:
+      "OpenAI's open 117B MoE. Fastest and cheapest here, with solid reasoning for its size. Choose for greetings, small talk, short factual questions, and quick lookups that need no heavy reasoning or coding.",
+  },
+  {
+    id: 'minimax/minimax-m2.7',
+    label: 'MiniMax M2.7',
+    tier: 'balanced',
+    cost: '$0.72',
+    blurb:
+      'Efficient agentic model built for autonomous, multi-step tool use at low cost. Choose for tool-driven workflows and general assistant tasks that do not need top-tier coding depth.',
+  },
+  {
+    id: 'deepseek/deepseek-v4-pro',
+    label: 'DeepSeek V4 Pro',
+    tier: 'balanced',
+    cost: '$0.87',
+    blurb:
+      '1.6T-param MoE (49B active) with a 1M-token context. Strong reasoning and coding at low cost — the best value for most complex reasoning, analysis, and coding tasks on a budget.',
+  },
+  {
+    id: 'google/gemini-3-flash-preview',
+    label: 'Gemini 3 Flash',
+    tier: 'balanced',
+    cost: '$3.00',
+    blurb:
+      'Fast multimodal thinking model (accepts image, audio, video, and files) with a 1M-token context and near-Pro reasoning. Choose for vision/file/long-document analysis or fast agentic chat.',
+  },
+  {
+    id: 'z-ai/glm-5.2',
+    label: 'GLM 5.2',
+    tier: 'capable',
+    cost: '$3.00',
+    blurb:
+      'Top-ranked open coding/agentic model (LMArena coding #2) with a 1M-token context. Choose for project-level software engineering and long-horizon agent workflows.',
+  },
+  {
+    id: 'moonshotai/kimi-k2.7-code',
+    label: 'Kimi K2.7 Code',
+    tier: 'capable',
+    cost: '$3.50',
+    blurb:
+      'Coding-specialist MoE built to complete end-to-end programming tasks reliably over long contexts. Choose for serious coding, debugging, or building/deploying software.',
+  },
+  {
+    id: 'qwen/qwen3.7-max',
+    label: 'Qwen3.7 Max',
+    tier: 'capable',
+    cost: '$3.75',
+    blurb:
+      "Alibaba's flagship generalist with a 1M-token context, strong at agentic work, coding, and productivity. A capable all-rounder alternative to GLM/Kimi.",
+  },
+  {
+    id: 'openai/o4-mini',
+    label: 'o4-mini',
+    tier: 'capable',
+    cost: '$4.40',
+    blurb:
+      'Compact o-series reasoning specialist (multimodal). Choose for hard math, logic puzzles, and careful step-by-step reasoning where correctness matters more than speed.',
+  },
+  {
+    id: 'anthropic/claude-sonnet-4.6',
+    label: 'Claude Sonnet 4.6',
+    tier: 'frontier',
+    cost: '$15.00',
+    blurb:
+      'Frontier model for coding, agents, and professional writing, with a 1M-token context. Choose for complex, high-quality work and nuanced writing. Expensive — only when the task clearly warrants it.',
+  },
+  {
+    id: 'anthropic/claude-opus-4.8',
+    label: 'Claude Opus 4.8',
+    tier: 'frontier',
+    cost: '$25.00',
+    blurb:
+      'The most capable model available. Choose ONLY for the hardest, highest-stakes tasks where every other model would fall short. Very expensive — use sparingly.',
+  },
+];
+
+export const CATALOG_IDS = MODEL_CATALOG.map((model) => model.id);
+
+/** The default model when the router cannot choose (budget-safe, capable). */
+export const DEFAULT_MODEL = 'deepseek/deepseek-v4-pro';
+
+/** Build a HackClub attempt for any catalog model id. */
+export function catalogAttempt(model: string): PiAttempt {
+  return {
+    customEnv: {
+      OPENROUTER_API_KEY: env.HACKCLUB_API_KEY,
+      OPENROUTER_BASE_URL: HACKCLUB_BASE_URL,
+    },
+    model,
+    provider: 'hackclub',
+  };
+}
+
+// Deep backup after the whole catalog has been exhausted: the same model
+// families on baishui, then Gemini. Keeps the bot resilient if HackClub is down.
+export const deepFallbackAttempts: PiAttempt[] = [
+  ...baishuiAttempts,
+  ...geminiAttempts,
+];
