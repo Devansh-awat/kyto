@@ -135,12 +135,25 @@ Most formatting and common issues are automatically fixed by Biome. Run `bun x u
 > asking for permission. Treat these notes as living documentation — stale notes
 > are worse than none.
 
-### Committing & pull requests
-- **Local commits: no permission needed.** Once a change is made, commit it
-  locally without asking. Use a clear conventional-commit message and keep these
-  doc notes updated in the same commit. Don't push or open a PR as part of this.
-- **Pushing / opening a PR: always ask first.** Anything that publishes to
-  GitHub (`git push`, `gh pr create`) requires explicit user confirmation.
+### After every change (auto workflow — this is a private repo)
+Run these automatically after each completed change, in order, **without asking**:
+1. **Auto-commit.** Commit the change locally with a clear conventional-commit
+   message, keeping these doc notes updated in the same commit. One logical
+   change = one commit.
+2. **Sync the Slack manifest if it changed.** If the change touched
+   `slack-manifest.json` (new tool/scope, command, display text, etc.), run
+   `bun run sync:manifest` from `apps/bot` to push it to the Slack app config.
+   (Needs the app config token env vars — see the Manifest sync note. Scope
+   changes still require reinstalling the app.)
+3. **Restart the bot** so the running process picks up the change. There is no
+   process manager: the bot runs as a single `bun run src/index.ts` process.
+   Restart with: `pkill -f 'bun run src/index.ts'` then relaunch in the
+   background with `bun run start:bot` from the repo root. Confirm it came back
+   up (check the process / startup logs).
+
+- **Pushing / opening a PR: still ask first.** Auto-commit/restart/sync are
+  local-and-Slack only. Anything that publishes to **GitHub** (`git push`,
+  `gh pr create`) requires explicit user confirmation.
 
 ### AI tools
 - Agent tools live in `apps/bot/src/lib/ai/tools/` and are registered in
