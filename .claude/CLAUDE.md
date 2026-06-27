@@ -166,6 +166,17 @@ Run these automatically after each completed change, in order, **without asking*
 - Slack scopes are declared in `slack-manifest.json` — update it when a tool
   needs a new scope.
 
+### Canvases (read/list/create across channels, channel tab)
+- `canvasList` takes an optional `channelId` (raw `C0123`, `slack:` id, or
+  `#channel` mention) to inspect another channel; on `not_in_channel` it joins
+  the public channel **silently** and retries (no announcement message).
+- `canvasWrite` create modes accept `title` (used for both create-standalone and
+  create-channel — without it a channel canvas shows as "Untitled").
+  `create-channel` then best-effort **adds the canvas as a channel tab** by
+  bookmarking its permalink (`addCanvasTab`), since
+  `conversations.canvases.create` alone doesn't always surface a header tab. The
+  summary says whether the tab was added. Needs `bookmarks:write` + `files:read`.
+
 ### Pins (pin in any channel, as bot or owner)
 - `pinMessage`/`unpinMessage` take an optional `channelId` (defaults to the
   current channel) and an optional `as: 'bot' | 'user'`. As the bot, a

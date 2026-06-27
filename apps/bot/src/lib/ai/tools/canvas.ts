@@ -18,12 +18,65 @@ const filesInfoSchema = z.looseObject({
   file: z
     .looseObject({
       id: z.string().optional(),
+      permalink: z.string().optional(),
       title: z.string().optional(),
       url_private_download: z.string().optional(),
     })
     .optional(),
   ok: z.boolean(),
 });
+
+const okSchema = z.looseObject({
+  error: z.string().optional(),
+  ok: z.boolean(),
+});
+
+// The bot can only act in channels it has joined. When a public-channel call
+// fails with not_in_channel, join once and let the caller retry. Private
+// channels (and DMs) can't be auto-joined, so those errors surface as-is. This
+// is silent on purpose — joining to read or attach a canvas should not post a
+// "kyto is available" style message into the channel.
+async function joinPublicChannelOnce(channelId: string): Promise<void> {
+  await slack.webClient
+    .apiCall('conversations.join', { channel: channelId })
+    .catch(() => undefined);
+}
+
+// Add a canvas to the channel's bookmark bar so it shows up as a clickable tab.
+// conversations.canvases.create attaches the canvas to the channel, but it does
+// not always surface in the header tabs; bookmarking its permalink does. Best
+// effort — returns whether the tab was added so the caller can report honestly.
+async function addCanvasTab({
+  canvasId,
+  channelId,
+  title,
+}: {
+  canvasId: string;
+  channelId: string;
+  title?: string;
+}): Promise<boolean> {
+  try {
+    const info = filesInfoSchema.parse(
+      await slack.webClient.apiCall('files.info', { file: canvasId })
+    );
+    const link = info.file?.permalink;
+    if (!(info.ok && link)) {
+      return false;
+    }
+    const result = okSchema.parse(
+      await slack.webClient.apiCall('bookmarks.add', {
+        channel_id: channelId,
+        link,
+        title: title ?? info.file?.title ?? 'Canvas',
+        type: 'link',
+      })
+    );
+    return result.ok;
+  } catch (error) {
+    logger.warn({ error: errorMessage(error) }, '[canvasWrite] add-tab failed');
+    return false;
+  }
+}
 
 const filesListSchema = z.looseObject({
   error: z.string().optional(),
@@ -64,12 +117,20 @@ export function canvasListTool({ thread }: { thread: Thread }) {
             success: false,
           };
         }
-        const result = filesListSchema.parse(
-          await slack.webClient.apiCall('files.list', {
-            channel: channelId,
-            types: 'canvases',
-          })
-        );
+        const listCanvases = async () =>
+          filesListSchema.parse(
+            await slack.webClient.apiCall('files.list', {
+              channel: channelId,
+              types: 'canvases',
+            })
+          );
+        let result = await listCanvases();
+        // Bot isn't in the (public) channel — join silently and retry once so
+        // "review the canvas in #other-channel" works without manual invites.
+        if (!result.ok && result.error === 'not_in_channel') {
+          await joinPublicChannelOnce(channelId);
+          result = await listCanvases();
+        }
         if (!result.ok) {
           return {
             error: `Could not list canvases: ${result.error}`,
@@ -184,10 +245,18 @@ export function canvasWriteTool({ thread }: { thread: Thread }) {
               success: false,
             };
           }
+          // Surface it as a clickable tab in the channel header bar.
+          const tabbed = result.canvas_id
+            ? await addCanvasTab({
+                canvasId: result.canvas_id,
+                channelId,
+                title,
+              })
+            : false;
           return {
             canvasId: result.canvas_id,
             success: true,
-            summary: `Created a canvas${title ? ` "${title}"` : ''} in this channel.`,
+            summary: `Created a canvas${title ? ` "${title}"` : ''} in this channel${tabbed ? ' and added it as a tab' : ''}.`,
           };
         }
 
