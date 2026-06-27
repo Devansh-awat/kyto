@@ -204,14 +204,22 @@ Run these automatically after each completed change, in order, **without asking*
   ranked): HackClub (`HACKCLUB_API_KEY`) → baishui (`OPENROUTER_API_KEY` @
   `OPENROUTER_BASE_URL`) → Gemini (`GEMINI_API_KEY`). No MiniMax (Kimi preferred).
 - **Complexity routing** (`apps/bot/src/lib/ai/classify.ts`): each turn is
-  classified `simple`/`complex` by a FREE Gemini model (`gemini-3.1-flash-lite`,
-  500/day — costs nothing against the ~$3/day HackClub budget). `attemptsFor(tier)`
-  builds the chain: **complex** leads with `PREMIUM_MODEL` (`z-ai/glm-5.2`, arena
-  coding #2); **simple** skips it (starts at `kimi-k2.7-code`) to save budget.
-  Classifier failure defaults to `simple` (budget-safe).
+  classified `simple`/`complex` by a free model on HackClub's OpenRouter-
+  compatible proxy (`openai/gpt-oss-120b` — free there, so it costs nothing
+  against the ~$3/day budget). `attemptsFor(tier)` builds the chain: **complex**
+  leads with `PREMIUM_MODEL` (`z-ai/glm-5.2`, arena coding #2); **simple** skips
+  it (starts at `kimi-k2.7-code`) to save budget. Classifier failure (or no
+  `HACKCLUB_API_KEY`) defaults to `simple` (budget-safe).
+- The chosen model (and any fallback model) is surfaced as a **`Model` task in
+  the thinking section** — never announced in the reply text. Useful for seeing
+  which model actually served a turn.
 - Fallback advances on **any** error AND on an **empty completion** — a model
   that finishes producing nothing (e.g. a HackClub 504 swallowed into an empty
-  stream) is treated as a failed attempt, not a silent success (`agent/index.ts`).
+  stream) is treated as a failed attempt, not a silent success. A deliberate
+  `skip` is NOT an empty completion (it counts as a handled turn), and any
+  provider placeholder text like `(Empty response: ...)` is dropped before it
+  reaches Slack (`agent/index.ts`, `ai/stream/index.ts`).
+- No **Stop button** is posted during a turn (removed from `postControls` flow).
 - `glm-4.7` is omitted from HackClub (persistent 504); `glm-5.2` 504s
   intermittently there but degrades via the empty-completion fallback, and is
   also reachable via baishui (`glm5.2-normal`).

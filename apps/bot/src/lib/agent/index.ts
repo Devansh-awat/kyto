@@ -9,7 +9,7 @@ import {
 } from '@repo/ai';
 import { loadSkills } from '@repo/sandbox';
 import { type Message, StreamingPlan, type Thread } from 'chat';
-import { deleteControls, postControls } from '@/lib/agent/controls';
+import { deleteControls, type postControls } from '@/lib/agent/controls';
 import { buildPrompt } from '@/lib/agent/prompt';
 import { createReply } from '@/lib/agent/reply';
 import { sandbox } from '@/lib/agent/sandbox';
@@ -71,7 +71,7 @@ async function executeTurn(
 
   let session: Awaited<ReturnType<typeof openSession>> | undefined;
   let activeAttempt: PiAttempt | undefined;
-  let controls: Awaited<ReturnType<typeof postControls>> = null;
+  const controls: Awaited<ReturnType<typeof postControls>> = null;
   let sandboxContext: SandboxContext | undefined;
   let reply: ReturnType<typeof createReply> | undefined;
   let errorStage: AgentErrorStage = 'before_output';
@@ -207,6 +207,16 @@ async function executeTurn(
         });
         session = await openSession({ agent, threadId });
         reply = createReply({ threadId });
+        // Surface the model in the thinking section (not the reply text). On a
+        // fallback this shows the model we advanced to, so it is visible which
+        // model actually served the turn — without announcing it in the output.
+        yield {
+          id: `model-${attempts.length}`,
+          output: `${currentAttempt.provider} · ${currentAttempt.model}`,
+          status: 'complete',
+          title: attempts.length > 0 ? 'Model · fallback' : 'Model',
+          type: 'task_update',
+        };
         const result = await agent.stream({
           abortSignal: controller.signal,
           prompt: promptWithAttachments({
@@ -225,7 +235,6 @@ async function executeTurn(
           onTextDelta: async (text) => {
             streamed = true;
             errorStage = 'after_text';
-            controls ??= await postControls({ thread });
             await reply?.append({ text, thread });
           },
           stream: result.stream,
@@ -235,7 +244,6 @@ async function executeTurn(
             errorStage = 'after_progress';
           }
           yield chunk;
-          controls ??= await postControls({ thread });
         }
 
         // A model that finishes without producing anything (e.g. an upstream
