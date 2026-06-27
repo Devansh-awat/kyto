@@ -92,7 +92,7 @@ export function buildTools({
     summarizeThread: summarizeThreadTool({ bot, threadId: thread.id }),
     generateImage: generateImageTool({
       upload: async ({ bytes, mediaType, index, total }) => {
-        const filename = `gorkie-image-${index + 1}.${mediaType.split('/').at(1) ?? 'png'}`;
+        const filename = `kyto-image-${index + 1}.${mediaType.split('/').at(1) ?? 'png'}`;
         await thread.post({
           files: [{ data: Buffer.from(bytes), filename }],
           markdown:

@@ -17,19 +17,19 @@ export function agentErrorMessage({
 }): string {
   const message = errorMessage(error);
   if (stage === 'after_text') {
-    return '_gorkie hit an error after it had already started responding. the reply above may be partial; send a follow-up and gorkie can continue from the current thread state._';
+    return '_kyto hit an error after it had already started responding. the reply above may be partial; send a follow-up and kyto can continue from the current thread state._';
   }
   if (stage === 'after_progress') {
-    return '_gorkie hit an error after it had already shown progress. the task rows above show what completed; send a follow-up and gorkie can continue from the current thread state._';
+    return '_kyto hit an error after it had already shown progress. the task rows above show what completed; send a follow-up and kyto can continue from the current thread state._';
   }
   if (CREDIT_ERROR_PATTERN.test(message)) {
-    return '_gorkie is out of model credits for this request. try again later or ask for a shorter/smaller result._';
+    return '_kyto is out of model credits for this request. try again later or ask for a shorter/smaller result._';
   }
   if (CONTEXT_ERROR_PATTERN.test(message)) {
     return '_that request is too large for the current model budget. try a shorter prompt or ask me to compact/summarize first._';
   }
   if (PROVIDER_TIMEOUT_PATTERN.test(message)) {
-    return '_gorkie hit a model provider timeout. try again in a bit, or send a shorter follow-up so gorkie can continue from the current thread state._';
+    return '_kyto hit a model provider timeout. try again in a bit, or send a shorter follow-up so kyto can continue from the current thread state._';
   }
   return '_oops, something went wrong._';
 }

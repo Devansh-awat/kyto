@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const POLL_VOTE_ACTION = 'poll_vote';
-export const POLL_METADATA_TYPE = 'gorkie_poll';
+export const POLL_METADATA_TYPE = 'kyto_poll';
 
 const BAR_SLOTS = 10;
 const BUTTON_LABEL_MAX = 70;

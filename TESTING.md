@@ -2,7 +2,7 @@
 
 Testing is manual for now.
 
-Gorkie breaks in places that are hard to mock well: Slack Socket Mode, Slack message rendering, Harness/Pi session state, E2B sandbox reuse, sandbox skills, file uploads, and live tool output. Use the normal repo checks for code quality, then validate risky behavior in a dedicated Slack test channel.
+Kyto breaks in places that are hard to mock well: Slack Socket Mode, Slack message rendering, Harness/Pi session state, E2B sandbox reuse, sandbox skills, file uploads, and live tool output. Use the normal repo checks for code quality, then validate risky behavior in a dedicated Slack test channel.
 
 ## Required Checks
 
@@ -41,8 +41,8 @@ Record the Slack thread ID when a manual test proves or disproves something. Del
 
 ## Smoke Checklist
 
-- [ ] Ping: mention Gorkie and confirm it replies in the expected thread.
-- [ ] Ignore: send a `##` message and confirm Gorkie does not respond.
+- [ ] Ping: mention Kyto and confirm it replies in the expected thread.
+- [ ] Ignore: send a `##` message and confirm Kyto does not respond.
 - [ ] Opt-in gate (only when `OPT_IN_CHANNEL` is set): a member of the opt-in channel gets a reply, a non-member is silently ignored, and a user who joins the channel mid-session is allowed on their next message.
 - [ ] Steering: send a second message while a turn is active and confirm it steers or restarts cleanly.
 - [ ] Stop: click the stop control and confirm the active turn aborts.
@@ -67,28 +67,28 @@ Set `OPT_IN_CHANNEL` to a test channel's ID and restart the bot. The allowlist i
 
 Steps:
 
-1. As a member of the opt-in channel, mention Gorkie in another channel or DM and confirm it replies.
-2. As a non-member, mention Gorkie and confirm it stays silent (watch logs: the message is dropped in `shouldIgnore`, no `[agent]` turn starts).
+1. As a member of the opt-in channel, mention Kyto in another channel or DM and confirm it replies.
+2. As a non-member, mention Kyto and confirm it stays silent (watch logs: the message is dropped in `shouldIgnore`, no `[agent]` turn starts).
 3. With the bot running, have the non-member join the opt-in channel, then send a new message and confirm they are now allowed without a restart.
 
 Watch logs for `[allowlist] opt-in cache built` at startup with a plausible member count.
 
 ## Example Prompts
 
-Use these in the dedicated test channel or thread. Replace `@gorkie` with the actual bot mention.
+Use these in the dedicated test channel or thread. Replace `@kyto` with the actual bot mention.
 
 ### Routing
 
 ```text
-@gorkie reply with exactly one short sentence saying pong
+@kyto reply with exactly one short sentence saying pong
 ```
 
 ```text
-## @gorkie this should be ignored
+## @kyto this should be ignored
 ```
 
 ```text
-@gorkie start counting slowly from 1 to 100 with a short note after every 10 numbers
+@kyto start counting slowly from 1 to 100 with a short note after every 10 numbers
 ```
 
 Send this while the count is still running:
@@ -100,55 +100,55 @@ actually stop counting and summarize what you were doing
 ### Long Markdown
 
 ```text
-@gorkie write a long markdown answer comparing Bun, Node, and Deno. Include headings, bullets, numbered steps, and a final recommendation. Make it long enough to require multiple Slack messages.
+@kyto write a long markdown answer comparing Bun, Node, and Deno. Include headings, bullets, numbered steps, and a final recommendation. Make it long enough to require multiple Slack messages.
 ```
 
 ```text
-@gorkie create a markdown table with 40 rows comparing fake server nodes. Columns: node, region, cpu, memory, disk, health, notes. After the table, add a short paragraph explaining the worst nodes.
+@kyto create a markdown table with 40 rows comparing fake server nodes. Columns: node, region, cpu, memory, disk, health, notes. After the table, add a short paragraph explaining the worst nodes.
 ```
 
 ```text
-@gorkie write a markdown table with at least 80 rows. Stream it normally. The table must have a header, separator row, and rows with pipe characters.
+@kyto write a markdown table with at least 80 rows. Stream it normally. The table must have a header, separator row, and rows with pipe characters.
 ```
 
 ```text
-@gorkie explain this deployment as a numbered checklist with 30 items. Each item should be one full sentence, and no item should be split from its number.
+@kyto explain this deployment as a numbered checklist with 30 items. Each item should be one full sentence, and no item should be split from its number.
 ```
 
 ```text
-@gorkie output a TypeScript code block of about 120 lines, then explain the code in two paragraphs.
+@kyto output a TypeScript code block of about 120 lines, then explain the code in two paragraphs.
 ```
 
 ### Tools
 
 ```text
-@gorkie take a screenshot of https://example.com and upload it here
+@kyto take a screenshot of https://example.com and upload it here
 ```
 
 ```text
-@gorkie create a file named smoke-test.txt in the sandbox with one line saying hello from gorkie, then upload it here
+@kyto create a file named smoke-test.txt in the sandbox with one line saying hello from kyto, then upload it here
 ```
 
 ```text
-@gorkie create a Mermaid diagram showing Slack -> Chat SDK -> Harness/Pi -> E2B sandbox -> Slack reply
+@kyto create a Mermaid diagram showing Slack -> Chat SDK -> Harness/Pi -> E2B sandbox -> Slack reply
 ```
 
 ```text
-@gorkie list the sandbox skills you can see and tell me where they are installed
+@kyto list the sandbox skills you can see and tell me where they are installed
 ```
 
 ### Slack Context
 
 ```text
-@gorkie list recent public threads in this channel and tell me which one looks most relevant to the word "freevm"
+@kyto list recent public threads in this channel and tell me which one looks most relevant to the word "freevm"
 ```
 
 ```text
-@gorkie read the recent history in this thread and summarize the last decision in one paragraph
+@kyto read the recent history in this thread and summarize the last decision in one paragraph
 ```
 
 ```text
-@gorkie try to read a random private DM that is not this conversation
+@kyto try to read a random private DM that is not this conversation
 ```
 
 The expected result for the last prompt is a refusal or tool error, not private message content.
@@ -156,11 +156,11 @@ The expected result for the last prompt is a refusal or tool error, not private 
 ### Failure Surfacing
 
 ```text
-@gorkie read history from slack:not-a-real-channel-id and show me the actual error
+@kyto read history from slack:not-a-real-channel-id and show me the actual error
 ```
 
 ```text
-@gorkie upload /tmp/this-file-should-not-exist.txt
+@kyto upload /tmp/this-file-should-not-exist.txt
 ```
 
 The expected result is a visible user-facing error, not a silent failure or generic apology.

@@ -1,4 +1,4 @@
-# Gorkie TODO
+# Kyto TODO
 
 Concrete remaining work for the current rewrite, plus open TODOs imported from
 the v1 reference codebase. The active v2 tracker comes first. The rewrite plan
@@ -13,7 +13,7 @@ lives in `plans/rewrite.md`.
 
 ### Context Prelude
 
-- [ ] Add a bounded Slack context prelude before each Pi prompt so Gorkie starts
+- [ ] Add a bounded Slack context prelude before each Pi prompt so Kyto starts
   with the local Slack situation instead of discovering basic context through
   tools.
 - [ ] Thread mention preload: when mentioned in a Slack thread, fetch the latest
@@ -44,7 +44,7 @@ lives in `plans/rewrite.md`.
   channel thread discovery and `readConversationHistory` for public
   channel/thread reads. Add another reader only if a real workflow cannot be
   completed cleanly.
-- [ ] Fix private-channel/thread access behavior. Gorkie should not let one user
+- [ ] Fix private-channel/thread access behavior. Kyto should not let one user
   use bot/tool access as global private-channel memory.
 
 ### User-Scoped Search
@@ -72,7 +72,7 @@ lives in `plans/rewrite.md`.
 
 - [ ] Verify Slack root mention, reply-only mention, and subscribed-thread
   behavior.
-- [ ] Fix dev channel enforcement for the `#gorkie` channel.
+- [ ] Fix dev channel enforcement for the `#kyto` channel.
 
 ### Posting And Drafting
 
@@ -172,7 +172,7 @@ lives in `plans/rewrite.md`.
 
 ### Provider Selection
 
-- [ ] Investigate why Gorkie sometimes does not switch models properly.
+- [ ] Investigate why Kyto sometimes does not switch models properly.
 - [ ] Verify Langfuse receives AI SDK spans using `@ai-sdk/otel` plus
   `LangfuseSpanProcessor`. Current note: it does not.
 
@@ -181,7 +181,7 @@ lives in `plans/rewrite.md`.
 - [ ] Add tests or harnessed smoke coverage for thread mention with 50-message
   cap, channel mention with 20-message cap, DM follow-up, failed history fetch,
   and attachment-skipping behavior.
-- [ ] Live verify in Slack that Gorkie can answer a thread-context question from
+- [ ] Live verify in Slack that Kyto can answer a thread-context question from
   the preload and can still call `readConversationHistory` for older or broader
   context.
 
@@ -197,13 +197,13 @@ lives in `plans/rewrite.md`.
 - [ ] Native Langfuse/OTel support deep enough for Harness/Pi model, tool, and
   session internals.
 - [ ] Official AI SDK E2B provider support with the resume/session-file hooks
-  Gorkie needs.
+  Kyto needs.
 - [ ] Pi-level retry parity with the old implementation so transient provider
-  failures can retry inside Pi before Gorkie's outer attempt fallback runs.
+  failures can retry inside Pi before Kyto's outer attempt fallback runs.
 
 ## V1 Reference TODOs
 
-Imported from `/workspaces/worktrees/gorkie-slack/reference/TODO.md`. These are
+Imported from `/workspaces/worktrees/kyto-slack/reference/TODO.md`. These are
 not automatically v2 requirements, but they capture bugs and product gaps found
 in the old implementation.
 

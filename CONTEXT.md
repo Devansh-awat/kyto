@@ -1,6 +1,6 @@
-# Gorkie
+# Kyto
 
-Gorkie is an AI assistant for Slack conversations. This glossary defines the domain language used when discussing its agent runtime and Slack behavior.
+Kyto is an AI assistant for Slack conversations. This glossary defines the domain language used when discussing its agent runtime and Slack behavior.
 
 ## Language
 
@@ -37,7 +37,7 @@ The removal of Private User Context and Private Tool Results before they become 
 _Avoid_: Private memory, filtering when discussing the shared memory privacy boundary.
 
 **Agent Turn**:
-One execution of Gorkie triggered by an Acting User message within an Agent Thread. It may stream a response, call tools, update Agent Thread Memory, and then end, stop, or be interrupted.
+One execution of Kyto triggered by an Acting User message within an Agent Thread. It may stream a response, call tools, update Agent Thread Memory, and then end, stop, or be interrupted.
 _Avoid_: Run, request, invocation when discussing user-visible agent execution.
 
 **Turn Interruption**:
@@ -57,7 +57,7 @@ A file or generated output created inside the Agent Sandbox. It is ephemeral unl
 _Avoid_: File, output when discussing durability expectations.
 
 **Speaker Label**:
-A human-facing name attached to a message in model-facing context when multiple people may be speaking in the same Agent Thread. Speaker Labels let Gorkie distinguish who said what without exposing platform-specific identifiers.
+A human-facing name attached to a message in model-facing context when multiple people may be speaking in the same Agent Thread. Speaker Labels let Kyto distinguish who said what without exposing platform-specific identifiers.
 _Avoid_: User ID, display name when discussing model-facing participant identity.
 
 **Fallback Speaker Label**:

@@ -1,13 +1,13 @@
 ---
 name: refactor
 description: >
-  Use when cleaning or refactoring this Gorkie Slack codebase. Covers the local
+  Use when cleaning or refactoring this Kyto Slack codebase. Covers the local
   cleanup style: simplifying names, collapsing thin helpers, splitting real
   ownership boundaries, trimming tool schemas, preserving Slack/AI behavior, and
   running the repo validation suite.
 ---
 
-# Gorkie Refactor
+# Kyto Refactor
 
 Clean by reducing jumps, not by adding architecture.
 
@@ -31,7 +31,7 @@ Clean by reducing jumps, not by adding architecture.
 8. Remove stale docs and prompts after renames. Search for old names before
    handoff.
 
-## Gorkie-Specific Smells
+## Kyto-Specific Smells
 
 - `index.ts` files that own lifecycle, state, IO, and helpers at once.
 - `create*`, `build*`, `with*`, `resolve*` names that hide a tiny operation.

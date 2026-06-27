@@ -106,8 +106,7 @@ async function executeTurn(
     if (hints.customization?.prompt && !slack.isDM(thread.id)) {
       await thread
         .post({
-          markdown:
-            "_gorkie's responses are shaped by this user's instructions_",
+          markdown: "_kyto's responses are shaped by this user's instructions_",
         })
         .catch(() => undefined);
     }

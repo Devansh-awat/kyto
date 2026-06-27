@@ -3,7 +3,7 @@ title: Tools
 description: The model-facing tool surface and safety boundaries.
 ---
 
-Gorkie gives the model two kinds of tools: Pi's sandbox tools and host tools owned by the bot.
+Kyto gives the model two kinds of tools: Pi's sandbox tools and host tools owned by the bot.
 
 ## Sandbox Tools
 
@@ -36,7 +36,7 @@ The streamed assistant text is already the reply to the current user. The model 
 
 ## Conversation Tools
 
-Gorkie uses a small custom Slack history surface:
+Kyto uses a small custom Slack history surface:
 
 | Tool | Purpose |
 | --- | --- |
@@ -47,7 +47,7 @@ Gorkie uses a small custom Slack history surface:
 
 `readConversationHistory` and `listThreads` join public channels best-effort before reading. They block DMs, private channels, and external conversations.
 
-`searchSlack` depends on Slack's assistant action token. If the token is missing, the tool returns a model-facing error explaining that the user must explicitly mention Gorkie.
+`searchSlack` depends on Slack's assistant action token. If the token is missing, the tool returns a model-facing error explaining that the user must explicitly mention Kyto.
 
 ## Creation And Utility Tools
 

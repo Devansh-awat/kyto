@@ -3,7 +3,7 @@ title: Architecture
 description: System boundaries, request flow, and package ownership.
 ---
 
-Gorkie has three major runtime pieces: Slack, the agent, and the sandbox.
+Kyto has three major runtime pieces: Slack, the agent, and the sandbox.
 
 Slack is the interface. The agent is the brain. The sandbox is the workspace.
 

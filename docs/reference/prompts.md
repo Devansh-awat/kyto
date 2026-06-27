@@ -20,7 +20,7 @@ Later sections can add more specific context, but they should not fight earlier 
 
 ## Core
 
-Core defines Gorkie's identity, Slack output rules, important limitations, media handling, and safety floor.
+Core defines Kyto's identity, Slack output rules, important limitations, media handling, and safety floor.
 
 The most important output rule is simple: the text the model writes is the Slack reply. There is no separate send step for the current response.
 

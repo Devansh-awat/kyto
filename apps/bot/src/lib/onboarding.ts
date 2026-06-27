@@ -15,7 +15,7 @@ import logger from '@/lib/logger';
 import { toLogError } from '@/lib/utils/error';
 
 // First-time onboarding for the opt-in allowlist. When OPT_IN_CHANNEL gates
-// access, an un-opted-in user who pings Gorkie sees an ephemeral card instead of
+// access, an un-opted-in user who pings Kyto sees an ephemeral card instead of
 // silence. Clicking "I accept" is the recorded consent: it grants access and
 // invites them into the terms channel.
 
@@ -35,10 +35,10 @@ export async function offerOptIn(thread: Thread, user: Author): Promise<void> {
     await thread.postEphemeral(
       user,
       Card({
-        title: ':wave: first time meeting gorkie',
+        title: ':wave: first time meeting kyto',
         children: [
           CardText(
-            `hi! i'm gorkie. before i can help, you need to accept the terms posted in <#${env.OPT_IN_CHANNEL}>.`
+            `hi! i'm kyto. before i can help, you need to accept the terms posted in <#${env.OPT_IN_CHANNEL}>.`
           ),
           CardText(
             "tap below to opt in, i'll add you to the terms channel and we can get started."
@@ -70,7 +70,7 @@ export async function acceptOptIn(event: ActionEvent): Promise<void> {
   await event.thread
     ?.postEphemeral(
       event.user,
-      "you're all set, welcome to gorkie. ask me anything.",
+      "you're all set, welcome to kyto. ask me anything.",
       { fallbackToDM: true }
     )
     .catch((error: unknown) => {

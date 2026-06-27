@@ -14,7 +14,7 @@ const SECURITY_HEADERS: Record<string, string> = {
   'Referrer-Policy': 'no-referrer',
 };
 
-const PREFIX = '/gorkiesites/';
+const PREFIX = '/kytosites/';
 
 async function ensureSelfSignedCert(): Promise<{ cert: string; key: string }> {
   const tlsDir = nodePath.join(sitesRoot(), '.tls');
@@ -44,7 +44,7 @@ async function ensureSelfSignedCert(): Promise<{ cert: string; key: string }> {
     '-days',
     '3650',
     '-subj',
-    `/CN=${env.SITES_PUBLIC_HOST ?? 'gorkie-sites'}`,
+    `/CN=${env.SITES_PUBLIC_HOST ?? 'kyto-sites'}`,
   ]);
   logger.info({ tlsDir }, '[sites] generated self-signed certificate');
   return {
@@ -58,7 +58,7 @@ function notFound(): Response {
 }
 
 async function resolveSiteFile(pathname: string): Promise<string | null> {
-  // Expect /gorkiesites/<name>/<rest...>
+  // Expect /kytosites/<name>/<rest...>
   const remainder = pathname.slice(PREFIX.length);
   const slash = remainder.indexOf('/');
   const name = slash === -1 ? remainder : remainder.slice(0, slash);
@@ -96,7 +96,7 @@ async function resolveSiteFile(pathname: string): Promise<string | null> {
 
 /**
  * Start the static-site HTTPS server on SITES_PORT. Serves prebuilt files from
- * SITES_ROOT/<name>/ under /gorkiesites/<name>/ and nothing else — no directory
+ * SITES_ROOT/<name>/ under /kytosites/<name>/ and nothing else — no directory
  * listings, no execution, strict path containment. Bind failures are logged and
  * swallowed so they never crash the bot (e.g. in local dev without port 443).
  */

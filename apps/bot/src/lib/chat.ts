@@ -13,7 +13,7 @@ export const slack = createSlackAdapter({
 });
 
 export const bot = new Chat({
-  userName: 'gorkie',
+  userName: 'kyto',
   adapters: { slack },
   concurrency: 'concurrent',
   state: createPostgresState({ url: env.DATABASE_URL }),

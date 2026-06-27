@@ -1,9 +1,9 @@
 ---
 title: Overview
-description: The shortest useful explanation of how Gorkie works.
+description: The shortest useful explanation of how Kyto works.
 ---
 
-Gorkie is an AI assistant for Slack. It can answer normally, use Slack context, search the web, run code, create files, generate images, and upload results back into the conversation.
+Kyto is an AI assistant for Slack. It can answer normally, use Slack context, search the web, run code, create files, generate images, and upload results back into the conversation.
 
 > **Mental Model:** Pi runs on the bot machine. E2B is the remote Linux workspace where file and shell operations happen.
 
@@ -22,7 +22,7 @@ flowchart LR
 ## Start Here
 
 - [Architecture](./architecture): System boundaries, request flow, and package ownership.
-- [Bot Runtime](./runtime/bot): How chat events become Gorkie turns.
+- [Bot Runtime](./runtime/bot): How chat events become Kyto turns.
 - [Agent Runtime](./runtime/agent): How HarnessAgent and Pi run a turn.
 - [Sandbox And Sessions](./runtime/sandbox): E2B lifecycle, session files, recovery, and skills.
 - [Streaming](./runtime/streaming): Assistant text, task rows, stop controls, and Slack limits.
@@ -34,7 +34,7 @@ flowchart LR
 ## Main Flow
 
 1. A chat adapter sends a message event through Chat SDK.
-2. `apps/bot` decides whether Gorkie should answer.
+2. `apps/bot` decides whether Kyto should answer.
 3. The bot creates or resumes the thread's E2B sandbox.
 4. `packages/ai` builds a HarnessAgent with Pi, prompts, tools, skills, and resume state.
 5. Pi streams text, reasoning, and tool activity.

@@ -127,7 +127,7 @@ Most formatting and common issues are automatically fixed by Biome. Run `bun x u
 
 ---
 
-## Project Notes (Gorkie Slack bot)
+## Project Notes (Kyto Slack bot)
 
 > **Keep this section current.** Whenever you add, remove, or change a feature
 > (a new agent tool, a changed scope, a config flag, gating rules, etc.), update
@@ -169,7 +169,7 @@ Most formatting and common issues are automatically fixed by Biome. Run `bun x u
 
 ### Static site hosting
 - `deploySite`/`removeSite` publish prebuilt static sites at
-  `https://<host>/gorkiesites/<name>/`. Code in `apps/bot/src/lib/sites/`. The
+  `https://<host>/kytosites/<name>/`. Code in `apps/bot/src/lib/sites/`. The
   host NEVER executes site code — building/testing happen in the E2B sandbox;
   only static output is copied out (`resolveWithin` path containment).
 - Server starts from `apps/bot/src/index.ts` (`startSitesServer`), binds

@@ -1,5 +1,5 @@
 {
-  "name": "gorkie-slack",
+  "name": "kyto-slack",
   "license": "MIT",
   "description": "A helpful AI Slack Bot built with AI SDK.",
   "private": true,
@@ -58,7 +58,7 @@
     "docs:preview": "fumadocs-preview",
     "build:template": "bun --filter=@repo/sandbox run build:template",
     "check": "ultracite check .",
-    "check:knip": "DATABASE_URL=postgres://user:password@localhost:5432/gorkie knip",
+    "check:knip": "DATABASE_URL=postgres://user:password@localhost:5432/kyto knip",
     "check:spelling": "cspell -c .cspell.jsonc --no-progress --no-summary --no-must-find-files --unique --cache .",
     "check:unsafe": "ultracite fix --unsafe .",
     "check:write": "ultracite fix .",

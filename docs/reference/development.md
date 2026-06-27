@@ -3,7 +3,7 @@ title: Development
 description: Commands, local runtime, template builds, checks, and reference repos.
 ---
 
-Gorkie runs as a long-lived Bun process from `apps/bot`. It uses Slack Socket Mode, so local development does not need a public webhook URL.
+Kyto runs as a long-lived Bun process from `apps/bot`. It uses Slack Socket Mode, so local development does not need a public webhook URL.
 
 ## Prerequisites
 

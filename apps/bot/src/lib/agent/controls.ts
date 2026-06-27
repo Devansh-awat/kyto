@@ -21,7 +21,7 @@ export async function postControls({
           ]),
         ],
       }),
-      fallbackText: 'Gorkie is responding.',
+      fallbackText: 'Kyto is responding.',
     });
   } catch (error) {
     logger.warn(

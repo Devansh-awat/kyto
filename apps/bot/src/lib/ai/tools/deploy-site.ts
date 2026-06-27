@@ -11,7 +11,7 @@ const siteNameSchema = z
   .min(1)
   .max(63)
   .describe(
-    'Site name used in the URL path /gorkiesites/<name>/. Lowercase letters, digits, and hyphens only.'
+    'Site name used in the URL path /kytosites/<name>/. Lowercase letters, digits, and hyphens only.'
   );
 
 export function deploySiteTool({
@@ -21,7 +21,7 @@ export function deploySiteTool({
 }) {
   return tool({
     description:
-      'Publish a prebuilt static site so it is reachable at https://<host>/gorkiesites/<name>/. Build and test the site in the sandbox first, then point sourceDir at the built static output (e.g. dist or out). The host only serves static files — it never runs site code — so deploy fully static output (HTML/CSS/JS/assets), not a dev server.',
+      'Publish a prebuilt static site so it is reachable at https://<host>/kytosites/<name>/. Build and test the site in the sandbox first, then point sourceDir at the built static output (e.g. dist or out). The host only serves static files — it never runs site code — so deploy fully static output (HTML/CSS/JS/assets), not a dev server.',
     inputSchema: z.object({
       name: siteNameSchema,
       sourceDir: z
@@ -73,7 +73,7 @@ export function deploySiteTool({
 export function removeSiteTool() {
   return tool({
     description:
-      'Take down a previously published static site so it is no longer served at /gorkiesites/<name>/. Permanent — only use when explicitly asked.',
+      'Take down a previously published static site so it is no longer served at /kytosites/<name>/. Permanent — only use when explicitly asked.',
     inputSchema: z.object({ name: siteNameSchema }),
     execute: async ({ name }) => {
       try {

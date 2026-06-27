@@ -5,7 +5,7 @@ import { toRawSlackChannelId } from '@/lib/slack/ids';
 import { toLogError } from '@/lib/utils/error';
 
 // Opt-in allowlist: when OPT_IN_CHANNEL is set, only members of that channel may
-// use Gorkie. The channel gates terms-of-service acceptance, users read the terms
+// use Kyto. The channel gates terms-of-service acceptance, users read the terms
 // posted there and opt in by joining, which is what grants access.
 
 function allowlistKey(channel: string): string {

@@ -1,6 +1,6 @@
-# Gorkie
+# Kyto
 
-Gorkie is an AI assistant for Slack. The codebase is a Bun/TypeScript monorepo using Chat SDK, AI SDK Harness/Pi, E2B, Drizzle/Postgres, Turborepo, and Ultracite.
+Kyto is an AI assistant for Slack. The codebase is a Bun/TypeScript monorepo using Chat SDK, AI SDK Harness/Pi, E2B, Drizzle/Postgres, Turborepo, and Ultracite.
 
 ## Mental Model
 

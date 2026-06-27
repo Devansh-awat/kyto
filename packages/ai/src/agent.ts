@@ -33,7 +33,7 @@ export function createAgent({
   });
   return new HarnessAgent({
     harness: pi,
-    id: 'gorkie',
+    id: 'kyto',
     permissionMode: 'allow-all',
     sandbox,
     skills,

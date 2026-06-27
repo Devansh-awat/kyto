@@ -1,6 +1,6 @@
 <div align="center">
-  <img alt="Gorkie banner" src="./.github/banner.png" />
-  <h1>Gorkie for Slack</h1>
+  <img alt="Kyto banner" src="./.github/banner.png" />
+  <h1>Kyto for Slack</h1>
 </div>
 
 ## Table of Contents
@@ -15,7 +15,7 @@
 
 ## Introduction
 
-Gorkie is an AI assistant for Slack. It responds in mentions, DMs, Assistant
+Kyto is an AI assistant for Slack. It responds in mentions, DMs, Assistant
 threads, and subscribed Slack threads with answers backed by tools, sandboxed
 code execution, web search, Slack context, file uploads, image generation, and
 reminders.
@@ -23,7 +23,7 @@ reminders.
 The bot runs as a long-lived Bun process. Slack events are handled through
 [Vercel Chat SDK][chat-sdk] and the Slack adapter in Socket Mode, while coding
 agent work runs through [Vercel AI SDK][ai-sdk] Harness/Pi. Each active Slack
-conversation gets an [E2B][e2b] sandbox so Gorkie can run commands, inspect
+conversation gets an [E2B][e2b] sandbox so Kyto can run commands, inspect
 files, generate artifacts, and upload results back to Slack.
 
 ## Features
@@ -61,7 +61,7 @@ provider keys for the configured Harness/Pi attempts.
 
 ```bash
 # Clone this repository
-git clone https://github.com/imdevarsh/gorkie-slack.git
+git clone https://github.com/imdevarsh/kyto-slack.git
 
 # Install dependencies
 bun install

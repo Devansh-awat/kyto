@@ -55,5 +55,5 @@ export function resolveWithin(root: string, relative: string): string | null {
 /** Public URL for a deployed site. */
 export function siteUrl(name: string): string {
   const host = env.SITES_PUBLIC_HOST ?? 'localhost';
-  return `https://${host}/gorkiesites/${name}/`;
+  return `https://${host}/kytosites/${name}/`;
 }

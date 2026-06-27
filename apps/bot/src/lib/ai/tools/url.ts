@@ -68,7 +68,7 @@ export function fetchUrlTool() {
     execute: async ({ url }) => {
       try {
         const response = await fetch(url, {
-          headers: { 'User-Agent': 'gorkie-slack-bot' },
+          headers: { 'User-Agent': 'kyto-slack-bot' },
           signal: AbortSignal.timeout(15_000),
         });
         if (!response.ok) {

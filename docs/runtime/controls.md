@@ -3,11 +3,11 @@ title: Turn Controls
 description: Interruption, stop, shutdown, and session parking.
 ---
 
-Gorkie can end a running turn for three reasons: a newer user message, a stop button click, or process shutdown.
+Kyto can end a running turn for three reasons: a newer user message, a stop button click, or process shutdown.
 
 ## Interruption
 
-If a user sends another message while a turn is active, Gorkie interrupts the current turn and restarts from the newest queued message.
+If a user sends another message while a turn is active, Kyto interrupts the current turn and restarts from the newest queued message.
 
 The interrupted turn still parks its session state. The sandbox stays warm because the next turn starts immediately.
 

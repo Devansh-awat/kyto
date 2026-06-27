@@ -3,7 +3,7 @@ title: Data Model
 description: What Postgres stores and why.
 ---
 
-Gorkie stores app-owned runtime state in `packages/db`. Chat SDK also stores adapter state through `@chat-adapter/state-pg`; those tables are owned by the adapter package and are not defined in this repo.
+Kyto stores app-owned runtime state in `packages/db`. Chat SDK also stores adapter state through `@chat-adapter/state-pg`; those tables are owned by the adapter package and are not defined in this repo.
 
 ## App-Owned Tables
 
@@ -76,4 +76,4 @@ Defined in `packages/db/src/schema/customizations.ts`.
 
 ## Chat SDK Tables
 
-Chat SDK stores its own Slack adapter state in the same Postgres database: subscriptions, locks, dedupe, and thread state. Gorkie uses that state through Chat SDK APIs instead of defining those tables in `packages/db`.
+Chat SDK stores its own Slack adapter state in the same Postgres database: subscriptions, locks, dedupe, and thread state. Kyto uses that state through Chat SDK APIs instead of defining those tables in `packages/db`.

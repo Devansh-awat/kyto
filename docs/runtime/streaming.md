@@ -3,12 +3,12 @@ title: Streaming
 description: Assistant text, task rows, and Slack limits.
 ---
 
-Gorkie renders a turn through two Slack output paths:
+Kyto renders a turn through two Slack output paths:
 
 - assistant text is posted as normal Slack replies through `createReply`;
 - reasoning and tool activity are rendered as task rows through Chat SDK `StreamingPlan`.
 
-> **Slack message limits:** Long native Slack stream buffers can fail with `msg_too_long`. Gorkie keeps assistant text outside the native stream buffer so long answers can be split into multiple Slack messages.
+> **Slack message limits:** Long native Slack stream buffers can fail with `msg_too_long`. Kyto keeps assistant text outside the native stream buffer so long answers can be split into multiple Slack messages.
 
 ## Text Replies
 
@@ -42,9 +42,9 @@ flowchart TD
 
 Each tool call has a stable task id from the AI SDK `toolCallId`.
 
-1. On `tool-call`, Gorkie stores the tool input, logs `[tool] called`, renders a request title/details, and yields an `in_progress` task row.
-2. On `tool-result`, Gorkie pairs the result with the stored input, logs `[tool] completed`, renders a response title/output, and marks the same task row `complete`.
-3. On `tool-error`, Gorkie pairs the error with the stored input, logs `[tool] failed`, renders an error output, and marks the same task row `error`.
+1. On `tool-call`, Kyto stores the tool input, logs `[tool] called`, renders a request title/details, and yields an `in_progress` task row.
+2. On `tool-result`, Kyto pairs the result with the stored input, logs `[tool] completed`, renders a response title/output, and marks the same task row `complete`.
+3. On `tool-error`, Kyto pairs the error with the stored input, logs `[tool] failed`, renders an error output, and marks the same task row `error`.
 
 Example Slack task flow:
 
@@ -77,17 +77,17 @@ Fallback rendering exists, but the intended shape is one clear renderer per expo
 
 Some tools return a normal result object with an `error` field instead of throwing. That means the tool call completed from the stream's point of view, but the tool's operation failed.
 
-Gorkie renders those as completed task rows with bold error output:
+Kyto renders those as completed task rows with bold error output:
 
 | State | Title | Output |
 | --- | --- | --- |
 | Complete | `Read channel` | `**Error**: An API error occurred: missing_scope` |
 
-If the tool itself throws, Gorkie marks the task row failed instead. That is reserved for execution failures where the tool did not return a normal result.
+If the tool itself throws, Kyto marks the task row failed instead. That is reserved for execution failures where the tool did not return a normal result.
 
 ## Overflow
 
-Task rows are capped at 45 visible task ids. Once the visible list is full, Gorkie stops adding one row per tool and updates a single overflow row instead:
+Task rows are capped at 45 visible task ids. Once the visible list is full, Kyto stops adding one row per tool and updates a single overflow row instead:
 
 | State | Title | Output |
 | --- | --- | --- |

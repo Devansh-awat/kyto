@@ -1,10 +1,10 @@
-# Gorkie v2 — Rewrite Plan
+# Kyto v2 — Rewrite Plan
 
 > Status: planning. Branch `feat/rewrite-from-scratch` (reset onto `feat/ai-sdk-harness`).
 > Last updated: 2026-06-14.
 >
 > ### 📂 Original codebase (read-only reference)
-> **`/workspaces/worktrees/gorkie-slack/reference`** — branch `feat/ai-sdk-harness`,
+> **`/workspaces/worktrees/kyto-slack/reference`** — branch `feat/ai-sdk-harness`,
 > commit `d7ce686`. This is the full v1 implementation: old DB schemas (MCP, scheduled
 > tasks), the MCP layer, sandbox/e2b logic, Slack/Bolt code, prompts — everything we
 > deleted here lives there. **Read it to understand *how* a hard piece was solved, then
@@ -28,7 +28,7 @@ prompts and references (Chat SDK + `chat/ai`, AI SDK harness, relevant GitHub is
 
 ## 1. Goal
 
-Rewrite gorkie into a cleaner, more abstracted, multi-surface-capable AI agent where
+Rewrite kyto into a cleaner, more abstracted, multi-surface-capable AI agent where
 **the agent runs by default inside a harness** (AI SDK 7 `HarnessAgent` + `pi`), with a
 sandbox per conversation [thread]. Fix the v1 pains — *the agent forgot what tools it called* and
 *had no compaction* — by making the harness (which owns native history + compaction) the
@@ -39,7 +39,7 @@ to other platforms (Discord, etc.).
 schema fresh.
 
 **Two-part build:**
-- **Part 1 — Core layer (build first):** gorkie converses **thread-only**; one
+- **Part 1 — Core layer (build first):** kyto converses **thread-only**; one
   `HarnessAgent(pi)` per thread on a **single shared service key** (no per-user keys yet);
   persistence + steering + the core Slack conversation tools. That's the whole focus.
 - **Part 2 — later, do not let it block Part 1:** **BYOK** (per-user keys), **MCP** (+ its
@@ -52,7 +52,7 @@ Trying to make everything work at once is the failure we're avoiding.
 
 This is a **true rewrite with fresh, clean architecture** — we do **not** reclutter the old
 codebase into a new framework. The `feat/ai-sdk-harness` branch is checked out **read-only**
-as a `reference` worktree at `/workspaces/worktrees/gorkie-slack/reference` (commit `d7ce686`).
+as a `reference` worktree at `/workspaces/worktrees/kyto-slack/reference` (commit `d7ce686`).
 Use it to *understand how a hard piece was solved*, then re-derive it cleanly — do **not**
 follow old logic unless strictly necessary. The reference proves the risky parts work:
 
@@ -84,7 +84,7 @@ the new framework is explicitly a failure mode to avoid.
 | Persistence | **Sandbox-primary + a DB session-file mirror.** `resumeState` (a *pointer*) lives in Postgres; pi's transcript is a session file in the sandbox snapshot. To survive a sandbox kill, mirror that session file's bytes to Postgres each turn and re-seed it into a fresh sandbox on resume (Phase 3 — see §4a). Conversation durability must not depend on any single sandbox staying alive. |
 | Tooling | Keep turborepo, ultracite/biome, cspell, knip, lefthook, bun catalog, drizzle. |
 | Reference | `feat/ai-sdk-harness` lives read-only at `../reference`. Understand, don't copy. |
-| Deferred | **MCP** and **`apps/server`** come *after* gorkie works end-to-end (they need low-level Bolt/OAuth code). Build the core agent first. |
+| Deferred | **MCP** and **`apps/server`** come *after* kyto works end-to-end (they need low-level Bolt/OAuth code). Build the core agent first. |
 
 This rewrite intentionally bets on AI SDK/Harness/pi maturing underneath us. Local provider
 fallback, E2B sandbox wiring, steering patches, MCP glue, skills, plugin wiring, and Langfuse/OTel
@@ -150,7 +150,7 @@ Slack / (later Discord) ──▶ vercel/chat adapter ──▶ Runtime (apps/bo
   is what makes per-user BYOK + MCP safe: secrets live in the host agent instance for that
   turn, never in the sandbox.
 - **Slack affordances become host-executed AI SDK tools** on the HarnessAgent. The compatibility
-  goal for Part 1 is **1:1 old Gorkie native tool coverage** before expanding new behavior:
+  goal for Part 1 is **1:1 old Kyto native tool coverage** before expanding new behavior:
   `searchSlack`, `searchWeb`, `generateImage`, `getUserInfo`, `getWeather`, `summariseThread`,
   `readConversationHistory`, `mermaid`, `react`, `leaveChannel`, scheduling tools, and sandbox
   file-sharing affordances. Many platform tools come free
@@ -340,7 +340,7 @@ core. When it does land it will be re-derived cleanly (not copied) and gated per
   provider failures, cap excessive output-token defaults, retry transient failures, and fall back
   across configured providers/models while preserving the current thread/session state.
 - **D8 — e2b template (Phase 2).** pi runs on host, so the sandbox only needs a base image +
-  whatever runtimes code-exec needs. Use a stock e2b base or build a custom `gorkie` template?
+  whatever runtimes code-exec needs. Use a stock e2b base or build a custom `kyto` template?
 - **D9 — Part-1 model + key (Phase 2).** Which model does pi use with the single shared key —
   AI Gateway (`AI_GATEWAY_API_KEY`), or a direct provider via `auth.customEnv`? Pick one model
   for the core happy path.
@@ -373,13 +373,13 @@ Each phase: design fresh (reference for understanding only) → build clean → 
   **plus** mirroring pi's session-file bytes to Postgres each turn and re-seeding into a fresh
   sandbox via `onSandboxSession` on resume. Verify: history survives sandbox **death** (not
   just restart), `resumeFrom` works against a new sandbox id, and compaction holds on long threads.
-- **Phase 4 — Core conversation tools.** Bring back every old Gorkie native tool or an intentional
+- **Phase 4 — Core conversation tools.** Bring back every old Kyto native tool or an intentional
   v2 equivalent. Use `createChatTools` (`chat/ai`) for compatible platform operations
   (`fetchMessages`/`getUser`/`addReaction`/etc.); hand-write bot-owned tools under
   `apps/bot/src/lib/ai/tools/*` (`searchSlack`, `searchWeb`, `getWeather`, `generateImage`,
   `mermaid`, file upload, scheduling). Do not remove old tool capability just because pi has
   built-ins; preserve the old user-facing affordance first, then simplify internals later.
-  Verify every restored old Gorkie skill/tool with at least one live or harnessed smoke path:
+  Verify every restored old Kyto skill/tool with at least one live or harnessed smoke path:
   Slack search, web search, image generation/upload, user lookup, weather, thread summary,
   conversation history, Mermaid upload, reactions, leaving channels, reminders, recurring tasks,
   scheduled-task listing/cancel, sandbox file sharing, and Chat SDK internal tools (`sendDirectMessage`,

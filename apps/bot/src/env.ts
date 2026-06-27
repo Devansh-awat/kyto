@@ -38,7 +38,7 @@ export const env = createEnv({
       .enum(['true', 'false'])
       .default('false')
       .transform((value) => value === 'true'),
-    SITES_ROOT: z.string().default('/var/gorkiesites'),
+    SITES_ROOT: z.string().default('/var/kytosites'),
     // Public host used to build the public site URL returned to the agent, e.g.
     // "devansh.hackclub.app". The URL is always https:// (Nest terminates TLS).
     SITES_PUBLIC_HOST: z.string().optional(),

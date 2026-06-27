@@ -64,7 +64,7 @@ export class E2BSandboxProvider implements HarnessV1SandboxProvider {
       lifecycle: { onTimeout: 'pause' },
       timeoutMs: sandboxConfig.timeoutMs,
       metadata: {
-        app: 'gorkie',
+        app: 'kyto',
         ...(sessionId ? { threadId: sessionId } : {}),
       },
     });

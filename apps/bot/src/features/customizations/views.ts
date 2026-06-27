@@ -23,11 +23,11 @@ export function buildHomeView({
     : '_No custom instructions set._';
 
   const blocks: SlackBlock[] = [
-    { text: createSlackPlainText('Gorkie'), type: 'header' },
+    { text: createSlackPlainText('Kyto'), type: 'header' },
     {
       elements: [
         createSlackMrkdwn(
-          'Customize how Gorkie behaves across your Slack conversations.'
+          'Customize how Kyto behaves across your Slack conversations.'
         ),
       ],
       type: 'context',
@@ -119,7 +119,7 @@ export function buildPromptModal({
           type: 'plain_text_input',
         },
         hint: createSlackPlainText(
-          'Gorkie follows these instructions across every conversation.'
+          'Kyto follows these instructions across every conversation.'
         ),
         label: createSlackPlainText('Your instructions'),
         type: 'input',

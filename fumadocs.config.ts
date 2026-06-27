@@ -6,7 +6,7 @@ export default defineConfig({
       {
         dir: './docs',
         include: ['.'],
-        name: 'gorkie-slack',
+        name: 'kyto-slack',
       },
     ],
   },

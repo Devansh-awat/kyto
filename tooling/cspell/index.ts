@@ -65,7 +65,7 @@ export default defineConfig({
     'exfiltration',
     'fdfind',
     'gork',
-    'gorkie',
+    'kyto',
     'hackclub',
     'haydenbleasel',
     'healthcheck',

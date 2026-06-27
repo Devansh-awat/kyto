@@ -96,10 +96,10 @@ export function searchSlackTool({ message }: { message: Message }) {
       if (!actionToken) {
         return {
           error:
-            'Slack search requires the user to explicitly ping/mention Gorkie so Slack provides an assistant search token.',
+            'Slack search requires the user to explicitly ping/mention Kyto so Slack provides an assistant search token.',
           success: false,
           summary:
-            'Could not search Slack because this turn did not include an assistant search token. Ask the user to explicitly mention Gorkie.',
+            'Could not search Slack because this turn did not include an assistant search token. Ask the user to explicitly mention Kyto.',
         };
       }
 

@@ -1,6 +1,6 @@
 # Development
 
-Gorkie runs as one local app: `apps/bot`.
+Kyto runs as one local app: `apps/bot`.
 
 The bot uses Chat SDK with the Slack adapter in Socket Mode, so local development does not need a public tunnel. AI work runs through AI SDK Harness/Pi and each active Slack thread gets an E2B sandbox.
 
