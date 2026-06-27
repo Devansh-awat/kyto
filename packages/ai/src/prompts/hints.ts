@@ -1,4 +1,5 @@
 export interface RequestHints {
+  botUserId?: string;
   channel?: {
     id?: string;
     name?: string;

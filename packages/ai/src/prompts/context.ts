@@ -2,6 +2,11 @@ import type { RequestHints } from './hints';
 
 export function contextPrompt(hints: RequestHints): string {
   const lines = [`The current date and time is ${hints.time}.`];
+  if (hints.botUserId) {
+    lines.push(
+      `Your own Slack user id is ${hints.botUserId}. A message that mentions <@${hints.botUserId}> (or @kyto) is addressed to YOU — never mistake it for another bot like gorkie. Never look this id up as a user.`
+    );
+  }
   if (hints.workspace) {
     lines.push(`The current Slack workspace is ${hints.workspace}.`);
   }

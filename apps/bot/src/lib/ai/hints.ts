@@ -19,6 +19,7 @@ export async function requestHints({
     getUserCustomization(message.author.userId).catch(() => null),
   ]);
   return {
+    botUserId: slack.botUserId,
     channel: {
       id: channelId,
       name: channel,
