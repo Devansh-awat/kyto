@@ -35,6 +35,16 @@ const loadingMessages = [
   'is consulting the vibes',
 ];
 
+// Slack's assistant status accepts at most 10 loading messages, so sample a
+// random subset of the catalog each turn — keeps the full list for variety.
+const MAX_LOADING_MESSAGES = 10;
+
+function sampleLoadingMessages(): string[] {
+  return [...loadingMessages]
+    .sort(() => Math.random() - 0.5)
+    .slice(0, MAX_LOADING_MESSAGES);
+}
+
 export async function startThinking({
   thread,
 }: {
@@ -47,7 +57,12 @@ export async function startThinking({
   }
 
   await slack
-    .setAssistantStatus(channel, threadTs, 'is thinking', loadingMessages)
+    .setAssistantStatus(
+      channel,
+      threadTs,
+      'is thinking',
+      sampleLoadingMessages()
+    )
     .catch((error: unknown) => {
       logger.warn(
         { err: errorMessage(error), threadId: thread.id },
