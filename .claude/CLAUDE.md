@@ -206,9 +206,12 @@ Run these automatically after each completed change, in order, **without asking*
   the proxy's official `/models` descriptions) plus a cost hint. To change the
   lineup or descriptions, edit `MODEL_CATALOG`.
 - **Router** (`apps/bot/src/lib/ai/router.ts`): `pickModel({ text, exclude })`
-  sends the catalog blurbs + the user message to a cheap, fast NON-reasoning
+  sends the catalog blurbs + the routing input to a cheap, fast NON-reasoning
   model (`mistralai/mistral-small-3.2-24b-instruct`, ~$0.07/1M, ~0.5s) and
-  returns the chosen catalog id. Reasoning models are unusable here — their
+  returns the chosen catalog id. The routing input is built by
+  `buildRoutingContext` — a compact transcript of the last ~8 thread messages,
+  not just the latest one — so follow-ups like "continue" inherit the
+  underlying task's model needs (a website build stays on a coding model). Reasoning models are unusable here — their
   hidden thinking eats the tiny token budget and yields empty content. On any
   failure (or no `HACKCLUB_API_KEY`) it falls back to the cheapest non-excluded
   catalog model (`DEFAULT_MODEL` = `deepseek/deepseek-v4-pro`), never throwing.

@@ -1,5 +1,6 @@
 import { CATALOG_IDS, DEFAULT_MODEL, MODEL_CATALOG } from '@repo/ai';
 import { env } from '@/env';
+import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
 import { errorMessage } from '@/lib/utils/error';
 
@@ -18,19 +19,62 @@ const CATALOG_BLURBS = MODEL_CATALOG.map(
     `- ${model.id} (${model.label}, ~${model.cost}/1M out): ${model.blurb}`
 ).join('\n');
 
-const SYSTEM_PROMPT = `You are the model router for a Slack assistant that can write and run code in a sandbox, browse the web, analyze files/images, and use many tools. Pick the single best model for the user's request from this catalog:
+const SYSTEM_PROMPT = `You are the model router for a Slack assistant that can write and run code in a sandbox, browse the web, analyze files/images, and use many tools. Pick the single best model for the assistant's NEXT turn from this catalog:
 
 ${CATALOG_BLURBS}
 
+The user message may be a transcript of recent thread messages (one per line, "name: text"). Route based on the actual task the assistant must now perform, not just the last line — a short follow-up like "continue" or "go on" still inherits the underlying task (e.g. building a website ⇒ a coding model), so look at the whole conversation.
+
 Guidance:
 - Match the model to the work. Default to the cheapest model that can clearly do the job well.
-- Use a fast model for greetings, small talk, and quick questions.
+- Use a fast model only for greetings, small talk, and quick standalone questions.
 - Use a coding/agentic model for building, debugging, deploying, or multi-step tool work.
 - Use a multimodal model when images, files, audio, or video must be understood.
 - Reserve the most expensive frontier models for genuinely hard, high-stakes tasks.
 - Never pick a model in the avoid list.
 
 Reply with ONLY the exact model id, nothing else.`;
+
+const ROUTING_HISTORY_LIMIT = 8;
+const PER_MESSAGE_CHARS = 300;
+
+/**
+ * Build the router's input: a compact transcript of the recent thread so the
+ * router can route follow-ups ("continue") by the underlying task, not just the
+ * latest line. Falls back to the current message text if history is unavailable.
+ */
+export async function buildRoutingContext({
+  threadId,
+  fallbackText,
+}: {
+  threadId: string;
+  fallbackText: string;
+}): Promise<string> {
+  try {
+    const { messages } = await slack.fetchMessages(threadId, {
+      limit: ROUTING_HISTORY_LIMIT,
+    });
+    if (!messages?.length) {
+      return fallbackText;
+    }
+    const transcript = messages
+      .map((message) => {
+        const who = message.author.isMe
+          ? 'kyto'
+          : (message.author.userName ?? message.author.fullName ?? 'user');
+        return `${who}: ${(message.text ?? '').slice(0, PER_MESSAGE_CHARS)}`;
+      })
+      .join('\n')
+      .trim();
+    return transcript || fallbackText;
+  } catch (error) {
+    logger.warn(
+      { err: errorMessage(error), threadId },
+      '[router] history fetch failed, routing on current message only'
+    );
+    return fallbackText;
+  }
+}
 
 /**
  * Ask the router model to choose the best catalog model for this request.

@@ -24,7 +24,7 @@ import { clearTurn, getTurn, setTurn } from '@/lib/agent/turns';
 import { startThinking } from '@/lib/agent/utils';
 import { promptWithAttachments, seedAttachments } from '@/lib/ai/attachments';
 import { requestHints } from '@/lib/ai/hints';
-import { pickModel } from '@/lib/ai/router';
+import { buildRoutingContext, pickModel } from '@/lib/ai/router';
 import { renderStream } from '@/lib/ai/stream';
 import { buildTools } from '@/lib/ai/toolset';
 import { runQueuedTurn } from '@/lib/ai/turn-queue';
@@ -175,12 +175,18 @@ async function executeTurn(
     // baishui/Gemini deep backup so the bot still answers if HackClub is down.
     const failedModels: string[] = [];
     const failedKeys = new Set<string>();
+    // Route on the recent thread transcript, not just the latest message, so
+    // follow-ups like "continue" inherit the underlying task's model needs.
+    const routingText = await buildRoutingContext({
+      fallbackText: messageText,
+      threadId,
+    });
     const nextRoutedAttempt = async (): Promise<PiAttempt | undefined> => {
       const remaining = CATALOG_IDS.filter((id) => !failedModels.includes(id));
       if (remaining.length > 0) {
         const model = await pickModel({
           exclude: failedModels,
-          text: messageText,
+          text: routingText,
         });
         return catalogAttempt(model);
       }
