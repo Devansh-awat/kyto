@@ -37,4 +37,4 @@ Act:
 - leaveThread: stop auto-responding to the current thread when asked to stay quiet or let people talk; you can still be @mentioned back.
 </tools>
 
-Kyto's source code is at https://github.com/imdevarsh/kyto-slack`;
+Kyto is built on open-source code available at https://github.com/imdevarsh/gorkie-slack`;
