@@ -4,11 +4,10 @@ import { errorMessage } from '@/lib/utils/error';
 
 export type Complexity = 'simple' | 'complex';
 
-const GEMINI_URL =
-  'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
-// Free, high-quota (500/day) classifier — costs nothing against the HackClub
-// budget, so routing never eats into the budget it is trying to protect.
-const CLASSIFIER_MODEL = 'gemini-3.1-flash-lite';
+// HackClub's OpenRouter-compatible proxy. gpt-oss-120b is free on this proxy,
+// so classification costs nothing against the daily budget while staying fast.
+const CLASSIFIER_URL = 'https://ai.hackclub.com/proxy/v1/chat/completions';
+const CLASSIFIER_MODEL = 'openai/gpt-oss-120b';
 const CLASSIFY_TIMEOUT_MS = 8000;
 const MAX_INPUT_CHARS = 4000;
 
@@ -17,17 +16,18 @@ const SYSTEM_PROMPT = `You route requests for a Slack assistant that can write a
 - "simple": greetings, small talk, short factual or quick questions, simple lookups.`;
 
 /**
- * Classify a user request as "simple" or "complex" using a free Gemini model,
- * so the agent can reserve the expensive premium model for queries that need it.
- * On any failure (or no Gemini key) we default to "simple" — the budget-safe
- * choice, since the simple chain still leads with a strong coding model.
+ * Classify a user request as "simple" or "complex" using a free model on
+ * HackClub's proxy, so the agent can reserve the expensive premium model for
+ * queries that need it. On any failure (or no HackClub key) we default to
+ * "simple" — the budget-safe choice, since the simple chain still leads with a
+ * strong coding model.
  */
 export async function classifyComplexity(text: string): Promise<Complexity> {
-  if (!env.GEMINI_API_KEY) {
+  if (!env.HACKCLUB_API_KEY) {
     return 'simple';
   }
   try {
-    const response = await fetch(GEMINI_URL, {
+    const response = await fetch(CLASSIFIER_URL, {
       body: JSON.stringify({
         max_tokens: 16,
         messages: [
@@ -38,7 +38,7 @@ export async function classifyComplexity(text: string): Promise<Complexity> {
         temperature: 0,
       }),
       headers: {
-        Authorization: `Bearer ${env.GEMINI_API_KEY}`,
+        Authorization: `Bearer ${env.HACKCLUB_API_KEY}`,
         'Content-Type': 'application/json',
       },
       method: 'POST',
