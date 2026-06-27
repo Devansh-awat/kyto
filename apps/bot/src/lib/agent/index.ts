@@ -166,6 +166,7 @@ async function executeTurn(
     });
     let attachments: Awaited<ReturnType<typeof seedAttachments>> = [];
     let streamed = false;
+    let skipped = false;
     const attempts: AttemptFailure[] = [];
     // Route by complexity: simple queries skip the expensive premium model to
     // protect the daily HackClub budget; complex ones lead with it.
@@ -215,6 +216,12 @@ async function executeTurn(
           session,
         });
         for await (const chunk of renderStream({
+          onSkip: () => {
+            // A skip is a deliberate, successful "no reply" — mark the turn as
+            // handled so the empty-response guard below does NOT advance the
+            // fallback chain (which previously produced placeholder garbage).
+            skipped = true;
+          },
           onTextDelta: async (text) => {
             streamed = true;
             errorStage = 'after_text';
@@ -234,7 +241,7 @@ async function executeTurn(
         // A model that finishes without producing anything (e.g. an upstream
         // 504 the harness swallowed into an empty stream) must NOT be treated
         // as a successful turn — throw so the fallback chain advances.
-        if (!streamed) {
+        if (!(streamed || skipped)) {
           throw new Error(
             `Model ${currentAttempt.model} returned an empty response.`
           );

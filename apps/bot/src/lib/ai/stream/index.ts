@@ -9,19 +9,25 @@ const REASONING_OUTPUT_MAX_LENGTH = 2800;
 
 export async function* renderStream({
   onTextDelta,
+  onSkip,
   stream,
 }: {
   onTextDelta?: (text: string) => PromiseLike<void> | void;
+  onSkip?: () => void;
   stream: AsyncIterable<TextStreamPart<ToolSet>>;
 }): AsyncGenerator<string | StreamChunk> {
   const toolInputs = new Map<string, unknown>();
   const reasoning = new Map<string, string>();
   const visibleTaskIds = new Set<string>();
   let hiddenTaskCount = 0;
+  let skipped = false;
   for await (const part of stream) {
     switch (part.type) {
       case 'text-delta': {
-        if (part.text) {
+        // A skipped turn intentionally produces no reply, and some providers
+        // emit placeholder garbage (e.g. "(Empty response: ...)") in this slot
+        // when the model returned only a thinking block — never forward either.
+        if (part.text && !skipped && !isPlaceholderText(part.text)) {
           await onTextDelta?.(part.text);
         }
         break;
@@ -95,6 +101,10 @@ export async function* renderStream({
         break;
       }
       case 'tool-result': {
+        if (part.toolName === 'skip') {
+          skipped = true;
+          onSkip?.();
+        }
         const input = toolInputs.get(part.toolCallId);
         logger.info(
           {
@@ -161,6 +171,15 @@ export async function* renderStream({
   if (hiddenTaskCount > 0) {
     yield hiddenTaskUpdate({ count: hiddenTaskCount, done: true });
   }
+}
+
+// Some upstream proxies, when a model returns only a thinking block with no
+// text, substitute a placeholder string (e.g. a Python-repr "(Empty response:
+// {...})") into the text slot. Never surface those to users.
+const PLACEHOLDER_TEXT = /^\s*\(empty (response|completion):/i;
+
+function isPlaceholderText(text: string): boolean {
+  return PLACEHOLDER_TEXT.test(text);
 }
 
 function showTask({
