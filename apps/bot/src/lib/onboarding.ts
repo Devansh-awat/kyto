@@ -32,13 +32,15 @@ export async function offerOptIn(thread: Thread, user: Author): Promise<void> {
     return;
   }
   try {
-    await thread.postEphemeral(
-      user,
+    // Posted as a visible in-thread reply (not ephemeral): an un-opted-in user
+    // should clearly see the prompt — and so should others in the thread, the
+    // way gorkie surfaces its own join gate.
+    await thread.post(
       Card({
         title: ':wave: first time meeting kyto',
         children: [
           CardText(
-            `hi! i'm kyto. before i can help, you need to accept the terms posted in <#${env.OPT_IN_CHANNEL}>.`
+            `hi <@${user.userId}>! i'm kyto. before i can help, you need to accept the terms posted in <#${env.OPT_IN_CHANNEL}>.`
           ),
           CardText(
             "tap below to opt in, i'll add you to the terms channel and we can get started."
@@ -52,8 +54,7 @@ export async function offerOptIn(thread: Thread, user: Author): Promise<void> {
             }),
           ]),
         ],
-      }),
-      { fallbackToDM: true }
+      })
     );
   } catch (error) {
     logger.warn(

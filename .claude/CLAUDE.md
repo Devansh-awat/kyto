@@ -232,10 +232,23 @@ Run these automatically after each completed change, in order, **without asking*
   is attempt 0; on any error or empty completion it falls through to the
   `deepFallbackAttempts` deep backup (baishui → Gemini, each tried once) so the
   bot still answers if HackClub/OpenRouter is down.
-- The requested model (`openrouter/auto`, or a deep-fallback id) is surfaced as a
-  **`Model` task in the thinking section** — never in the reply text. Note: the
-  stream only exposes the *requested* id, not the underlying model OpenRouter
-  resolves to, so the task shows `openrouter/auto` for the primary path.
+- **Fetch interceptor** (`apps/bot/src/lib/agent/resolved-model.ts`, installed in
+  `index.ts`): Pi makes model calls through the process-global `fetch` (undici),
+  so we patch it to tune the request and read the response:
+  - **Tune the auto-router**: inject the `auto-router` plugin into the
+    `openrouter/auto` request body with `cost_quality_tradeoff` (0 = best/dearest,
+    7 = default, 10 = cheapest; we use **5**) and a `model_patterns` allowlist
+    (anthropic/\*, google/gemini-3\*, openai/gpt-\*, moonshot/\*, minimax/\*,
+    zero-one-ai/\*, qwen/\*). Edit `COST_QUALITY_TRADEOFF`/`MODEL_PATTERNS` there.
+  - **Capture the resolved model**: the stream only exposes the *requested* id, so
+    we read the concrete model OpenRouter resolved to from the `model` field of a
+    clone of the response and stash it per-turn (`AsyncLocalStorage`).
+- The model is surfaced as a **`Model` task in the thinking section** (never in
+  the reply text), shown as `openrouter/auto → <resolved>`. The task is opened
+  `in_progress` and completed once after streaming (same id) so it updates in
+  place. `openrouter/auto` re-routes **per step**, so a turn can use several
+  models; the task shows the **first** step's pick (every step is logged at info
+  as `[router] resolved openrouter/auto model`).
 - `MODEL_CATALOG`/`CATALOG_IDS` are retained for reference/diagnostics only (no
   longer drive routing). `chatAttempts`/`attemptsFor`/`PREMIUM_MODEL` remain
   exported (used by `compaction.ts`, which always runs on `chatAttempts[0]`).
@@ -256,6 +269,23 @@ Run these automatically after each completed change, in order, **without asking*
   intermittently there but degrades via the empty-completion fallback, and is
   also reachable via baishui (`glm5.2-normal`).
 
+### Identity & opt-in gating
+- **The bot's Slack username is a gorkie-era handle (`gorkie__devansh_`)** — the
+  app was forked from gorkie and the handle stuck (display name shows "Not set"
+  live even though `slack-manifest.json` says `kyto`; the manifest needs syncing
+  + reinstall to update it). Because of this, `annotateMentions`
+  (`lib/agent/mentions.ts`) special-cases the bot's own id (`slack.botUserId`) and
+  annotates it as `kyto`, so the agent never mistakes its own mention for gorkie.
+- **Opt-in gating** (`OPT_IN_CHANNEL`): an un-opted-in user who @s kyto gets
+  `offerOptIn` (`lib/onboarding.ts`) — a **visible in-thread reply** (not
+  ephemeral) with an "i accept" button, mirroring how gorkie surfaces its join
+  gate. Membership of `OPT_IN_CHANNEL` is the allowlist (`lib/allowed-users.ts`).
+
 ### Sandbox / E2B
-- Config in `packages/sandbox/src/config.ts`. Only sandbox/code-execution work
-  bills E2B; the Slack tools above are free HTTP calls.
+- Config in `packages/sandbox/src/config.ts`. **The sandbox is created/resumed
+  every turn** — not just for code execution: the Pi agent's session file (the
+  conversation transcript that gives a thread memory) lives in the sandbox FS
+  (`syncSession`/`getSessionFile`), since `buildPrompt` sends only the latest
+  message. So the sandbox can't be made lazy without breaking thread memory. It
+  is paused between turns and resumed (same sandbox per thread), so E2B bills
+  active turn time, not idle.
