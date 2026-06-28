@@ -150,10 +150,16 @@ Run these automatically after each completed change, in order, **without asking*
    Restart with: `pkill -f 'bun run src/index.ts'` then relaunch in the
    background with `bun run start:bot` from the repo root. Confirm it came back
    up (check the process / startup logs).
+4. **Push to the private repo** (`origin` →
+   `github.com/Devansh-awat/kyto.git`). After committing, `git push origin` the
+   current branch automatically, **without asking**. This is the owner's private
+   repo, so pushing is pre-authorized.
 
-- **Pushing / opening a PR: still ask first.** Auto-commit/restart/sync are
-  local-and-Slack only. Anything that publishes to **GitHub** (`git push`,
-  `gh pr create`) requires explicit user confirmation.
+- **NEVER push to `upstream`** (`github.com/imdevarsh/gorkie-slack.git`, the
+  fork source). Auto-push is `origin` only.
+- **Opening a PR still asks first.** Auto-commit/restart/sync/push-to-origin are
+  pre-authorized; `gh pr create` (or any cross-repo publish) requires explicit
+  user confirmation.
 
 ### AI tools
 - Agent tools live in `apps/bot/src/lib/ai/tools/` and are registered in
