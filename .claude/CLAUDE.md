@@ -248,13 +248,16 @@ Run these automatically after each completed change, in order, **without asking*
   so we patch it to tune the request and read the response:
   - **Tune the auto-router**: inject the `auto-router` plugin into the
     `openrouter/auto` request body with `cost_quality_tradeoff` (0 = best/dearest,
-    7 = default, 10 = cheapest; we use **5**) and a `model_patterns` allowlist of
-    **exact slugs** (not globs, so no `-nano`/`-mini`/`-flash-lite`/`-fast` or
-    `claude-fable-5` leakage): claude-opus-4.6/4.7/4.8, claude-sonnet-4.6,
-    gpt-5.4/5.5, glm-5.1/5.2, gemini-3.5-flash, gemini-3.1-pro-preview,
-    deepseek-v4-pro/flash, kimi-k2.6/k2.7-code, minimax-m3, qwen3.6-plus (the
-    owner's leaderboard ranking, verified against OpenRouter's /models catalog).
-    Edit `COST_QUALITY_TRADEOFF`/`MODEL_PATTERNS` there.
+    7 = default, 10 = cheapest; we use **5**) and an **`allowed_models`** allowlist
+    of **exact slugs** (the field is `allowed_models` — the older `model_patterns`
+    name is silently ignored by the proxy; not globs, so no
+    `-nano`/`-mini`/`-flash-lite`/`-fast` or `claude-fable-5` leakage):
+    claude-opus-4.6/4.7/4.8, claude-sonnet-4.6, gpt-5.4/5.5, glm-5.1/5.2,
+    gemini-3.5-flash, gemini-3.1-pro-preview, deepseek-v4-pro/flash,
+    kimi-k2.6/k2.7-code, minimax-m3, qwen3.6-plus (the owner's leaderboard
+    ranking). The interceptor strips a stale `Content-Length` when re-issuing the
+    tuned (longer) body so the appended `plugins` isn't truncated. Verified
+    honored by the HackClub proxy. Edit `COST_QUALITY_TRADEOFF`/`ALLOWED_MODELS`.
   - **Capture the resolved model**: the stream only exposes the *requested* id, so
     we read the concrete model OpenRouter resolved to from the `model` field of a
     clone of the response and stash it per-turn (`AsyncLocalStorage`).

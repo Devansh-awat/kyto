@@ -7,7 +7,7 @@ import logger from '@/lib/logger';
 //
 //  1. Request: tune the auto-router by injecting the `auto-router` plugin with
 //     `cost_quality_tradeoff` (0 = pure quality, 7 = default, 10 = cheapest)
-//     and a `model_patterns` allowlist restricting it to chosen families.
+//     and an `allowed_models` allowlist restricting it to chosen model ids.
 //  2. Response: the OpenAI-compatible payload carries the model the router
 //     actually resolved to (e.g. `openai/gpt-5.5`) in its `model` field, which
 //     the Pi/harness stream never exposes. We read it off a clone of the
@@ -30,12 +30,14 @@ const MAX_SCAN_BYTES = 16_384;
 // Auto-router cost/quality bias: 7 is OpenRouter's default, 10 is cheapest.
 const COST_QUALITY_TRADEOFF = 5;
 // Restrict the auto-router to these EXACT model ids (owner-chosen allowlist,
-// derived from the leaderboard ranking). Exact slugs — not globs — so trimmed
-// variants like `-nano`/`-mini`/`-flash-lite`/`-fast`/`-pro-image` and
-// `claude-fable-5` can never be routed to. Reasoning-effort tiers in the
-// leaderboard ("Thinking"/"High"/"xHigh"/"Max") are the same slug, so they
-// collapse. Verified against OpenRouter's /api/v1/models catalog (June 2026).
-const MODEL_PATTERNS = [
+// derived from the leaderboard ranking). Passed as the auto-router plugin's
+// `allowed_models` field (NOT `model_patterns` — that field name is silently
+// ignored). Exact slugs — not globs — so trimmed variants like
+// `-nano`/`-mini`/`-flash-lite`/`-fast`/`-pro-image` and `claude-fable-5` can
+// never be routed to. Reasoning-effort tiers in the leaderboard
+// ("Thinking"/"High"/"xHigh"/"Max") are the same slug, so they collapse.
+// Verified honored by the HackClub proxy (June 2026).
+const ALLOWED_MODELS = [
   'anthropic/claude-opus-4.8',
   'anthropic/claude-opus-4.7',
   'anthropic/claude-opus-4.6',
@@ -116,25 +118,18 @@ function bodyToString(body: unknown): string | undefined {
 }
 
 /**
- * If this is an `openrouter/auto` completions request with a JSON string body,
- * return an init with the cost-biasing auto-router plugin merged in. Otherwise
- * return the init unchanged.
+ * If `raw` is an `openrouter/auto` completions body, return a new JSON body with
+ * the cost-biasing auto-router plugin (cost_quality_tradeoff + allowed_models
+ * allowlist) merged in. Returns null when it does not apply or cannot be parsed.
  */
-function tuneAutoRouter(
-  url: string,
-  init: RequestInit | undefined
-): RequestInit | undefined {
-  if (!(init?.body && url.includes(COMPLETIONS_HINT))) {
-    return init;
-  }
-  const raw = bodyToString(init.body);
+function tuneCompletionsBody(raw: string | undefined): string | null {
   if (!raw?.includes(ROUTER_MODEL_ID)) {
-    return init;
+    return null;
   }
   try {
     const payload = JSON.parse(raw);
     if (payload?.model !== ROUTER_MODEL_ID) {
-      return init;
+      return null;
     }
     const plugins = Array.isArray(payload.plugins) ? payload.plugins : [];
     payload.plugins = [
@@ -144,13 +139,37 @@ function tuneAutoRouter(
       {
         id: AUTO_ROUTER_PLUGIN_ID,
         cost_quality_tradeoff: COST_QUALITY_TRADEOFF,
-        model_patterns: MODEL_PATTERNS,
+        allowed_models: ALLOWED_MODELS,
       },
     ];
-    return { ...init, body: JSON.stringify(payload) };
+    return JSON.stringify(payload);
   } catch {
-    return init;
+    return null;
   }
+}
+
+/**
+ * Read the request body whether it lives on `init.body` (string/Uint8Array) or
+ * inside a `Request` object passed as `input`. The AI SDK/Pi may use either, and
+ * if we only checked `init.body` the plugin injection would silently no-op for
+ * `Request`-style calls (the bug that let openrouter/auto pick off-allowlist
+ * models like gemini-2.5-flash-lite).
+ */
+async function readRequestBody(
+  input: string | URL | Request,
+  init: RequestInit | undefined
+): Promise<string | undefined> {
+  const fromInit = bodyToString(init?.body);
+  if (fromInit !== undefined) {
+    return fromInit;
+  }
+  if (input instanceof Request) {
+    return await input
+      .clone()
+      .text()
+      .catch(() => undefined);
+  }
+  return;
 }
 
 let installed = false;
@@ -170,9 +189,36 @@ export function installModelCapture(): void {
     init?: RequestInit
   ): Promise<Response> => {
     const url = requestUrl(input);
+    // Inject the auto-router allowlist into the openrouter/auto request. The
+    // body may live on init.body OR inside a Request object, so read both and,
+    // when we tune it, re-issue as (url, init) so the new body is the one sent.
+    let callInput: string | URL | Request = input;
+    let callInit = init;
+    if (url.includes(COMPLETIONS_HINT)) {
+      const tuned = tuneCompletionsBody(await readRequestBody(input, init));
+      if (tuned) {
+        const source =
+          init?.headers ??
+          (input instanceof Request ? input.headers : undefined);
+        // Drop Content-Length: our tuned body is longer than the original, so a
+        // stale length truncates the request on the wire — cutting off the
+        // appended `plugins` (which is why the allowlist was silently ignored).
+        // Let undici recompute it from the new body.
+        const headers = new Headers(
+          source as ConstructorParameters<typeof Headers>[0]
+        );
+        headers.delete('content-length');
+        const method =
+          init?.method ?? (input instanceof Request ? input.method : 'POST');
+        const signal =
+          init?.signal ?? (input instanceof Request ? input.signal : undefined);
+        callInput = url;
+        callInit = { ...init, body: tuned, headers, method, signal };
+      }
+    }
     const response = await original(
-      input as Parameters<typeof original>[0],
-      tuneAutoRouter(url, init)
+      callInput as Parameters<typeof original>[0],
+      callInit
     );
     const holder = store.getStore();
     if (
