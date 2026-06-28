@@ -7,13 +7,24 @@ import { rawSlackText } from '@/lib/utils/message';
 // We never persist a session, so the whole Slack thread is the agent's only
 // memory. Cap how many prior messages we replay to bound prompt size.
 const MAX_THREAD_MESSAGES = 100;
+// The bot's Slack username is a leftover gorkie-era handle; label its own
+// authored messages as kyto so it doesn't think "gorkie" spoke (mirrors the
+// same special-case in annotateMentions).
+const BOT_NAME = 'kyto';
+
+function authorLabel(message: Message): string {
+  if (slack.botUserId && message.author.userId === slack.botUserId) {
+    return BOT_NAME;
+  }
+  return message.author.userName;
+}
 
 async function renderMessage(message: Message): Promise<string> {
   const slackText = rawSlackText(message);
   const text = slackText
     ? slackMrkdwnToMarkdown(await annotateMentions(slackText))
     : message.text;
-  return `@${message.author.userName} (${message.author.userId}): ${text}`;
+  return `@${authorLabel(message)} (${message.author.userId}): ${text}`;
 }
 
 export async function buildPrompt(
