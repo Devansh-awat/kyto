@@ -29,14 +29,20 @@ const MODEL_FIELD = /"model"\s*:\s*"([^"]+)"/;
 const MAX_SCAN_BYTES = 16_384;
 // Auto-router cost/quality bias: 7 is OpenRouter's default, 10 is cheapest.
 const COST_QUALITY_TRADEOFF = 5;
-// Restrict the auto-router to these model families (owner-chosen allowlist).
+// Restrict the auto-router to these model families (owner-chosen allowlist,
+// derived from the leaderboard ranking). Anthropic is scoped to opus/sonnet so
+// `claude-fable-*` is deliberately excluded. Covers: Opus 4.6/4.7/4.8,
+// Sonnet 4.6, GPT 5.4/5.5, Gemini 3.x, GLM 5.1/5.2, DeepSeek V4 (pro/flash),
+// Kimi K2.6/K2.7, MiniMax M3, Qwen 3.6.
 const MODEL_PATTERNS = [
-  'anthropic/*',
+  'anthropic/claude-opus-*',
+  'anthropic/claude-sonnet-*',
+  'openai/gpt-5*',
   'google/gemini-3*',
-  'openai/gpt-*',
-  'moonshot/*',
+  'z-ai/glm-5*',
+  'deepseek/deepseek-v4*',
+  'moonshotai/*',
   'minimax/*',
-  'zero-one-ai/*',
   'qwen/*',
 ];
 const AUTO_ROUTER_PLUGIN_ID = 'auto-router';

@@ -238,8 +238,10 @@ Run these automatically after each completed change, in order, **without asking*
   - **Tune the auto-router**: inject the `auto-router` plugin into the
     `openrouter/auto` request body with `cost_quality_tradeoff` (0 = best/dearest,
     7 = default, 10 = cheapest; we use **5**) and a `model_patterns` allowlist
-    (anthropic/\*, google/gemini-3\*, openai/gpt-\*, moonshot/\*, minimax/\*,
-    zero-one-ai/\*, qwen/\*). Edit `COST_QUALITY_TRADEOFF`/`MODEL_PATTERNS` there.
+    (anthropic/claude-opus-\*, anthropic/claude-sonnet-\* — opus/sonnet only so
+    `claude-fable-*` is excluded — openai/gpt-5\*, google/gemini-3\*, z-ai/glm-5\*,
+    deepseek/deepseek-v4\*, moonshotai/\*, minimax/\*, qwen/\*; derived from the
+    owner's leaderboard ranking). Edit `COST_QUALITY_TRADEOFF`/`MODEL_PATTERNS` there.
   - **Capture the resolved model**: the stream only exposes the *requested* id, so
     we read the concrete model OpenRouter resolved to from the `model` field of a
     clone of the response and stash it per-turn (`AsyncLocalStorage`).
