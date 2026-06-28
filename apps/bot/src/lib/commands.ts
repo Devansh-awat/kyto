@@ -1,17 +1,12 @@
 import type { Message, Thread } from 'chat';
-import { compactTurn, stopTurn } from '@/lib/agent';
+import { stopTurn } from '@/lib/agent';
 import logger from '@/lib/logger';
 import { toLogError } from '@/lib/utils/error';
 import { rawText, withoutLeadingMentions } from '@/lib/utils/message';
 
-type BotCommand =
-  | {
-      instructions?: string;
-      type: 'compact';
-    }
-  | {
-      type: 'stop';
-    };
+interface BotCommand {
+  type: 'stop';
+}
 
 export async function handleCommand({
   message,
@@ -23,14 +18,6 @@ export async function handleCommand({
   const command = cmd(message);
   if (!command) {
     return false;
-  }
-  if (command.type === 'compact') {
-    await compactTurn({
-      instructions: command.instructions,
-      message,
-      thread,
-    });
-    return true;
   }
 
   const stopped = stopTurn({ threadId: thread.id });
@@ -62,11 +49,6 @@ function cmd(message: Message): BotCommand | null {
   }
 
   switch (match[1].toLowerCase()) {
-    case 'compact':
-      return {
-        instructions: (match?.[2] ?? '').trim() || undefined,
-        type: 'compact',
-      };
     case 'stop':
       return { type: 'stop' };
     default:

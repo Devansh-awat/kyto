@@ -20,6 +20,7 @@
     "@repo/logging": "workspace:*",
     "@repo/sandbox": "workspace:*",
     "@t3-oss/env-core": "catalog:",
+    "agentmail": "^0.5.13",
     "ai": "catalog:",
     "chat": "^4.30.0",
     "dotenv": "catalog:",

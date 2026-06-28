@@ -85,7 +85,7 @@ async function main(): Promise<void> {
         'node --version | grep -E "^v2[4-9]" || (echo "ERROR: Node 24+ required, got $(node --version)" && exit 1)',
         'npm config --global set prefix /usr/local',
         'python3 -m pip install --no-cache-dir --break-system-packages --no-user --upgrade pip',
-        'python3 -m pip install --no-cache-dir --break-system-packages --no-user pillow matplotlib numpy pandas requests agentmail',
+        'python3 -m pip install --no-cache-dir --break-system-packages --no-user pillow matplotlib numpy pandas requests',
         'npm install -g agent-browser',
         'bash -lc "yes | agent-browser install --with-deps"',
         'chown -R user:user /home/user',

@@ -168,9 +168,20 @@ Run these automatically after each completed change, in order, **without asking*
   `errorMessage()`/`toLogError()` from `@/lib/utils/error`.
 - Fork-added tools: `canvasRead/Write/List/Delete`, `pinMessage`, `unpinMessage`,
   `bookmarkLink`, `createChannel`, `setChannelTopic`, `poll`, `getPermalink`,
-  `fetchUrl`, `deploySite`, `removeSite`, `skip`, `sendAsUser`, `editAsUser`.
+  `fetchUrl`, `deploySite`, `removeSite`, `skip`, `sendAsUser`, `editAsUser`,
+  `browse`, `sendEmail`/`checkInbox`/`replyEmail`.
 - Slack scopes are declared in `slack-manifest.json` — update it when a tool
   needs a new scope.
+- **Email** (`sendEmail`/`checkInbox`/`replyEmail`, `tools/email.ts`) runs
+  **host-side** via the AgentMail JS SDK (`agentmail` npm) using
+  `AGENTMAIL_API_KEY`. Registered only when that key is set (toolset.ts). It is
+  NOT in the sandbox anymore (the key is no longer injected there).
+- **Browser** (`browse`, `tools/browse.ts`) runs the preinstalled
+  `agent-browser` CLI **inside the sandbox** (Chromium stays isolated off the
+  host). It's a thin wrapper: pass agent-browser args in `command` (run
+  `skills get core` first). Using it materializes the lazy sandbox. The old
+  `agentmail`/`agent-browser` **Pi skills were removed** — kyto now loads **zero
+  Pi skills** (any skill would force per-turn sandbox creation; see Sandbox/E2B).
 - **Web search** (the `searchWeb` task) uses Exa via `EXA_API_KEY`. A placeholder
   key (`exa-placeholder-no-websearch`) makes every search return
   `ExaError: Invalid API key` — set a real key to enable web search.
@@ -255,7 +266,7 @@ Run these automatically after each completed change, in order, **without asking*
   as `[router] resolved openrouter/auto model`).
 - `MODEL_CATALOG`/`CATALOG_IDS` are retained for reference/diagnostics only (no
   longer drive routing). `chatAttempts`/`attemptsFor`/`PREMIUM_MODEL` remain
-  exported (used by `compaction.ts`, which always runs on `chatAttempts[0]`).
+  exported for reference.
 - Fallback advances on **any** error AND on an **empty completion** — a model
   that finishes producing nothing (e.g. a HackClub 504 swallowed into an empty
   stream) is treated as a failed attempt, not a silent success. A deliberate
@@ -285,11 +296,29 @@ Run these automatically after each completed change, in order, **without asking*
   ephemeral) with an "i accept" button, mirroring how gorkie surfaces its join
   gate. Membership of `OPT_IN_CHANNEL` is the allowlist (`lib/allowed-users.ts`).
 
-### Sandbox / E2B
-- Config in `packages/sandbox/src/config.ts`. **The sandbox is created/resumed
-  every turn** — not just for code execution: the Pi agent's session file (the
-  conversation transcript that gives a thread memory) lives in the sandbox FS
-  (`syncSession`/`getSessionFile`), since `buildPrompt` sends only the latest
-  message. So the sandbox can't be made lazy without breaking thread memory. It
-  is paused between turns and resumed (same sandbox per thread), so E2B bills
-  active turn time, not idle.
+### Sandbox / E2B — lazy + ephemeral, no persistence
+- Config in `packages/sandbox/src/config.ts`. **Nothing is stored between turns.**
+  Pi runs in-process on the host (no bridge); the E2B sandbox is only the
+  execution backend for Pi's builtin `bash`/file tools and the host tools that
+  opt into it (`browse`, `deploySite`, `getFile`, `uploadFile`).
+- **Memory = the Slack thread.** Each turn opens a **fresh** Pi session (no
+  resume) and `buildPrompt` (`lib/agent/prompt.ts`) feeds the **whole thread**
+  (`slack.fetchMessages`, capped) as context. No session is persisted: the DB
+  `sandbox_sessions` table and the in-sandbox `.pi-sessions` file are no longer
+  written. (`!compact` and the per-thread DB session were removed.)
+- **Lazy sandbox** (`packages/sandbox/src/lazy-session.ts`,
+  `LazyE2BNetworkSandboxSession`): `createSession` hands the harness a session
+  that defers the real `Sandbox.create` until a tool actually needs it, so
+  **chat-only turns cost zero E2B**. The harness/Pi run a tiny fixed bootstrap on
+  the sandbox at start (`mkdir -p <workdir>` + one workspace `find`; a `printf
+  $HOME` only with Pi skills — we load none); the lazy session **fakes** those
+  (the never-persisted workspace is always empty) and materializes on the first
+  real file/exec op, replaying the recorded `mkdir`s. **This couples to harness/
+  Pi bootstrap command shapes** — re-check on `@ai-sdk/harness*` upgrades; if a
+  faked command changes, it degrades to "sandbox every turn" (correct, not lazy).
+- **Ephemeral lifecycle:** the session is `destroy()`ed at turn end (kills the
+  sandbox iff it was materialized; chat turns never created one). Never paused,
+  never resumed, no DB row, no snapshot — so no paused-sandbox accumulation.
+- This makes kyto "live processing without storing message contents" for the
+  Slack Scraping policy. `langfuse` tracing is disabled for the same reason
+  (it would export message content); env keys remain but unused.

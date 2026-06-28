@@ -1,22 +1,53 @@
 import { slackMrkdwnToMarkdown } from '@chat-adapter/slack/format';
-import type { Message } from 'chat';
+import type { Message, Thread } from 'chat';
 import { annotateMentions } from '@/lib/agent/mentions';
+import { slack } from '@/lib/chat';
 import { rawSlackText } from '@/lib/utils/message';
+
+// We never persist a session, so the whole Slack thread is the agent's only
+// memory. Cap how many prior messages we replay to bound prompt size.
+const MAX_THREAD_MESSAGES = 100;
+
+async function renderMessage(message: Message): Promise<string> {
+  const slackText = rawSlackText(message);
+  const text = slackText
+    ? slackMrkdwnToMarkdown(await annotateMentions(slackText))
+    : message.text;
+  return `@${message.author.userName} (${message.author.userId}): ${text}`;
+}
 
 export async function buildPrompt(
   message: Message,
   {
     customizationPrompt,
+    thread,
   }: {
     customizationPrompt?: string;
+    thread?: Thread;
   } = {}
 ): Promise<string> {
-  const prefix = `@${message.author.userName} (${message.author.userId})`;
-  const slackText = rawSlackText(message);
-  const text = slackText
-    ? slackMrkdwnToMarkdown(await annotateMentions(slackText))
-    : message.text;
-  const messageText = `${prefix}: ${text}`;
+  const current = await renderMessage(message);
+
+  let history = '';
+  if (thread) {
+    const fetched = await slack
+      .fetchMessages(thread.id, { limit: MAX_THREAD_MESSAGES })
+      .catch(() => undefined);
+    const prior = (fetched?.messages ?? []).filter(
+      (entry): entry is Message => entry.id !== message.id
+    );
+    if (prior.length > 0) {
+      const rendered = await Promise.all(prior.map(renderMessage));
+      history = [
+        'Conversation so far in this Slack thread (oldest first):',
+        ...rendered,
+        '',
+        'The latest message, which you must respond to:',
+      ].join('\n');
+    }
+  }
+
+  const body = history ? `${history}\n${current}` : current;
 
   return customizationPrompt
     ? [
@@ -24,7 +55,7 @@ export async function buildPrompt(
         customizationPrompt,
         '</user_instructions>',
         '',
-        messageText,
+        body,
       ].join('\n')
-    : messageText;
+    : body;
 }

@@ -26,7 +26,7 @@ export function agentErrorMessage({
     return '_kyto is out of model credits for this request. try again later or ask for a shorter/smaller result._';
   }
   if (CONTEXT_ERROR_PATTERN.test(message)) {
-    return '_that request is too large for the current model budget. try a shorter prompt or ask me to compact/summarize first._';
+    return '_that request is too large for the current model budget. try a shorter prompt or start a new thread._';
   }
   if (PROVIDER_TIMEOUT_PATTERN.test(message)) {
     return '_kyto hit a model provider timeout. try again in a bit, or send a shorter follow-up so kyto can continue from the current thread state._';

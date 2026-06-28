@@ -1,40 +1,14 @@
 import type { HarnessV1SandboxProvider } from '@ai-sdk/harness';
-import type { Experimental_SandboxSession } from '@ai-sdk/provider-utils';
 import { Sandbox } from '@e2b/code-interpreter';
-import {
-  getByThread,
-  markActivity,
-  markPaused,
-  updateRuntime,
-  upsert,
-} from '@repo/db/queries';
 import type { Logger } from '@repo/logging/logger';
 import { sandboxConfig } from './config';
-import { E2BNetworkSandboxSession, isMissingSandboxError } from './session';
+import { LazyE2BNetworkSandboxSession } from './lazy-session';
 
 export interface E2BSandboxProviderOptions {
   apiKey: string;
   env?: Record<string, string>;
   logger: Logger;
   template?: string;
-}
-
-function connectE2BSandbox({
-  apiKey,
-  sandboxId,
-}: {
-  apiKey: string;
-  sandboxId: string;
-}): Promise<Sandbox | null> {
-  return Sandbox.connect(sandboxId, {
-    apiKey,
-    timeoutMs: sandboxConfig.timeoutMs,
-  }).catch((error: unknown) => {
-    if (isMissingSandboxError(error)) {
-      return null;
-    }
-    throw error;
-  });
 }
 
 export class E2BSandboxProvider implements HarnessV1SandboxProvider {
@@ -72,134 +46,24 @@ export class E2BSandboxProvider implements HarnessV1SandboxProvider {
     return sandbox;
   };
 
-  createSession = async ({
-    abortSignal,
-    onFirstCreate,
+  // Ephemeral + lazy: we never persist or resume a session (the Slack thread is
+  // the only source of memory). Hand the harness a lazy session that defers the
+  // real E2B `Sandbox.create` until a tool actually needs it, so chat-only turns
+  // cost zero sandbox. The session is destroyed at turn end (no DB, no pausing).
+  createSession = ({
     sessionId,
   }: {
     abortSignal?: AbortSignal;
     identity?: string;
-    onFirstCreate?: (
-      session: Experimental_SandboxSession,
-      opts: { abortSignal?: AbortSignal }
-    ) => Promise<void>;
+    onFirstCreate?: unknown;
     sessionId?: string;
-  } = {}) => {
-    abortSignal?.throwIfAborted();
-
-    const existing = sessionId ? await getByThread(sessionId) : null;
-    let sandbox = existing
-      ? await connectE2BSandbox({
-          apiKey: this.apiKey,
-          sandboxId: existing.sandboxId,
-        })
-      : null;
-    if (sandbox && sessionId) {
-      await sandbox
-        .setTimeout(sandboxConfig.timeoutMs)
-        .then(async () => {
-          await sandbox?.files.makeDir(sandboxConfig.workdir);
-        })
-        .catch((error: unknown) => {
-          if (isMissingSandboxError(error)) {
-            sandbox = null;
-            return;
-          }
-          throw error;
-        });
-    }
-
-    if (sandbox && sessionId) {
-      await markActivity(sessionId);
-      this.logger.debug(
-        { sessionId, sandboxId: sandbox.sandboxId },
-        '[sandbox] reused e2b sandbox'
-      );
-      return new E2BNetworkSandboxSession({ env: this.env, sandbox });
-    }
-
-    const nextSandbox = await this.spawnSandbox({ sessionId });
-    const session = new E2BNetworkSandboxSession({
-      env: this.env,
-      sandbox: nextSandbox,
-    });
-    await onFirstCreate?.(session.restricted(), { abortSignal });
-
-    if (sessionId) {
-      await upsert({
-        threadId: sessionId,
-        sandboxId: nextSandbox.sandboxId,
+  } = {}) =>
+    Promise.resolve(
+      new LazyE2BNetworkSandboxSession({
+        env: this.env,
+        logger: this.logger,
         sessionId,
-        status: 'active',
-      });
-    }
-
-    this.logger.info(
-      { sessionId, sandboxId: nextSandbox.sandboxId, template: this.template },
-      '[sandbox] created sandbox'
+        spawn: () => this.spawnSandbox({ sessionId }),
+      })
     );
-
-    return session;
-  };
-
-  pauseSession = async ({ threadId }: { threadId: string }): Promise<void> => {
-    const existing = await getByThread(threadId);
-    if (!existing) {
-      return;
-    }
-    try {
-      await Sandbox.pause(existing.sandboxId, { apiKey: this.apiKey });
-      await markPaused(threadId);
-    } catch (error) {
-      this.logger.warn(
-        { err: error, threadId },
-        '[sandbox] failed to pause e2b sandbox'
-      );
-    }
-  };
-
-  resumeSession = async ({
-    abortSignal,
-    sessionId,
-  }: {
-    abortSignal?: AbortSignal;
-    sessionId: string;
-  }) => {
-    abortSignal?.throwIfAborted();
-
-    const existing = await getByThread(sessionId);
-    if (!existing) {
-      throw new Error(`[sandbox] missing e2b sandbox for ${sessionId}`);
-    }
-
-    let sandbox = await connectE2BSandbox({
-      apiKey: this.apiKey,
-      sandboxId: existing.sandboxId,
-    });
-    if (sandbox) {
-      await sandbox.setTimeout(sandboxConfig.timeoutMs);
-      this.logger.debug(
-        { sessionId, sandboxId: sandbox.sandboxId },
-        '[sandbox] resumed e2b sandbox'
-      );
-    } else {
-      sandbox = await this.spawnSandbox({ sessionId });
-      this.logger.info(
-        {
-          previous: existing.sandboxId,
-          sandboxId: sandbox.sandboxId,
-          sessionId,
-        },
-        '[sandbox] recreated e2b sandbox from mirror'
-      );
-    }
-
-    await updateRuntime(sessionId, {
-      sandboxId: sandbox.sandboxId,
-      sessionId,
-      status: 'active',
-    });
-
-    return new E2BNetworkSandboxSession({ env: this.env, sandbox });
-  };
 }

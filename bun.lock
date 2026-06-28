@@ -37,6 +37,7 @@
         "@repo/logging": "workspace:*",
         "@repo/sandbox": "workspace:*",
         "@t3-oss/env-core": "catalog:",
+        "agentmail": "^0.5.13",
         "ai": "catalog:",
         "chat": "^4.30.0",
         "dotenv": "catalog:",
@@ -824,6 +825,8 @@
     "@workflow/serde": ["@workflow/serde@4.1.0", "", {}, "sha512-pav4F2BoirECWR7Nf1TKt+2eETcBj7jj4cBefQ8VXQCA6NPkaKeLfj/zMgi+3zYV5ZIBT4GuUiphsj0/b9hPQQ=="],
 
     "agent-base": ["agent-base@7.1.4", "", {}, "sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ=="],
+
+    "agentmail": ["agentmail@0.5.13", "", { "dependencies": { "ws": "^8.20.0" } }, "sha512-eA+yBnQ/9jvnFXtOa/xuETosjV0Fbb9oAFaEUcQNnMfRchrwUJvL6uuXHANHTnuhAsP51HsccNdnC/a+CCKX9w=="],
 
     "ai": ["ai@7.0.0-beta.178", "", { "dependencies": { "@ai-sdk/gateway": "4.0.0-beta.109", "@ai-sdk/provider": "4.0.0-beta.19", "@ai-sdk/provider-utils": "5.0.0-beta.49" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-kOfIbf23FDkvvfDHOS1gIjImBF9MlYut8fEMlps57vvS622VKL1PeEDLJ181aVd2LPSiDr3SupAMSzI2rEaW3w=="],
 

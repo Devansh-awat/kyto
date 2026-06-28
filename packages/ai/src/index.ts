@@ -15,6 +15,6 @@ export {
   PREMIUM_MODEL,
   ROUTER_MODEL,
 } from './providers/pi';
-export { openSession, persistSession } from './sessions';
+export { openSession } from './sessions';
 export type { SandboxContext } from './types';
 export type { PiAttempt } from './types/providers';

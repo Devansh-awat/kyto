@@ -4,7 +4,6 @@ import {
   deepFallbackAttempts,
   openSession,
   type PiAttempt,
-  persistSession,
   ROUTER_MODEL,
   type SandboxContext,
   systemPrompt,
@@ -35,7 +34,6 @@ import { errorMessage } from '@/lib/utils/error';
 import type { ActiveTurn, AgentErrorStage } from '@/types/agent';
 import type { AttemptFailure } from '@/types/attempts';
 
-export { compactTurn } from '@/lib/agent/compaction';
 export { stopAllTurns, stopTurn } from '@/lib/agent/turns';
 
 export function runTurn(input: {
@@ -77,21 +75,14 @@ async function executeTurn(
   let reply: ReturnType<typeof createReply> | undefined;
   let errorStage: AgentErrorStage = 'before_output';
 
-  const parkSession = async ({ pause }: { pause: boolean }): Promise<void> => {
+  // No persistence: the Slack thread is the only memory, fed whole into each
+  // turn. Tear the session down (kills the E2B sandbox iff it was materialized;
+  // a chat-only turn never created one, so this is a cheap no-op there).
+  const endSession = async (): Promise<void> => {
     if (!session) {
       return;
     }
-    const ending = session;
-    await persistSession({
-      session: ending,
-      snapshotSource: sandboxContext,
-      threadId,
-    }).catch(async () => {
-      await ending.destroy().catch(() => undefined);
-    });
-    if (pause) {
-      await sandbox.pauseSession({ threadId });
-    }
+    await session.destroy().catch(() => undefined);
   };
 
   try {
@@ -112,7 +103,7 @@ async function executeTurn(
         .catch(() => undefined);
     }
     await deleteControls({ controls });
-    await parkSession({ pause: true });
+    await endSession();
     logger.info(
       { attempt: attemptLog(activeAttempt), threadId },
       '[agent] turn complete'
@@ -122,17 +113,17 @@ async function executeTurn(
     if (reason) {
       logger.info({ reason, threadId }, '[agent] turn interrupted');
       await deleteControls({ controls });
-      // An interrupt restarts immediately, so leave the sandbox warm; stop and
-      // shutdown end the turn, so pause it. The transcript is persisted either
-      // way, so the follow-up resumes with full context.
-      await parkSession({ pause: reason !== 'interrupt' });
+      // No persistence: an interrupt re-runs immediately and the follow-up
+      // rebuilds context from the whole Slack thread, so we always tear the
+      // session down (and its sandbox, if any) regardless of the reason.
+      await endSession();
     } else {
       logger.error(
         { attempt: attemptLog(activeAttempt), err: error, threadId },
         '[agent] turn failed'
       );
       await reply?.flush({ thread });
-      await parkSession({ pause: true });
+      await endSession();
       await deleteControls({ controls });
       await thread.post(agentErrorMessage({ error, stage: errorStage }));
     }
@@ -164,6 +155,7 @@ async function executeTurn(
     const skills = await loadSkills();
     const messageText = await buildPrompt(message, {
       customizationPrompt: hints.customization?.prompt,
+      thread,
     });
     let attachments: Awaited<ReturnType<typeof seedAttachments>> = [];
     let streamed = false;
@@ -212,10 +204,9 @@ async function executeTurn(
           attempt: currentAttempt,
           onSandboxReady: async (context) => {
             sandboxContext = context;
-            await context.session.writeBinaryFile({
-              content: new Uint8Array(),
-              path: `${context.sessionWorkDir}/output/.keep`,
-            });
+            // Only seeding attachments touches the sandbox here, and only when
+            // the message actually has files — so a chat-only turn leaves the
+            // lazy sandbox unmaterialized (zero E2B cost).
             attachments = await seedAttachments({
               message,
               sandboxContext: context,

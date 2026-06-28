@@ -3,6 +3,7 @@ import type { SandboxContext } from '@repo/ai';
 import type { ToolSet } from 'ai';
 import type { Chat, Message, Thread } from 'chat';
 import { env } from '@/env';
+import { browseTool } from './tools/browse';
 import {
   canvasDeleteTool,
   canvasListTool,
@@ -11,6 +12,7 @@ import {
 } from './tools/canvas';
 import { createChannelTool, setChannelTopicTool } from './tools/channels';
 import { deploySiteTool, removeSiteTool } from './tools/deploy-site';
+import { checkInboxTool, replyEmailTool, sendEmailTool } from './tools/email';
 import { generateImageTool } from './tools/generate-image';
 import { getChannelInfoTool } from './tools/get-channel-info';
 import { getFileTool } from './tools/get-file';
@@ -55,6 +57,9 @@ export function buildTools({
     Boolean(env.OWNER_USER_ID) &&
     authorUserId === env.OWNER_USER_ID;
 
+  // Email tools run host-side via AgentMail; only registered when a key is set.
+  const agentMailKey = env.AGENTMAIL_API_KEY;
+
   return {
     react: reactTool({ bot }),
     getUser: getUserTool(),
@@ -79,6 +84,12 @@ export function buildTools({
     fetchUrl: fetchUrlTool(),
     deploySite: deploySiteTool({ getSandboxContext }),
     removeSite: removeSiteTool(),
+    browse: browseTool({ getSandboxContext }),
+    ...(agentMailKey && {
+      sendEmail: sendEmailTool({ apiKey: agentMailKey }),
+      checkInbox: checkInboxTool({ apiKey: agentMailKey }),
+      replyEmail: replyEmailTool({ apiKey: agentMailKey }),
+    }),
     skip: skipTool({ threadId: thread.id }),
     listThreads: listThreadsTool({ currentThreadId: thread.id }),
     readConversationHistory: readConversationHistoryTool({

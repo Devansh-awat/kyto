@@ -2,7 +2,6 @@ import type { HarnessV1SandboxProvider, HarnessV1Skill } from '@ai-sdk/harness';
 import { HarnessAgent } from '@ai-sdk/harness/agent';
 import { createPi } from '@ai-sdk/harness-pi';
 import type { ToolSet } from 'ai';
-import { syncSession } from './files/session';
 import { writeSystemPrompt } from './files/system';
 import type { SandboxContext } from './types';
 import type { PiAttempt } from './types/providers';
@@ -38,10 +37,13 @@ export function createAgent({
     sandbox,
     skills,
     tools,
-    onSandboxSession: async ({ abortSignal, session, sessionWorkDir }) => {
+    onSandboxSession: async ({ session, sessionWorkDir }) => {
+      // `writeSystemPrompt` writes to a host tmp dir (not the sandbox), and
+      // `onSandboxReady` only seeds attachments when the message has any — so
+      // for a chat-only turn this hook never touches the sandbox, keeping the
+      // lazy session unmaterialized. No session sync: we never persist.
       await onSandboxReady?.({ session, sessionWorkDir });
       await writeSystemPrompt({ sessionId, systemPrompt });
-      await syncSession({ abortSignal, session, sessionId, sessionWorkDir });
     },
   });
 }

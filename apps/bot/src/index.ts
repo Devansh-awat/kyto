@@ -4,7 +4,6 @@ import { installModelCapture } from '@/lib/agent/resolved-model';
 import { buildAllowlist } from '@/lib/allowed-users';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
-import { shutdownLangfuse } from '@/lib/observability/langfuse';
 import { startSitesServer } from '@/lib/sites/server';
 
 let shuttingDown = false;
@@ -19,7 +18,6 @@ async function shutdown(signal: string): Promise<void> {
   await bot.shutdown().catch((error: unknown) => {
     logger.error({ err: error }, '[bot] error during shutdown');
   });
-  await shutdownLangfuse();
   process.exit(0);
 }
 
