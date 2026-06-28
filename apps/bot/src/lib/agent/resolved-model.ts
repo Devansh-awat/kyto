@@ -1,14 +1,20 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import logger from '@/lib/logger';
 
-// `openrouter/auto` lets OpenRouter pick the underlying model server-side. The
-// Pi/harness stream only reports the *requested* id, so the concrete model it
-// resolved to (e.g. `openai/gpt-5.5`) is invisible to us. But Pi makes its model
-// calls through the process-global `fetch` (undici), and the proxy response —
-// like any OpenAI-compatible payload — carries the resolved slug in its `model`
-// field. We intercept fetch, read that field off a clone of the response, and
-// stash it on a per-turn holder so the agent loop can surface it in the Model
-// task. Best-effort: any failure just leaves the holder empty.
+// `openrouter/auto` lets OpenRouter pick the underlying model server-side. Pi
+// makes its model calls through the process-global `fetch` (undici), so we patch
+// fetch to do two things on the completions request/response:
+//
+//  1. Request: bias the auto-router toward cheaper models by injecting the
+//     `auto-router` plugin with `cost_quality_tradeoff` (0 = pure quality,
+//     7 = default, 10 = cheapest). We use 8 — a touch cheaper than default.
+//  2. Response: the OpenAI-compatible payload carries the model the router
+//     actually resolved to (e.g. `openai/gpt-5.5`) in its `model` field, which
+//     the Pi/harness stream never exposes. We read it off a clone of the
+//     response and stash it on a per-turn holder so the agent loop can surface
+//     it in the Model task.
+//
+// Both are best-effort: any failure leaves the request/holder untouched.
 
 export interface ModelHolder {
   model?: string;
@@ -21,6 +27,11 @@ const MODEL_FIELD = /"model"\s*:\s*"([^"]+)"/;
 // Read at most this many bytes of the response before giving up on finding the
 // model field — the slug appears in the first SSE chunk, so this is generous.
 const MAX_SCAN_BYTES = 16_384;
+// Auto-router cost/quality bias: 7 is OpenRouter's default, 10 is cheapest. 8
+// nudges toward cheaper picks without forcing the floor.
+const COST_QUALITY_TRADEOFF = 8;
+const AUTO_ROUTER_PLUGIN_ID = 'auto-router';
+const ROUTER_MODEL_ID = 'openrouter/auto';
 
 /**
  * Begin a capture scope for the current async branch (one agent attempt) and
@@ -71,9 +82,59 @@ async function readResolvedModel(
   return;
 }
 
+function bodyToString(body: unknown): string | undefined {
+  if (typeof body === 'string') {
+    return body;
+  }
+  if (body instanceof Uint8Array) {
+    return new TextDecoder().decode(body);
+  }
+  return;
+}
+
+/**
+ * If this is an `openrouter/auto` completions request with a JSON string body,
+ * return an init with the cost-biasing auto-router plugin merged in. Otherwise
+ * return the init unchanged.
+ */
+function tuneAutoRouter(
+  url: string,
+  init: RequestInit | undefined
+): RequestInit | undefined {
+  if (!(init?.body && url.includes(COMPLETIONS_HINT))) {
+    return init;
+  }
+  const raw = bodyToString(init.body);
+  if (!raw?.includes(ROUTER_MODEL_ID)) {
+    return init;
+  }
+  try {
+    const payload = JSON.parse(raw);
+    if (payload?.model !== ROUTER_MODEL_ID) {
+      return init;
+    }
+    const plugins = Array.isArray(payload.plugins) ? payload.plugins : [];
+    payload.plugins = [
+      ...plugins.filter(
+        (plugin: { id?: string }) => plugin?.id !== AUTO_ROUTER_PLUGIN_ID
+      ),
+      {
+        id: AUTO_ROUTER_PLUGIN_ID,
+        cost_quality_tradeoff: COST_QUALITY_TRADEOFF,
+      },
+    ];
+    return { ...init, body: JSON.stringify(payload) };
+  } catch {
+    return init;
+  }
+}
+
 let installed = false;
 
-/** Patch global fetch once to capture the resolved model per active turn. */
+/**
+ * Patch global fetch once to (1) bias the openrouter/auto router toward cheaper
+ * models and (2) capture the resolved model per active turn.
+ */
 export function installModelCapture(): void {
   if (installed) {
     return;
@@ -84,15 +145,16 @@ export function installModelCapture(): void {
     input: string | URL | Request,
     init?: RequestInit
   ): Promise<Response> => {
+    const url = requestUrl(input);
     const response = await original(
       input as Parameters<typeof original>[0],
-      init
+      tuneAutoRouter(url, init)
     );
     const holder = store.getStore();
     if (
       !(holder && response.body) ||
       holder.model ||
-      !requestUrl(input).includes(COMPLETIONS_HINT)
+      !url.includes(COMPLETIONS_HINT)
     ) {
       return response;
     }
