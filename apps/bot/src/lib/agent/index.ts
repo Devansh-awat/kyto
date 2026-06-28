@@ -235,10 +235,13 @@ async function executeTurn(
         // Surface the model in the thinking section (not the reply text). On a
         // fallback this shows the model we advanced to, so it is visible which
         // model actually served the turn — without announcing it in the output.
+        // Opened in_progress and completed after streaming (same id) so the one
+        // task updates in place — and so the completion can append the concrete
+        // model `openrouter/auto` resolved to.
         yield {
           id: modelTaskId,
           output: `${currentAttempt.provider} · ${currentAttempt.model}`,
-          status: 'complete',
+          status: 'in_progress',
           title: modelTaskTitle,
           type: 'task_update',
         };
@@ -275,12 +278,16 @@ async function executeTurn(
           yield chunk;
         }
 
-        // Patch the Model task with the concrete model OpenRouter resolved
-        // `openrouter/auto` to (now known from the streamed response).
-        if (modelHolder.model && modelHolder.model !== currentAttempt.model) {
+        // Complete the Model task, appending the concrete model OpenRouter
+        // resolved `openrouter/auto` to (now known from the streamed response).
+        {
+          const resolved =
+            modelHolder.model && modelHolder.model !== currentAttempt.model
+              ? ` → ${modelHolder.model}`
+              : '';
           yield {
             id: modelTaskId,
-            output: `${currentAttempt.provider} · ${currentAttempt.model} → ${modelHolder.model}`,
+            output: `${currentAttempt.provider} · ${currentAttempt.model}${resolved}`,
             status: 'complete',
             title: modelTaskTitle,
             type: 'task_update',
