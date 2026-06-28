@@ -5,9 +5,9 @@ import logger from '@/lib/logger';
 // makes its model calls through the process-global `fetch` (undici), so we patch
 // fetch to do two things on the completions request/response:
 //
-//  1. Request: bias the auto-router toward cheaper models by injecting the
-//     `auto-router` plugin with `cost_quality_tradeoff` (0 = pure quality,
-//     7 = default, 10 = cheapest). We use 8 — a touch cheaper than default.
+//  1. Request: tune the auto-router by injecting the `auto-router` plugin with
+//     `cost_quality_tradeoff` (0 = pure quality, 7 = default, 10 = cheapest)
+//     and a `model_patterns` allowlist restricting it to chosen families.
 //  2. Response: the OpenAI-compatible payload carries the model the router
 //     actually resolved to (e.g. `openai/gpt-5.5`) in its `model` field, which
 //     the Pi/harness stream never exposes. We read it off a clone of the
@@ -27,9 +27,18 @@ const MODEL_FIELD = /"model"\s*:\s*"([^"]+)"/;
 // Read at most this many bytes of the response before giving up on finding the
 // model field — the slug appears in the first SSE chunk, so this is generous.
 const MAX_SCAN_BYTES = 16_384;
-// Auto-router cost/quality bias: 7 is OpenRouter's default, 10 is cheapest. 8
-// nudges toward cheaper picks without forcing the floor.
-const COST_QUALITY_TRADEOFF = 8;
+// Auto-router cost/quality bias: 7 is OpenRouter's default, 10 is cheapest.
+const COST_QUALITY_TRADEOFF = 5;
+// Restrict the auto-router to these model families (owner-chosen allowlist).
+const MODEL_PATTERNS = [
+  'anthropic/*',
+  'google/gemini-3*',
+  'openai/gpt-*',
+  'moonshot/*',
+  'minimax/*',
+  'zero-one-ai/*',
+  'qwen/*',
+];
 const AUTO_ROUTER_PLUGIN_ID = 'auto-router';
 const ROUTER_MODEL_ID = 'openrouter/auto';
 
@@ -121,6 +130,7 @@ function tuneAutoRouter(
       {
         id: AUTO_ROUTER_PLUGIN_ID,
         cost_quality_tradeoff: COST_QUALITY_TRADEOFF,
+        model_patterns: MODEL_PATTERNS,
       },
     ];
     return { ...init, body: JSON.stringify(payload) };
