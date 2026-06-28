@@ -185,6 +185,15 @@ async function executeTurn(
     // task id (the thinking disclosure keys updates by id).
     let routingPass = 0;
     let attempt: PiAttempt | undefined;
+    // Built once: the tool set does not depend on the chosen model, and its keys
+    // let renderStream hide hallucinated calls to non-existent tools.
+    const tools = buildTools({
+      bot,
+      getSandboxContext: () => sandboxContext,
+      message,
+      thread,
+    });
+    const knownTools = new Set(Object.keys(tools));
     // A routing pass awaits an LLM call (pickModel). Without a visible in-progress
     // task during that await, the thinking disclosure has only completed Model
     // tasks and collapses to "completed" mid-turn. Yielding an in-progress
@@ -244,12 +253,7 @@ async function executeTurn(
           sessionId: threadId,
           skills,
           systemPrompt: systemPrompt({ hints }),
-          tools: buildTools({
-            bot,
-            getSandboxContext: () => sandboxContext,
-            message,
-            thread,
-          }),
+          tools,
         });
         session = await openSession({ agent, threadId });
         reply = createReply({ threadId });
@@ -272,6 +276,7 @@ async function executeTurn(
           session,
         });
         for await (const chunk of renderStream({
+          knownTools,
           onSkip: () => {
             // A skip is a deliberate, successful "no reply" — mark the turn as
             // handled so the empty-response guard below does NOT advance the

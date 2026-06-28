@@ -8,15 +8,23 @@ const MAX_VISIBLE_TASKS = 45;
 const REASONING_OUTPUT_MAX_LENGTH = 2800;
 
 export async function* renderStream({
+  knownTools,
   onTextDelta,
   onSkip,
   stream,
 }: {
+  knownTools?: ReadonlySet<string>;
   onTextDelta?: (text: string) => PromiseLike<void> | void;
   onSkip?: () => void;
   stream: AsyncIterable<TextStreamPart<ToolSet>>;
 }): AsyncGenerator<string | StreamChunk> {
   const toolInputs = new Map<string, unknown>();
+  // Weak models sometimes hallucinate a tool call to a non-existent tool (e.g.
+  // a mangled name like " analemma"). The harness answers with a "Tool X not
+  // found" tool-result and the model recovers on the next step — but we must not
+  // surface that phantom call/result as a visible activity task. Track their ids
+  // so the matching tool-result/tool-error is dropped too.
+  const phantomToolCallIds = new Set<string>();
   const reasoning = new Map<string, string>();
   const visibleTaskIds = new Set<string>();
   let hiddenTaskCount = 0;
@@ -72,6 +80,17 @@ export async function* renderStream({
         break;
       }
       case 'tool-call': {
+        // Drop hallucinated calls to tools we never registered: hide them from
+        // the UI entirely (the model still gets the harness's not-found result
+        // and recovers on the next step).
+        if (knownTools && !knownTools.has(part.toolName.trim())) {
+          phantomToolCallIds.add(part.toolCallId);
+          logger.warn(
+            { input: part.input, toolName: part.toolName },
+            '[tool] ignored hallucinated tool call'
+          );
+          break;
+        }
         toolInputs.set(part.toolCallId, part.input);
         logger.info(
           {
@@ -101,6 +120,10 @@ export async function* renderStream({
         break;
       }
       case 'tool-result': {
+        if (phantomToolCallIds.has(part.toolCallId)) {
+          phantomToolCallIds.delete(part.toolCallId);
+          break;
+        }
         if (part.toolName === 'skip') {
           skipped = true;
           onSkip?.();
@@ -135,6 +158,10 @@ export async function* renderStream({
         break;
       }
       case 'tool-error': {
+        if (phantomToolCallIds.has(part.toolCallId)) {
+          phantomToolCallIds.delete(part.toolCallId);
+          break;
+        }
         const input = toolInputs.get(part.toolCallId);
         logger.warn(
           {
