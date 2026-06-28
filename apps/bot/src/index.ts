@@ -1,5 +1,6 @@
 import { bot } from '@/bot';
 import { stopAllTurns } from '@/lib/agent';
+import { installModelCapture } from '@/lib/agent/resolved-model';
 import { buildAllowlist } from '@/lib/allowed-users';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
@@ -23,6 +24,7 @@ async function shutdown(signal: string): Promise<void> {
 }
 
 try {
+  installModelCapture();
   await bot.initialize();
   await buildAllowlist();
   await startSitesServer();

@@ -14,6 +14,7 @@ import { type Message, StreamingPlan, type Thread } from 'chat';
 import { deleteControls, type postControls } from '@/lib/agent/controls';
 import { buildPrompt } from '@/lib/agent/prompt';
 import { createReply } from '@/lib/agent/reply';
+import { enterModelCapture } from '@/lib/agent/resolved-model';
 import { sandbox } from '@/lib/agent/sandbox';
 import {
   abortReasonOf,
@@ -228,16 +229,22 @@ async function executeTurn(
         });
         session = await openSession({ agent, threadId });
         reply = createReply({ threadId });
+        const modelTaskId = `model-${attempts.length}`;
+        const modelTaskTitle =
+          attempts.length > 0 ? 'Model · fallback' : 'Model';
         // Surface the model in the thinking section (not the reply text). On a
         // fallback this shows the model we advanced to, so it is visible which
         // model actually served the turn — without announcing it in the output.
         yield {
-          id: `model-${attempts.length}`,
+          id: modelTaskId,
           output: `${currentAttempt.provider} · ${currentAttempt.model}`,
           status: 'complete',
-          title: attempts.length > 0 ? 'Model · fallback' : 'Model',
+          title: modelTaskTitle,
           type: 'task_update',
         };
+        // `openrouter/auto` resolves the real model server-side; capture it off
+        // the global fetch so we can show the concrete pick (see resolved-model).
+        const modelHolder = enterModelCapture();
         const result = await agent.stream({
           abortSignal: controller.signal,
           prompt: promptWithAttachments({
@@ -266,6 +273,18 @@ async function executeTurn(
             errorStage = 'after_progress';
           }
           yield chunk;
+        }
+
+        // Patch the Model task with the concrete model OpenRouter resolved
+        // `openrouter/auto` to (now known from the streamed response).
+        if (modelHolder.model && modelHolder.model !== currentAttempt.model) {
+          yield {
+            id: modelTaskId,
+            output: `${currentAttempt.provider} · ${currentAttempt.model} → ${modelHolder.model}`,
+            status: 'complete',
+            title: modelTaskTitle,
+            type: 'task_update',
+          };
         }
 
         // A model that finishes without producing anything (e.g. an upstream
