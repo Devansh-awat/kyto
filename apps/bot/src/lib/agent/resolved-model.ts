@@ -29,21 +29,29 @@ const MODEL_FIELD = /"model"\s*:\s*"([^"]+)"/;
 const MAX_SCAN_BYTES = 16_384;
 // Auto-router cost/quality bias: 7 is OpenRouter's default, 10 is cheapest.
 const COST_QUALITY_TRADEOFF = 5;
-// Restrict the auto-router to these model families (owner-chosen allowlist,
-// derived from the leaderboard ranking). Anthropic is scoped to opus/sonnet so
-// `claude-fable-*` is deliberately excluded. Covers: Opus 4.6/4.7/4.8,
-// Sonnet 4.6, GPT 5.4/5.5, Gemini 3.x, GLM 5.1/5.2, DeepSeek V4 (pro/flash),
-// Kimi K2.6/K2.7, MiniMax M3, Qwen 3.6.
+// Restrict the auto-router to these EXACT model ids (owner-chosen allowlist,
+// derived from the leaderboard ranking). Exact slugs — not globs — so trimmed
+// variants like `-nano`/`-mini`/`-flash-lite`/`-fast`/`-pro-image` and
+// `claude-fable-5` can never be routed to. Reasoning-effort tiers in the
+// leaderboard ("Thinking"/"High"/"xHigh"/"Max") are the same slug, so they
+// collapse. Verified against OpenRouter's /api/v1/models catalog (June 2026).
 const MODEL_PATTERNS = [
-  'anthropic/claude-opus-*',
-  'anthropic/claude-sonnet-*',
-  'openai/gpt-5*',
-  'google/gemini-3*',
-  'z-ai/glm-5*',
-  'deepseek/deepseek-v4*',
-  'moonshotai/*',
-  'minimax/*',
-  'qwen/*',
+  'anthropic/claude-opus-4.8',
+  'anthropic/claude-opus-4.7',
+  'anthropic/claude-opus-4.6',
+  'anthropic/claude-sonnet-4.6',
+  'openai/gpt-5.5',
+  'openai/gpt-5.4',
+  'z-ai/glm-5.2',
+  'z-ai/glm-5.1',
+  'google/gemini-3.5-flash',
+  'google/gemini-3.1-pro-preview',
+  'deepseek/deepseek-v4-pro',
+  'deepseek/deepseek-v4-flash',
+  'moonshotai/kimi-k2.7-code',
+  'moonshotai/kimi-k2.6',
+  'minimax/minimax-m3',
+  'qwen/qwen3.6-plus',
 ];
 const AUTO_ROUTER_PLUGIN_ID = 'auto-router';
 const ROUTER_MODEL_ID = 'openrouter/auto';
