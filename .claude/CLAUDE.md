@@ -165,6 +165,9 @@ Run these automatically after each completed change, in order, **without asking*
   `fetchUrl`, `deploySite`, `removeSite`, `skip`, `sendAsUser`, `editAsUser`.
 - Slack scopes are declared in `slack-manifest.json` — update it when a tool
   needs a new scope.
+- **Web search** (the `searchWeb` task) uses Exa via `EXA_API_KEY`. A placeholder
+  key (`exa-placeholder-no-websearch`) makes every search return
+  `ExaError: Invalid API key` — set a real key to enable web search.
 
 ### Canvases (read/list/create across channels, channel tab)
 - `canvasList` takes an optional `channelId` (raw `C0123`, `slack:` id, or
@@ -211,42 +214,37 @@ Run these automatically after each completed change, in order, **without asking*
   token first). Scope changes require reinstalling the app.
 
 ### Models / LLM model router + fallback
-- **The main query always runs on a PAID model chosen per-request by an LLM
-  router.** `MODEL_CATALOG` in `packages/ai/src/providers/pi.ts` lists ~10 paid
-  HackClub models (fast → frontier) each with a capability `blurb` (sourced from
-  the proxy's official `/models` descriptions) plus a cost hint. To change the
-  lineup or descriptions, edit `MODEL_CATALOG`.
-- **Router** (`apps/bot/src/lib/ai/router.ts`): `pickModel({ text, exclude })`
-  sends the catalog blurbs + the routing input to a cheap, fast NON-reasoning
-  model (`mistralai/mistral-small-3.2-24b-instruct`, ~$0.07/1M, ~0.5s) and
-  returns the chosen catalog id. The routing input is built by
-  `buildRoutingContext` — a compact transcript of the last ~8 thread messages,
-  not just the latest one — so follow-ups like "continue" inherit the
-  underlying task's model needs (a website build stays on a coding model). Reasoning models are unusable here — their
-  hidden thinking eats the tiny token budget and yields empty content. On any
-  failure (or no `HACKCLUB_API_KEY`) it falls back to the cheapest non-excluded
-  catalog model (`DEFAULT_MODEL` = `deepseek/deepseek-v4-pro`), never throwing.
-- **Fallback on failure** (`agent/index.ts`): when a chosen model errors/empties,
-  it's added to an `exclude` list and the router is re-asked for a different
-  model. Once the whole catalog is exhausted, it falls through to the
-  `deepFallbackAttempts` deep backup (baishui → Gemini) so the bot still answers
-  if HackClub is down.
-- The chosen model (and any fallback model) is surfaced as a **`Model` task in
-  the thinking section** — never announced in the reply text. Useful for seeing
-  which model actually served a turn.
-- Each routing pass (initial + every fallback) yields an in-progress **`Routing`
-  task** around the `pickModel` await (`routeNextAttempt` in `agent/index.ts`).
-  Without it the thinking disclosure has only completed `Model` tasks during the
-  router LLM call and Slack collapses it to "Thinking completed" mid-turn; the
-  in-progress task keeps the disclosure open and makes route latency visible.
-- `chatAttempts`/`attemptsFor`/`PREMIUM_MODEL` remain exported (used by
-  `compaction.ts`, which always runs on `chatAttempts[0]`).
+- **The main query runs on OpenRouter's own auto-router via HackClub**
+  (`ROUTER_MODEL = 'openrouter/auto'` in `packages/ai/src/providers/pi.ts`). The
+  HackClub proxy is OpenRouter-compatible, so sending model id `openrouter/auto`
+  hands routing to OpenRouter, which picks the best underlying model per request
+  (e.g. it resolved to `openai/gpt-5.5` in testing). This replaced the old
+  per-request router-LLM hop (`pickModel`/`buildRoutingContext`, deleted) and the
+  `meta-llama/llama-3.3-70b-instruct` fast tier, which was unreliable for tool
+  use (hallucinated tool names, wrong-bot/persona confusion, stray "battles").
+- **Fallback on failure** (`agent/index.ts`, `routeNextAttempt`): `openrouter/auto`
+  is attempt 0; on any error or empty completion it falls through to the
+  `deepFallbackAttempts` deep backup (baishui → Gemini, each tried once) so the
+  bot still answers if HackClub/OpenRouter is down.
+- The requested model (`openrouter/auto`, or a deep-fallback id) is surfaced as a
+  **`Model` task in the thinking section** — never in the reply text. Note: the
+  stream only exposes the *requested* id, not the underlying model OpenRouter
+  resolves to, so the task shows `openrouter/auto` for the primary path.
+- `MODEL_CATALOG`/`CATALOG_IDS` are retained for reference/diagnostics only (no
+  longer drive routing). `chatAttempts`/`attemptsFor`/`PREMIUM_MODEL` remain
+  exported (used by `compaction.ts`, which always runs on `chatAttempts[0]`).
 - Fallback advances on **any** error AND on an **empty completion** — a model
   that finishes producing nothing (e.g. a HackClub 504 swallowed into an empty
   stream) is treated as a failed attempt, not a silent success. A deliberate
   `skip` is NOT an empty completion (it counts as a handled turn), and any
   provider placeholder text like `(Empty response: ...)` is dropped before it
   reaches Slack (`agent/index.ts`, `ai/stream/index.ts`).
+- **Hallucinated tool calls are hidden.** Weak models sometimes emit a tool call
+  to a tool we never registered (observed: a mangled name `" analemma"`); the
+  harness returns a `"Tool X not found"` tool-result and the model recovers next
+  step. `renderStream` is passed `knownTools` and drops any tool-call (and its
+  matching result/error) whose name isn't registered, so phantom calls never
+  surface as activity tasks (`ai/stream/index.ts`).
 - No **Stop button** is posted during a turn (removed from `postControls` flow).
 - `glm-4.7` is omitted from HackClub (persistent 504); `glm-5.2` 504s
   intermittently there but degrades via the empty-completion fallback, and is

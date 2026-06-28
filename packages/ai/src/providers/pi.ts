@@ -224,6 +224,15 @@ export const CATALOG_IDS = MODEL_CATALOG.map((model) => model.id);
 /** The default model when the router cannot choose (budget-safe, capable). */
 export const DEFAULT_MODEL = 'deepseek/deepseek-v4-pro';
 
+/**
+ * The primary routing model for the main query: OpenRouter's own auto-router,
+ * reached through the OpenRouter-compatible HackClub proxy. OpenRouter picks the
+ * best underlying model per request, replacing our per-request router-LLM hop
+ * (see apps/bot/src/lib/agent/index.ts). The MODEL_CATALOG above is retained for
+ * reference/diagnostics and the deep-fallback families below.
+ */
+export const ROUTER_MODEL = 'openrouter/auto';
+
 /** Build a HackClub attempt for any catalog model id. */
 export function catalogAttempt(model: string): PiAttempt {
   return {

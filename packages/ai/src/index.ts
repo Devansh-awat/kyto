@@ -13,6 +13,7 @@ export {
   MODEL_CATALOG,
   type ModelTier,
   PREMIUM_MODEL,
+  ROUTER_MODEL,
 } from './providers/pi';
 export { openSession, persistSession } from './sessions';
 export type { SandboxContext } from './types';

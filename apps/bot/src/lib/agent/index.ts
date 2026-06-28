@@ -1,11 +1,11 @@
 import {
-  CATALOG_IDS,
   catalogAttempt,
   createAgent,
   deepFallbackAttempts,
   openSession,
   type PiAttempt,
   persistSession,
+  ROUTER_MODEL,
   type SandboxContext,
   systemPrompt,
 } from '@repo/ai';
@@ -24,7 +24,6 @@ import { clearTurn, getTurn, setTurn } from '@/lib/agent/turns';
 import { startThinking } from '@/lib/agent/utils';
 import { promptWithAttachments, seedAttachments } from '@/lib/ai/attachments';
 import { requestHints } from '@/lib/ai/hints';
-import { buildRoutingContext, pickModel } from '@/lib/ai/router';
 import { renderStream } from '@/lib/ai/stream';
 import { buildTools } from '@/lib/ai/toolset';
 import { runQueuedTurn } from '@/lib/ai/turn-queue';
@@ -169,21 +168,13 @@ async function executeTurn(
     let streamed = false;
     let skipped = false;
     const attempts: AttemptFailure[] = [];
-    // The main query always runs on a PAID model chosen by the router LLM from
-    // MODEL_CATALOG. On failure we re-ask the router, excluding models that
-    // already failed; once the whole catalog is exhausted we fall through to the
-    // baishui/Gemini deep backup so the bot still answers if HackClub is down.
-    const failedModels: string[] = [];
+    // The main query runs on OpenRouter's own model router via HackClub
+    // (`openrouter/auto`): OpenRouter picks the best underlying model per
+    // request, so we no longer maintain a catalog or pay a separate router-LLM
+    // hop. On failure we fall through to the baishui/Gemini deep backup so the
+    // bot still answers if HackClub/OpenRouter is down.
     const failedKeys = new Set<string>();
-    // Route on the recent thread transcript, not just the latest message, so
-    // follow-ups like "continue" inherit the underlying task's model needs.
-    const routingText = await buildRoutingContext({
-      fallbackText: messageText,
-      threadId,
-    });
-    // Tracks how many times we've routed, so each routing pass gets a distinct
-    // task id (the thinking disclosure keys updates by id).
-    let routingPass = 0;
+    let triedAuto = false;
     let attempt: PiAttempt | undefined;
     // Built once: the tool set does not depend on the chosen model, and its keys
     // let renderStream hide hallucinated calls to non-existent tools.
@@ -194,40 +185,20 @@ async function executeTurn(
       thread,
     });
     const knownTools = new Set(Object.keys(tools));
-    // A routing pass awaits an LLM call (pickModel). Without a visible in-progress
-    // task during that await, the thinking disclosure has only completed Model
-    // tasks and collapses to "completed" mid-turn. Yielding an in-progress
-    // "Routing" task bridges every routing/fallback gap and surfaces route time.
-    // It assigns `attempt` as a side effect so callers can `yield*` the progress.
-    async function* routeNextAttempt() {
-      const remaining = CATALOG_IDS.filter((id) => !failedModels.includes(id));
-      if (remaining.length === 0) {
-        attempt = deepFallbackAttempts.find(
-          (candidate) =>
-            !failedKeys.has(`${candidate.provider}:${candidate.model}`)
-        );
+    // Selects the next attempt as a side effect: `openrouter/auto` first, then
+    // the deep backup chain (each entry tried at most once).
+    const routeNextAttempt = () => {
+      if (!triedAuto) {
+        triedAuto = true;
+        attempt = catalogAttempt(ROUTER_MODEL);
         return;
       }
-      const routeId = `routing-${routingPass++}`;
-      yield {
-        id: routeId,
-        status: 'in_progress',
-        title: 'Routing',
-        type: 'task_update',
-      };
-      const model = await pickModel({
-        exclude: failedModels,
-        text: routingText,
-      });
-      yield {
-        id: routeId,
-        status: 'complete',
-        title: 'Routing',
-        type: 'task_update',
-      };
-      attempt = catalogAttempt(model);
-    }
-    yield* routeNextAttempt();
+      attempt = deepFallbackAttempts.find(
+        (candidate) =>
+          !failedKeys.has(`${candidate.provider}:${candidate.model}`)
+      );
+    };
+    routeNextAttempt();
     logger.info(
       { model: attempt?.model, provider: attempt?.provider, threadId },
       '[agent] routed turn'
@@ -309,10 +280,7 @@ async function executeTurn(
       } catch (error) {
         attempts.push({ attempt: currentAttempt, error });
         failedKeys.add(`${currentAttempt.provider}:${currentAttempt.model}`);
-        if (currentAttempt.provider === 'hackclub') {
-          failedModels.push(currentAttempt.model);
-        }
-        yield* routeNextAttempt();
+        routeNextAttempt();
         const retryAttempt = attempt;
         if (controller.signal.aborted || streamed || !retryAttempt) {
           throw error;
