@@ -35,18 +35,45 @@ export async function* renderStream({
   const visibleTaskIds = new Set<string>();
   let hiddenTaskCount = 0;
   let skipped = false;
+  // TEMP diagnostic: tally what the whole (multi-step) stream emitted so we can
+  // see why a turn ends with no reply — e.g. tool calls but zero text/reasoning
+  // (an empty continuation step). Remove once the "stops mid-task" bug is fixed.
+  const tally = {
+    textDeltas: 0,
+    droppedTextDeltas: 0,
+    reasoningParts: 0,
+    toolCalls: 0,
+    toolResults: 0,
+    finishReasons: [] as string[],
+    errors: [] as string[],
+  };
   for await (const part of stream) {
+    if (part.type === 'finish-step' || part.type === 'finish') {
+      const reason = (part as { finishReason?: string }).finishReason;
+      if (reason) {
+        tally.finishReasons.push(reason);
+      }
+    }
+    if (part.type === 'error') {
+      tally.errors.push(
+        String((part as { error?: unknown }).error).slice(0, 200)
+      );
+    }
     switch (part.type) {
       case 'text-delta': {
         // A skipped turn intentionally produces no reply, and some providers
         // emit placeholder garbage (e.g. "(Empty response: ...)") in this slot
         // when the model returned only a thinking block — never forward either.
         if (part.text && !skipped && !isPlaceholderText(part.text)) {
+          tally.textDeltas += 1;
           await onTextDelta?.(part.text);
+        } else if (part.text) {
+          tally.droppedTextDeltas += 1;
         }
         break;
       }
       case 'reasoning-start': {
+        tally.reasoningParts += 1;
         const id = reasoningTaskId(part.id);
         if (!showTask({ id, visibleTaskIds })) {
           hiddenTaskCount += 1;
@@ -98,6 +125,7 @@ export async function* renderStream({
           break;
         }
         toolInputs.set(part.toolCallId, part.input);
+        tally.toolCalls += 1;
         onToolActivity?.();
         logger.info(
           {
@@ -205,6 +233,10 @@ export async function* renderStream({
   if (hiddenTaskCount > 0) {
     yield hiddenTaskUpdate({ count: hiddenTaskCount, done: true });
   }
+  // TEMP diagnostic: a turn that ran tools but emitted 0 text + 0 reasoning is
+  // an empty continuation step — the "stops mid-task" bug. finishReasons shows
+  // how each step ended; droppedTextDeltas counts placeholder/skip text we hid.
+  logger.info({ ...tally }, '[stream] tally');
 }
 
 // Some upstream proxies, when a model returns only a thinking block with no
