@@ -262,7 +262,10 @@ Run these automatically after each completed change, in order, **without asking*
     name is silently ignored by the proxy; not globs, so no
     `-nano`/`-mini`/`-flash-lite`/`-fast` or `claude-fable-5` leakage):
     claude-opus-4.6/4.7/4.8, claude-sonnet-4.6, gpt-5.4/5.5, glm-5.1/5.2,
-    gemini-3.5-flash, gemini-3.1-pro-preview (the owner's leaderboard top tier;
+    gemini-3.5-flash (the owner's leaderboard top tier;
+    `gemini-3.1-pro-preview` was removed after it ended a turn right after its
+    tool calls without ever writing a reply — the empty-response guard counted
+    that as a failed attempt and burned the fallback chain;
     the lower-ranked tail — deepseek-v4-pro/flash, kimi-k2.6/k2.7-code,
     minimax-m3, qwen3.6-plus — was dropped to keep routing on the stronger
     models). The interceptor strips a stale `Content-Length` when re-issuing the

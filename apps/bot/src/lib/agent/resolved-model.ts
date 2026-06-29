@@ -49,7 +49,6 @@ const ALLOWED_MODELS = [
   'z-ai/glm-5.2',
   'z-ai/glm-5.1',
   'google/gemini-3.5-flash',
-  'google/gemini-3.1-pro-preview',
 ];
 const AUTO_ROUTER_PLUGIN_ID = 'auto-router';
 const ROUTER_MODEL_ID = 'openrouter/auto';
