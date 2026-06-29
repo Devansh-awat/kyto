@@ -212,16 +212,25 @@ Run these automatically after each completed change, in order, **without asking*
   `OWNER_USER_ID`; requires the `chat:write` **user** scope.
 
 ### Static site hosting
-- `deploySite`/`removeSite` publish prebuilt static sites at
-  `https://<host>/kytosites/<name>/`. Code in `apps/bot/src/lib/sites/`. The
-  host NEVER executes site code — building/testing happen in the E2B sandbox;
-  only static output is copied out (`resolveWithin` path containment).
+- `deploySite`/`removeSite` publish prebuilt static sites at the **host root**:
+  `https://<host>/<name>/` (default host `kyto.devansh.hackclub.app`). Code in
+  `apps/bot/src/lib/sites/`. The host NEVER executes site code — building/testing
+  happen in the E2B sandbox; only static output is copied out (`resolveWithin`
+  path containment). The on-disk store is still `SITES_ROOT` (`/var/kytosites`).
+- **Multi-page sites:** both tools take an optional `page` sub-path (e.g. `home`
+  or `docs/intro`), served at `https://<host>/<name>/<page>/`. A page deploy
+  atomically swaps only that sub-path and leaves the rest of the site intact, so
+  a site's pages can be published/removed one at a time; omit `page` to
+  publish/replace (or remove) the whole site at the root. Page paths are
+  validated by `isValidPagePath` (lowercase slug segments split on `/`) on top of
+  `resolveWithin` containment.
 - Server starts from `apps/bot/src/index.ts` (`startSitesServer`), binds
-  `SITES_PORT` (default 443). Serves **plain HTTP by default** because it sits
-  behind Nest's TLS-terminating proxy (serving HTTPS there → 502). Set
+  `SITES_PORT` (default **8080**). Serves **plain HTTP by default** because it
+  sits behind Nest's TLS-terminating proxy (serving HTTPS there → 502). Set
   `SITES_TLS=true` for a self-signed HTTPS cert (standalone/local).
-  `SITES_PUBLIC_HOST` builds the public URL (always `https://`). Config:
-  `SITES_ENABLED`, `SITES_PORT`, `SITES_TLS`, `SITES_ROOT`, `SITES_PUBLIC_HOST`.
+  `SITES_PUBLIC_HOST` (default `kyto.devansh.hackclub.app`) builds the public URL
+  (always `https://`). Config: `SITES_ENABLED`, `SITES_PORT`, `SITES_TLS`,
+  `SITES_ROOT`, `SITES_PUBLIC_HOST`.
 
 ### Manifest sync
 - `bun run sync:manifest` (apps/bot) pushes `slack-manifest.json` to the Slack
@@ -253,9 +262,10 @@ Run these automatically after each completed change, in order, **without asking*
     name is silently ignored by the proxy; not globs, so no
     `-nano`/`-mini`/`-flash-lite`/`-fast` or `claude-fable-5` leakage):
     claude-opus-4.6/4.7/4.8, claude-sonnet-4.6, gpt-5.4/5.5, glm-5.1/5.2,
-    gemini-3.5-flash, gemini-3.1-pro-preview, deepseek-v4-pro/flash,
-    kimi-k2.6/k2.7-code, minimax-m3, qwen3.6-plus (the owner's leaderboard
-    ranking). The interceptor strips a stale `Content-Length` when re-issuing the
+    gemini-3.5-flash, gemini-3.1-pro-preview (the owner's leaderboard top tier;
+    the lower-ranked tail — deepseek-v4-pro/flash, kimi-k2.6/k2.7-code,
+    minimax-m3, qwen3.6-plus — was dropped to keep routing on the stronger
+    models). The interceptor strips a stale `Content-Length` when re-issuing the
     tuned (longer) body so the appended `plugins` isn't truncated. Verified
     honored by the HackClub proxy. Edit `COST_QUALITY_TRADEOFF`/`ALLOWED_MODELS`.
   - **Capture the resolved model**: the stream only exposes the *requested* id, so

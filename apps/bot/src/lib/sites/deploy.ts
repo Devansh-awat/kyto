@@ -50,13 +50,19 @@ async function listSandboxFiles(
  * validating every destination path stays within the site root. Builds into a
  * staging directory, then atomically swaps it into place so a half-finished or
  * malicious deploy never leaves a partial site live.
+ *
+ * When `page` is given (e.g. `home` or `docs/intro`), only that sub-path of the
+ * site is swapped — the rest of the site is left untouched, so pages can be
+ * published incrementally. Without `page`, the whole site is replaced.
  */
 export async function deploySiteFromSandbox({
   name,
+  page,
   session,
   sourceDir,
 }: {
   name: string;
+  page?: string;
   session: Session;
   sourceDir: string;
 }): Promise<DeployResult> {
@@ -71,7 +77,17 @@ export async function deploySiteFromSandbox({
     };
   }
 
-  const finalRoot = siteRoot(name);
+  const siteDir = siteRoot(name);
+  // Destination is the whole site, or — for a single-page deploy — a contained
+  // sub-path within it. resolveWithin rejects any traversal outside the site.
+  let finalRoot = siteDir;
+  if (page) {
+    const resolved = resolveWithin(siteDir, page);
+    if (!resolved || resolved === siteDir) {
+      return { error: `Invalid page path: ${page}`, ok: false };
+    }
+    finalRoot = resolved;
+  }
   const staging = nodePath.join(
     sitesRoot(),
     '.staging',
@@ -109,7 +125,10 @@ export async function deploySiteFromSandbox({
       await writeFile(dest, bytes);
     }
 
-    // Atomic swap: replace any existing site in one rename.
+    // Atomic swap: replace the existing site (or page sub-path) in one rename.
+    // For a page deploy the parent dirs may not exist yet, and siblings must
+    // survive — so only the page sub-path is removed, not the whole site.
+    await mkdir(nodePath.dirname(finalRoot), { recursive: true });
     await rm(finalRoot, { force: true, recursive: true });
     await rename(staging, finalRoot);
 
@@ -125,8 +144,17 @@ export async function deploySiteFromSandbox({
   }
 }
 
-/** Remove a deployed site from the host. */
-export async function removeSite(name: string): Promise<void> {
-  await rm(siteRoot(name), { force: true, recursive: true });
-  logger.info({ name }, '[sites] removed site');
+/** Remove a deployed site (or a single page within it) from the host. */
+export async function removeSite(name: string, page?: string): Promise<void> {
+  const siteDir = siteRoot(name);
+  let target = siteDir;
+  if (page) {
+    const resolved = resolveWithin(siteDir, page);
+    if (!resolved || resolved === siteDir) {
+      throw new Error(`Invalid page path: ${page}`);
+    }
+    target = resolved;
+  }
+  await rm(target, { force: true, recursive: true });
+  logger.info({ name, page }, '[sites] removed site');
 }

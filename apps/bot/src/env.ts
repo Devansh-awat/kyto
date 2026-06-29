@@ -30,7 +30,7 @@ export const env = createEnv({
       .enum(['true', 'false'])
       .default('true')
       .transform((value) => value === 'true'),
-    SITES_PORT: z.coerce.number().default(443),
+    SITES_PORT: z.coerce.number().default(8080),
     // Serve HTTPS with a self-signed cert. Leave false when running behind a
     // TLS-terminating reverse proxy (e.g. Nest), which forwards plain HTTP to
     // the container — serving HTTPS there causes 502 Bad Gateway.
@@ -39,9 +39,10 @@ export const env = createEnv({
       .default('false')
       .transform((value) => value === 'true'),
     SITES_ROOT: z.string().default('/var/kytosites'),
-    // Public host used to build the public site URL returned to the agent, e.g.
-    // "devansh.hackclub.app". The URL is always https:// (Nest terminates TLS).
-    SITES_PUBLIC_HOST: z.string().optional(),
+    // Public host used to build the public site URL returned to the agent.
+    // Sites are served at the host root, e.g. https://<host>/<name>/<page>/. The
+    // URL is always https:// (Nest terminates TLS).
+    SITES_PUBLIC_HOST: z.string().default('kyto.devansh.hackclub.app'),
 
     E2B_API_KEY: z.string().min(1),
     AGENTMAIL_API_KEY: z.string().min(1).optional(),

@@ -14,8 +14,6 @@ const SECURITY_HEADERS: Record<string, string> = {
   'Referrer-Policy': 'no-referrer',
 };
 
-const PREFIX = '/kytosites/';
-
 async function ensureSelfSignedCert(): Promise<{ cert: string; key: string }> {
   const tlsDir = nodePath.join(sitesRoot(), '.tls');
   const certPath = nodePath.join(tlsDir, 'cert.pem');
@@ -58,8 +56,9 @@ function notFound(): Response {
 }
 
 async function resolveSiteFile(pathname: string): Promise<string | null> {
-  // Expect /kytosites/<name>/<rest...>
-  const remainder = pathname.slice(PREFIX.length);
+  // Sites are served at the domain root: /<name>/<rest...>. The first path
+  // segment is the site name; everything after it is a file or page within it.
+  const remainder = pathname.replace(/^\/+/, '');
   const slash = remainder.indexOf('/');
   const name = slash === -1 ? remainder : remainder.slice(0, slash);
   if (!isValidSiteName(name)) {
@@ -96,9 +95,9 @@ async function resolveSiteFile(pathname: string): Promise<string | null> {
 
 /**
  * Start the static-site HTTPS server on SITES_PORT. Serves prebuilt files from
- * SITES_ROOT/<name>/ under /kytosites/<name>/ and nothing else — no directory
- * listings, no execution, strict path containment. Bind failures are logged and
- * swallowed so they never crash the bot (e.g. in local dev without port 443).
+ * SITES_ROOT/<name>/ at the domain root under /<name>/ and nothing else — no
+ * directory listings, no execution, strict path containment. Bind failures are logged and
+ * swallowed so they never crash the bot (e.g. in local dev without port 8080).
  */
 export async function startSitesServer(): Promise<void> {
   if (!env.SITES_ENABLED) {
@@ -121,9 +120,6 @@ export async function startSitesServer(): Promise<void> {
             headers: SECURITY_HEADERS,
             status: 405,
           });
-        }
-        if (!pathname.startsWith(PREFIX)) {
-          return notFound();
         }
 
         const filePath = await resolveSiteFile(pathname);

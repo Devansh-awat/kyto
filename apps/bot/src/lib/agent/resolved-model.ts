@@ -36,7 +36,9 @@ const COST_QUALITY_TRADEOFF = 5;
 // `-nano`/`-mini`/`-flash-lite`/`-fast`/`-pro-image` and `claude-fable-5` can
 // never be routed to. Reasoning-effort tiers in the leaderboard
 // ("Thinking"/"High"/"xHigh"/"Max") are the same slug, so they collapse.
-// Verified honored by the HackClub proxy (June 2026).
+// Verified honored by the HackClub proxy (June 2026). The lower-ranked tail
+// (deepseek-v4-pro/flash, kimi-k2.6/k2.7-code, minimax-m3, qwen3.6-plus) was
+// dropped to keep routing on the stronger models only.
 const ALLOWED_MODELS = [
   'anthropic/claude-opus-4.8',
   'anthropic/claude-opus-4.7',
@@ -48,12 +50,6 @@ const ALLOWED_MODELS = [
   'z-ai/glm-5.1',
   'google/gemini-3.5-flash',
   'google/gemini-3.1-pro-preview',
-  'deepseek/deepseek-v4-pro',
-  'deepseek/deepseek-v4-flash',
-  'moonshotai/kimi-k2.7-code',
-  'moonshotai/kimi-k2.6',
-  'minimax/minimax-m3',
-  'qwen/qwen3.6-plus',
 ];
 const AUTO_ROUTER_PLUGIN_ID = 'auto-router';
 const ROUTER_MODEL_ID = 'openrouter/auto';

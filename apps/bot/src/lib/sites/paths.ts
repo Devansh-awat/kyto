@@ -20,6 +20,20 @@ export function isValidSiteName(name: string): boolean {
   return SITE_NAME_RE.test(name) && !RESERVED_SITE_NAMES.has(name);
 }
 
+/**
+ * A page sub-path within a site, e.g. `home` or `docs/getting-started`. One or
+ * more slug segments, each a DNS-label-style slug, joined by `/`. The router
+ * then serves it at `/<site>/<page>/`. resolveWithin still enforces containment;
+ * this is the additional shape check so page paths stay clean URL slugs.
+ */
+export function isValidPagePath(page: string): boolean {
+  const segments = page.split('/').filter((segment) => segment.length > 0);
+  if (segments.length === 0) {
+    return false;
+  }
+  return segments.every((segment) => SITE_NAME_RE.test(segment));
+}
+
 export function sitesRoot(): string {
   return nodePath.resolve(env.SITES_ROOT);
 }
@@ -52,8 +66,9 @@ export function resolveWithin(root: string, relative: string): string | null {
   return target;
 }
 
-/** Public URL for a deployed site. */
-export function siteUrl(name: string): string {
+/** Public URL for a deployed site (optionally a page within it). */
+export function siteUrl(name: string, page?: string): string {
   const host = env.SITES_PUBLIC_HOST ?? 'localhost';
-  return `https://${host}/kytosites/${name}/`;
+  const suffix = page ? `${page}/` : '';
+  return `https://${host}/${name}/${suffix}`;
 }
