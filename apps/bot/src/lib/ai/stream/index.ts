@@ -11,11 +11,17 @@ export async function* renderStream({
   knownTools,
   onTextDelta,
   onSkip,
+  onToolActivity,
   stream,
 }: {
   knownTools?: ReadonlySet<string>;
   onTextDelta?: (text: string) => PromiseLike<void> | void;
   onSkip?: () => void;
+  // Fires on the first real (non-phantom, registered) tool call. Lets the agent
+  // loop tell "the model did actual work" apart from a truly empty completion,
+  // so a turn that ran tools is never discarded as empty and restarted on a
+  // fresh model (which would re-do all the work and burn the fallback chain).
+  onToolActivity?: () => void;
   stream: AsyncIterable<TextStreamPart<ToolSet>>;
 }): AsyncGenerator<string | StreamChunk> {
   const toolInputs = new Map<string, unknown>();
@@ -92,6 +98,7 @@ export async function* renderStream({
           break;
         }
         toolInputs.set(part.toolCallId, part.input);
+        onToolActivity?.();
         logger.info(
           {
             input: part.input,

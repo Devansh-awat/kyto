@@ -285,19 +285,33 @@ Run these automatically after each completed change, in order, **without asking*
   - **Capture the resolved model**: the stream only exposes the *requested* id, so
     we read the concrete model OpenRouter resolved to from the `model` field of a
     clone of the response and stash it per-turn (`AsyncLocalStorage`).
-- The model is surfaced as a **`Model` task in the thinking section** (never in
-  the reply text), shown as `openrouter/auto → <resolved>`. The task is opened
-  `in_progress` and completed once after streaming (same id) so it updates in
-  place. `openrouter/auto` re-routes **per step**, so a turn can use several
+- The model is surfaced as an **informational `Model` task in the thinking
+  section** (never in the reply text), shown as `openrouter/auto → <resolved>`.
+  It is emitted **`complete` (never `in_progress`)** so it never becomes the
+  collapsed-header "current activity" — the header tracks real work (Thinking /
+  running a tool / searching), and a fallback never shows (let alone gets stuck)
+  as the top line; the `Model · fallback` items are only visible when expanded.
+  (This also fixed a frozen header: when the chain exhausted, the last
+  `in_progress` model task never reached its post-stream completion and stuck.)
+  Updated in place by id after streaming to append the resolved model.
+  `openrouter/auto` re-routes **per step**, so a turn can use several
   models; the task shows the **first** step's pick (every step is logged at info
   as `[router] resolved openrouter/auto model`).
 - `MODEL_CATALOG`/`CATALOG_IDS` are retained for reference/diagnostics only (no
   longer drive routing). `chatAttempts`/`attemptsFor`/`PREMIUM_MODEL` remain
   exported for reference.
-- Fallback advances on **any** error AND on an **empty completion** — a model
-  that finishes producing nothing (e.g. a HackClub 504 swallowed into an empty
-  stream) is treated as a failed attempt, not a silent success. A deliberate
-  `skip` is NOT an empty completion (it counts as a handled turn), and any
+- Fallback advances on **any** error AND on a **truly empty completion** — a
+  completion that produced NEITHER reply text, NOR a deliberate `skip`, NOR any
+  **tool activity** (e.g. a HackClub 504 swallowed into an empty stream). Tool
+  activity now counts as a **handled turn** (tracked via `renderStream`'s
+  `onToolActivity` → `producedToolActivity`): a turn that ran tools did real work,
+  so it is NOT discarded as empty and restarted on a fresh model. This fixed a
+  cascade where every model in the chain threw "empty" mid-research (the model
+  ran tools but wrote no final text — worsened by the persistence prompt telling
+  it not to narrate), burning the whole chain to a hard "Something went wrong".
+  The trade-off: a model that runs tools then stops without a written summary
+  ends the turn quietly rather than falling back (the persistence prompt pushes
+  it to finish + summarize). A deliberate `skip` still counts as handled, and any
   provider placeholder text like `(Empty response: ...)` is dropped before it
   reaches Slack (`agent/index.ts`, `ai/stream/index.ts`).
 - **Hallucinated tool calls are hidden.** Weak models sometimes emit a tool call

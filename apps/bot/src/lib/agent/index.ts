@@ -158,14 +158,16 @@ async function executeTurn(
       thread,
     });
     let attachments: Awaited<ReturnType<typeof seedAttachments>> = [];
-    // Track real reply text (not generic activity): tool-call/activity chunks
-    // don't count, so this tells "the model actually replied" apart from "the
-    // model only ran tools and then stopped". A turn that ends with tool activity
-    // but no assistant text (and no deliberate skip) is a degenerate completion —
-    // the user sees the tool tasks and then silence — so we treat it as an empty
-    // turn and fall through to a model that actually answers.
+    // Distinguish a turn that did real work from a truly empty completion. Only
+    // a completion that produced NEITHER reply text, NOR a deliberate skip, NOR
+    // any tool activity (e.g. an upstream 504 swallowed into an empty stream) is
+    // treated as empty and falls through to another model. A turn that ran tools
+    // did real work — restarting it on a fresh model would throw that away and
+    // burn the fallback chain — so tool activity counts as a handled turn even if
+    // the model never wrote a final summary.
     let producedText = false;
     let skipped = false;
+    let producedToolActivity = false;
     const attempts: AttemptFailure[] = [];
     // The main query runs on OpenRouter's own model router via HackClub
     // (`openrouter/auto`): OpenRouter picks the best underlying model per
@@ -264,16 +266,17 @@ async function executeTurn(
         const modelTaskId = `model-${attempts.length}`;
         const modelTaskTitle =
           attempts.length > 0 ? 'Model · fallback' : 'Model';
-        // Surface the model in the thinking section (not the reply text). On a
-        // fallback this shows the model we advanced to, so it is visible which
-        // model actually served the turn — without announcing it in the output.
-        // Opened in_progress and completed after streaming (same id) so the one
-        // task updates in place — and so the completion can append the concrete
-        // model `openrouter/auto` resolved to.
+        // Surface the model as an informational item in the thinking section
+        // (visible when expanded), NOT in the reply text. Emitted `complete`
+        // (never in_progress) so it never becomes the collapsed-header "current
+        // activity": the header should track real work (Thinking / running a
+        // tool / searching), and a fallback must never show — let alone get
+        // stuck — as the top line. Same id so the post-stream update appends the
+        // concrete model `openrouter/auto` resolved to, in place.
         yield {
           id: modelTaskId,
           output: `${currentAttempt.provider} · ${currentAttempt.model}`,
-          status: 'in_progress',
+          status: 'complete',
           title: modelTaskTitle,
           type: 'task_update',
         };
@@ -306,6 +309,9 @@ async function executeTurn(
             errorStage = 'after_text';
             await reply?.append({ text, thread });
           },
+          onToolActivity: () => {
+            producedToolActivity = true;
+          },
           stream: result.stream,
         })) {
           if (errorStage === 'before_output') {
@@ -330,13 +336,14 @@ async function executeTurn(
           };
         }
 
-        // A model that finishes without producing a reply must NOT be treated as
-        // a successful turn — whether it emitted nothing at all (e.g. an upstream
-        // 504 swallowed into an empty stream) or only ran tools and then stopped
-        // without answering (observed: gemini-3.1-pro ending the loop right after
-        // searchSlack). Both end with no user-visible text and no deliberate
-        // skip; throw so the fallback chain advances to a model that answers.
-        if (!(producedText || skipped)) {
+        // Only a completion that produced NOTHING — no reply text, no deliberate
+        // skip, and no tool activity (e.g. an upstream 504 swallowed into an
+        // empty stream) — is treated as empty and falls through to another model.
+        // A turn that ran tools did real work; restarting it on a fresh model
+        // would discard that work and burn the fallback chain (observed: every
+        // model in the chain throwing "empty" mid-research), so tool activity
+        // counts as a handled turn even without a final written summary.
+        if (!(producedText || skipped || producedToolActivity)) {
           throw new Error(
             `Model ${currentAttempt.model} returned an empty response.`
           );
