@@ -251,3 +251,45 @@ export const deepFallbackAttempts: PiAttempt[] = [
   ...baishuiAttempts,
   ...geminiAttempts,
 ];
+
+/** A baishui-proxy attempt (jam06452.uk, OpenRouter-compatible) for the
+ * open-weight tail that HackClub does not serve. Empty if the proxy key/URL is
+ * unset (then those rungs are simply skipped). */
+const proxyAttempt = (model: string): PiAttempt => ({
+  customEnv: {
+    MOONSHOTAI_API_KEY: env.OPENROUTER_API_KEY as string,
+    MOONSHOTAI_BASE_URL: env.OPENROUTER_BASE_URL as string,
+  },
+  model,
+  provider: 'baishui',
+});
+const proxyReady = Boolean(env.OPENROUTER_API_KEY && env.OPENROUTER_BASE_URL);
+
+// The owner's arena leaderboard, best→worst, restricted to models we can
+// actually reach: the strong tier on HackClub (same slugs `openrouter/auto`
+// resolves to), the open-weight tail on the baishui proxy. Fable 5 (rank #1) is
+// unreachable (no provider) and omitted; reasoning-effort tiers collapse to one
+// slug. The agent (apps/bot/src/lib/agent/index.ts) runs `openrouter/auto`
+// first, retries the exact model it resolved to, then walks THIS list UP from
+// that model (toward #1) and then DOWN (toward the weakest). Order matters: the
+// index of each entry is the rank used for the up/down pivot.
+export const LEADERBOARD_FALLBACK: PiAttempt[] = [
+  catalogAttempt('anthropic/claude-opus-4.8'),
+  catalogAttempt('openai/gpt-5.5'),
+  catalogAttempt('anthropic/claude-opus-4.7'),
+  catalogAttempt('anthropic/claude-opus-4.6'),
+  catalogAttempt('openai/gpt-5.4'),
+  catalogAttempt('z-ai/glm-5.2'),
+  catalogAttempt('anthropic/claude-sonnet-4.6'),
+  catalogAttempt('z-ai/glm-5.1'),
+  catalogAttempt('google/gemini-3.5-flash'),
+  ...(proxyReady
+    ? [
+        proxyAttempt('deepseek-v4-pro'),
+        proxyAttempt('kimi-k2.6'),
+        proxyAttempt('k2.7-code-normal'),
+        proxyAttempt('deepseek-4-flash'),
+        proxyAttempt('m3-normal'),
+      ]
+    : []),
+];

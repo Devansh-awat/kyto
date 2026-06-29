@@ -1,7 +1,7 @@
 import {
   catalogAttempt,
   createAgent,
-  deepFallbackAttempts,
+  LEADERBOARD_FALLBACK,
   openSession,
   type PiAttempt,
   ROUTER_MODEL,
@@ -169,11 +169,19 @@ async function executeTurn(
     const attempts: AttemptFailure[] = [];
     // The main query runs on OpenRouter's own model router via HackClub
     // (`openrouter/auto`): OpenRouter picks the best underlying model per
-    // request, so we no longer maintain a catalog or pay a separate router-LLM
-    // hop. On failure we fall through to the baishui/Gemini deep backup so the
-    // bot still answers if HackClub/OpenRouter is down.
+    // request. On failure we (1) retry the exact model auto resolved to, then
+    // (2) walk the leaderboard UP from that model (toward the best) and then
+    // DOWN (toward the weakest) — see routeNextAttempt. Keeps the bot answering
+    // and biases recovery toward stronger models when the chosen one fails.
     const failedKeys = new Set<string>();
     let triedAuto = false;
+    let triedResolved = false;
+    // The up-then-down leaderboard queue, built lazily once we know what
+    // `openrouter/auto` resolved to (its rank is the pivot).
+    let fallbackQueue: PiAttempt[] | undefined;
+    // The per-turn model holder for the auto attempt; its `.model` is filled by
+    // the fetch interceptor with the slug auto actually resolved to.
+    let autoHolder: ReturnType<typeof enterModelCapture> | undefined;
     let attempt: PiAttempt | undefined;
     // Built once: the tool set does not depend on the chosen model, and its keys
     // let renderStream hide hallucinated calls to non-existent tools.
@@ -184,15 +192,42 @@ async function executeTurn(
       thread,
     });
     const knownTools = new Set(Object.keys(tools));
-    // Selects the next attempt as a side effect: `openrouter/auto` first, then
-    // the deep backup chain (each entry tried at most once).
+    // Build the up-then-down leaderboard queue around the resolved model: climb
+    // to better-ranked models first (closest-better → best), then descend to the
+    // lower-ranked ones. If the resolved slug isn't on the leaderboard (or is
+    // unknown), fall back to the full best→worst order.
+    const buildFallbackQueue = (pivotModel?: string): PiAttempt[] => {
+      const idx = pivotModel
+        ? LEADERBOARD_FALLBACK.findIndex((a) => a.model === pivotModel)
+        : -1;
+      if (idx === -1) {
+        return [...LEADERBOARD_FALLBACK];
+      }
+      const up = LEADERBOARD_FALLBACK.slice(0, idx).reverse();
+      const down = LEADERBOARD_FALLBACK.slice(idx + 1);
+      return [...up, ...down];
+    };
+    // Selects the next attempt as a side effect: `openrouter/auto` first, then a
+    // pinned retry of the model it resolved to, then the up-then-down queue
+    // (each entry tried at most once, tracked via failedKeys).
     const routeNextAttempt = () => {
       if (!triedAuto) {
         triedAuto = true;
         attempt = catalogAttempt(ROUTER_MODEL);
         return;
       }
-      attempt = deepFallbackAttempts.find(
+      const resolved = autoHolder?.model;
+      if (!triedResolved) {
+        triedResolved = true;
+        fallbackQueue = buildFallbackQueue(resolved);
+        // Retry the exact model auto resolved to (auto's failure may be
+        // transient or an empty completion), if known and not already tried.
+        if (resolved && !failedKeys.has(`hackclub:${resolved}`)) {
+          attempt = catalogAttempt(resolved);
+          return;
+        }
+      }
+      attempt = fallbackQueue?.find(
         (candidate) =>
           !failedKeys.has(`${candidate.provider}:${candidate.model}`)
       );
@@ -243,8 +278,13 @@ async function executeTurn(
           type: 'task_update',
         };
         // `openrouter/auto` resolves the real model server-side; capture it off
-        // the global fetch so we can show the concrete pick (see resolved-model).
+        // the global fetch so we can show the concrete pick (see resolved-model)
+        // and pin it as the first fallback. Keep the holder ref for the auto
+        // attempt so routeNextAttempt can read the resolved slug even on failure.
         const modelHolder = enterModelCapture();
+        if (currentAttempt.model === ROUTER_MODEL) {
+          autoHolder = modelHolder;
+        }
         const result = await agent.stream({
           abortSignal: controller.signal,
           prompt: promptWithAttachments({

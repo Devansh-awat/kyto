@@ -10,6 +10,7 @@ export {
   chatAttempts,
   DEFAULT_MODEL,
   deepFallbackAttempts,
+  LEADERBOARD_FALLBACK,
   MODEL_CATALOG,
   type ModelTier,
   PREMIUM_MODEL,

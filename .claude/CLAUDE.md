@@ -249,9 +249,20 @@ Run these automatically after each completed change, in order, **without asking*
   `meta-llama/llama-3.3-70b-instruct` fast tier, which was unreliable for tool
   use (hallucinated tool names, wrong-bot/persona confusion, stray "battles").
 - **Fallback on failure** (`agent/index.ts`, `routeNextAttempt`): `openrouter/auto`
-  is attempt 0; on any error or empty completion it falls through to the
-  `deepFallbackAttempts` deep backup (baishui → Gemini, each tried once) so the
-  bot still answers if HackClub/OpenRouter is down.
+  is attempt 0. On any error or empty completion it (1) retries the **exact model
+  auto resolved to**, pinned via HackClub (auto's failure is often transient/an
+  empty completion), then (2) walks the `LEADERBOARD_FALLBACK` list (`pi.ts`)
+  **UP** from that model toward the best (closest-better first), then **DOWN**
+  toward the weakest. `LEADERBOARD_FALLBACK` is the owner's arena leaderboard,
+  best→worst, restricted to reachable models: the strong tier on HackClub
+  (opus-4.8/4.7/4.6, gpt-5.5/5.4, glm-5.2/5.1, sonnet-4.6, gemini-3.5-flash) and
+  the open tail on the **baishui proxy** (`jam06452.uk`: deepseek-v4-pro,
+  kimi-k2.6, k2.7-code, deepseek-4-flash, m3) — the proxy rungs are skipped if
+  `OPENROUTER_API_KEY`/`_BASE_URL` are unset. Fable 5 (rank #1) is omitted (no
+  provider). The resolved slug is read off the per-turn model holder (`autoHolder`)
+  captured during the auto attempt, so it pins/pivots even when auto failed. Each
+  entry is tried at most once (tracked via `failedKeys`). `deepFallbackAttempts`
+  is retained/exported for reference but no longer drives routing.
 - **Fetch interceptor** (`apps/bot/src/lib/agent/resolved-model.ts`, installed in
   `index.ts`): Pi makes model calls through the process-global `fetch` (undici),
   so we patch it to tune the request and read the response:
