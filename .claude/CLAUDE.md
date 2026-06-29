@@ -285,16 +285,16 @@ Run these automatically after each completed change, in order, **without asking*
   - **Capture the resolved model**: the stream only exposes the *requested* id, so
     we read the concrete model OpenRouter resolved to from the `model` field of a
     clone of the response and stash it per-turn (`AsyncLocalStorage`).
-- The model is surfaced as an **informational `Model` task in the thinking
-  section** (never in the reply text), shown as `openrouter/auto → <resolved>`.
-  It is emitted **`complete` (never `in_progress`)** so it never becomes the
-  collapsed-header "current activity" — the header tracks real work (Thinking /
-  running a tool / searching), and a fallback never shows (let alone gets stuck)
-  as the top line; the `Model · fallback` items are only visible when expanded.
-  (This also fixed a frozen header: when the chain exhausted, the last
-  `in_progress` model task never reached its post-stream completion and stuck.)
-  Updated in place by id after streaming to append the resolved model.
-  `openrouter/auto` re-routes **per step**, so a turn can use several
+- The model is surfaced as a **`Model` task in the thinking section** (never in
+  the reply text), shown as `openrouter/auto → <resolved>`. Emitted
+  **`in_progress` while the attempt runs** (so the activity indicator reads as
+  working, never a misleading "completed" before anything has happened) and
+  marked **`complete` both after streaming (success) AND in the catch
+  (failure)** — completing it in the catch is what stops the header from
+  freezing on a `Model · fallback` spinner when an attempt throws before its
+  post-stream completion. `modelTaskId`/`modelTaskTitle` are declared outside the
+  per-attempt try so the catch can complete the same task. Updated in place by id
+  to append the resolved model. `openrouter/auto` re-routes **per step**, so a turn can use several
   models; the task shows the **first** step's pick (every step is logged at info
   as `[router] resolved openrouter/auto model`).
 - `MODEL_CATALOG`/`CATALOG_IDS` are retained for reference/diagnostics only (no

@@ -241,6 +241,9 @@ async function executeTurn(
     );
     while (attempt) {
       const currentAttempt = attempt;
+      // Declared outside the try so the catch can complete the same task.
+      const modelTaskId = `model-${attempts.length}`;
+      const modelTaskTitle = attempts.length > 0 ? 'Model · fallback' : 'Model';
       try {
         activeAttempt = currentAttempt;
         const agent = createAgent({
@@ -263,20 +266,16 @@ async function executeTurn(
         });
         session = await openSession({ agent, threadId });
         reply = createReply({ threadId });
-        const modelTaskId = `model-${attempts.length}`;
-        const modelTaskTitle =
-          attempts.length > 0 ? 'Model · fallback' : 'Model';
-        // Surface the model as an informational item in the thinking section
-        // (visible when expanded), NOT in the reply text. Emitted `complete`
-        // (never in_progress) so it never becomes the collapsed-header "current
-        // activity": the header should track real work (Thinking / running a
-        // tool / searching), and a fallback must never show — let alone get
-        // stuck — as the top line. Same id so the post-stream update appends the
-        // concrete model `openrouter/auto` resolved to, in place.
+        // Surface the model in the thinking section (not the reply text).
+        // Emitted `in_progress` while this attempt actually runs, so the
+        // activity indicator reads as working (never a misleading "completed"
+        // before anything has happened). It is marked `complete` after streaming
+        // (below) on success, AND in the catch on failure, so it transitions to
+        // done at the right moment and never sticks as a frozen spinner.
         yield {
           id: modelTaskId,
           output: `${currentAttempt.provider} · ${currentAttempt.model}`,
-          status: 'complete',
+          status: 'in_progress',
           title: modelTaskTitle,
           type: 'task_update',
         };
@@ -350,6 +349,16 @@ async function executeTurn(
         }
         return;
       } catch (error) {
+        // Mark this attempt's model task done so the activity indicator never
+        // sticks on a frozen "Model · fallback" spinner when the attempt threw
+        // before its post-stream completion yield ran.
+        yield {
+          id: modelTaskId,
+          output: `${currentAttempt.provider} · ${currentAttempt.model}`,
+          status: 'complete',
+          title: modelTaskTitle,
+          type: 'task_update',
+        };
         attempts.push({ attempt: currentAttempt, error });
         failedKeys.add(`${currentAttempt.provider}:${currentAttempt.model}`);
         routeNextAttempt();
