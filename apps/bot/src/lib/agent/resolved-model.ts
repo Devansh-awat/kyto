@@ -17,6 +17,10 @@ import logger from '@/lib/logger';
 // Both are best-effort: any failure leaves the request/holder untouched.
 
 export interface ModelHolder {
+  // Count of model completions calls in this turn. One call == one agentic step
+  // (model → tools → model → …). Lets us tell "Pi only ran a single step" apart
+  // from "the model chose to stop early" when a turn ends with no reply.
+  calls?: number;
   model?: string;
 }
 
@@ -210,6 +214,14 @@ export function installModelCapture(): void {
         callInput = url;
         callInit = { ...init, body: tuned, headers, method, signal };
       }
+    }
+    const holderForCount = store.getStore();
+    if (holderForCount && url.includes(COMPLETIONS_HINT)) {
+      holderForCount.calls = (holderForCount.calls ?? 0) + 1;
+      logger.info(
+        { step: holderForCount.calls },
+        '[router] model completions call'
+      );
     }
     const response = await original(
       callInput as Parameters<typeof original>[0],
