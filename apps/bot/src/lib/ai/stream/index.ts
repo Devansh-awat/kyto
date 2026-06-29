@@ -12,6 +12,7 @@ export async function* renderStream({
   onTextDelta,
   onSkip,
   onToolActivity,
+  onError,
   stream,
 }: {
   knownTools?: ReadonlySet<string>;
@@ -22,6 +23,10 @@ export async function* renderStream({
   // so a turn that ran tools is never discarded as empty and restarted on a
   // fresh model (which would re-do all the work and burn the fallback chain).
   onToolActivity?: () => void;
+  // Fires for each stream-level error part (e.g. a provider 429 swallowed into
+  // the stream). Lets the agent loop react to provider conditions — like a
+  // HackClub "daily spending limit" 429 — that never surface as a thrown error.
+  onError?: (message: string) => void;
   stream: AsyncIterable<TextStreamPart<ToolSet>>;
 }): AsyncGenerator<string | StreamChunk> {
   const toolInputs = new Map<string, unknown>();
@@ -55,9 +60,9 @@ export async function* renderStream({
       }
     }
     if (part.type === 'error') {
-      tally.errors.push(
-        String((part as { error?: unknown }).error).slice(0, 200)
-      );
+      const message = String((part as { error?: unknown }).error);
+      tally.errors.push(message.slice(0, 200));
+      onError?.(message);
     }
     switch (part.type) {
       case 'text-delta': {

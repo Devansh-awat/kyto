@@ -34,6 +34,10 @@ import { errorMessage } from '@/lib/utils/error';
 import type { ActiveTurn, AgentErrorStage } from '@/types/agent';
 import type { AttemptFailure } from '@/types/attempts';
 
+// HackClub/OpenRouter daily-spend-limit rejection (also "insufficient credits").
+// Matched against stream error parts to fail over off HackClub for the turn.
+const SPEND_LIMIT_PATTERN = /spending limit|insufficient credits|daily limit/i;
+
 export { stopAllTurns, stopTurn } from '@/lib/agent/turns';
 
 export function runTurn(input: {
@@ -184,6 +188,13 @@ async function executeTurn(
     // The per-turn model holder for the auto attempt; its `.model` is filled by
     // the fetch interceptor with the slug auto actually resolved to.
     let autoHolder: ReturnType<typeof enterModelCapture> | undefined;
+    // Set when a HackClub call returns the daily-spend-limit 429: every HackClub
+    // model shares that one budget, so once it is hit there is no point trying
+    // the rest of the HackClub rungs — skip straight to the unmetered baishui
+    // proxy (see routeNextAttempt). `max_tokens` capping (resolved-model.ts)
+    // prevents most spurious 429s; this is the backstop when the budget is truly
+    // gone.
+    let hackclubBudgetExhausted = false;
     let attempt: PiAttempt | undefined;
     // Built once: the tool set does not depend on the chosen model, and its keys
     // let renderStream hide hallucinated calls to non-existent tools.
@@ -223,15 +234,23 @@ async function executeTurn(
         triedResolved = true;
         fallbackQueue = buildFallbackQueue(resolved);
         // Retry the exact model auto resolved to (auto's failure may be
-        // transient or an empty completion), if known and not already tried.
-        if (resolved && !failedKeys.has(`hackclub:${resolved}`)) {
+        // transient or an empty completion), if known and not already tried —
+        // unless HackClub's budget is exhausted (the pinned retry is HackClub).
+        if (
+          !hackclubBudgetExhausted &&
+          resolved &&
+          !failedKeys.has(`hackclub:${resolved}`)
+        ) {
           attempt = catalogAttempt(resolved);
           return;
         }
       }
       attempt = fallbackQueue?.find(
         (candidate) =>
-          !failedKeys.has(`${candidate.provider}:${candidate.model}`)
+          !(
+            failedKeys.has(`${candidate.provider}:${candidate.model}`) ||
+            (hackclubBudgetExhausted && candidate.provider === 'hackclub')
+          )
       );
     };
     routeNextAttempt();
@@ -310,6 +329,16 @@ async function executeTurn(
           },
           onToolActivity: () => {
             producedToolActivity = true;
+          },
+          onError: (msg) => {
+            // A HackClub daily-spend-limit 429 dooms every HackClub rung — flag
+            // it so routeNextAttempt skips them and fails over to baishui.
+            if (
+              currentAttempt.provider === 'hackclub' &&
+              SPEND_LIMIT_PATTERN.test(msg)
+            ) {
+              hackclubBudgetExhausted = true;
+            }
           },
           stream: result.stream,
         })) {

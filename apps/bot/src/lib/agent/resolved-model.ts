@@ -33,6 +33,15 @@ const MODEL_FIELD = /"model"\s*:\s*"([^"]+)"/;
 const MAX_SCAN_BYTES = 16_384;
 // Auto-router cost/quality bias: 7 is OpenRouter's default, 10 is cheapest.
 const COST_QUALITY_TRADEOFF = 5;
+// Cap output tokens on HackClub requests. OpenRouter enforces the daily spend
+// limit PESSIMISTICALLY: with no `max_tokens` it assumes the model could emit
+// its full max output, projects that worst-case cost, and returns
+// `429 Daily spending limit reached` when the projection would cross the cap —
+// even with budget still free (the dearer models were rejected at $2.33/$3).
+// Setting `max_tokens` makes OpenRouter price the request off this bound
+// instead, so requests go through. Observed step outputs are <6k tokens, so
+// this is generous headroom while still slashing the projected cost.
+const MAX_OUTPUT_TOKENS = 16_000;
 // Restrict the auto-router to these EXACT model ids (owner-chosen allowlist,
 // derived from the leaderboard ranking). Passed as the auto-router plugin's
 // `allowed_models` field (NOT `model_patterns` — that field name is silently
@@ -117,31 +126,50 @@ function bodyToString(body: unknown): string | undefined {
 }
 
 /**
- * If `raw` is an `openrouter/auto` completions body, return a new JSON body with
- * the cost-biasing auto-router plugin (cost_quality_tradeoff + allowed_models
- * allowlist) merged in. Returns null when it does not apply or cannot be parsed.
+ * Tune a completions body before it goes out:
+ *  - For an `openrouter/auto` body: merge in the cost-biasing auto-router plugin
+ *    (cost_quality_tradeoff + allowed_models allowlist).
+ *  - When `capMaxTokens` (HackClub requests): ensure `max_tokens` is set to at
+ *    most MAX_OUTPUT_TOKENS so OpenRouter's pessimistic daily-spend check prices
+ *    the request off that bound instead of the model's full max output (the
+ *    cause of spurious `429 Daily spending limit reached`).
+ * Returns a new JSON body when something changed, else null (leave the original).
  */
-function tuneCompletionsBody(raw: string | undefined): string | null {
-  if (!raw?.includes(ROUTER_MODEL_ID)) {
+function tuneCompletionsBody(
+  raw: string | undefined,
+  capMaxTokens: boolean
+): string | null {
+  if (raw === undefined) {
     return null;
   }
   try {
     const payload = JSON.parse(raw);
-    if (payload?.model !== ROUTER_MODEL_ID) {
+    if (!payload || typeof payload !== 'object') {
       return null;
     }
-    const plugins = Array.isArray(payload.plugins) ? payload.plugins : [];
-    payload.plugins = [
-      ...plugins.filter(
-        (plugin: { id?: string }) => plugin?.id !== AUTO_ROUTER_PLUGIN_ID
-      ),
-      {
-        id: AUTO_ROUTER_PLUGIN_ID,
-        cost_quality_tradeoff: COST_QUALITY_TRADEOFF,
-        allowed_models: ALLOWED_MODELS,
-      },
-    ];
-    return JSON.stringify(payload);
+    let changed = false;
+    if (payload.model === ROUTER_MODEL_ID) {
+      const plugins = Array.isArray(payload.plugins) ? payload.plugins : [];
+      payload.plugins = [
+        ...plugins.filter(
+          (plugin: { id?: string }) => plugin?.id !== AUTO_ROUTER_PLUGIN_ID
+        ),
+        {
+          id: AUTO_ROUTER_PLUGIN_ID,
+          cost_quality_tradeoff: COST_QUALITY_TRADEOFF,
+          allowed_models: ALLOWED_MODELS,
+        },
+      ];
+      changed = true;
+    }
+    if (capMaxTokens) {
+      const current = payload.max_tokens;
+      if (typeof current !== 'number' || current > MAX_OUTPUT_TOKENS) {
+        payload.max_tokens = MAX_OUTPUT_TOKENS;
+        changed = true;
+      }
+    }
+    return changed ? JSON.stringify(payload) : null;
   } catch {
     return null;
   }
@@ -194,7 +222,12 @@ export function installModelCapture(): void {
     let callInput: string | URL | Request = input;
     let callInit = init;
     if (url.includes(COMPLETIONS_HINT)) {
-      const tuned = tuneCompletionsBody(await readRequestBody(input, init));
+      // Cap max_tokens only on HackClub (the OpenRouter-backed proxy subject to
+      // the daily spend limit); the baishui proxy is unmetered and left alone.
+      const tuned = tuneCompletionsBody(
+        await readRequestBody(input, init),
+        url.includes('hackclub')
+      );
       if (tuned) {
         const source =
           init?.headers ??
