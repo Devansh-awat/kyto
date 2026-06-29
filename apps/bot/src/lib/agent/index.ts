@@ -158,7 +158,13 @@ async function executeTurn(
       thread,
     });
     let attachments: Awaited<ReturnType<typeof seedAttachments>> = [];
-    let streamed = false;
+    // Track real reply text (not generic activity): tool-call/activity chunks
+    // don't count, so this tells "the model actually replied" apart from "the
+    // model only ran tools and then stopped". A turn that ends with tool activity
+    // but no assistant text (and no deliberate skip) is a degenerate completion —
+    // the user sees the tool tasks and then silence — so we treat it as an empty
+    // turn and fall through to a model that actually answers.
+    let producedText = false;
     let skipped = false;
     const attempts: AttemptFailure[] = [];
     // The main query runs on OpenRouter's own model router via HackClub
@@ -256,13 +262,12 @@ async function executeTurn(
             skipped = true;
           },
           onTextDelta: async (text) => {
-            streamed = true;
+            producedText = true;
             errorStage = 'after_text';
             await reply?.append({ text, thread });
           },
           stream: result.stream,
         })) {
-          streamed = true;
           if (errorStage === 'before_output') {
             errorStage = 'after_progress';
           }
@@ -285,10 +290,13 @@ async function executeTurn(
           };
         }
 
-        // A model that finishes without producing anything (e.g. an upstream
-        // 504 the harness swallowed into an empty stream) must NOT be treated
-        // as a successful turn — throw so the fallback chain advances.
-        if (!(streamed || skipped)) {
+        // A model that finishes without producing a reply must NOT be treated as
+        // a successful turn — whether it emitted nothing at all (e.g. an upstream
+        // 504 swallowed into an empty stream) or only ran tools and then stopped
+        // without answering (observed: gemini-3.1-pro ending the loop right after
+        // searchSlack). Both end with no user-visible text and no deliberate
+        // skip; throw so the fallback chain advances to a model that answers.
+        if (!(producedText || skipped)) {
           throw new Error(
             `Model ${currentAttempt.model} returned an empty response.`
           );
@@ -299,7 +307,12 @@ async function executeTurn(
         failedKeys.add(`${currentAttempt.provider}:${currentAttempt.model}`);
         routeNextAttempt();
         const retryAttempt = attempt;
-        if (controller.signal.aborted || streamed || !retryAttempt) {
+        // Gate on `producedText`, not `streamed`: if the model only emitted tool
+        // activity (no reply text) before failing — including the empty-response
+        // throw above — nothing user-visible was shown, so it is safe to fall
+        // back to another model. Only a turn that already streamed real reply
+        // text must not fall back (it would duplicate the user-facing output).
+        if (controller.signal.aborted || producedText || !retryAttempt) {
           throw error;
         }
         logger.warn(
