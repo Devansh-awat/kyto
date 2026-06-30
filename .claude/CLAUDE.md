@@ -264,12 +264,18 @@ Run these automatically after each completed change, in order, **without asking*
   entry is tried at most once (tracked via `failedKeys`). `deepFallbackAttempts`
   is retained/exported for reference but no longer drives routing.
 - **HackClub spend-limit failover**: if a HackClub call returns the daily-spend
-  429 (`SPEND_LIMIT_PATTERN`, surfaced via `renderStream`'s `onError`), every
-  HackClub rung shares that one budget and will 429 too — so `routeNextAttempt`
-  sets `hackclubBudgetExhausted` and skips all remaining HackClub attempts
-  (including the pinned resolved retry), failing over straight to the unmetered
-  **baishui** proxy for the rest of the turn. The `max_tokens` cap (above)
-  prevents most spurious 429s; this is the backstop when the budget is truly out.
+  429 (`SPEND_LIMIT_PATTERN`, surfaced via `renderStream`'s `onError`),
+  `routeNextAttempt` sets `hackclubBudgetExhausted`. Because the limit is
+  enforced **pessimistically** (OpenRouter projects each request's worst-case
+  cost), the dearer models are rejected first while budget remains — but the
+  capped `max_tokens` (above) keeps the cheaper models' projection low enough to
+  still fit. So rather than abandoning HackClub, the flag flips
+  `buildFallbackQueue` to try the HackClub rungs **CHEAPEST-first**
+  (gemini-3.5-flash → glm → … → opus, i.e. leaderboard tail→top) — the models
+  most likely to pass — and only **then** fails over to the unmetered **baishui**
+  proxy. The pinned resolved-model retry is still skipped on spend-limit (it's
+  the dear model auto already picked and 429'd). This means a near-budget turn
+  recovers on HackClub itself instead of jumping straight to baishui.
 - **Fetch interceptor** (`apps/bot/src/lib/agent/resolved-model.ts`, installed in
   `index.ts`): Pi makes model calls through the process-global `fetch` (undici),
   so we patch it to tune the request and read the response:
@@ -289,16 +295,20 @@ Run these automatically after each completed change, in order, **without asking*
     models). The interceptor strips a stale `Content-Length` when re-issuing the
     tuned (longer) body so the appended `plugins` isn't truncated. Verified
     honored by the HackClub proxy. Edit `COST_QUALITY_TRADEOFF`/`ALLOWED_MODELS`.
-  - **Cap `max_tokens` on HackClub requests** (`MAX_OUTPUT_TOKENS = 16000`): the
+  - **Cap `max_tokens` on HackClub requests** (`MAX_OUTPUT_TOKENS = 8000`): the
     HackClub proxy enforces its **daily spend limit pessimistically** — with no
     `max_tokens` it assumes the model could emit its full max output, projects
     that worst-case cost, and returns `429 Daily spending limit of $3 reached`
     when the projection crosses the cap **even with budget still free** (the
     dearer models — opus/gpt-5.x — were rejected at $2.33/$3 while cheap GLM went
     through). Injecting `max_tokens` makes OpenRouter price off that bound, so
-    requests pass (verified: opus-4.8 429s without it, succeeds with it). Applied
-    only to HackClub URLs (the baishui proxy is unmetered). Edit
-    `MAX_OUTPUT_TOKENS`; raise it if large single-step file writes get truncated.
+    requests pass (verified: opus-4.8 429s without it, succeeds with it). Sized
+    to past usage: observed step outputs run **<6k tokens**, so 8k is generous
+    headroom while halving the projected cost vs. the old 16k — the lower
+    projection is what lets the cheaper HackClub rungs still fit near the budget
+    end (so the spend-limit fallback above can recover on HackClub). Applied only
+    to HackClub URLs (the baishui proxy is unmetered). Edit `MAX_OUTPUT_TOKENS`;
+    raise it if large single-step file writes get truncated.
   - **Capture the resolved model**: the stream only exposes the *requested* id, so
     we read the concrete model OpenRouter resolved to from the `model` field of a
     clone of the response and stash it per-turn (`AsyncLocalStorage`).

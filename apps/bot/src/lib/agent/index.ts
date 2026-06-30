@@ -208,12 +208,14 @@ async function executeTurn(
     // The per-turn model holder for the auto attempt; its `.model` is filled by
     // the fetch interceptor with the slug auto actually resolved to.
     let autoHolder: ReturnType<typeof enterModelCapture> | undefined;
-    // Set when a HackClub call returns the daily-spend-limit 429: every HackClub
-    // model shares that one budget, so once it is hit there is no point trying
-    // the rest of the HackClub rungs — skip straight to the unmetered baishui
-    // proxy (see routeNextAttempt). `max_tokens` capping (resolved-model.ts)
-    // prevents most spurious 429s; this is the backstop when the budget is truly
-    // gone.
+    // Set when a HackClub call returns the daily-spend-limit 429. The limit is
+    // enforced pessimistically (OpenRouter projects each request's worst-case
+    // cost), so the dearer models get rejected first while budget remains — but
+    // the capped `max_tokens` (resolved-model.ts) keeps the cheaper models'
+    // projection low enough to still fit. So instead of skipping HackClub
+    // entirely, this flips the fallback queue to try the HackClub rungs
+    // CHEAPEST-first (most likely to pass) before failing over to the unmetered
+    // baishui proxy (see buildFallbackQueue).
     let hackclubBudgetExhausted = false;
     let attempt: PiAttempt | undefined;
     // Built once: the tool set does not depend on the chosen model, and its keys
@@ -230,6 +232,20 @@ async function executeTurn(
     // lower-ranked ones. If the resolved slug isn't on the leaderboard (or is
     // unknown), fall back to the full best→worst order.
     const buildFallbackQueue = (pivotModel?: string): PiAttempt[] => {
+      // HackClub daily spend limit hit: the dearer models keep getting the
+      // pessimistic 429, but the capped max_tokens lets the cheaper ones still
+      // fit under the remaining budget. Try every HackClub rung CHEAPEST-first
+      // (leaderboard tail → top), then the baishui tail — exhaust HackClub
+      // before failing over to the unmetered proxy.
+      if (hackclubBudgetExhausted) {
+        const hackclub = LEADERBOARD_FALLBACK.filter(
+          (a) => a.provider === 'hackclub'
+        ).reverse();
+        const rest = LEADERBOARD_FALLBACK.filter(
+          (a) => a.provider !== 'hackclub'
+        );
+        return [...hackclub, ...rest];
+      }
       const idx = pivotModel
         ? LEADERBOARD_FALLBACK.findIndex((a) => a.model === pivotModel)
         : -1;
@@ -267,10 +283,7 @@ async function executeTurn(
       }
       attempt = fallbackQueue?.find(
         (candidate) =>
-          !(
-            failedKeys.has(`${candidate.provider}:${candidate.model}`) ||
-            (hackclubBudgetExhausted && candidate.provider === 'hackclub')
-          )
+          !failedKeys.has(`${candidate.provider}:${candidate.model}`)
       );
     };
     routeNextAttempt();

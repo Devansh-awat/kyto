@@ -39,9 +39,13 @@ const COST_QUALITY_TRADEOFF = 5;
 // `429 Daily spending limit reached` when the projection would cross the cap —
 // even with budget still free (the dearer models were rejected at $2.33/$3).
 // Setting `max_tokens` makes OpenRouter price the request off this bound
-// instead, so requests go through. Observed step outputs are <6k tokens, so
-// this is generous headroom while still slashing the projected cost.
-const MAX_OUTPUT_TOKENS = 16_000;
+// instead, so requests go through. Observed step outputs run <6k tokens, so 8k
+// is generous headroom while halving the projected worst-case cost vs. the old
+// 16k cap — which matters near the budget end: the lower projection lets the
+// cheaper models still fit under the remaining balance and pass (the agent's
+// fallback then walks the cheaper HackClub rungs before failing over off-proxy).
+// Raise it if large single-step file writes get truncated.
+const MAX_OUTPUT_TOKENS = 8000;
 // Restrict the auto-router to these EXACT model ids (owner-chosen allowlist,
 // derived from the leaderboard ranking). Passed as the auto-router plugin's
 // `allowed_models` field (NOT `model_patterns` — that field name is silently
