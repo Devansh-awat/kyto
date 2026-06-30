@@ -32,7 +32,7 @@ export function browseTool({
           'Arguments passed to the agent-browser CLI, e.g. "skills get core", "navigate https://example.com", or "snapshot".'
         ),
     }),
-    execute: async ({ command }) => {
+    execute: async ({ command }, { abortSignal }) => {
       const context = getSandboxContext();
       if (!context) {
         return {
@@ -41,7 +41,12 @@ export function browseTool({
         };
       }
       try {
+        // Forward the turn's abort signal so a browser command that never
+        // returns (a page that hangs loading) is killed when the turn is
+        // interrupted or the per-attempt watchdog fires — otherwise Pi stays
+        // blocked awaiting this tool and the whole turn freezes.
         const result = await context.session.run({
+          abortSignal,
           command: `agent-browser ${command}`,
           workingDirectory: context.sessionWorkDir,
         });

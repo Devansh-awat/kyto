@@ -38,6 +38,26 @@ import type { AttemptFailure } from '@/types/attempts';
 // Matched against stream error parts to fail over off HackClub for the turn.
 const SPEND_LIMIT_PATTERN = /spending limit|insufficient credits|daily limit/i;
 
+// Hard ceiling on a single model attempt (the whole multi-step agentic stream).
+// Without it, a stalled upstream SSE connection or a hung tool leaves the turn
+// awaiting forever and the Slack "thinking" spinner never resolves — observed: a
+// website-build turn froze indefinitely after streaming a "On it…" preamble and
+// then issuing a browser open that never returned. On expiry we abort only THIS
+// attempt's signal (not the shared turn controller), so the existing recovery
+// path takes over: fall back to the next model if no reply text was streamed
+// yet, or surface an error if it was. Override with AGENT_ATTEMPT_TIMEOUT_MS.
+const ATTEMPT_TIMEOUT_MS =
+  Number(process.env.AGENT_ATTEMPT_TIMEOUT_MS) || 10 * 60 * 1000;
+
+class AttemptTimeoutError extends Error {
+  constructor(ms: number) {
+    super(
+      `Model attempt exceeded ${Math.round(ms / 1000)}s without completing.`
+    );
+    this.name = 'AttemptTimeoutError';
+  }
+}
+
 export { stopAllTurns, stopTurn } from '@/lib/agent/turns';
 
 export function runTurn(input: {
@@ -263,6 +283,16 @@ async function executeTurn(
       // Declared outside the try so the catch can complete the same task.
       const modelTaskId = `model-${attempts.length}`;
       const modelTaskTitle = attempts.length > 0 ? 'Model · fallback' : 'Model';
+      // Per-attempt watchdog: if this attempt stalls (a frozen upstream SSE
+      // stream or a hung tool that never returns), abort just THIS attempt so
+      // the catch below can recover instead of the turn hanging forever. Kept
+      // separate from `controller` so a timeout is NOT mistaken for a user
+      // interrupt (which tears the turn down silently); the combined signal
+      // also reaches tool execution, so a hung sandbox command is killed too.
+      const attemptAbort = new AbortController();
+      const attemptTimer = setTimeout(() => {
+        attemptAbort.abort(new AttemptTimeoutError(ATTEMPT_TIMEOUT_MS));
+      }, ATTEMPT_TIMEOUT_MS);
       try {
         activeAttempt = currentAttempt;
         const agent = createAgent({
@@ -307,7 +337,10 @@ async function executeTurn(
           autoHolder = modelHolder;
         }
         const result = await agent.stream({
-          abortSignal: controller.signal,
+          abortSignal: AbortSignal.any([
+            controller.signal,
+            attemptAbort.signal,
+          ]),
           prompt: promptWithAttachments({
             attachments,
             text: messageText,
@@ -412,6 +445,8 @@ async function executeTurn(
         await session?.detach().catch(() => undefined);
         session = undefined;
         attempt = retryAttempt;
+      } finally {
+        clearTimeout(attemptTimer);
       }
     }
   }
