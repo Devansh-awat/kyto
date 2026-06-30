@@ -13,6 +13,7 @@ export async function* renderStream({
   onSkip,
   onToolActivity,
   onError,
+  onFinish,
   stream,
 }: {
   knownTools?: ReadonlySet<string>;
@@ -27,6 +28,12 @@ export async function* renderStream({
   // the stream). Lets the agent loop react to provider conditions — like a
   // HackClub "daily spending limit" 429 — that never surface as a thrown error.
   onError?: (message: string) => void;
+  // Fires for each stream finish/finish-step that carries a finishReason. Lets
+  // the agent loop tell a deliberate completion (`stop`) apart from a truncated
+  // or empty step that emitted no finish — the latter, when it also produced no
+  // text, is the "stops mid-task" bug (tools ran, synthesis step came back empty)
+  // and must fall back instead of ending the turn silently.
+  onFinish?: (finishReason: string) => void;
   stream: AsyncIterable<TextStreamPart<ToolSet>>;
 }): AsyncGenerator<string | StreamChunk> {
   const toolInputs = new Map<string, unknown>();
@@ -57,6 +64,7 @@ export async function* renderStream({
       const reason = (part as { finishReason?: string }).finishReason;
       if (reason) {
         tally.finishReasons.push(reason);
+        onFinish?.(reason);
       }
     }
     if (part.type === 'error') {

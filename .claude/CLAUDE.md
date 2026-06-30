@@ -327,20 +327,32 @@ Run these automatically after each completed change, in order, **without asking*
 - `MODEL_CATALOG`/`CATALOG_IDS` are retained for reference/diagnostics only (no
   longer drive routing). `chatAttempts`/`attemptsFor`/`PREMIUM_MODEL` remain
   exported for reference.
-- Fallback advances on **any** error AND on a **truly empty completion** — a
-  completion that produced NEITHER reply text, NOR a deliberate `skip`, NOR any
-  **tool activity** (e.g. a HackClub 504 swallowed into an empty stream). Tool
-  activity now counts as a **handled turn** (tracked via `renderStream`'s
-  `onToolActivity` → `producedToolActivity`): a turn that ran tools did real work,
-  so it is NOT discarded as empty and restarted on a fresh model. This fixed a
-  cascade where every model in the chain threw "empty" mid-research (the model
-  ran tools but wrote no final text — worsened by the persistence prompt telling
-  it not to narrate), burning the whole chain to a hard "Something went wrong".
-  The trade-off: a model that runs tools then stops without a written summary
-  ends the turn quietly rather than falling back (the persistence prompt pushes
-  it to finish + summarize). A deliberate `skip` still counts as handled, and any
+- Fallback advances on **any** error AND on an **un-handled completion**. A turn
+  counts as **handled** iff it produced reply text, a deliberate `skip`, OR tool
+  activity **that ended on a clean `stop`** finish. The clean-stop qualifier is
+  the fix for the **"stops mid-task" bug**: a turn could run tools (e.g. a few
+  web searches) and then the synthesis step came back **empty/truncated — no text
+  and no finish reason** (a spend-limit 429 or 504 swallowed into an empty
+  continuation), yet `producedToolActivity` alone marked it handled, so the turn
+  ended **silently with no answer**. Now `renderStream`'s `onFinish` reports each
+  finishReason; the agent tracks a per-attempt `sawCleanStop` (true only on
+  `stop`). Tool activity counts as handled ONLY with a clean stop (the model ran
+  tools then deliberately finished — the original anti-cascade case, just no
+  narration); tool activity that ends WITHOUT a clean stop falls back to another
+  model so the user actually gets an answer. A truly empty completion (no text,
+  skip, or tools) also falls back. Tracked via `onToolActivity` →
+  `producedToolActivity`, `onFinish` → `sawCleanStop`, `onSkip` → `skipped`. Any
   provider placeholder text like `(Empty response: ...)` is dropped before it
   reaches Slack (`agent/index.ts`, `ai/stream/index.ts`).
+- **Daily-budget failure message**: when a turn fails after the HackClub
+  spend-limit 429 cascaded through every fallback, `agent/index.ts` throws
+  `BudgetExhaustedError` (carrying the raw 429 text), and `agentErrorMessage`
+  (`lib/errors.ts`) renders a plain message naming the cap — _"kyto's daily model
+  budget ($3/day) is used up … resets daily, try again later"_ — instead of the
+  generic "oops". It deliberately does **not** explain OpenRouter's pessimistic
+  limit accounting. The dollar amount is parsed from the 429 text (defaults to
+  $3). This wins over the stage-based (`after_text`/`after_progress`) messages
+  since the budget is the real cause.
 - **Hallucinated tool calls are hidden.** Weak models sometimes emit a tool call
   to a tool we never registered (observed: a mangled name `" analemma"`); the
   harness returns a `"Tool X not found"` tool-result and the model recovers next

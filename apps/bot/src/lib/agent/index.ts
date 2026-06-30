@@ -28,7 +28,7 @@ import { renderStream } from '@/lib/ai/stream';
 import { buildTools } from '@/lib/ai/toolset';
 import { runQueuedTurn } from '@/lib/ai/turn-queue';
 import { bot, slack } from '@/lib/chat';
-import { agentErrorMessage } from '@/lib/errors';
+import { agentErrorMessage, BudgetExhaustedError } from '@/lib/errors';
 import logger from '@/lib/logger';
 import { errorMessage } from '@/lib/utils/error';
 import type { ActiveTurn, AgentErrorStage } from '@/types/agent';
@@ -217,6 +217,10 @@ async function executeTurn(
     // CHEAPEST-first (most likely to pass) before failing over to the unmetered
     // baishui proxy (see buildFallbackQueue).
     let hackclubBudgetExhausted = false;
+    // The raw daily-spend-limit 429 text (e.g. "Daily spending limit of $3
+    // reached"), captured so a fully-failed turn can tell the user the budget is
+    // spent (and name the cap) instead of showing a generic error.
+    let spendLimitMessage: string | undefined;
     let attempt: PiAttempt | undefined;
     // Built once: the tool set does not depend on the chosen model, and its keys
     // let renderStream hide hallucinated calls to non-existent tools.
@@ -293,6 +297,12 @@ async function executeTurn(
     );
     while (attempt) {
       const currentAttempt = attempt;
+      // Per-attempt: did THIS attempt's stream finish deliberately (`stop`)?
+      // Reset each attempt so a stale stop from a prior model can't mask a
+      // truncated current one. A turn that ran tools but ended without a clean
+      // stop (an empty/truncated synthesis step — the "stops mid-task" bug) never
+      // delivered an answer, so it must fall back rather than end silently.
+      let sawCleanStop = false;
       // Declared outside the try so the catch can complete the same task.
       const modelTaskId = `model-${attempts.length}`;
       const modelTaskTitle = attempts.length > 0 ? 'Model · fallback' : 'Model';
@@ -376,6 +386,14 @@ async function executeTurn(
           onToolActivity: () => {
             producedToolActivity = true;
           },
+          onFinish: (reason) => {
+            // `stop` = the model deliberately ended its generation. Any other
+            // reason (tool-calls/length) or no finish at all means the turn
+            // didn't conclude on its own terms.
+            if (reason === 'stop') {
+              sawCleanStop = true;
+            }
+          },
           onError: (msg) => {
             // A HackClub daily-spend-limit 429 dooms every HackClub rung — flag
             // it so routeNextAttempt skips them and fails over to baishui.
@@ -384,6 +402,7 @@ async function executeTurn(
               SPEND_LIMIT_PATTERN.test(msg)
             ) {
               hackclubBudgetExhausted = true;
+              spendLimitMessage = msg;
             }
           },
           stream: result.stream,
@@ -410,16 +429,24 @@ async function executeTurn(
           };
         }
 
-        // Only a completion that produced NOTHING — no reply text, no deliberate
-        // skip, and no tool activity (e.g. an upstream 504 swallowed into an
-        // empty stream) — is treated as empty and falls through to another model.
-        // A turn that ran tools did real work; restarting it on a fresh model
-        // would discard that work and burn the fallback chain (observed: every
-        // model in the chain throwing "empty" mid-research), so tool activity
-        // counts as a handled turn even without a final written summary.
-        if (!(producedText || skipped || producedToolActivity)) {
+        // Decide whether this completion delivered anything. Reply text or a
+        // deliberate skip always counts. Tool activity counts as real work ONLY
+        // if the stream also ended on a clean `stop` — i.e. the model ran tools
+        // and then deliberately finished (it just didn't narrate). If it ran
+        // tools but the stream ended WITHOUT a clean stop (an empty/truncated
+        // synthesis step that emitted no text — the "stops mid-task" bug, e.g. a
+        // spend-limit 429 or 504 swallowed into an empty continuation), the user
+        // got no answer, so fall back to another model instead of returning
+        // silently. A truly empty completion (no text, skip, or tools) also falls
+        // back. This keeps the anti-cascade behavior (deliberate tool-then-stop
+        // is handled) while never leaving a turn answerless mid-task.
+        const handled =
+          producedText || skipped || (producedToolActivity && sawCleanStop);
+        if (!handled) {
           throw new Error(
-            `Model ${currentAttempt.model} returned an empty response.`
+            producedToolActivity
+              ? `Model ${currentAttempt.model} ran tools but ended without a reply (truncated synthesis step).`
+              : `Model ${currentAttempt.model} returned an empty response.`
           );
         }
         return;
@@ -443,7 +470,16 @@ async function executeTurn(
         // throw above — nothing user-visible was shown, so it is safe to fall
         // back to another model. Only a turn that already streamed real reply
         // text must not fall back (it would duplicate the user-facing output).
-        if (controller.signal.aborted || producedText || !retryAttempt) {
+        if (controller.signal.aborted || producedText) {
+          throw error;
+        }
+        if (!retryAttempt) {
+          // Every model is exhausted. If the daily spend limit started the
+          // cascade, surface that (the budget is the real cause) rather than the
+          // last provider's generic error.
+          if (hackclubBudgetExhausted) {
+            throw new BudgetExhaustedError(spendLimitMessage, { cause: error });
+          }
           throw error;
         }
         logger.warn(
