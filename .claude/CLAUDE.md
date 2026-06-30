@@ -185,6 +185,11 @@ Run these automatically after each completed change, in order, **without asking*
 - **Web search** (the `searchWeb` task) uses Exa via `EXA_API_KEY`. A placeholder
   key (`exa-placeholder-no-websearch`) makes every search return
   `ExaError: Invalid API key` — set a real key to enable web search.
+- **Parallel tool calls**: the core prompt (`packages/ai/src/prompts/core.ts`,
+  "Working in parallel") tells the model to batch INDEPENDENT tool calls (several
+  web/Slack searches, multiple URL/file reads) into a **single step** so they run
+  concurrently, instead of one call per step. This is a prompt-level nudge only —
+  intra-step concurrency itself is owned by the Pi harness; we don't fork it.
 
 ### Canvases (read/list/create across channels, channel tab)
 - `canvasList` takes an optional `channelId` (raw `C0123`, `slack:` id, or
@@ -316,11 +321,15 @@ Run these automatically after each completed change, in order, **without asking*
   the reply text), shown as `openrouter/auto → <resolved>`. Emitted
   **`in_progress` while the attempt runs** (so the activity indicator reads as
   working, never a misleading "completed" before anything has happened) and
-  marked **`complete` both after streaming (success) AND in the catch
-  (failure)** — completing it in the catch is what stops the header from
-  freezing on a `Model · fallback` spinner when an attempt throws before its
-  post-stream completion. `modelTaskId`/`modelTaskTitle` are declared outside the
-  per-attempt try so the catch can complete the same task. Updated in place by id
+  marked **`complete` exactly once** via the `completeModelTask()` guard
+  (`modelTaskDone`): the post-stream success path completes it, and the catch
+  completes it only if that hasn't already fired (so an attempt that throws before
+  post-stream still stops the `Model · fallback` spinner). The single-completion
+  guard fixes a **display bug where each model rendered 2–3×**: a streamed attempt
+  that then failed the empty-check completed the task post-stream (with the
+  resolved arrow) AND again in the catch (plain), so the plan showed the same
+  model repeated. `modelHolder`/`modelTaskId`/`modelTaskTitle` are declared
+  outside the per-attempt try so the catch can read them. Updated in place by id
   to append the resolved model. `openrouter/auto` re-routes **per step**, so a turn can use several
   models; the task shows the **first** step's pick (every step is logged at info
   as `[router] resolved openrouter/auto model`).

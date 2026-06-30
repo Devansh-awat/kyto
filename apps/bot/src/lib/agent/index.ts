@@ -9,7 +9,12 @@ import {
   systemPrompt,
 } from '@repo/ai';
 import { loadSkills } from '@repo/sandbox';
-import { type Message, StreamingPlan, type Thread } from 'chat';
+import {
+  type Message,
+  type StreamChunk,
+  StreamingPlan,
+  type Thread,
+} from 'chat';
 import { deleteControls, type postControls } from '@/lib/agent/controls';
 import { buildPrompt } from '@/lib/agent/prompt';
 import { createReply } from '@/lib/agent/reply';
@@ -314,6 +319,30 @@ async function executeTurn(
       // Declared outside the try so the catch can complete the same task.
       const modelTaskId = `model-${attempts.length}`;
       const modelTaskTitle = attempts.length > 0 ? 'Model · fallback' : 'Model';
+      // Per-turn model holder for this attempt (filled with the slug auto/glm
+      // resolved to). Declared outside the try so the catch can read it when it
+      // completes the task. Guard so the Model task is completed EXACTLY once —
+      // previously the post-stream complete AND the catch both fired when a
+      // streamed attempt then failed the empty-check, rendering the model 2–3×.
+      let modelHolder: ReturnType<typeof enterModelCapture> | undefined;
+      let modelTaskDone = false;
+      const completeModelTask = (): StreamChunk | undefined => {
+        if (modelTaskDone) {
+          return;
+        }
+        modelTaskDone = true;
+        const resolved =
+          modelHolder?.model && modelHolder.model !== currentAttempt.model
+            ? ` → ${modelHolder.model}`
+            : '';
+        return {
+          id: modelTaskId,
+          output: `${currentAttempt.provider} · ${currentAttempt.model}${resolved}`,
+          status: 'complete',
+          title: modelTaskTitle,
+          type: 'task_update',
+        };
+      };
       // Per-attempt watchdog: if this attempt stalls (a frozen upstream SSE
       // stream or a hung tool that never returns), abort just THIS attempt so
       // the catch below can recover instead of the turn hanging forever. Kept
@@ -363,7 +392,7 @@ async function executeTurn(
         // the global fetch so we can show the concrete pick (see resolved-model)
         // and pin it as the first fallback. Keep the holder ref for the auto
         // attempt so routeNextAttempt can read the resolved slug even on failure.
-        const modelHolder = enterModelCapture();
+        modelHolder = enterModelCapture();
         if (currentAttempt.model === ROUTER_MODEL) {
           autoHolder = modelHolder;
         }
@@ -435,20 +464,14 @@ async function executeTurn(
           yield chunk;
         }
 
-        // Complete the Model task, appending the concrete model OpenRouter
-        // resolved `openrouter/auto` to (now known from the streamed response).
+        // Complete the Model task exactly once (the guard ensures the catch
+        // won't re-complete it), appending the concrete model OpenRouter resolved
+        // `openrouter/auto` to (now known from the streamed response).
         {
-          const resolved =
-            modelHolder.model && modelHolder.model !== currentAttempt.model
-              ? ` → ${modelHolder.model}`
-              : '';
-          yield {
-            id: modelTaskId,
-            output: `${currentAttempt.provider} · ${currentAttempt.model}${resolved}`,
-            status: 'complete',
-            title: modelTaskTitle,
-            type: 'task_update',
-          };
+          const done = completeModelTask();
+          if (done) {
+            yield done;
+          }
         }
 
         // Decide whether this completion delivered anything. Reply text or a
@@ -475,14 +498,15 @@ async function executeTurn(
       } catch (error) {
         // Mark this attempt's model task done so the activity indicator never
         // sticks on a frozen "Model · fallback" spinner when the attempt threw
-        // before its post-stream completion yield ran.
-        yield {
-          id: modelTaskId,
-          output: `${currentAttempt.provider} · ${currentAttempt.model}`,
-          status: 'complete',
-          title: modelTaskTitle,
-          type: 'task_update',
-        };
+        // before its post-stream completion yield ran. The guard makes this a
+        // no-op if the post-stream completion already fired (so the model never
+        // renders twice).
+        {
+          const done = completeModelTask();
+          if (done) {
+            yield done;
+          }
+        }
         attempts.push({ attempt: currentAttempt, error });
         failedKeys.add(`${currentAttempt.provider}:${currentAttempt.model}`);
         routeNextAttempt();
