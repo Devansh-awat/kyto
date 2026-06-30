@@ -338,6 +338,19 @@ Run these automatically after each completed change, in order, **without asking*
   matching result/error) whose name isn't registered, so phantom calls never
   surface as activity tasks (`ai/stream/index.ts`).
 - No **Stop button** is posted during a turn (removed from `postControls` flow).
+- **Per-attempt watchdog** (`agent/index.ts`, `ATTEMPT_TIMEOUT_MS`, default 10m,
+  env `AGENT_ATTEMPT_TIMEOUT_MS`): each model attempt runs under a dedicated
+  `AbortController` combined with the turn controller via `AbortSignal.any`. If
+  the attempt stalls (a frozen upstream SSE stream or a hung tool that never
+  returns) the timer aborts **only the attempt signal**, so it is NOT mistaken
+  for a user interrupt — it routes through the normal recovery path (fall back to
+  the next model if no reply text streamed yet, else surface an error). The
+  combined signal also reaches tool execution: sandbox tools that forward it
+  (`browse` passes `abortSignal` into `session.run`) get their hung command
+  killed, unblocking Pi. Without this a turn could hang forever (observed: a
+  website-build turn froze after an "On it…" preamble + a browser open that never
+  returned). Other sandbox tools (`deploySite`, `getFile`, `uploadFile`) do not
+  yet forward the signal — extend them the same way if they're seen to hang.
 - `glm-4.7` is omitted from HackClub (persistent 504); `glm-5.2` 504s
   intermittently there but degrades via the empty-completion fallback, and is
   also reachable via baishui (`glm5.2-normal`).
