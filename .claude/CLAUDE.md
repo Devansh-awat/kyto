@@ -344,12 +344,29 @@ Run these automatically after each completed change, in order, **without asking*
   `producedToolActivity`, `onFinish` → `sawCleanStop`, `onSkip` → `skipped`. Any
   provider placeholder text like `(Empty response: ...)` is dropped before it
   reaches Slack (`agent/index.ts`, `ai/stream/index.ts`).
+- **Tool-result carryover across fallback**: so a fallback model doesn't re-run
+  the same tools (e.g. repeat identical web searches) after an earlier step
+  truncated, `renderStream`'s `onToolResult` reports every completed
+  (non-phantom, non-`skip`) tool call's input+output. The agent stashes them in
+  `gatheredResults` (deduped by tool+input via `gatheredKeys`). On a **fallback**
+  attempt (`attempts.length > 0`) the prompt is augmented with `renderCarryover`
+  — a "previous attempt already ran these tools, answer from them, do NOT re-run"
+  block — so the new model continues from the gathered results. Bounded to avoid
+  context blow-up: last `CARRYOVER_MAX_RESULTS` (12) results, each clamped to
+  `CARRYOVER_OUTPUT_MAX` (1500) / `CARRYOVER_INPUT_MAX` (400) chars. The first
+  attempt always sends the plain prompt. NOTE: this is a prompt-level replay, not
+  true session continuation — each attempt is still a fresh Pi session/model (the
+  harness session history is owned per-runtime and isn't transferred across
+  different models), so the carried results are re-sent as text, not resumed.
 - **Daily-budget failure message**: when a turn fails after the HackClub
   spend-limit 429 cascaded through every fallback, `agent/index.ts` throws
   `BudgetExhaustedError` (carrying the raw 429 text), and `agentErrorMessage`
-  (`lib/errors.ts`) renders a plain message naming the cap — _"kyto's daily model
-  budget ($3/day) is used up … resets daily, try again later"_ — instead of the
-  generic "oops". It deliberately does **not** explain OpenRouter's pessimistic
+  (`lib/errors.ts`) renders a plain message naming the cap and the reset
+  countdown — _"kyto's daily model budget ($3/day) is used up … it resets at UK
+  midnight, in Xh Ym"_ — instead of the generic "oops". The reset clock
+  (`timeUntilUkReset`) counts down to the next **Europe/London** midnight (tracks
+  BST/GMT automatically, computed from London wall-clock so it's host-tz
+  independent). It deliberately does **not** explain OpenRouter's pessimistic
   limit accounting. The dollar amount is parsed from the 429 text (defaults to
   $3). This wins over the stage-based (`after_text`/`after_progress`) messages
   since the budget is the real cause.

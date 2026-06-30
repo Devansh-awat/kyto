@@ -12,6 +12,7 @@ export async function* renderStream({
   onTextDelta,
   onSkip,
   onToolActivity,
+  onToolResult,
   onError,
   onFinish,
   stream,
@@ -24,6 +25,16 @@ export async function* renderStream({
   // so a turn that ran tools is never discarded as empty and restarted on a
   // fresh model (which would re-do all the work and burn the fallback chain).
   onToolActivity?: () => void;
+  // Fires once per completed (non-phantom, non-skip) tool call with its input and
+  // output. Lets the agent loop stash gathered results so that if a later step
+  // truncates and the turn falls back to another model, those results can be
+  // replayed into the fallback prompt — the new model answers from them instead
+  // of re-running the same tools (e.g. re-doing identical web searches).
+  onToolResult?: (info: {
+    toolName: string;
+    input: unknown;
+    output: unknown;
+  }) => void;
   // Fires for each stream-level error part (e.g. a provider 429 swallowed into
   // the stream). Lets the agent loop react to provider conditions — like a
   // HackClub "daily spending limit" 429 — that never surface as a thrown error.
@@ -175,6 +186,12 @@ export async function* renderStream({
         if (part.toolName === 'skip') {
           skipped = true;
           onSkip?.();
+        } else {
+          onToolResult?.({
+            input: toolInputs.get(part.toolCallId),
+            output: part.output,
+            toolName: part.toolName,
+          });
         }
         const input = toolInputs.get(part.toolCallId);
         logger.info(

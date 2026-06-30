@@ -31,6 +31,7 @@ import { bot, slack } from '@/lib/chat';
 import { agentErrorMessage, BudgetExhaustedError } from '@/lib/errors';
 import logger from '@/lib/logger';
 import { errorMessage } from '@/lib/utils/error';
+import { clamp } from '@/lib/utils/text';
 import type { ActiveTurn, AgentErrorStage } from '@/types/agent';
 import type { AttemptFailure } from '@/types/attempts';
 
@@ -192,6 +193,13 @@ async function executeTurn(
     let producedText = false;
     let skipped = false;
     let producedToolActivity = false;
+    // Tool results gathered so far this turn, deduped by tool+input. If a later
+    // step truncates and the turn falls back to another model, these are replayed
+    // into the fallback prompt so the new model answers from them instead of
+    // re-running the same tools (e.g. identical web searches). Capped in
+    // renderCarryover so the replay can't blow up context.
+    const gatheredResults: GatheredResult[] = [];
+    const gatheredKeys = new Set<string>();
     const attempts: AttemptFailure[] = [];
     // The main query runs on OpenRouter's own model router via HackClub
     // (`openrouter/auto`): OpenRouter picks the best underlying model per
@@ -366,7 +374,13 @@ async function executeTurn(
           ]),
           prompt: promptWithAttachments({
             attachments,
-            text: messageText,
+            // On a fallback attempt, replay any tool results already gathered so
+            // the new model continues from them instead of re-running the same
+            // tools. First attempt (no prior failures) sends the plain prompt.
+            text:
+              attempts.length > 0 && gatheredResults.length > 0
+                ? `${messageText}\n\n${renderCarryover(gatheredResults)}`
+                : messageText,
           }),
           session,
         });
@@ -385,6 +399,14 @@ async function executeTurn(
           },
           onToolActivity: () => {
             producedToolActivity = true;
+          },
+          onToolResult: (info) => {
+            const key = `${info.toolName}:${stableInput(info.input)}`;
+            if (gatheredKeys.has(key)) {
+              return;
+            }
+            gatheredKeys.add(key);
+            gatheredResults.push(info);
           },
           onFinish: (reason) => {
             // `stop` = the model deliberately ended its generation. Any other
@@ -505,4 +527,45 @@ function attemptLog(attempt: PiAttempt | undefined) {
   return attempt
     ? { model: attempt.model, provider: attempt.provider }
     : undefined;
+}
+
+interface GatheredResult {
+  input: unknown;
+  output: unknown;
+  toolName: string;
+}
+
+// Bounds on the replayed carryover so a fallback prompt can't blow up context
+// (web-search results are large): keep the most recent results and clamp each.
+const CARRYOVER_MAX_RESULTS = 12;
+const CARRYOVER_OUTPUT_MAX = 1500;
+const CARRYOVER_INPUT_MAX = 400;
+
+function stableInput(input: unknown): string {
+  try {
+    return typeof input === 'string' ? input : JSON.stringify(input);
+  } catch {
+    return String(input);
+  }
+}
+
+function toCompactText(value: unknown, max: number): string {
+  const text = typeof value === 'string' ? value : stableInput(value);
+  return clamp(text, max) ?? text;
+}
+
+// Render gathered tool results as a prompt block the fallback model can answer
+// from without re-running the tools. Most recent results win when over the cap.
+function renderCarryover(results: GatheredResult[]): string {
+  const recent = results.slice(-CARRYOVER_MAX_RESULTS);
+  const lines = recent.map((result, index) => {
+    const input = toCompactText(result.input, CARRYOVER_INPUT_MAX);
+    const output = toCompactText(result.output, CARRYOVER_OUTPUT_MAX);
+    return `${index + 1}. ${result.toolName}(${input})\n${output}`;
+  });
+  return [
+    'A previous attempt already ran these tools and got these results. Use them to answer directly — do NOT re-run the same tools:',
+    '',
+    ...lines,
+  ].join('\n');
 }
