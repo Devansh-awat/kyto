@@ -393,12 +393,16 @@ Run these automatically after each completed change, in order, **without asking*
     `gemini-3.5-flash` was removed the same way (2026-07-01) after logs showed
     it returning an **empty response on 100% of attempts** (22/22 direct via
     `geminiAttempts`/`GEMINI_MODELS` in `pi.ts`, 10/10 via the auto-router's
-    `google/gemini-3.5-flash` slug in `LEADERBOARD_FALLBACK`) — this is why the
-    Gemini dashboard showed zero usage on 3.5-flash while everything landed on
-    3.1-flash-lite: every single call to it wasted an attempt before falling
-    through. Re-add to `ALLOWED_MODELS` (here), `GEMINI_MODELS` (`pi.ts`), and
-    the commented `LEADERBOARD_FALLBACK` line only after verifying a real
-    completion succeeds;
+    `google/gemini-3.5-flash` slug in `LEADERBOARD_FALLBACK`). The owner's
+    Google AI Studio dashboard showed **zero requests metered** against
+    3.5-flash despite these attempts, meaning the calls were rejected before
+    reaching generation (likely not enabled for a free-tier key), not that the
+    model burned its output budget on thinking. It also only carries a 20 RPD
+    free-tier quota vs. 3.1-flash-lite's 500 RPD, so it was a bad primary rung
+    either way. Every call to it wasted an attempt before falling through to
+    3.1-flash-lite. Re-add to `ALLOWED_MODELS` (here), `GEMINI_MODELS`
+    (`pi.ts`), and the commented `LEADERBOARD_FALLBACK` line only after
+    verifying a real completion succeeds AND that the key's tier allows it;
     the lower-ranked tail — deepseek-v4-pro/flash, kimi-k2.6/k2.7-code,
     minimax-m3, qwen3.6-plus — was dropped to keep routing on the stronger
     models). The interceptor strips a stale `Content-Length` when re-issuing the
