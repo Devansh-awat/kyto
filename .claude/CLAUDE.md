@@ -322,41 +322,43 @@ Run these automatically after each completed change, in order, **without asking*
   **UP** from that model toward the best (closest-better first), then **DOWN**
   toward the weakest. `LEADERBOARD_FALLBACK` is the owner's arena leaderboard,
   best→worst, restricted to reachable models: the strong tier on HackClub
-  (opus-4.8/4.7/4.6, gpt-5.5/5.4, glm-5.2/5.1, sonnet-4.6, gemini-3.5-flash) and
-  the open tail on the **baishui proxy** (`jam06452.uk`: deepseek-v4-pro,
-  kimi-k2.6, k2.7-code, deepseek-4-flash, m3) — the proxy rungs are skipped if
-  `OPENROUTER_API_KEY`/`_BASE_URL` are unset. **Last resort: the owner's own
-  Gemini key** (`geminiAttempts`, `GEMINI_API_KEY`, direct Google endpoint,
-  provider `gemini`) is appended to the very end of `LEADERBOARD_FALLBACK`, so a
-  fully budget-exhausted HackClub day (and a down/absent baishui proxy) still
-  gets an answer off a separate, cheap quota; skipped if `GEMINI_API_KEY` is
-  unset. Fable 5 (rank #1) is omitted (no provider). The resolved slug is read off the per-turn model holder (`autoHolder`)
+  (opus-4.8/4.7/4.6, gpt-5.5/5.4, glm-5.2/5.1, sonnet-4.6, gemini-3.5-flash).
+  The **baishui proxy** tail (`jam06452.uk`) is **commented out** — its `/models`
+  endpoint answers but every completion fails ("upstream authentication failed" /
+  "all provider keys rate-limited or in cooldown"), so it only wasted fallback
+  attempts; re-enable the block (with `proxyAttempt`/`proxyReady`) only after
+  verifying a real completion succeeds. **Last resort: the owner's own Gemini
+  key** (`geminiAttempts`, `GEMINI_API_KEY`, direct Google endpoint, provider
+  `gemini`) is appended to the very end of `LEADERBOARD_FALLBACK`, so a fully
+  budget-exhausted HackClub day still gets an answer off a separate, cheap quota;
+  skipped if `GEMINI_API_KEY` is unset. Fable 5 (rank #1) is omitted (no
+  provider). The resolved slug is read off the per-turn model holder (`autoHolder`)
   captured during the auto attempt, so it pins/pivots even when auto failed. Each
   entry is tried at most once (tracked via `failedKeys`). `deepFallbackAttempts`
   is retained/exported for reference but no longer drives routing.
-- **HackClub spend-limit failover**: if a HackClub call returns the daily-spend
-  429 (`SPEND_LIMIT_PATTERN`, surfaced via `renderStream`'s `onError`),
-  `routeNextAttempt` sets `hackclubBudgetExhausted`. Because the limit is
-  enforced **pessimistically** (OpenRouter projects each request's worst-case
-  cost), the dearer models are rejected first while budget remains — but the
-  capped `max_tokens` (above) keeps the cheaper models' projection low enough to
-  still fit. So rather than abandoning HackClub, the flag flips
-  `buildFallbackQueue` to try the HackClub rungs **CHEAPEST-first**
-  (gemini-3.5-flash → glm → … → opus, i.e. leaderboard tail→top) — the models
-  most likely to pass — and only **then** fails over to the unmetered **baishui**
-  proxy. The pinned resolved-model retry is still skipped on spend-limit (it's
-  the dear model auto already picked and 429'd). This means a near-budget turn
-  recovers on HackClub itself instead of jumping straight to baishui.
+- **HackClub spend-limit failover → straight to Gemini**: if a HackClub call
+  returns the daily-spend 429 (`SPEND_LIMIT_PATTERN`, surfaced via
+  `renderStream`'s `onError`), `routeNextAttempt` sets `hackclubBudgetExhausted`.
+  The whole HackClub budget is **shared**, so once the first call 429s every other
+  HackClub rung 429s the same way (they just burn attempts at ~4ms each). So the
+  flag flips `buildFallbackQueue` to **skip all HackClub rungs and go straight to
+  the owner's Gemini key** (`geminiAttempts`, separate quota, reliable, cheap),
+  then any other non-HackClub rung (baishui, if re-enabled). The pinned
+  resolved-model retry is also skipped on spend-limit (it's a HackClub call).
+  (This replaced the older cheapest-first-HackClub-retry approach — the
+  pessimistic-limit "a cheap rung might still fit" recovery wasn't worth the
+  wasted 429 attempts once the Gemini key exists as a clean, cheap escape.)
 - **Fetch interceptor** (`apps/bot/src/lib/agent/resolved-model.ts`, installed in
   `index.ts`): Pi makes model calls through the process-global `fetch` (undici),
   so we patch it to tune the request and read the response:
   - **Tune the auto-router**: inject the `auto-router` plugin into the
     `openrouter/auto` request body with `cost_quality_tradeoff` (0 = best/dearest,
-    7 = default, 10 = cheapest; we use **5**) and an **`allowed_models`** allowlist
+    7 = default, 10 = cheapest; we use **7** — the default, biased away from the
+    always-premium routing that blew up cost) and an **`allowed_models`** allowlist
     of **exact slugs** (the field is `allowed_models` — the older `model_patterns`
     name is silently ignored by the proxy; not globs, so no
     `-nano`/`-mini`/`-flash-lite`/`-fast` or `claude-fable-5` leakage):
-    claude-opus-4.6/4.7/4.8, claude-sonnet-4.6, gpt-5.4/5.5, glm-5.1/5.2,
+    claude-opus-4.6/4.7/4.8, claude-sonnet-5, claude-sonnet-4.6, gpt-5.4/5.5, glm-5.1/5.2,
     gemini-3.5-flash, **gemini-3.1-flash-lite** (the cheap rung — added so auto
     can route simple/casual turns off the premium tier, the main cost blowup, and
     as the signal for handing a turn to the owner's Gemini key; the owner's
@@ -475,8 +477,8 @@ Run these automatically after each completed change, in order, **without asking*
   returned). Other sandbox tools (`deploySite`, `getFile`, `uploadFile`) do not
   yet forward the signal — extend them the same way if they're seen to hang.
 - `glm-4.7` is omitted from HackClub (persistent 504); `glm-5.2` 504s
-  intermittently there but degrades via the empty-completion fallback, and is
-  also reachable via baishui (`glm5.2-normal`).
+  intermittently there but degrades via the empty-completion fallback (baishui is
+  disabled, so no `glm5.2-normal` backstop).
 
 ### Identity & opt-in gating
 - **The bot's Slack username is a gorkie-era handle (`gorkie__devansh_`)** — the

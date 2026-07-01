@@ -252,18 +252,19 @@ export const deepFallbackAttempts: PiAttempt[] = [
   ...geminiAttempts,
 ];
 
-/** A baishui-proxy attempt (jam06452.uk, OpenRouter-compatible) for the
- * open-weight tail that HackClub does not serve. Empty if the proxy key/URL is
- * unset (then those rungs are simply skipped). */
-const proxyAttempt = (model: string): PiAttempt => ({
-  customEnv: {
-    MOONSHOTAI_API_KEY: env.OPENROUTER_API_KEY as string,
-    MOONSHOTAI_BASE_URL: env.OPENROUTER_BASE_URL as string,
-  },
-  model,
-  provider: 'baishui',
-});
-const proxyReady = Boolean(env.OPENROUTER_API_KEY && env.OPENROUTER_BASE_URL);
+/* baishui-proxy helpers — DISABLED with the baishui rungs below (the proxy's
+ * upstream completions fail). Uncomment together with the LEADERBOARD_FALLBACK
+ * block to re-enable.
+ * const proxyAttempt = (model: string): PiAttempt => ({
+ *   customEnv: {
+ *     MOONSHOTAI_API_KEY: env.OPENROUTER_API_KEY as string,
+ *     MOONSHOTAI_BASE_URL: env.OPENROUTER_BASE_URL as string,
+ *   },
+ *   model,
+ *   provider: 'baishui',
+ * });
+ * const proxyReady = Boolean(env.OPENROUTER_API_KEY && env.OPENROUTER_BASE_URL);
+ */
 
 // The owner's arena leaderboard, best→worst, restricted to models we can
 // actually reach: the strong tier on HackClub (same slugs `openrouter/auto`
@@ -283,19 +284,24 @@ export const LEADERBOARD_FALLBACK: PiAttempt[] = [
   catalogAttempt('anthropic/claude-sonnet-4.6'),
   catalogAttempt('z-ai/glm-5.1'),
   catalogAttempt('google/gemini-3.5-flash'),
-  ...(proxyReady
-    ? [
-        proxyAttempt('deepseek-v4-pro'),
-        proxyAttempt('kimi-k2.6'),
-        proxyAttempt('k2.7-code-normal'),
-        proxyAttempt('deepseek-4-flash'),
-        proxyAttempt('m3-normal'),
-      ]
-    : []),
+  // baishui (jam06452.uk) is DISABLED — its /models endpoint responds but every
+  // completion fails ("upstream authentication failed" / "all provider keys are
+  // rate-limited or in cooldown"), so it only wastes fallback attempts. Re-enable
+  // this block if the proxy's upstream is fixed (verify with a real completion,
+  // not just GET /models). `proxyAttempt`/`proxyReady` are kept for that.
+  // ...(proxyReady
+  //   ? [
+  //       proxyAttempt('deepseek-v4-pro'),
+  //       proxyAttempt('kimi-k2.6'),
+  //       proxyAttempt('k2.7-code-normal'),
+  //       proxyAttempt('deepseek-4-flash'),
+  //       proxyAttempt('m3-normal'),
+  //     ]
+  //   : []),
   // Last resort: the owner's OWN Gemini key (GEMINI_API_KEY, direct Google
-  // endpoint — separate quota from HackClub/baishui, and very cheap). Reached
-  // only after every HackClub rung and the baishui tail have failed, so a fully
-  // budget-exhausted / proxy-down day still gets an answer. Empty if the key is
-  // unset (then these rungs are simply skipped).
+  // endpoint — separate quota from HackClub, and very cheap). Reached after the
+  // HackClub rungs fail (and immediately on a HackClub budget-exhaustion 429, see
+  // buildFallbackQueue), so a fully budget-exhausted day still gets an answer.
+  // Empty if the key is unset (then these rungs are simply skipped).
   ...geminiAttempts,
 ];

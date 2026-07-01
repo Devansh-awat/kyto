@@ -32,7 +32,7 @@ const MODEL_FIELD = /"model"\s*:\s*"([^"]+)"/;
 // model field — the slug appears in the first SSE chunk, so this is generous.
 const MAX_SCAN_BYTES = 16_384;
 // Auto-router cost/quality bias: 7 is OpenRouter's default, 10 is cheapest.
-const COST_QUALITY_TRADEOFF = 5;
+const COST_QUALITY_TRADEOFF = 7;
 // Cap output tokens on HackClub requests. OpenRouter enforces the daily spend
 // limit PESSIMISTICALLY: with no `max_tokens` it assumes the model could emit
 // its full max output, projects that worst-case cost, and returns

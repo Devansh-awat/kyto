@@ -249,19 +249,20 @@ async function executeTurn(
     // lower-ranked ones. If the resolved slug isn't on the leaderboard (or is
     // unknown), fall back to the full best→worst order.
     const buildFallbackQueue = (pivotModel?: string): PiAttempt[] => {
-      // HackClub daily spend limit hit: the dearer models keep getting the
-      // pessimistic 429, but the capped max_tokens lets the cheaper ones still
-      // fit under the remaining budget. Try every HackClub rung CHEAPEST-first
-      // (leaderboard tail → top), then the baishui tail — exhaust HackClub
-      // before failing over to the unmetered proxy.
+      // HackClub daily spend limit hit: the whole HackClub budget is shared, so
+      // once the first call returns the spend-limit 429 EVERY other HackClub rung
+      // 429s the same way (they just burn attempts at ~4ms each). Skip all of
+      // them and go **straight to the owner's Gemini key** (separate quota,
+      // reliable, cheap) — then any other non-HackClub rung (baishui, if
+      // re-enabled). No more cheapest-first HackClub retries.
       if (hackclubBudgetExhausted) {
-        const hackclub = LEADERBOARD_FALLBACK.filter(
-          (a) => a.provider === 'hackclub'
-        ).reverse();
-        const rest = LEADERBOARD_FALLBACK.filter(
-          (a) => a.provider !== 'hackclub'
+        const gemini = LEADERBOARD_FALLBACK.filter(
+          (a) => a.provider === 'gemini'
         );
-        return [...hackclub, ...rest];
+        const otherNonHackclub = LEADERBOARD_FALLBACK.filter(
+          (a) => a.provider !== 'hackclub' && a.provider !== 'gemini'
+        );
+        return [...gemini, ...otherNonHackclub];
       }
       const idx = pivotModel
         ? LEADERBOARD_FALLBACK.findIndex((a) => a.model === pivotModel)
