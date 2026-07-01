@@ -22,8 +22,9 @@
         "should_escape": false
       }
     ],
-    "assistant_view": {
-      "assistant_description": "Your AI assistant for Slack. Searches the web, writes and runs code, generates images, browses websites, manages reminders and scheduled tasks, and more."
+    "agent_view": {
+      "agent_description": "Your AI assistant for Slack. Searches the web, writes and runs code, generates images, browses websites, manages reminders and scheduled tasks, and more.",
+      "suggested_prompts": []
     }
   },
   "oauth_config": {
