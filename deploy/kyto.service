@@ -1,0 +1,17 @@
+[Unit]
+Description=Kyto Slack Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=3
+WorkingDirectory=/root/kyto/apps/bot
+Environment=HOME=/root
+Environment=PATH=/root/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/root/.bun/bin/bun run src/index.ts
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

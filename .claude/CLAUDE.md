@@ -145,11 +145,16 @@ Run these automatically after each completed change, in order, **without asking*
    `bun run sync:manifest` from `apps/bot` to push it to the Slack app config.
    (Needs the app config token env vars — see the Manifest sync note. Scope
    changes still require reinstalling the app.)
-3. **Restart the bot** so the running process picks up the change. There is no
-   process manager: the bot runs as a single `bun run src/index.ts` process.
-   Restart with: `pkill -f 'bun run src/index.ts'` then relaunch in the
-   background with `bun run start:bot` from the repo root. Confirm it came back
-   up (check the process / startup logs).
+3. **Restart the bot** so the running process picks up the change. The bot runs
+   under **systemd** as `kyto.service` (unit tracked in-repo at
+   `deploy/kyto.service`; `WorkingDirectory=/root/kyto/apps/bot`,
+   `ExecStart=/root/.bun/bin/bun run src/index.ts`, `Restart=always`, enabled on
+   boot). Restart with `systemctl restart kyto.service`; check it with
+   `systemctl status kyto.service` and `journalctl -u kyto.service -n 30 -o cat`
+   (look for `kyto (…) is online`). Do NOT hand-launch `bun run start:bot` — a
+   manual process becomes a **second Socket Mode connection** that competes with
+   the service for events (Slack delivers each event to only ONE connection). If
+   the unit file itself changed, `sudo systemctl daemon-reload` first.
 4. **Push to the private repo** (`origin` →
    `github.com/Devansh-awat/kyto.git`). After committing, `git push origin` the
    current branch automatically, **without asking**. This is the owner's private
@@ -261,6 +266,36 @@ Run these automatically after each completed change, in order, **without asking*
   token** (not the bot/user token): `SLACK_APP_ID`, `SLACK_CONFIG_ACCESS_TOKEN`,
   and optional `SLACK_CONFIG_REFRESH_TOKEN` (auto-rotates the short-lived access
   token first). Scope changes require reinstalling the app.
+
+### Running the bot / debugging "kyto isn't responding"
+- The bot runs under **systemd** (`kyto.service`, unit at `deploy/kyto.service`).
+  `systemctl status kyto.service` / `journalctl -u kyto.service -f -o cat`. It
+  auto-restarts (`Restart=always`) and starts on boot. Two other unrelated Slack
+  apps also run on this host (`slackbot.service` = `/root/slack-ai-helper`, a Q&A
+  helper; `hackclub-ai-status-bot.service`) — different apps/tokens, they don't
+  interfere.
+- **Never hand-launch a second copy** (`bun run start:bot`). Each running process
+  opens its own **Socket Mode** connection, and Slack delivers each event to only
+  ONE connection, so a stray manual instance silently steals ~half the mentions.
+  Diagnose the connection count with Slack's `hello` frame `num_connections` (open
+  a throwaway socket via `apps.connections.open` with `SLACK_APP_TOKEN` and read
+  the first frame) — it should be **1** (just the service).
+- **The app's live username is `gorkie__devansh_`** (immutable, gorkie-era) but
+  the **display name is `kyto`**, so `@kyto` DOES resolve to this bot
+  (`U0BD3555UCQ`, app `A0BCA6D6GAV`). `auth.test`'s `user` field returns the
+  username, not the display name — don't be fooled into thinking `@kyto` is a
+  different app.
+- **Slash commands work but @mentions/DMs don't = Event Subscriptions are off.**
+  Slack Socket Mode routes slash commands, interactivity, and event-subscription
+  events independently; if the **Enable Events** master toggle is off (it silently
+  turned off once), `slash_commands` still deliver over the socket while
+  `app_mention` / `message.*` deliver **nothing**, and the bot logs only startup
+  lines (it never sees the event). Fix: re-enable Event Subscriptions in the app
+  config (and reinstall if scopes changed). Confirm by opening a throwaway socket
+  and mentioning the bot — you should see an `app_mention` envelope arrive.
+- **Zombie socket:** a dropped Socket Mode WSS can stay TCP-`ESTAB` locally with a
+  stuck send-queue (`ss -tnp | grep :443` shows non-zero Send-Q) while delivering
+  nothing; `systemctl restart kyto.service` re-establishes a clean connection.
 
 ### Models / LLM model router + fallback
 - **The main query runs on OpenRouter's own auto-router via HackClub**
