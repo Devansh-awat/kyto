@@ -17,6 +17,7 @@ import { generateImageTool } from './tools/generate-image';
 import { getChannelInfoTool } from './tools/get-channel-info';
 import { getFileTool } from './tools/get-file';
 import { getUserTool } from './tools/get-user';
+import { joinThreadTool } from './tools/join-thread';
 import { leaveThreadTool } from './tools/leave-thread';
 import { listThreadsTool } from './tools/list-threads';
 import { mermaidTool } from './tools/mermaid';
@@ -65,6 +66,7 @@ export function buildTools({
     getUser: getUserTool(),
     postMessage: postMessageTool({ bot }),
     getFile: getFileTool({ getSandboxContext }),
+    joinThread: joinThreadTool({ thread }),
     leaveThread: leaveThreadTool({ thread }),
     ...(canActAsOwner && {
       sendAsUser: sendAsUserTool({ authorUserId, thread }),

@@ -174,7 +174,19 @@ Run these automatically after each completed change, in order, **without asking*
 - Fork-added tools: `canvasRead/Write/List/Delete`, `pinMessage`, `unpinMessage`,
   `bookmarkLink`, `createChannel`, `setChannelTopic`, `poll`, `getPermalink`,
   `fetchUrl`, `deploySite`, `removeSite`, `skip`, `sendAsUser`, `editAsUser`,
-  `browse`, `sendEmail`/`checkInbox`/`replyEmail`.
+  `browse`, `sendEmail`/`checkInbox`/`replyEmail`, `joinThread`.
+- **`joinThread`/`leaveThread`** (`tools/join-thread.ts`/`tools/leave-thread.ts`):
+  let the model opt itself into (or out of) auto-responding to a thread's
+  future messages **without** needing a fresh @mention each time. Both just
+  toggle the chat-sdk's built-in per-thread state (`respondOnThreadMessages`)
+  and `thread.subscribe()`/`unsubscribe()`; `bot.onSubscribedMessage`
+  (`apps/bot/src/bot.ts`) is the gate that actually acts on it (responds if
+  `respondOnThreadMessages` is true OR the message is a mention). This state
+  is durable across restarts (`createPostgresState`, `lib/chat.ts`) — no new
+  persistence was added. Note: a mention **inside** an existing thread already
+  auto-sets `respondOnThreadMessages: true` (`bot.ts`, `onNewMention`); this
+  tool is for the model to join **proactively** (e.g. asked to "keep following
+  this thread") without waiting for that implicit trigger.
 - Slack scopes are declared in `slack-manifest.json` — update it when a tool
   needs a new scope.
 - **Email** (`sendEmail`/`checkInbox`/`replyEmail`, `tools/email.ts`) runs
