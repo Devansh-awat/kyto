@@ -185,11 +185,29 @@ Run these automatically after each completed change, in order, **without asking*
 - **Web search** (the `searchWeb` task) uses Exa via `EXA_API_KEY`. A placeholder
   key (`exa-placeholder-no-websearch`) makes every search return
   `ExaError: Invalid API key` — set a real key to enable web search.
-- **Parallel tool calls**: the core prompt (`packages/ai/src/prompts/core.ts`,
-  "Working in parallel") tells the model to batch INDEPENDENT tool calls (several
-  web/Slack searches, multiple URL/file reads) into a **single step** so they run
-  concurrently, instead of one call per step. This is a prompt-level nudge only —
-  intra-step concurrency itself is owned by the Pi harness; we don't fork it.
+- **Parallel tool calls**: Pi **already executes a batch of tool calls
+  concurrently by default** — no fork needed. `pi-agent-core`'s
+  `executeToolCalls` runs the batch in parallel (`Promise.all`) unless
+  `config.toolExecution === 'sequential'` **or** some tool in the batch has
+  `executionMode: 'sequential'`; the default `toolExecution` is `"parallel"`, and
+  `harness-pi` sets neither, so every kyto tool defaults to parallel. The
+  `openai-completions` provider (the HackClub path) also does **not** send
+  `parallel_tool_calls: false` (it omits the field → OpenAI-compat default
+  `true`), so the model is free to emit several tool calls in one assistant
+  message. The **only** lever we have is behavioral: getting the model to actually
+  batch calls into a single step. That's driven by the core prompt
+  (`packages/ai/src/prompts/core.ts`, "Working in parallel"), which now tells it
+  to batch **read-only / side-effect-free** lookups (file reads, Slack/web
+  searches, URL fetches, list/get calls) together in one step, and to issue
+  **side-effecting** tools (send/edit message, deploy/remove site, canvas
+  write/delete, create channel, pin, email, state-changing commands) **one at a
+  time**. Per-tool `executionMode` is NOT reachable through harness-pi (the
+  `HarnessV1ToolSpec` kyto registers doesn't carry it), so the read-only-only
+  restriction is enforced at the **prompt level**, not by tool metadata — marking
+  individual writes `sequential` would require patching the `harness-pi`
+  node_module. Batching is still model-dependent (a weak model may not batch even
+  when told). Faster batched reads also keep a turn under Slack's ~interaction
+  timeout, avoiding the "invalid action" token expiry seen on slow serial turns.
 
 ### Canvases (read/list/create across channels, channel tab)
 - `canvasList` takes an optional `channelId` (raw `C0123`, `slack:` id, or
