@@ -318,7 +318,11 @@ async function executeTurn(
       let sawCleanStop = false;
       // Declared outside the try so the catch can complete the same task.
       const modelTaskId = `model-${attempts.length}`;
-      const modelTaskTitle = attempts.length > 0 ? 'Model · fallback' : 'Model';
+      // The model-lifecycle row reads as "Thinking" (the model is working) while
+      // it runs, and completes to show which model actually answered. Tool rows
+      // render separately, so a turn shows Thinking → tool activity → done.
+      const modelTaskTitle =
+        attempts.length > 0 ? 'Thinking · fallback' : 'Thinking';
       // Per-turn model holder for this attempt (filled with the slug auto/glm
       // resolved to). Declared outside the try so the catch can read it when it
       // completes the task. Guard so the Model task is completed EXACTLY once —
@@ -381,9 +385,11 @@ async function executeTurn(
         // before anything has happened). It is marked `complete` after streaming
         // (below) on success, AND in the catch on failure, so it transitions to
         // done at the right moment and never sticks as a frozen spinner.
+        // NO `output` while in progress: the completed emit (completeModelTask)
+        // carries the model detail. Setting it on both states made the plan
+        // render the provider·model line twice on the finished row.
         yield {
           id: modelTaskId,
-          output: `${currentAttempt.provider} · ${currentAttempt.model}`,
           status: 'in_progress',
           title: modelTaskTitle,
           type: 'task_update',

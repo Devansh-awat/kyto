@@ -66,6 +66,11 @@ const ALLOWED_MODELS = [
   'z-ai/glm-5.2',
   'z-ai/glm-5.1',
   'google/gemini-3.5-flash',
+  // Cheap tier: lets auto route simple/casual turns to a low-cost model instead
+  // of always landing on the premium tier (the main cost blowup). Also the
+  // signal used to hand the turn to the owner's own Gemini key (see pi.ts /
+  // buildFallbackQueue) as a last resort.
+  'google/gemini-3.1-flash-lite',
 ];
 const AUTO_ROUTER_PLUGIN_ID = 'auto-router';
 const ROUTER_MODEL_ID = 'openrouter/auto';

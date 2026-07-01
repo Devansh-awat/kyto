@@ -292,4 +292,10 @@ export const LEADERBOARD_FALLBACK: PiAttempt[] = [
         proxyAttempt('m3-normal'),
       ]
     : []),
+  // Last resort: the owner's OWN Gemini key (GEMINI_API_KEY, direct Google
+  // endpoint — separate quota from HackClub/baishui, and very cheap). Reached
+  // only after every HackClub rung and the baishui tail have failed, so a fully
+  // budget-exhausted / proxy-down day still gets an answer. Empty if the key is
+  // unset (then these rungs are simply skipped).
+  ...geminiAttempts,
 ];

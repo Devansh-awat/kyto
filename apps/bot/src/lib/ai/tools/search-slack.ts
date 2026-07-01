@@ -57,10 +57,14 @@ const slackSearchResponseSchema = z.looseObject({
               channelId: message.channel_id,
               channelName: message.channel_name,
               content: message.content ?? '',
+              // Keep only the 2 context messages nearest the match on each side
+              // (Slack returns ~5/5). Context is the dominant prompt-size driver
+              // across agentic steps, so trimming it here slashes input-token
+              // cost with no loss of the immediately-relevant surrounding thread.
               context: message.context_messages
                 ? {
-                    after: message.context_messages.after ?? [],
-                    before: message.context_messages.before ?? [],
+                    after: (message.context_messages.after ?? []).slice(0, 2),
+                    before: (message.context_messages.before ?? []).slice(-2),
                   }
                 : undefined,
               isAuthorBot: message.is_author_bot,

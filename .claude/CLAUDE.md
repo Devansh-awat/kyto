@@ -190,6 +190,15 @@ Run these automatically after each completed change, in order, **without asking*
 - **Web search** (the `searchWeb` task) uses Exa via `EXA_API_KEY`. A placeholder
   key (`exa-placeholder-no-websearch`) makes every search return
   `ExaError: Invalid API key` — set a real key to enable web search.
+- **Slack search cost** (`tools/search-slack.ts`): `assistant.search.context`
+  returns `limit: 10` matches with `include_context_messages: true` (~5 before/5
+  after each). The context messages are the **dominant input-token driver** —
+  they ride along in every subsequent agentic step, so a few searches balloon a
+  turn to 100k–270k input tokens (× premium model pricing = the cost blowup). We
+  trim each match's context to the **2 nearest before + 2 nearest after** in the
+  result transform (`.slice(-2)` / `.slice(0, 2)`), keeping the relevant
+  surrounding thread while slashing prompt size. Drop `limit` or trim bodies
+  further if cost climbs again.
 - **Parallel tool calls**: Pi **already executes a batch of tool calls
   concurrently by default** — no fork needed. `pi-agent-core`'s
   `executeToolCalls` runs the batch in parallel (`Promise.all`) unless
@@ -316,8 +325,12 @@ Run these automatically after each completed change, in order, **without asking*
   (opus-4.8/4.7/4.6, gpt-5.5/5.4, glm-5.2/5.1, sonnet-4.6, gemini-3.5-flash) and
   the open tail on the **baishui proxy** (`jam06452.uk`: deepseek-v4-pro,
   kimi-k2.6, k2.7-code, deepseek-4-flash, m3) — the proxy rungs are skipped if
-  `OPENROUTER_API_KEY`/`_BASE_URL` are unset. Fable 5 (rank #1) is omitted (no
-  provider). The resolved slug is read off the per-turn model holder (`autoHolder`)
+  `OPENROUTER_API_KEY`/`_BASE_URL` are unset. **Last resort: the owner's own
+  Gemini key** (`geminiAttempts`, `GEMINI_API_KEY`, direct Google endpoint,
+  provider `gemini`) is appended to the very end of `LEADERBOARD_FALLBACK`, so a
+  fully budget-exhausted HackClub day (and a down/absent baishui proxy) still
+  gets an answer off a separate, cheap quota; skipped if `GEMINI_API_KEY` is
+  unset. Fable 5 (rank #1) is omitted (no provider). The resolved slug is read off the per-turn model holder (`autoHolder`)
   captured during the auto attempt, so it pins/pivots even when auto failed. Each
   entry is tried at most once (tracked via `failedKeys`). `deepFallbackAttempts`
   is retained/exported for reference but no longer drives routing.
@@ -344,7 +357,10 @@ Run these automatically after each completed change, in order, **without asking*
     name is silently ignored by the proxy; not globs, so no
     `-nano`/`-mini`/`-flash-lite`/`-fast` or `claude-fable-5` leakage):
     claude-opus-4.6/4.7/4.8, claude-sonnet-4.6, gpt-5.4/5.5, glm-5.1/5.2,
-    gemini-3.5-flash (the owner's leaderboard top tier;
+    gemini-3.5-flash, **gemini-3.1-flash-lite** (the cheap rung — added so auto
+    can route simple/casual turns off the premium tier, the main cost blowup, and
+    as the signal for handing a turn to the owner's Gemini key; the owner's
+    leaderboard top tier otherwise;
     `gemini-3.1-pro-preview` was removed after it ended a turn right after its
     tool calls without ever writing a reply — the empty-response guard counted
     that as a failed attempt and burned the fallback chain;
@@ -370,10 +386,16 @@ Run these automatically after each completed change, in order, **without asking*
   - **Capture the resolved model**: the stream only exposes the *requested* id, so
     we read the concrete model OpenRouter resolved to from the `model` field of a
     clone of the response and stash it per-turn (`AsyncLocalStorage`).
-- The model is surfaced as a **`Model` task in the thinking section** (never in
-  the reply text), shown as `openrouter/auto → <resolved>`. Emitted
-  **`in_progress` while the attempt runs** (so the activity indicator reads as
-  working, never a misleading "completed" before anything has happened) and
+- The model is surfaced as a **`Thinking` task in the thinking section** (title
+  `Thinking`, or `Thinking · fallback` on retries — renamed from `Model` so the
+  collapsed row reads as an activity status: the model is working). The concrete
+  model is shown **only on completion** as the task `output` (`provider · model
+  → <resolved>`); the `in_progress` emit carries **no `output`** — setting it on
+  both states made the finished row render the `provider · model` line **twice**
+  (the "model name shown twice" bug). Reasoning tokens the model streams render as
+  a **separate `Reasoning` task** (`stream/index.ts`) so the two don't collide.
+  Emitted **`in_progress` while the attempt runs** (so the activity indicator reads
+  as working, never a misleading "completed" before anything has happened) and
   marked **`complete` exactly once** via the `completeModelTask()` guard
   (`modelTaskDone`): the post-stream success path completes it, and the catch
   completes it only if that hasn't already fired (so an attempt that throws before
