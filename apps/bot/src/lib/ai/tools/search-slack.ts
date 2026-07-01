@@ -81,14 +81,20 @@ const slackSearchResponseSchema = z.looseObject({
 export function searchSlackTool({ message }: { message: Message }) {
   return tool({
     description:
-      'Search Slack messages for past conversations, decisions, links, or context outside the current thread.',
+      'Search Slack messages for past conversations, decisions, links, or context outside the current thread. Supports normal Slack search modifiers in the query, e.g. from:@user, has:link, has:star, in:#channel, before:2026-01-01, after:2026-01-01. Uses an assistant action token that expires ~2 minutes into the turn, so run this early rather than after other work.',
     inputSchema: z.object({
       cursor: z
         .string()
         .min(1)
         .optional()
         .describe('Cursor from a previous Slack search result page.'),
-      query: z.string().min(1).max(500),
+      query: z
+        .string()
+        .min(1)
+        .max(500)
+        .describe(
+          'Search text. Supports Slack modifiers like from:@user, has:link, before:2026-01-01, after:2026-01-01, in:#channel.'
+        ),
     }),
     execute: async ({ cursor, query }) => {
       const parsedRaw = actionTokenSchema.safeParse(message.raw);

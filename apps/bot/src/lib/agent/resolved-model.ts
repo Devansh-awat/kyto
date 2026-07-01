@@ -66,7 +66,11 @@ const ALLOWED_MODELS = [
   'openai/gpt-5.4',
   'z-ai/glm-5.2',
   'z-ai/glm-5.1',
-  'google/gemini-3.5-flash',
+  // `google/gemini-3.5-flash` deliberately excluded: 100% empty-response rate
+  // observed in production (10/10 router picks, 22/22 direct Gemini-key
+  // attempts) — same failure signature as the removed `gemini-3.1-pro-preview`.
+  // See pi.ts GEMINI_MODELS for detail. Re-add only after verifying a real
+  // completion succeeds.
   // Cheap tier: lets auto route simple/casual turns to a low-cost model instead
   // of always landing on the premium tier (the main cost blowup). Also the
   // signal used to hand the turn to the owner's own Gemini key (see pi.ts /

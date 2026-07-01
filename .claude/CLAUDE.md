@@ -211,6 +211,18 @@ Run these automatically after each completed change, in order, **without asking*
   result transform (`.slice(-2)` / `.slice(0, 2)`), keeping the relevant
   surrounding thread while slashing prompt size. Drop `limit` or trim bodies
   further if cost climbs again.
+- **Slack search modifiers**: `assistant.search.context`'s `query` supports the
+  same modifiers as Slack's own search bar (`from:@user`, `has:link`,
+  `has:star`, `in:#channel`, `before:YYYY-MM-DD`, `after:YYYY-MM-DD`,
+  combinable). Documented in the tool description and the core prompt
+  (`packages/ai/src/prompts/core.ts`) so the model uses them to narrow queries
+  instead of filtering broad results itself.
+- **Slack search action-token urgency**: the `action_token` backing
+  `assistant.search.context` expires roughly 2 minutes after the turn starts.
+  The core prompt now tells the model to run all `searchSlack` calls early in
+  the turn (batched with other read-only lookups per the parallel-tool-call
+  guidance below), since a search attempted late in a long turn can fail purely
+  from token expiry.
 - **Parallel tool calls**: Pi **already executes a batch of tool calls
   concurrently by default** — no fork needed. `pi-agent-core`'s
   `executeToolCalls` runs the batch in parallel (`Promise.all`) unless
@@ -334,7 +346,7 @@ Run these automatically after each completed change, in order, **without asking*
   **UP** from that model toward the best (closest-better first), then **DOWN**
   toward the weakest. `LEADERBOARD_FALLBACK` is the owner's arena leaderboard,
   best→worst, restricted to reachable models: the strong tier on HackClub
-  (opus-4.8/4.7/4.6, gpt-5.5/5.4, glm-5.2/5.1, sonnet-4.6, gemini-3.5-flash).
+  (opus-4.8/4.7/4.6, gpt-5.5/5.4, glm-5.2/5.1, sonnet-4.6).
   The **baishui proxy** tail (`jam06452.uk`) is **commented out** — its `/models`
   endpoint answers but every completion fails ("upstream authentication failed" /
   "all provider keys rate-limited or in cooldown"), so it only wasted fallback
@@ -371,13 +383,22 @@ Run these automatically after each completed change, in order, **without asking*
     name is silently ignored by the proxy; not globs, so no
     `-nano`/`-mini`/`-flash-lite`/`-fast` or `claude-fable-5` leakage):
     claude-opus-4.6/4.7/4.8, claude-sonnet-5, claude-sonnet-4.6, gpt-5.4/5.5, glm-5.1/5.2,
-    gemini-3.5-flash, **gemini-3.1-flash-lite** (the cheap rung — added so auto
+    **gemini-3.1-flash-lite** (the cheap rung — added so auto
     can route simple/casual turns off the premium tier, the main cost blowup, and
     as the signal for handing a turn to the owner's Gemini key; the owner's
     leaderboard top tier otherwise;
     `gemini-3.1-pro-preview` was removed after it ended a turn right after its
     tool calls without ever writing a reply — the empty-response guard counted
     that as a failed attempt and burned the fallback chain;
+    `gemini-3.5-flash` was removed the same way (2026-07-01) after logs showed
+    it returning an **empty response on 100% of attempts** (22/22 direct via
+    `geminiAttempts`/`GEMINI_MODELS` in `pi.ts`, 10/10 via the auto-router's
+    `google/gemini-3.5-flash` slug in `LEADERBOARD_FALLBACK`) — this is why the
+    Gemini dashboard showed zero usage on 3.5-flash while everything landed on
+    3.1-flash-lite: every single call to it wasted an attempt before falling
+    through. Re-add to `ALLOWED_MODELS` (here), `GEMINI_MODELS` (`pi.ts`), and
+    the commented `LEADERBOARD_FALLBACK` line only after verifying a real
+    completion succeeds;
     the lower-ranked tail — deepseek-v4-pro/flash, kimi-k2.6/k2.7-code,
     minimax-m3, qwen3.6-plus — was dropped to keep routing on the stronger
     models). The interceptor strips a stale `Content-Length` when re-issuing the

@@ -51,9 +51,14 @@ const BAISHUI_MODELS = [
 ] as const;
 
 // Gemini (GEMINI_API_KEY) — prefer 3.x (higher rate limits); 3.1-flash-lite has
-// the highest daily quota so it sits before the 2.5 models.
+// the highest daily quota so it sits before the 2.5 models. `gemini-3.5-flash`
+// is deliberately excluded: it returned an EMPTY response on 100% of observed
+// attempts (both here and via the auto-router's `google/gemini-3.5-flash`
+// pick) — same failure signature as the removed `gemini-3.1-pro-preview`
+// (likely burns its output budget on thinking with no text emitted). Keeping
+// it in the chain only wastes an attempt every single turn before falling
+// through to flash-lite. Re-add only after verifying a real completion works.
 const GEMINI_MODELS = [
-  'gemini-3.5-flash',
   'gemini-3.1-flash-lite',
   'gemini-3-flash-preview',
   'gemini-2.5-flash',
@@ -283,7 +288,8 @@ export const LEADERBOARD_FALLBACK: PiAttempt[] = [
   catalogAttempt('z-ai/glm-5.2'),
   catalogAttempt('anthropic/claude-sonnet-4.6'),
   catalogAttempt('z-ai/glm-5.1'),
-  catalogAttempt('google/gemini-3.5-flash'),
+  // `google/gemini-3.5-flash` deliberately omitted here too — see GEMINI_MODELS
+  // above, same 100%-empty-response failure via this HackClub/OpenRouter slug.
   // baishui (jam06452.uk) is DISABLED — its /models endpoint responds but every
   // completion fails ("upstream authentication failed" / "all provider keys are
   // rate-limited or in cooldown"), so it only wastes fallback attempts. Re-enable
