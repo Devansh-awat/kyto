@@ -51,15 +51,19 @@ const BAISHUI_MODELS = [
 ] as const;
 
 // Gemini (GEMINI_API_KEY) — prefer 3.x (higher rate limits); 3.1-flash-lite has
-// the highest daily quota so it sits before the 2.5 models. `gemini-3.5-flash`
-// and `gemini-3.1-pro-preview` were previously dropped here (and from
-// LEADERBOARD_FALLBACK / ALLOWED_MODELS) after both returned an EMPTY response
-// on every observed attempt (22/22 direct, 10/10 via the auto-router slug for
-// 3.5-flash) — re-added at the owner's request. If the empty-response failure
-// recurs, watch the `[stream] tally` logs (0 textDeltas/reasoningParts despite
-// tool activity) and re-remove.
+// the highest daily quota so it sits before the 2.5 models. `gemini-3.1-pro-preview`
+// was previously dropped here (and from LEADERBOARD_FALLBACK / ALLOWED_MODELS)
+// after it ended a turn right after tool calls with no reply — re-added at the
+// owner's request. `gemini-3.5-flash` stays OUT of this direct-key list on
+// purpose (kept only on the HackClub path — LEADERBOARD_FALLBACK below and
+// ALLOWED_MODELS in resolved-model.ts): every direct attempt with the owner's
+// own Gemini key returned an empty response with ZERO requests metered on the
+// Google AI Studio dashboard, meaning the call was rejected before generation
+// (likely not enabled for this key's tier) — a HackClub-proxied call to the
+// same model is a different request path and may not hit that restriction. If
+// the empty-response failure recurs on EITHER path, watch the `[stream] tally`
+// logs (0 textDeltas/reasoningParts despite tool activity) and remove there too.
 const GEMINI_MODELS = [
-  'gemini-3.5-flash',
   'gemini-3.1-pro-preview',
   'gemini-3.1-flash-lite',
   'gemini-3-flash-preview',
@@ -297,8 +301,12 @@ export const LEADERBOARD_FALLBACK: PiAttempt[] = [
   // order (verified reachable via ai.hackclub.com/proxy/v1/models).
   // `google/gemini-3.1-pro-preview` and `google/gemini-3.5-flash` were
   // previously skipped here for a confirmed 100%-empty-response failure via
-  // this HackClub/OpenRouter slug (see GEMINI_MODELS above) — re-added at the
-  // owner's request; re-remove if the empty-response failure recurs.
+  // this HackClub/OpenRouter slug — re-added at the owner's request. Note
+  // `gemini-3.5-flash` is intentionally HackClub-only: it stays OUT of
+  // GEMINI_MODELS above (the direct-key path) since that one showed zero
+  // requests metered on the owner's Gemini dashboard (likely tier-gated),
+  // while this HackClub-proxied call is a different request path. Re-remove
+  // from here too if the empty-response failure recurs.
   catalogAttempt('moonshotai/kimi-k2.7-code'),
   catalogAttempt('google/gemini-3.1-pro-preview'),
   catalogAttempt('google/gemini-3.5-flash'),
