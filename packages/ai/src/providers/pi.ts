@@ -273,12 +273,15 @@ export const deepFallbackAttempts: PiAttempt[] = [
 
 // The owner's arena leaderboard, best→worst, restricted to models we can
 // actually reach: the strong tier on HackClub (same slugs `openrouter/auto`
-// resolves to), the open-weight tail on the baishui proxy. Fable 5 (rank #1) is
-// unreachable (no provider) and omitted; reasoning-effort tiers collapse to one
-// slug. The agent (apps/bot/src/lib/agent/index.ts) runs `openrouter/auto`
-// first, retries the exact model it resolved to, then walks THIS list UP from
-// that model (toward #1) and then DOWN (toward the weakest). Order matters: the
-// index of each entry is the rank used for the up/down pivot.
+// resolves to), the open-weight tail on the baishui proxy. Fable 5 (rank #1) IS
+// reachable on HackClub now (`anthropic/claude-fable-5`, confirmed via
+// ai.hackclub.com/proxy/v1/models) but is deliberately left out — ~2x
+// opus-4.8's per-token cost, not worth it given the daily HackClub spend cap;
+// reasoning-effort tiers (Thinking/High/xHigh) collapse to one base slug. The
+// agent (apps/bot/src/lib/agent/index.ts) runs `openrouter/auto` first, retries
+// the exact model it resolved to, then walks THIS list UP from that model
+// (toward #1) and then DOWN (toward the weakest). Order matters: the index of
+// each entry is the rank used for the up/down pivot.
 export const LEADERBOARD_FALLBACK: PiAttempt[] = [
   catalogAttempt('anthropic/claude-opus-4.8'),
   catalogAttempt('openai/gpt-5.5'),
@@ -288,8 +291,23 @@ export const LEADERBOARD_FALLBACK: PiAttempt[] = [
   catalogAttempt('z-ai/glm-5.2'),
   catalogAttempt('anthropic/claude-sonnet-4.6'),
   catalogAttempt('z-ai/glm-5.1'),
-  // `google/gemini-3.5-flash` deliberately omitted here too — see GEMINI_MODELS
-  // above, same 100%-empty-response failure via this HackClub/OpenRouter slug.
+  // Below this point: the rest of the owner's leaderboard, appended in rank
+  // order (verified reachable via ai.hackclub.com/proxy/v1/models). Two ranked
+  // entries are still skipped on purpose — `google/gemini-3.1-pro-preview` and
+  // `google/gemini-3.5-flash` — both have a confirmed 100%-empty-response
+  // failure via this same HackClub/OpenRouter slug (see GEMINI_MODELS above);
+  // re-add only after verifying a real completion succeeds.
+  catalogAttempt('moonshotai/kimi-k2.7-code'),
+  catalogAttempt('deepseek/deepseek-v4-flash'),
+  catalogAttempt('moonshotai/kimi-k2.6'),
+  catalogAttempt('minimax/minimax-m3'),
+  catalogAttempt('deepseek/deepseek-v4-pro'),
+  catalogAttempt('qwen/qwen3.6-plus'),
+  catalogAttempt('x-ai/grok-4.3'),
+  catalogAttempt('x-ai/grok-build-0.1'),
+  catalogAttempt('google/gemini-3-flash-preview'),
+  catalogAttempt('minimax/minimax-m2.7'),
+  catalogAttempt('nvidia/nemotron-3-ultra-550b-a55b'),
   // baishui (jam06452.uk) is DISABLED — its /models endpoint responds but every
   // completion fails ("upstream authentication failed" / "all provider keys are
   // rate-limited or in cooldown"), so it only wastes fallback attempts. Re-enable

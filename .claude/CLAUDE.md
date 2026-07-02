@@ -356,7 +356,16 @@ Run these automatically after each completed change, in order, **without asking*
   **UP** from that model toward the best (closest-better first), then **DOWN**
   toward the weakest. `LEADERBOARD_FALLBACK` is the owner's arena leaderboard,
   best→worst, restricted to reachable models: the strong tier on HackClub
-  (opus-4.8/4.7/4.6, gpt-5.5/5.4, glm-5.2/5.1, sonnet-4.6).
+  (opus-4.8/4.7/4.6, gpt-5.5/5.4, glm-5.2/5.1, sonnet-4.6), then the rest of the
+  leaderboard appended in rank order (kimi-k2.7-code, deepseek-v4-flash,
+  kimi-k2.6, minimax-m3, deepseek-v4-pro, qwen3.6-plus, grok-4.3, grok-build-0.1,
+  gemini-3-flash-preview, minimax-m2.7, nemotron-3-ultra-550b-a55b — all
+  verified present on `ai.hackclub.com/proxy/v1/models`). Claude Fable 5 is also
+  reachable there now (`anthropic/claude-fable-5`) but deliberately excluded —
+  ~2x opus-4.8's per-token cost, not worth it against the daily HackClub spend
+  cap. `gemini-3.1-pro-preview` and `gemini-3.5-flash` are excluded too despite
+  ranking on the leaderboard — both have a confirmed 100%-empty-response
+  failure via this HackClub slug (see below).
   The **baishui proxy** tail (`jam06452.uk`) is **commented out** — its `/models`
   endpoint answers but every completion fails ("upstream authentication failed" /
   "all provider keys rate-limited or in cooldown"), so it only wasted fallback
