@@ -1,0 +1,14 @@
+diff --git a/dist/index.js b/dist/index.js
+index 53a35e40d7dc03dea57f965325728761467ad7c7..b22fb563326416ab871709e8a6d6c00cc0ab10bc 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -1980,8 +1980,7 @@ var SlackAdapter = class _SlackAdapter {
+       });
+       return;
+     }
+-    const isDM = event.channel_type === "im";
+-    const threadTs = isDM ? event.thread_ts || "" : event.thread_ts || event.ts;
++    const threadTs = event.thread_ts || event.ts;
+     const threadId = this.encodeThreadId({
+       channel: event.channel,
+       threadTs

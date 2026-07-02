@@ -137,6 +137,9 @@
       "name": "@repo/tsconfig",
     },
   },
+  "patchedDependencies": {
+    "@chat-adapter/slack@4.30.0": "patches/@chat-adapter%2Fslack@4.30.0.patch",
+  },
   "overrides": {
     "@earendil-works/pi-coding-agent": "0.79.10",
   },

@@ -117,15 +117,14 @@ async function executeTurn(
 
   try {
     // Slack's native streaming API (StreamingPlan -> adapter.stream) requires a
-    // real threadTs, which only exists once Slack has established an assistant
-    // thread container. A top-level DM message that arrives outside that
-    // container (e.g. a plain DM predating the app's Assistant setup) has no
-    // thread_ts, so wrapping the turn in StreamingPlan throws
-    // "Slack streaming requires a valid thread context" before anything is
-    // posted. Mirrors the same threadTs check `startThinking` already does:
-    // drain the turn generator directly instead — the actual reply text still
-    // goes out via `reply.append`'s plain `thread.post`, we just skip the
-    // native task-card UI that needs streaming.
+    // real threadTs. The patched @chat-adapter/slack (see patches/) now assigns
+    // every message — DM or channel — a threadTs (falling back to the message's
+    // own ts), so this should always be populated; kept as a defensive fallback
+    // (mirrors the same check `startThinking` does) in case some other path
+    // ever produces a threadId with no threadTs. Drains the turn generator
+    // directly in that case — the reply text still goes out via
+    // `reply.append`'s plain `thread.post`, we just skip the native task-card UI
+    // that needs streaming.
     const { threadTs } = slack.decodeThreadId(thread.id);
     if (threadTs) {
       await thread.post(

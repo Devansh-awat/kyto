@@ -212,11 +212,21 @@ Run these automatically after each completed change, in order, **without asking*
   surrounding thread while slashing prompt size. Drop `limit` or trim bodies
   further if cost climbs again.
 - **Slack search modifiers**: `assistant.search.context`'s `query` supports the
-  same modifiers as Slack's own search bar (`from:@user`, `has:link`,
-  `has:star`, `in:#channel`, `before:YYYY-MM-DD`, `after:YYYY-MM-DD`,
-  combinable). Documented in the tool description and the core prompt
-  (`packages/ai/src/prompts/core.ts`) so the model uses them to narrow queries
-  instead of filtering broad results itself.
+  full set of modifiers from Slack's own search bar, all combinable:
+  `from:@user`/`from:me`, `to:@user`, `in:#channel`/`in:@user` (DM), `on:`,
+  `before:`, `after:`, `during:` (`YYYY-MM-DD` or `YYYY-MM`), `has:link`,
+  `has:star`, `has:pin`, `has::emoji_name:` (reaction), `is:thread`, `is:dm`,
+  `is:external`, `filename:`, `ext:`. Documented in the tool description and the
+  core prompt (`packages/ai/src/prompts/core.ts`) so the model uses them to
+  narrow queries instead of filtering broad results itself.
+- **Slack search scope**: `assistant.search.context` runs with the *requesting
+  user's* own Slack access (not the bot's), so it naturally reaches private
+  channels and DMs that user is a member of — but only once the corresponding
+  granular OAuth scopes are granted. `search:read.public`/`.files`/`.users` were
+  present but `search:read.private`, `.im`, `.mpim` were missing (added to
+  `slack-manifest.json`), which silently limited every search to public
+  channels only. Needs `bun run sync:manifest` + a reinstall to actually take
+  effect (see Manifest sync note).
 - **Slack search action-token urgency**: the `action_token` backing
   `assistant.search.context` expires roughly 2 minutes after the turn starts.
   The core prompt now tells the model to run all `searchSlack` calls early in
@@ -528,6 +538,37 @@ Run these automatically after each completed change, in order, **without asking*
   `offerOptIn` (`lib/onboarding.ts`) — a **visible in-thread reply** (not
   ephemeral) with an "i accept" button, mirroring how gorkie surfaces its join
   gate. Membership of `OPT_IN_CHANNEL` is the allowlist (`lib/allowed-users.ts`).
+
+### DM threading (patched @chat-adapter/slack)
+- **Every DM reply is now threaded, mirroring channel behavior.** The upstream
+  `@chat-adapter/slack` (v4.30.0) special-cased DMs so a top-level DM message
+  (`channel_type: "im"`, no `thread_ts`) got an **empty** threadTs — unlike
+  channels, which fall back to the message's own `ts`. That empty threadTs broke
+  two things: (1) Slack's native streaming API (`StreamingPlan` -> `adapter
+  .stream`) throws `ValidationError: Slack streaming requires a valid thread
+  context` on an empty threadTs, so **every DM turn failed** ("oops, something
+  went wrong") until this was patched — the "thinking" task-card UI is exactly
+  what needs that native stream; (2) `buildPrompt`'s `slack.fetchMessages
+  (thread.id)` had no threadTs to scope to, so it silently fell back to fetching
+  the **whole DM history** as context on every turn.
+- Fixed via `bun patch` (`patches/@chat-adapter%2Fslack@4.30.0.patch`,
+  `package.json`'s `patchedDependencies`): removed the DM special-case in
+  `handleMessageEvent` so `threadTs = event.thread_ts || event.ts` unconditionally,
+  same as channels. Effects: a top-level DM message now starts (and kyto replies
+  within) its own thread, not the main DM timeline; a reply-in-thread from the
+  user continues that same thread (still dispatched to `onDirectMessage` per
+  chat-sdk's routing — DMs always go there over `onSubscribedMessage`, so no
+  `bot.ts` change was needed); and `buildPrompt` now scopes context to just that
+  thread, so **kyto has no memory of the rest of the DM by default** — the model
+  must use `searchSlack` (`in:@user`) to pull in earlier DM history on purpose.
+  This patch must survive `bun install`/lockfile updates (it's declared in
+  `package.json`), but re-verify it after any `@chat-adapter/slack` version bump
+  (`bun patch @chat-adapter/slack` again if the line shifts).
+- `apps/bot/src/lib/agent/index.ts`'s pre-`StreamingPlan` threadTs check (added
+  before this patch existed, to drain the turn without native streaming when
+  threadTs was empty) is kept as a defensive fallback for any other path that
+  might produce a threadId with no threadTs, but should no longer trigger in
+  practice for DMs.
 
 ### Sandbox / E2B — lazy + ephemeral, no persistence
 - Config in `packages/sandbox/src/config.ts`. **Nothing is stored between turns.**

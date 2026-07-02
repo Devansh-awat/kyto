@@ -81,7 +81,7 @@ const slackSearchResponseSchema = z.looseObject({
 export function searchSlackTool({ message }: { message: Message }) {
   return tool({
     description:
-      'Search Slack messages for past conversations, decisions, links, or context outside the current thread. Supports normal Slack search modifiers in the query, e.g. from:@user, has:link, has:star, in:#channel, before:2026-01-01, after:2026-01-01. Uses an assistant action token that expires ~2 minutes into the turn, so run this early rather than after other work.',
+      "Search Slack messages for past conversations, decisions, links, or context outside the current thread — including a DM's own earlier history, since a fresh DM thread otherwise starts with no prior context by design. Runs with the requesting user's own Slack access, so it reaches private channels and DMs that user is in, not just public channels. Supports normal Slack search modifiers in the query: from:@user, from:me, to:@user, in:#channel, in:@user (DM), on:YYYY-MM-DD, before:YYYY-MM-DD, after:YYYY-MM-DD, during:month-or-YYYY-MM, has:link, has:star, has:pin, has::emoji_name: (reaction), is:thread, is:dm, is:external, filename:name, ext:filetype. Uses an assistant action token that expires ~2 minutes into the turn, so run this early rather than after other work.",
     inputSchema: z.object({
       cursor: z
         .string()
@@ -93,7 +93,7 @@ export function searchSlackTool({ message }: { message: Message }) {
         .min(1)
         .max(500)
         .describe(
-          'Search text. Supports Slack modifiers like from:@user, has:link, before:2026-01-01, after:2026-01-01, in:#channel.'
+          'Search text. Supports Slack modifiers like from:@user, in:#channel, in:@user (DM), has:link, has:star, before:2026-01-01, after:2026-01-01, is:thread, filename:name, ext:filetype.'
         ),
     }),
     execute: async ({ cursor, query }) => {
