@@ -381,15 +381,16 @@ Run these automatically after each completed change, in order, **without asking*
   toward the weakest. `LEADERBOARD_FALLBACK` is the owner's arena leaderboard,
   best→worst, restricted to reachable models: the strong tier on HackClub
   (opus-4.8/4.7/4.6, gpt-5.5/5.4, glm-5.2/5.1, sonnet-4.6), then the rest of the
-  leaderboard appended in rank order (kimi-k2.7-code, deepseek-v4-flash,
-  kimi-k2.6, minimax-m3, deepseek-v4-pro, qwen3.6-plus, grok-4.3, grok-build-0.1,
-  gemini-3-flash-preview, minimax-m2.7, nemotron-3-ultra-550b-a55b — all
-  verified present on `ai.hackclub.com/proxy/v1/models`). Claude Fable 5 is also
-  reachable there now (`anthropic/claude-fable-5`) but deliberately excluded —
-  ~2x opus-4.8's per-token cost, not worth it against the daily HackClub spend
-  cap. `gemini-3.1-pro-preview` and `gemini-3.5-flash` are excluded too despite
-  ranking on the leaderboard — both have a confirmed 100%-empty-response
-  failure via this HackClub slug (see below).
+  leaderboard appended in rank order (kimi-k2.7-code, gemini-3.1-pro-preview,
+  gemini-3.5-flash, deepseek-v4-flash, kimi-k2.6, minimax-m3, deepseek-v4-pro,
+  qwen3.6-plus, grok-4.3, grok-build-0.1, gemini-3-flash-preview, minimax-m2.7,
+  nemotron-3-ultra-550b-a55b — all verified present on
+  `ai.hackclub.com/proxy/v1/models`). Claude Fable 5 is also reachable there now
+  (`anthropic/claude-fable-5`) but deliberately excluded — ~2x opus-4.8's
+  per-token cost, not worth it against the daily HackClub spend cap. Both
+  gemini-3.1-pro-preview and gemini-3.5-flash were previously excluded here too
+  for a confirmed 100%-empty-response failure, then re-added at the owner's
+  request (see below) — re-remove if the failure recurs.
   The **baishui proxy** tail (`jam06452.uk`) is **commented out** — its `/models`
   endpoint answers but every completion fails ("upstream authentication failed" /
   "all provider keys rate-limited or in cooldown"), so it only wasted fallback
@@ -444,10 +445,16 @@ Run these automatically after each completed change, in order, **without asking*
     despite these attempts, meaning the calls were rejected before reaching
     generation (likely not enabled for a free-tier key at the time), not that
     the model burned its output budget on thinking; it also only carries a 20
-    RPD free-tier quota vs. 3.1-flash-lite's 500 RPD. If the empty-response
-    failure recurs, watch `[stream] tally` in the logs (0 textDeltas/
-    reasoningParts despite tool activity) and re-remove from here,
-    `GEMINI_MODELS` (`pi.ts`), and `LEADERBOARD_FALLBACK` (`pi.ts`). The
+    RPD free-tier quota vs. 3.1-flash-lite's 500 RPD. Because of that dashboard
+    signal, `gemini-3.5-flash` was kept OUT of `GEMINI_MODELS` (`pi.ts`, the
+    direct-key path) when re-adding it here and to `LEADERBOARD_FALLBACK` — the
+    HackClub-proxied call is a different request path and may not be tier-gated
+    the same way; `gemini-3.1-pro-preview` was re-added to all three (it's not
+    known to have that dashboard issue). If the empty-response failure recurs
+    on either model, watch `[stream] tally` in the logs (0 textDeltas/
+    reasoningParts despite tool activity) and re-remove from `ALLOWED_MODELS`
+    (here) and `LEADERBOARD_FALLBACK` (`pi.ts`), plus `GEMINI_MODELS` (`pi.ts`)
+    for `gemini-3.1-pro-preview`. The
     interceptor strips a stale `Content-Length` when re-issuing the tuned
     (longer) body so the appended `plugins` isn't truncated. Verified honored
     by the HackClub proxy. Edit `COST_QUALITY_TRADEOFF`/`ALLOWED_MODELS`.
