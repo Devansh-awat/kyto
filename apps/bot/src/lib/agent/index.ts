@@ -116,11 +116,28 @@ async function executeTurn(
   };
 
   try {
-    await thread.post(
-      new StreamingPlan(renderTurn({ message, thread }), {
-        groupTasks: 'plan',
-      })
-    );
+    // Slack's native streaming API (StreamingPlan -> adapter.stream) requires a
+    // real threadTs, which only exists once Slack has established an assistant
+    // thread container. A top-level DM message that arrives outside that
+    // container (e.g. a plain DM predating the app's Assistant setup) has no
+    // thread_ts, so wrapping the turn in StreamingPlan throws
+    // "Slack streaming requires a valid thread context" before anything is
+    // posted. Mirrors the same threadTs check `startThinking` already does:
+    // drain the turn generator directly instead — the actual reply text still
+    // goes out via `reply.append`'s plain `thread.post`, we just skip the
+    // native task-card UI that needs streaming.
+    const { threadTs } = slack.decodeThreadId(thread.id);
+    if (threadTs) {
+      await thread.post(
+        new StreamingPlan(renderTurn({ message, thread }), {
+          groupTasks: 'plan',
+        })
+      );
+    } else {
+      for await (const _chunk of renderTurn({ message, thread })) {
+        // Drained without posting task-card chunks; see comment above.
+      }
+    }
     if (!session) {
       throw new Error('Agent turn ended before session was recorded.');
     }
