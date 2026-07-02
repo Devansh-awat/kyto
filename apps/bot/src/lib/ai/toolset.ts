@@ -30,6 +30,11 @@ import { pollTool } from './tools/poll';
 import { postMessageTool } from './tools/post-message';
 import { reactTool } from './tools/react';
 import { readConversationHistoryTool } from './tools/read-conversation-history';
+import {
+  cancelReminderTool,
+  listRemindersTool,
+  scheduleRecurringReminderTool,
+} from './tools/reminders';
 import { scheduleReminderTool } from './tools/schedule-reminder';
 import { searchSlackTool } from './tools/search-slack';
 import { searchWebTool } from './tools/search-web';
@@ -100,6 +105,9 @@ export function buildTools({
     getChannelInfo: getChannelInfoTool({ currentThreadId: thread.id }),
     mermaid: mermaidTool({ thread }),
     scheduleReminder: scheduleReminderTool({ message }),
+    scheduleRecurringReminder: scheduleRecurringReminderTool({ message }),
+    listReminders: listRemindersTool({ message }),
+    cancelReminder: cancelReminderTool({ message }),
     searchSlack: searchSlackTool({ message }),
     searchWeb: searchWebTool({ apiKey: env.EXA_API_KEY }),
     summarizeThread: summarizeThreadTool({ bot, threadId: thread.id }),

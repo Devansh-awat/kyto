@@ -174,7 +174,31 @@ Run these automatically after each completed change, in order, **without asking*
 - Fork-added tools: `canvasRead/Write/List/Delete`, `pinMessage`, `unpinMessage`,
   `bookmarkLink`, `createChannel`, `setChannelTopic`, `poll`, `getPermalink`,
   `fetchUrl`, `deploySite`, `removeSite`, `skip`, `sendAsUser`, `editAsUser`,
-  `browse`, `sendEmail`/`checkInbox`/`replyEmail`, `joinThread`.
+  `browse`, `sendEmail`/`checkInbox`/`replyEmail`, `joinThread`,
+  `scheduleRecurringReminder`/`listReminders`/`cancelReminder`.
+- **Recurring reminders** (`tools/reminders.ts`, `lib/reminders/scheduler.ts`,
+  `@repo/db` schema/queries `reminders`): unlike the pre-existing one-time
+  `scheduleReminder` (which uses Slack's native `chat.scheduleMessage` — a
+  single future timestamp, no repeat support), recurring reminders are driven
+  entirely by kyto's own process since Slack has no recurring-schedule API.
+  `scheduleRecurringReminderTool` persists a row (`user_id`, `text`,
+  `recurrence: 'interval'|'daily'|'weekly'`, plus the relevant
+  `interval_seconds`/`time_of_day_minutes`/`weekday`, and `next_run_at`) to
+  Postgres via Drizzle (`packages/db/src/schema/reminders.ts` — a new
+  `patchedDependencies`-free table pushed directly with a one-off script since
+  `drizzle-kit push` prompted for an interactive rename decision against the
+  pre-existing `user_customizations`/`sandbox_sessions` tables in a non-TTY
+  shell; `db:generate`/`db:push` should work normally as a human running the
+  CLI). `startReminderScheduler` (`index.ts`) runs a `setInterval` (30s) on the
+  always-on systemd process that polls `reminders WHERE active AND
+  next_run_at <= now()`, posts each via `bot.openDM(userId).post(...)`, then
+  advances `next_run_at` to the next occurrence (never deactivates — recurring
+  means forever until explicitly cancelled). `listReminders`/`cancelReminder`
+  let the model manage a user's own reminders (cancel is scoped by `user_id`,
+  so a user can only cancel their own). This durable state is a deliberate
+  exception to the "no persistence" policy elsewhere (turns/sandbox) — a
+  reminder's entire purpose is to outlive the turn that created it, same
+  precedent as site hosting and the opt-in allowlist.
 - **`joinThread`/`leaveThread`** (`tools/join-thread.ts`/`tools/leave-thread.ts`):
   let the model opt itself into (or out of) auto-responding to a thread's
   future messages **without** needing a fresh @mention each time. Both just
@@ -374,8 +398,11 @@ Run these automatically after each completed change, in order, **without asking*
   key** (`geminiAttempts`, `GEMINI_API_KEY`, direct Google endpoint, provider
   `gemini`) is appended to the very end of `LEADERBOARD_FALLBACK`, so a fully
   budget-exhausted HackClub day still gets an answer off a separate, cheap quota;
-  skipped if `GEMINI_API_KEY` is unset. Fable 5 (rank #1) is omitted (no
-  provider). The resolved slug is read off the per-turn model holder (`autoHolder`)
+  skipped if `GEMINI_API_KEY` is unset. Fable 5 (rank #1) is reachable on
+  HackClub (`anthropic/claude-fable-5`) but deliberately excluded from both
+  `LEADERBOARD_FALLBACK` and the auto-router allowlist — ~2x opus-4.8's
+  per-token cost, not worth it against the daily HackClub spend cap. The
+  resolved slug is read off the per-turn model holder (`autoHolder`)
   captured during the auto attempt, so it pins/pivots even when auto failed. Each
   entry is tried at most once (tracked via `failedKeys`). `deepFallbackAttempts`
   is retained/exported for reference but no longer drives routing.
@@ -404,29 +431,26 @@ Run these automatically after each completed change, in order, **without asking*
     claude-opus-4.6/4.7/4.8, claude-sonnet-5, claude-sonnet-4.6, gpt-5.4/5.5, glm-5.1/5.2,
     **gemini-3.1-flash-lite** (the cheap rung — added so auto
     can route simple/casual turns off the premium tier, the main cost blowup, and
-    as the signal for handing a turn to the owner's Gemini key; the owner's
-    leaderboard top tier otherwise;
-    `gemini-3.1-pro-preview` was removed after it ended a turn right after its
-    tool calls without ever writing a reply — the empty-response guard counted
-    that as a failed attempt and burned the fallback chain;
-    `gemini-3.5-flash` was removed the same way (2026-07-01) after logs showed
-    it returning an **empty response on 100% of attempts** (22/22 direct via
-    `geminiAttempts`/`GEMINI_MODELS` in `pi.ts`, 10/10 via the auto-router's
-    `google/gemini-3.5-flash` slug in `LEADERBOARD_FALLBACK`). The owner's
-    Google AI Studio dashboard showed **zero requests metered** against
-    3.5-flash despite these attempts, meaning the calls were rejected before
-    reaching generation (likely not enabled for a free-tier key), not that the
-    model burned its output budget on thinking. It also only carries a 20 RPD
-    free-tier quota vs. 3.1-flash-lite's 500 RPD, so it was a bad primary rung
-    either way. Every call to it wasted an attempt before falling through to
-    3.1-flash-lite. Re-add to `ALLOWED_MODELS` (here), `GEMINI_MODELS`
-    (`pi.ts`), and the commented `LEADERBOARD_FALLBACK` line only after
-    verifying a real completion succeeds AND that the key's tier allows it;
-    the lower-ranked tail — deepseek-v4-pro/flash, kimi-k2.6/k2.7-code,
-    minimax-m3, qwen3.6-plus — was dropped to keep routing on the stronger
-    models). The interceptor strips a stale `Content-Length` when re-issuing the
-    tuned (longer) body so the appended `plugins` isn't truncated. Verified
-    honored by the HackClub proxy. Edit `COST_QUALITY_TRADEOFF`/`ALLOWED_MODELS`.
+    as the signal for handing a turn to the owner's Gemini key), plus
+    `gemini-3.1-pro-preview` and `gemini-3.5-flash` (re-added 2026-07-02 at the
+    owner's request). Both were previously removed: `gemini-3.1-pro-preview`
+    once ended a turn right after its tool calls without ever writing a reply
+    (the empty-response guard counted that as a failed attempt and burned the
+    fallback chain), and `gemini-3.5-flash` returned an **empty response on
+    100% of observed attempts** (22/22 direct via `geminiAttempts`/
+    `GEMINI_MODELS` in `pi.ts`, 10/10 via the auto-router's
+    `google/gemini-3.5-flash` slug in `LEADERBOARD_FALLBACK`) — the owner's
+    Google AI Studio dashboard showed **zero requests metered** against it
+    despite these attempts, meaning the calls were rejected before reaching
+    generation (likely not enabled for a free-tier key at the time), not that
+    the model burned its output budget on thinking; it also only carries a 20
+    RPD free-tier quota vs. 3.1-flash-lite's 500 RPD. If the empty-response
+    failure recurs, watch `[stream] tally` in the logs (0 textDeltas/
+    reasoningParts despite tool activity) and re-remove from here,
+    `GEMINI_MODELS` (`pi.ts`), and `LEADERBOARD_FALLBACK` (`pi.ts`). The
+    interceptor strips a stale `Content-Length` when re-issuing the tuned
+    (longer) body so the appended `plugins` isn't truncated. Verified honored
+    by the HackClub proxy. Edit `COST_QUALITY_TRADEOFF`/`ALLOWED_MODELS`.
   - **Cap `max_tokens` on HackClub requests** (`MAX_OUTPUT_TOKENS = 8000`): the
     HackClub proxy enforces its **daily spend limit pessimistically** — with no
     `max_tokens` it assumes the model could emit its full max output, projects

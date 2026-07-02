@@ -4,6 +4,7 @@ import { installModelCapture } from '@/lib/agent/resolved-model';
 import { buildAllowlist } from '@/lib/allowed-users';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
+import { startReminderScheduler } from '@/lib/reminders/scheduler';
 import { startSitesServer } from '@/lib/sites/server';
 
 let shuttingDown = false;
@@ -26,6 +27,7 @@ try {
   await bot.initialize();
   await buildAllowlist();
   await startSitesServer();
+  startReminderScheduler(bot);
   const botProfile = slack.botUserId
     ? await slack.webClient.users
         .info({ user: slack.botUserId })

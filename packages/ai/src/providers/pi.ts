@@ -52,13 +52,15 @@ const BAISHUI_MODELS = [
 
 // Gemini (GEMINI_API_KEY) — prefer 3.x (higher rate limits); 3.1-flash-lite has
 // the highest daily quota so it sits before the 2.5 models. `gemini-3.5-flash`
-// is deliberately excluded: it returned an EMPTY response on 100% of observed
-// attempts (both here and via the auto-router's `google/gemini-3.5-flash`
-// pick) — same failure signature as the removed `gemini-3.1-pro-preview`
-// (likely burns its output budget on thinking with no text emitted). Keeping
-// it in the chain only wastes an attempt every single turn before falling
-// through to flash-lite. Re-add only after verifying a real completion works.
+// and `gemini-3.1-pro-preview` were previously dropped here (and from
+// LEADERBOARD_FALLBACK / ALLOWED_MODELS) after both returned an EMPTY response
+// on every observed attempt (22/22 direct, 10/10 via the auto-router slug for
+// 3.5-flash) — re-added at the owner's request. If the empty-response failure
+// recurs, watch the `[stream] tally` logs (0 textDeltas/reasoningParts despite
+// tool activity) and re-remove.
 const GEMINI_MODELS = [
+  'gemini-3.5-flash',
+  'gemini-3.1-pro-preview',
   'gemini-3.1-flash-lite',
   'gemini-3-flash-preview',
   'gemini-2.5-flash',
@@ -292,12 +294,14 @@ export const LEADERBOARD_FALLBACK: PiAttempt[] = [
   catalogAttempt('anthropic/claude-sonnet-4.6'),
   catalogAttempt('z-ai/glm-5.1'),
   // Below this point: the rest of the owner's leaderboard, appended in rank
-  // order (verified reachable via ai.hackclub.com/proxy/v1/models). Two ranked
-  // entries are still skipped on purpose — `google/gemini-3.1-pro-preview` and
-  // `google/gemini-3.5-flash` — both have a confirmed 100%-empty-response
-  // failure via this same HackClub/OpenRouter slug (see GEMINI_MODELS above);
-  // re-add only after verifying a real completion succeeds.
+  // order (verified reachable via ai.hackclub.com/proxy/v1/models).
+  // `google/gemini-3.1-pro-preview` and `google/gemini-3.5-flash` were
+  // previously skipped here for a confirmed 100%-empty-response failure via
+  // this HackClub/OpenRouter slug (see GEMINI_MODELS above) — re-added at the
+  // owner's request; re-remove if the empty-response failure recurs.
   catalogAttempt('moonshotai/kimi-k2.7-code'),
+  catalogAttempt('google/gemini-3.1-pro-preview'),
+  catalogAttempt('google/gemini-3.5-flash'),
   catalogAttempt('deepseek/deepseek-v4-flash'),
   catalogAttempt('moonshotai/kimi-k2.6'),
   catalogAttempt('minimax/minimax-m3'),
