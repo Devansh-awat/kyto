@@ -4,6 +4,20 @@ import { z } from 'zod';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
 
+// A Slack user/bot id (U... or W...) used after in:/from:/to: without a
+// leading "@" is silently ignored by Slack's search parser — it isn't
+// recognized as a user reference at all, so the search runs as if that
+// modifier were never given and returns 0 results with no error. Observed:
+// the model wrote `in:U09ASUK57K8` while looking up a DM and got zero
+// results even though the DM existed. Repair it here instead of relying on
+// the model to always remember the "@" — insert it whenever a bare user id
+// follows one of these modifiers.
+const BARE_USER_ID_MODIFIER = /\b(in|from|to):(?!@)([UW][A-Z0-9]{6,})\b/gi;
+
+function normalizeSearchQuery(query: string): string {
+  return query.replace(BARE_USER_ID_MODIFIER, '$1:@$2');
+}
+
 const actionTokenSchema = z.looseObject({
   action_token: z.string().min(1).optional(),
   assistant_thread: z
@@ -93,7 +107,7 @@ export function searchSlackTool({ message }: { message: Message }) {
         .min(1)
         .max(500)
         .describe(
-          'Search text. Supports Slack modifiers like from:@user, in:#channel, in:@user (DM), has:link, has:star, before:2026-01-01, after:2026-01-01, is:thread, filename:name, ext:filetype. To search a DM (including a DM with a bot), use in:@user ALONE with the other party — do NOT pair it with to:@user, which only means "mentioned this user" inside a channel search and does nothing useful for DMs.'
+          'Search text. Supports Slack modifiers like from:@user, in:#channel, in:@user (DM), has:link, has:star, before:2026-01-01, after:2026-01-01, is:thread, filename:name, ext:filetype. To search a DM (including a DM with a bot), use in:@user ALONE with the other party — do NOT pair it with to:@user, which only means "mentioned this user" inside a channel search and does nothing useful for DMs. The @ is REQUIRED even when using a raw user id instead of a handle, e.g. in:@U09ASUK57K8 — in:U09ASUK57K8 without the @ is silently ignored and returns 0 results.'
         ),
     }),
     execute: async ({ cursor, query }) => {
@@ -113,6 +127,14 @@ export function searchSlackTool({ message }: { message: Message }) {
         };
       }
 
+      const normalizedQuery = normalizeSearchQuery(query);
+      if (normalizedQuery !== query) {
+        logger.debug(
+          { normalizedQuery, query },
+          '[searchSlack] normalized bare user id in query'
+        );
+      }
+
       const parsedResponse = slackSearchResponseSchema.parse(
         await slack.webClient.apiCall('assistant.search.context', {
           action_token: actionToken,
@@ -120,7 +142,7 @@ export function searchSlackTool({ message }: { message: Message }) {
           cursor,
           include_context_messages: true,
           limit: 10,
-          query,
+          query: normalizedQuery,
         })
       );
       const messages = parsedResponse.results?.messages ?? [];
@@ -129,7 +151,10 @@ export function searchSlackTool({ message }: { message: Message }) {
 
       if (!parsedResponse.ok) {
         const error = parsedResponse.error ?? 'unknown';
-        logger.warn({ error, query }, '[searchSlack] search failed');
+        logger.warn(
+          { error, query: normalizedQuery },
+          '[searchSlack] search failed'
+        );
         return {
           error: `Slack search failed: ${error}`,
           success: false,
@@ -137,7 +162,10 @@ export function searchSlackTool({ message }: { message: Message }) {
         };
       }
 
-      logger.debug({ count: messages.length, query }, '[searchSlack] complete');
+      logger.debug(
+        { count: messages.length, query: normalizedQuery },
+        '[searchSlack] complete'
+      );
       return {
         messages,
         nextCursor,

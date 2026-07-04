@@ -306,6 +306,20 @@ Run these automatically after each completed change, in order, **without asking*
   prompt (`packages/ai/src/prompts/core.ts`) now spell this out explicitly and
   tell the model to retry with `in:@user` alone before concluding a DM's
   content doesn't exist.
+- **DM search: a bare user id (no `@`) after `in:`/`from:`/`to:` is silently
+  ignored, not an error.** Even after the `to:`-vs-`in:` fix above, a DM lookup
+  still failed: the model wrote `in:U09ASUK57K8` (the correct modifier, but the
+  raw id with no leading `@`) and got 0 results even though the DM existed —
+  Slack's search parser doesn't recognize a bare id as a user reference at all,
+  so it silently drops the modifier rather than erroring, and the empty result
+  looks identical to "no messages exist." Fixed defensively at the **code**
+  level rather than relying on the model to remember the `@`:
+  `normalizeSearchQuery` in `tools/search-slack.ts` regex-repairs
+  `(in|from|to):<bare U/W-id>` to `(in|from|to):@<id>` before the query ever
+  reaches `assistant.search.context` (logged at debug when it fires). The tool
+  description and core prompt also spell out the `@`-required rule with a
+  concrete example, as defense in depth for other malformed forms the regex
+  doesn't catch.
 - **Slack search action-token urgency**: the `action_token` backing
   `assistant.search.context` expires roughly 2 minutes after the turn starts.
   The core prompt now tells the model to run all `searchSlack` calls early in
