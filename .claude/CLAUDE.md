@@ -320,6 +320,27 @@ Run these automatically after each completed change, in order, **without asking*
   description and core prompt also spell out the `@`-required rule with a
   concrete example, as defense in depth for other malformed forms the regex
   doesn't catch.
+- **DM search STILL failed with a correctly-formed `in:@<raw id>` query, on a
+  DM confirmed (by the owner, checking Slack directly) to have real history.**
+  This ruled out both the `to:`-vs-`in:` bug and the missing-`@` bug above —
+  the modifier was syntactically right and the data existed, yet
+  `assistant.search.context` returned 0 results. Best-available explanation:
+  Slack's search backend appears to key a user reference by **handle**
+  (`tanjim`), not by raw internal id (`U09ASUK57K8`) — `in:@U09ASUK57K8` may
+  simply not resolve as a user reference the way `in:@tanjim` does, even
+  though both have the required `@`. Since the model usually only has the raw
+  id (from mention annotation, not necessarily the real handle), this is
+  handled with an automatic **retry**, not a prompt fix:
+  `queryWithResolvedHandles` (`tools/search-slack.ts`) extracts every unique
+  id from `in:@`/`from:@`/`to:@` modifiers, resolves each via `users.info`
+  (`.user.name`, the actual handle), and — only if the first search came back
+  empty — retries once with ids substituted for handles, adopting that result
+  if it found anything. This couldn't be root-caused with certainty (no way to
+  reproduce `assistant.search.context` outside a live Slack turn's ephemeral
+  `action_token` to A/B-test id-vs-handle directly), so if a DM search still
+  comes up empty on data confirmed to exist, check the `[searchSlack] retried
+  with resolved username after 0 results` debug log to see whether the retry
+  fired and what it found.
 - **Slack search action-token urgency**: the `action_token` backing
   `assistant.search.context` expires roughly 2 minutes after the turn starts.
   The core prompt now tells the model to run all `searchSlack` calls early in
