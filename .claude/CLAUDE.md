@@ -358,12 +358,32 @@ Run these automatically after each completed change, in order, **without asking*
   now retries an `in:<@user>` search as `with:<@user>` if the first attempt
   comes back empty, and the tool description/core prompt now recommend
   `with:@user` over `in:@user` for DM lookups directly, rather than relying
-  solely on the fallback. This is still not 100%-confirmed as the final root
-  cause (no way to test `assistant.search.context` outside a live turn's
-  ephemeral `action_token`) — if a DM search comes up empty again after this,
-  check the `[searchSlack] retried in: as with: after 0 results` debug log
-  for the actual result count, and treat the model's next debugging step as
-  the next place to look, not necessarily "no history exists."
+  solely on the fallback.
+- **Conclusion (as far as this can be root-caused without Slack support):
+  private 1:1/group DM search is admin-gated, not a query bug, and kyto
+  cannot fix this itself.** `with:@tanjim` (correct modifier, correct bracket
+  format, `channel_types` including `im`) DID return real results — but only
+  from a **public** channel (`#botthissite`) where both users had posted; the
+  actual private DM content between them never surfaced, no error either
+  time. Slack's Real-time Search API docs state private-channel/DM/MPDM
+  search additionally requires **user-level consent that can be individually
+  revoked**, separate from the app's declared `search:read.*` scopes — i.e.
+  scopes being granted at the app-install level doesn't guarantee the
+  requesting user has been granted (or the workspace admin has approved) the
+  specific private-search consent this feature needs. The owner (Devansh)
+  checked every tab of the app's own Slack UI and found no such consent
+  prompt/toggle for kyto, and he is **not** a workspace admin/owner on Hack
+  Club's Slack (`is_admin`/`is_owner`: false via `users.info`) — so if this is
+  gated behind admin-level app approval (common on Enterprise Grid workspaces,
+  especially for a scope as sensitive as `search:read.im` on a personal/
+  custom bot), he cannot unlock it himself; only a Hack Club Slack admin
+  could. Decision: **accept this as a platform limitation** rather than keep
+  chasing it in code — `tools/search-slack.ts`'s description and the core
+  prompt now say plainly that DM search is best-effort and a DM search
+  returning 0 (or only public-channel hits) must be reported as inconclusive,
+  never as "no history exists." Revisit only if Hack Club admins are asked
+  and confirm/deny an app-approval restriction, or if Slack support clarifies
+  the actual authorization model for this API.
 - **Slack search action-token urgency**: the `action_token` backing
   `assistant.search.context` expires roughly 2 minutes after the turn starts.
   The core prompt now tells the model to run all `searchSlack` calls early in
