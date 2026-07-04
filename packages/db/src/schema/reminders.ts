@@ -20,10 +20,14 @@ export type ReminderRecurrence = (typeof reminderRecurrence.enumValues)[number];
 // 'script': fetches `url` and posts its content (optionally prefixed by `text`).
 // 'agent': runs a small LLM (Gemini, the owner's own key) with `text` as its
 // instructions, optionally fetching a URL itself, and posts whatever it decides.
+// 'bash': runs `command` in a fresh E2B sandbox each fire and posts its exact
+// stdout/stderr (optionally prefixed by `text`) — for real parsing/processing
+// logic, unlike 'script' which only does a raw URL fetch.
 export const reminderKind = pgEnum('reminder_kind', [
   'message',
   'script',
   'agent',
+  'bash',
 ]);
 
 export type ReminderKind = (typeof reminderKind.enumValues)[number];
@@ -42,6 +46,8 @@ export const reminders = pgTable(
     channelId: text('channel_id'),
     // 'script' kind: the URL to fetch each run.
     url: text('url'),
+    // 'bash' kind: the shell command to run in a fresh sandbox each run.
+    command: text('command'),
     // Number of times this reminder has fired; recurring reminders stop
     // (deactivate) after MAX_RECURRING_RUNS regardless of kind.
     runCount: integer('run_count').notNull().default(0),

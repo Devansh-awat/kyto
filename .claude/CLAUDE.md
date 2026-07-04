@@ -195,13 +195,25 @@ Run these automatically after each completed change, in order, **without asking*
   all of them as "not in the Drizzle schema"; column additions are now applied
   with a one-off raw-SQL script (`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`)
   instead of `db:push`, to avoid ever re-triggering that data-loss prompt).
-  Three **kinds** (`kind: 'message'|'script'|'agent'`, default `'message'`):
+  Four **kinds** (`kind: 'message'|'script'|'bash'|'agent'`, default `'message'`):
   - `'message'`: posts `text` verbatim (the original/only behavior before this
     was added).
   - `'script'`: fetches `url` each run (`fetchUrlText`, factored out of
     `tools/url.ts`'s `fetchUrlTool` so both share the same HTML-stripping/
     truncation logic) and posts its content, prefixed by `text` if given. Min
-    interval **60s** — it's just an HTTP fetch, cheap to run often.
+    interval **60s** — it's just an HTTP fetch, cheap to run often. This kind is
+    deliberately dumb (raw fetch only, no logic) — for anything that needs real
+    parsing/processing on a schedule, use `'bash'` instead.
+  - `'bash'`: runs a shell `command` each fire in a **brand-new, throwaway E2B
+    sandbox** (`lib/reminders/bash.ts`'s `runReminderBash`, backed by
+    `packages/sandbox`'s new `runOnce` helper) and posts its **exact**
+    stdout/stderr, fenced in a code block, prefixed by `text` if given. Unlike
+    the harness's lazy per-turn sandbox session, this has no session/harness
+    machinery at all — it's a one-shot `Sandbox.create` → `commands.run` →
+    `sandbox.kill()` outside any turn, since the scheduler fires independently
+    of any Pi turn. Output is truncated to 4000 chars. Min interval **300s (5
+    minutes)** — spinning a real sandbox each run has real compute cost, above
+    `'script'`'s bare HTTP fetch but well below `'agent'`'s LLM call.
   - `'agent'`: runs a small one-shot `generateText` call (`lib/reminders/
     agent.ts`, `runReminderAgent`) using the owner's **own Gemini key**
     (`GEMINI_API_KEY`, direct Google OpenAI-compatible endpoint — NOT the
@@ -438,6 +450,15 @@ Run these automatically after each completed change, in order, **without asking*
   **registered** when `message.author.userId === OWNER_USER_ID` (toolset.ts) and
   each re-checks the author at execute time. Config: `SLACK_USER_TOKEN`,
   `OWNER_USER_ID`; requires the `chat:write` **user** scope.
+- `sendAsUser` defaults to replying **in the active thread** when called from
+  one — this surprised the owner once ("post in the channel" from inside a
+  thread still landed in the thread, and passing a `channelId` equal to the
+  *current* channel didn't change that, since only a genuinely different
+  channel id triggered top-level posting). Fixed by adding an explicit
+  `topLevel: boolean` param (`tools/send-as-user.ts`): `postTopLevel =
+  crossChannel || topLevel` now decides whether `thread_ts` is omitted from
+  `chat.postMessage`, so the model can post at the top level of the *current*
+  channel (not just a different one) when the owner asks for that.
 
 ### Static site hosting
 - `deploySite`/`removeSite` publish prebuilt static sites at the **host root**:

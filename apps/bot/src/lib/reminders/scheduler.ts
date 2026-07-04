@@ -8,6 +8,7 @@ import type { Chat } from 'chat';
 import { fetchUrlText } from '@/lib/ai/tools/url';
 import logger from '@/lib/logger';
 import { runReminderAgent } from '@/lib/reminders/agent';
+import { runReminderBash } from '@/lib/reminders/bash';
 import { errorMessage } from '@/lib/utils/error';
 
 // Recurring reminders are Kyto's own durable side effect (unlike per-turn
@@ -30,6 +31,14 @@ async function buildReminderMessage(reminder: Reminder): Promise<string> {
   }
   if (reminder.kind === 'agent') {
     return await runReminderAgent(reminder);
+  }
+  if (reminder.kind === 'bash') {
+    if (!reminder.command) {
+      throw new Error("Bash reminder is missing a 'command'.");
+    }
+    const output = await runReminderBash(reminder.command);
+    const fenced = `\`\`\`\n${output}\n\`\`\``;
+    return reminder.text ? `${reminder.text}\n\n${fenced}` : fenced;
   }
   return reminder.text;
 }

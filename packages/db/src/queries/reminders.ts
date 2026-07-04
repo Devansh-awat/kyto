@@ -57,6 +57,7 @@ export async function createReminder(input: {
   kind?: ReminderKind;
   channelId?: string;
   url?: string;
+  command?: string;
 }): Promise<Reminder> {
   const nextRunAt = computeNextRun(input.schedule, new Date());
   const values: NewReminder = {
@@ -66,6 +67,7 @@ export async function createReminder(input: {
     kind: input.kind ?? 'message',
     channelId: input.channelId,
     url: input.url,
+    command: input.command,
     nextRunAt,
     ...(input.schedule.recurrence === 'interval'
       ? { intervalSeconds: input.schedule.intervalSeconds }

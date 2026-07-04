@@ -27,10 +27,17 @@ const MAX_INTERVAL_SECONDS = 180 * 24 * 60 * 60;
 const MINUTES_PER_HOUR = 60;
 const MINUTES_PER_DAY = 24 * MINUTES_PER_HOUR;
 // 'script' reminders just fetch a URL, so they can run as often as once a
-// minute. 'agent' reminders run a real (if small) LLM call, so they're floored
-// much higher to keep unattended cost predictable.
+// minute. 'bash' reminders spin up a real sandbox each run (real compute cost,
+// not just an HTTP call), so they're floored higher than 'script' but well
+// below 'agent'. 'agent' reminders run a real (if small) LLM call, so they're
+// floored much higher still to keep unattended cost predictable.
 const MIN_INTERVAL_SECONDS_DEFAULT = 60;
+const MIN_INTERVAL_SECONDS_BASH = 5 * 60;
 const MIN_INTERVAL_SECONDS_AGENT = 60 * 60;
+const MIN_INTERVAL_SECONDS_BY_KIND: Partial<Record<string, number>> = {
+  agent: MIN_INTERVAL_SECONDS_AGENT,
+  bash: MIN_INTERVAL_SECONDS_BASH,
+};
 
 function formatTimeOfDay(minutes: number): string {
   const hours = Math.floor(minutes / MINUTES_PER_HOUR);
@@ -76,20 +83,20 @@ export function scheduleRecurringReminderTool({
   message: Message;
 }) {
   return tool({
-    description: `Schedule a RECURRING reminder — kyto will repeatedly post on the given schedule until cancelled, either to the user's own DM (default) or to a channel kyto is already a member of (pass channelId). Every recurring reminder auto-cancels after ${MAX_RECURRING_RUNS} runs regardless of kind. Three kinds: 'message' just posts text verbatim; 'script' fetches a url each run and posts its content (min interval 1 minute); 'agent' runs a small LLM (kyto's own Gemini key, gemini-3.1-flash-lite) with text as its instructions — it can fetch a URL itself and decides what to post (min interval 1 hour, since it's a real model call each run). For a one-time reminder, use scheduleReminder instead.`,
+    description: `Schedule a RECURRING reminder — kyto will repeatedly post on the given schedule until cancelled, either to the user's own DM (default) or to a channel kyto is already a member of (pass channelId). Every recurring reminder auto-cancels after ${MAX_RECURRING_RUNS} runs regardless of kind. Four kinds: 'message' just posts text verbatim; 'script' fetches a url each run and posts its content (min interval 1 minute); 'bash' runs a shell command in a fresh sandbox each run and posts its exact stdout/stderr (min interval 5 minutes — use this for actual parsing/processing logic, not just a raw fetch); 'agent' runs a small LLM (kyto's own Gemini key, gemini-3.1-flash-lite) with text as its instructions — it can fetch a URL itself and decides what to post (min interval 1 hour, since it's a real model call each run). For a one-time reminder, use scheduleReminder instead.`,
     inputSchema: z.object({
       text: z
         .string()
         .min(1)
         .max(3000)
         .describe(
-          "The message to post ('message' kind), an optional prefix before the fetched content ('script' kind), or the instructions for the agent ('agent' kind)."
+          "The message to post ('message' kind), an optional prefix before the fetched content/command output ('script'/'bash' kinds), or the instructions for the agent ('agent' kind)."
         ),
       kind: z
-        .enum(['message', 'script', 'agent'])
+        .enum(['message', 'script', 'agent', 'bash'])
         .default('message')
         .describe(
-          "'message' (default): post text verbatim. 'script': fetch url and post its content. 'agent': run a small LLM on text as instructions and post what it produces."
+          "'message' (default): post text verbatim. 'script': fetch url and post its content. 'bash': run command in a fresh sandbox and post its exact output. 'agent': run a small LLM on text as instructions and post what it produces."
         ),
       url: z
         .string()
@@ -97,6 +104,14 @@ export function scheduleRecurringReminderTool({
         .optional()
         .describe(
           "Required for kind 'script' (the URL to fetch each run). Optional for kind 'agent' (a URL the agent's instructions reference)."
+        ),
+      command: z
+        .string()
+        .min(1)
+        .max(4000)
+        .optional()
+        .describe(
+          "Required for kind 'bash': the shell command to run in a fresh sandbox each fire. Its exact stdout/stderr is posted verbatim."
         ),
       channelId: z
         .string()
@@ -117,7 +132,7 @@ export function scheduleRecurringReminderTool({
         .max(MAX_INTERVAL_SECONDS)
         .optional()
         .describe(
-          "Required when recurrence is 'interval'. 60 to 15552000 (180 days) for 'message'/'script'; at least 3600 (1 hour) for 'agent'."
+          "Required when recurrence is 'interval'. 60 to 15552000 (180 days) for 'message'/'script'; at least 300 (5 minutes) for 'bash'; at least 3600 (1 hour) for 'agent'."
         ),
       timeOfDayMinutes: z
         .number()
@@ -142,6 +157,7 @@ export function scheduleRecurringReminderTool({
       text,
       kind,
       url,
+      command,
       channelId,
       recurrence,
       intervalSeconds,
@@ -151,6 +167,12 @@ export function scheduleRecurringReminderTool({
       if (kind === 'script' && !url) {
         return {
           error: "kind 'script' requires a url.",
+          success: false,
+        };
+      }
+      if (kind === 'bash' && !command) {
+        return {
+          error: "kind 'bash' requires a command.",
           success: false,
         };
       }
@@ -164,9 +186,7 @@ export function scheduleRecurringReminderTool({
           };
         }
         const minInterval =
-          kind === 'agent'
-            ? MIN_INTERVAL_SECONDS_AGENT
-            : MIN_INTERVAL_SECONDS_DEFAULT;
+          MIN_INTERVAL_SECONDS_BY_KIND[kind] ?? MIN_INTERVAL_SECONDS_DEFAULT;
         if (intervalSeconds < minInterval) {
           return {
             error: `kind '${kind}' requires intervalSeconds >= ${minInterval}.`,
@@ -205,6 +225,7 @@ export function scheduleRecurringReminderTool({
       try {
         const reminder = await createReminder({
           channelId: rawChannelId,
+          command,
           kind,
           schedule,
           text,
@@ -234,6 +255,7 @@ export function listRemindersTool({ message }: { message: Message }) {
       return {
         reminders: rows.map((row) => ({
           channelId: row.channelId ?? undefined,
+          command: row.command ?? undefined,
           id: row.id,
           kind: row.kind,
           nextRunAt: row.nextRunAt.toISOString(),
