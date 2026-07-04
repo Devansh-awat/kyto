@@ -44,7 +44,7 @@ export function sendAsUserTool({
 }) {
   return tool({
     description:
-      'Send a message AS the owner (under their own name), not as the bot. Defaults to the current thread. Pass channelId to post a top-level message in a different channel. Only available when the owner triggered this turn.',
+      "Send a message AS the owner (under their own name), not as the bot. Defaults to replying in the current thread. Pass channelId to post a top-level message in a DIFFERENT channel. Pass topLevel: true to post at the top level of the CURRENT channel instead of inside the active thread (e.g. when the owner says 'post this in the channel', not in this thread). Only available when the owner triggered this turn.",
     inputSchema: z.object({
       text: z
         .string()
@@ -56,10 +56,16 @@ export function sendAsUserTool({
         .min(1)
         .optional()
         .describe(
-          'Target Slack channel id (e.g. C0123ABC) to post into as a top-level message. Defaults to the current thread.'
+          'Target Slack channel id (e.g. C0123ABC) to post into as a top-level message. Defaults to the current channel.'
+        ),
+      topLevel: z
+        .boolean()
+        .optional()
+        .describe(
+          'Post as a top-level channel message instead of inside the current thread. Defaults to false (replies in-thread when one is active). Set true when the owner wants it visible in the channel itself, not buried in a thread reply.'
         ),
     }),
-    execute: async ({ text, channelId }) => {
+    execute: async ({ text, channelId, topLevel }) => {
       try {
         const gate = checkOwner(authorUserId);
         if (!gate.ok) {
@@ -75,18 +81,20 @@ export function sendAsUserTool({
           };
         }
 
-        // A cross-channel post lands as a top-level message; only posts in the
-        // current channel inherit the active thread.
+        // A cross-channel post, or an explicit topLevel request, lands as a
+        // top-level message; otherwise a post in the current channel inherits
+        // the active thread.
         const crossChannel = Boolean(
           channelId && channelId !== currentChannelId
         );
+        const postTopLevel = crossChannel || Boolean(topLevel);
         const targetChannel = channelId ?? currentChannelId;
 
         const response = await fetch('https://slack.com/api/chat.postMessage', {
           body: JSON.stringify({
             channel: targetChannel,
             text,
-            ...(!crossChannel && threadTs && { thread_ts: threadTs }),
+            ...(!postTopLevel && threadTs && { thread_ts: threadTs }),
           }),
           headers: {
             Authorization: `Bearer ${userToken}`,
@@ -107,12 +115,13 @@ export function sendAsUserTool({
             '[sendAsUser] posted as owner to another channel'
           );
         }
-        return {
-          success: true,
-          summary: crossChannel
-            ? `Sent the message as the owner to <#${targetChannel}>.`
-            : 'Sent the message as the owner.',
-        };
+        let summary = 'Sent the message as the owner.';
+        if (crossChannel) {
+          summary = `Sent the message as the owner to <#${targetChannel}>.`;
+        } else if (postTopLevel) {
+          summary = `Sent the message as the owner to the top level of <#${targetChannel}>.`;
+        }
+        return { success: true, summary };
       } catch (error) {
         logger.warn({ error: errorMessage(error) }, '[sendAsUser] failed');
         return { error: errorMessage(error), success: false };
