@@ -93,7 +93,7 @@ export function searchSlackTool({ message }: { message: Message }) {
         .min(1)
         .max(500)
         .describe(
-          'Search text. Supports Slack modifiers like from:@user, in:#channel, in:@user (DM), has:link, has:star, before:2026-01-01, after:2026-01-01, is:thread, filename:name, ext:filetype.'
+          'Search text. Supports Slack modifiers like from:@user, in:#channel, in:@user (DM), has:link, has:star, before:2026-01-01, after:2026-01-01, is:thread, filename:name, ext:filetype. To search a DM (including a DM with a bot), use in:@user ALONE with the other party — do NOT pair it with to:@user, which only means "mentioned this user" inside a channel search and does nothing useful for DMs.'
         ),
     }),
     execute: async ({ cursor, query }) => {

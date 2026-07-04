@@ -1,10 +1,13 @@
 import {
   advanceReminder,
   getDueReminders,
+  MAX_RECURRING_RUNS,
   type Reminder,
 } from '@repo/db/queries';
 import type { Chat } from 'chat';
+import { fetchUrlText } from '@/lib/ai/tools/url';
 import logger from '@/lib/logger';
+import { runReminderAgent } from '@/lib/reminders/agent';
 import { errorMessage } from '@/lib/utils/error';
 
 // Recurring reminders are Kyto's own durable side effect (unlike per-turn
@@ -16,14 +19,56 @@ import { errorMessage } from '@/lib/utils/error';
 // reminders must be driven from here instead.
 const POLL_INTERVAL_MS = 30_000;
 
+/** Build the message text for a reminder, branching on its kind. */
+async function buildReminderMessage(reminder: Reminder): Promise<string> {
+  if (reminder.kind === 'script') {
+    if (!reminder.url) {
+      throw new Error("Script reminder is missing a 'url'.");
+    }
+    const { content } = await fetchUrlText(reminder.url);
+    return reminder.text ? `${reminder.text}\n\n${content}` : content;
+  }
+  if (reminder.kind === 'agent') {
+    return await runReminderAgent(reminder);
+  }
+  return reminder.text;
+}
+
+/** Resolve where to post: an explicit channel the bot is in, or the user's DM. */
+async function resolveTarget(
+  bot: Chat,
+  reminder: Reminder
+): Promise<{ post: (message: { markdown: string }) => Promise<unknown> }> {
+  if (reminder.channelId) {
+    return bot.channel(`slack:${reminder.channelId}`);
+  }
+  return await bot.openDM(reminder.userId);
+}
+
 async function fireReminder(bot: Chat, reminder: Reminder): Promise<void> {
+  let markdown: string;
   try {
-    const dm = await bot.openDM(reminder.userId);
-    await dm.post({ markdown: reminder.text });
+    markdown = await buildReminderMessage(reminder);
   } catch (error) {
     logger.warn(
       { err: errorMessage(error), reminderId: reminder.id },
-      '[reminders] failed to post reminder DM'
+      '[reminders] failed to build reminder content'
+    );
+    markdown = `Reminder: ${reminder.text}\n\n_(Couldn't complete this run: ${errorMessage(error)})_`;
+  }
+
+  const isFinalRun = reminder.runCount + 1 >= MAX_RECURRING_RUNS;
+  if (isFinalRun) {
+    markdown += `\n\n_This was the final scheduled run (${MAX_RECURRING_RUNS}/${MAX_RECURRING_RUNS}) — this reminder is now cancelled._`;
+  }
+
+  try {
+    const target = await resolveTarget(bot, reminder);
+    await target.post({ markdown });
+  } catch (error) {
+    logger.warn(
+      { err: errorMessage(error), reminderId: reminder.id },
+      '[reminders] failed to post reminder'
     );
   }
   await advanceReminder(reminder).catch((error: unknown) => {

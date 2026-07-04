@@ -16,6 +16,18 @@ export const reminderRecurrence = pgEnum('reminder_recurrence', [
 
 export type ReminderRecurrence = (typeof reminderRecurrence.enumValues)[number];
 
+// 'message': posts `text` verbatim (the original behavior).
+// 'script': fetches `url` and posts its content (optionally prefixed by `text`).
+// 'agent': runs a small LLM (Gemini, the owner's own key) with `text` as its
+// instructions, optionally fetching a URL itself, and posts whatever it decides.
+export const reminderKind = pgEnum('reminder_kind', [
+  'message',
+  'script',
+  'agent',
+]);
+
+export type ReminderKind = (typeof reminderKind.enumValues)[number];
+
 export const reminders = pgTable(
   'reminders',
   {
@@ -25,6 +37,14 @@ export const reminders = pgTable(
     userId: text('user_id').notNull(),
     text: text('text').notNull(),
     recurrence: reminderRecurrence('recurrence').notNull(),
+    kind: reminderKind('kind').notNull().default('message'),
+    // Raw Slack channel id to post to (e.g. "C0123"); null means DM `userId`.
+    channelId: text('channel_id'),
+    // 'script' kind: the URL to fetch each run.
+    url: text('url'),
+    // Number of times this reminder has fired; recurring reminders stop
+    // (deactivate) after MAX_RECURRING_RUNS regardless of kind.
+    runCount: integer('run_count').notNull().default(0),
     // 'interval': how often to repeat, in seconds.
     intervalSeconds: integer('interval_seconds'),
     // 'daily' / 'weekly': minutes since UTC midnight the reminder fires at.

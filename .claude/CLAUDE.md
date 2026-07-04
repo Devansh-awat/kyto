@@ -177,28 +177,67 @@ Run these automatically after each completed change, in order, **without asking*
   `browse`, `sendEmail`/`checkInbox`/`replyEmail`, `joinThread`,
   `scheduleRecurringReminder`/`listReminders`/`cancelReminder`.
 - **Recurring reminders** (`tools/reminders.ts`, `lib/reminders/scheduler.ts`,
-  `@repo/db` schema/queries `reminders`): unlike the pre-existing one-time
-  `scheduleReminder` (which uses Slack's native `chat.scheduleMessage` — a
-  single future timestamp, no repeat support), recurring reminders are driven
-  entirely by kyto's own process since Slack has no recurring-schedule API.
-  `scheduleRecurringReminderTool` persists a row (`user_id`, `text`,
-  `recurrence: 'interval'|'daily'|'weekly'`, plus the relevant
-  `interval_seconds`/`time_of_day_minutes`/`weekday`, and `next_run_at`) to
-  Postgres via Drizzle (`packages/db/src/schema/reminders.ts` — a new
-  `patchedDependencies`-free table pushed directly with a one-off script since
-  `drizzle-kit push` prompted for an interactive rename decision against the
-  pre-existing `user_customizations`/`sandbox_sessions` tables in a non-TTY
-  shell; `db:generate`/`db:push` should work normally as a human running the
-  CLI). `startReminderScheduler` (`index.ts`) runs a `setInterval` (30s) on the
+  `lib/reminders/agent.ts`, `@repo/db` schema/queries `reminders`): unlike the
+  pre-existing one-time `scheduleReminder` (which uses Slack's native
+  `chat.scheduleMessage` — a single future timestamp, no repeat support),
+  recurring reminders are driven entirely by kyto's own process since Slack has
+  no recurring-schedule API. `scheduleRecurringReminderTool` persists a row
+  (`user_id`, `text`, `recurrence: 'interval'|'daily'|'weekly'`, plus the
+  relevant `interval_seconds`/`time_of_day_minutes`/`weekday`, and
+  `next_run_at`) to Postgres via Drizzle (`packages/db/src/schema/reminders.ts`
+  — a new `patchedDependencies`-free table originally pushed directly with a
+  one-off script since `drizzle-kit push` prompted for an interactive rename
+  decision against the pre-existing `user_customizations`/`sandbox_sessions`
+  tables in a non-TTY shell; later column additions here hit a **worse**
+  problem — `drizzle-kit push` diffs the **entire** database, including tables
+  it doesn't own (`chat_state_subscriptions`/`chat_state_cache`/
+  `chat_state_lists`, owned by `@chat-adapter/state-pg`), and tried to **drop**
+  all of them as "not in the Drizzle schema"; column additions are now applied
+  with a one-off raw-SQL script (`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`)
+  instead of `db:push`, to avoid ever re-triggering that data-loss prompt).
+  Three **kinds** (`kind: 'message'|'script'|'agent'`, default `'message'`):
+  - `'message'`: posts `text` verbatim (the original/only behavior before this
+    was added).
+  - `'script'`: fetches `url` each run (`fetchUrlText`, factored out of
+    `tools/url.ts`'s `fetchUrlTool` so both share the same HTML-stripping/
+    truncation logic) and posts its content, prefixed by `text` if given. Min
+    interval **60s** — it's just an HTTP fetch, cheap to run often.
+  - `'agent'`: runs a small one-shot `generateText` call (`lib/reminders/
+    agent.ts`, `runReminderAgent`) using the owner's **own Gemini key**
+    (`GEMINI_API_KEY`, direct Google OpenAI-compatible endpoint — NOT the
+    HackClub-routed main model) on **`gemini-3.1-flash-lite`** specifically,
+    with `text` as the instructions and one `fetchUrl` tool (`stopWhen:
+    stepCountIs(4)`); whatever text it returns is posted. This is a plain AI
+    SDK call via `@ai-sdk/openai-compatible`'s `createOpenAICompatible`, NOT
+    the full Pi harness — no sandbox, no session, no tool loop beyond the one
+    fetch tool, deliberately kept minimal since it runs unattended. Min
+    interval **3600s (1 hour)** — a real (if cheap) model call each run, so the
+    floor exists to keep unattended cost predictable regardless of how the
+    reminder text is phrased.
+  Every recurring reminder, regardless of kind, now **auto-cancels after
+  `MAX_RECURRING_RUNS` (20) fires** (`queries/reminders.ts`) — `advanceReminder`
+  increments `run_count` and flips `active: false` instead of computing a next
+  run once the cap is hit, and the final post appends a note that this was the
+  last run. This replaced the old "recurring means forever" behavior — a
+  forgotten reminder no longer runs unattended indefinitely.
+  **Posting target**: reminders can now post to an explicit `channelId` (Slack
+  channel id) instead of only the creating user's DM — `scheduleRecurringReminderTool`
+  requires kyto to **already be a member** of that channel (checked via
+  `conversations.info`'s `is_member` at schedule time) and **deliberately never
+  auto-joins** for this, unlike the pins/canvas tools' auto-join-on-`not_in_channel`
+  pattern — an unattended background job shouldn't be the thing that joins a new
+  channel. Omit `channelId` to keep the original DM-the-creator behavior.
+  `startReminderScheduler` (`index.ts`) runs a `setInterval` (30s) on the
   always-on systemd process that polls `reminders WHERE active AND
-  next_run_at <= now()`, posts each via `bot.openDM(userId).post(...)`, then
-  advances `next_run_at` to the next occurrence (never deactivates — recurring
-  means forever until explicitly cancelled). `listReminders`/`cancelReminder`
-  let the model manage a user's own reminders (cancel is scoped by `user_id`,
-  so a user can only cancel their own). This durable state is a deliberate
-  exception to the "no persistence" policy elsewhere (turns/sandbox) — a
-  reminder's entire purpose is to outlive the turn that created it, same
-  precedent as site hosting and the opt-in allowlist.
+  next_run_at <= now()`, builds the message per-kind, resolves the target
+  (`bot.channel(...)` or `bot.openDM(...)`), posts, then calls
+  `advanceReminder`. `listReminders`/`cancelReminder` let the model manage a
+  user's own reminders (cancel is scoped by `user_id`, so a user can only
+  cancel their own; `listReminders` now also surfaces `kind`, `channelId`,
+  `url`, and `runsRemaining`). This durable state is a deliberate exception to
+  the "no persistence" policy elsewhere (turns/sandbox) — a reminder's entire
+  purpose is to outlive the turn that created it, same precedent as site
+  hosting and the opt-in allowlist.
 - **`joinThread`/`leaveThread`** (`tools/join-thread.ts`/`tools/leave-thread.ts`):
   let the model opt itself into (or out of) auto-responding to a thread's
   future messages **without** needing a fresh @mention each time. Both just
@@ -250,7 +289,23 @@ Run these automatically after each completed change, in order, **without asking*
   present but `search:read.private`, `.im`, `.mpim` were missing (added to
   `slack-manifest.json`), which silently limited every search to public
   channels only. Needs `bun run sync:manifest` + a reinstall to actually take
-  effect (see Manifest sync note).
+  effect (see Manifest sync note) — **confirmed done**: `auth.test`'s
+  `x-oauth-scopes` header on the live bot token includes `search:read.im`,
+  `search:read.mpim`, and `search:read.private`.
+- **DM search: don't combine `to:` with a DM lookup.** `to:@user` only means
+  "mentions this user" inside a **channel** search — it is not a DM-scoping
+  modifier and doesn't identify a DM conversation. A query like `from:@bot
+  to:@me` to find a DM with a bot reliably returns 0 results (observed: kyto
+  failed to find a real DM from another bot this way) even though the bot
+  token has the right `search:read.im` scope and the messages exist — the
+  query itself was malformed, not a permissions/data problem. The fix is
+  the correct modifier: `in:@user` **alone**, where `@user` is the *other*
+  party in the DM (never the requesting user, never paired with `to:`); add
+  `from:@user` only to further filter to messages sent by that party within
+  the DM. Both the tool description (`tools/search-slack.ts`) and the core
+  prompt (`packages/ai/src/prompts/core.ts`) now spell this out explicitly and
+  tell the model to retry with `in:@user` alone before concluding a DM's
+  content doesn't exist.
 - **Slack search action-token urgency**: the `action_token` backing
   `assistant.search.context` expires roughly 2 minutes after the turn starts.
   The core prompt now tells the model to run all `searchSlack` calls early in

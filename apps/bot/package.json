@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@ai-sdk/openai-compatible": "catalog:",
     "@ai-sdk/otel": "catalog:",
     "@chat-adapter/slack": "^4.30.0",
     "@chat-adapter/state-pg": "^4.30.0",

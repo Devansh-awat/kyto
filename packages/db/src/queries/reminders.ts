@@ -1,12 +1,21 @@
 import { and, eq, lte } from 'drizzle-orm';
 import { db } from '../client';
-import { type NewReminder, type Reminder, reminders } from '../schema';
+import {
+  type NewReminder,
+  type Reminder,
+  type ReminderKind,
+  reminders,
+} from '../schema';
 
-export type { Reminder, ReminderRecurrence } from '../schema';
+export type { Reminder, ReminderKind, ReminderRecurrence } from '../schema';
 
 const MINUTES_PER_DAY = 24 * 60;
 const DAYS_PER_WEEK = 7;
 const MS_PER_SECOND = 1000;
+
+// Every recurring reminder — regardless of kind — stops itself after this
+// many fires, so a forgotten reminder can't run forever unattended.
+export const MAX_RECURRING_RUNS = 20;
 
 export type ReminderSchedule =
   | { recurrence: 'interval'; intervalSeconds: number }
@@ -45,12 +54,18 @@ export async function createReminder(input: {
   userId: string;
   text: string;
   schedule: ReminderSchedule;
+  kind?: ReminderKind;
+  channelId?: string;
+  url?: string;
 }): Promise<Reminder> {
   const nextRunAt = computeNextRun(input.schedule, new Date());
   const values: NewReminder = {
     userId: input.userId,
     text: input.text,
     recurrence: input.schedule.recurrence,
+    kind: input.kind ?? 'message',
+    channelId: input.channelId,
+    url: input.url,
     nextRunAt,
     ...(input.schedule.recurrence === 'interval'
       ? { intervalSeconds: input.schedule.intervalSeconds }
@@ -94,14 +109,26 @@ export async function getDueReminders(now: Date): Promise<Reminder[]> {
     .where(and(eq(reminders.active, true), lte(reminders.nextRunAt, now)));
 }
 
-/** Advance a fired reminder to its next occurrence. */
-export async function advanceReminder(reminder: Reminder): Promise<void> {
+/**
+ * Advance a fired reminder to its next occurrence, or deactivate it once it
+ * has hit MAX_RECURRING_RUNS. Returns whether the reminder is still active.
+ */
+export async function advanceReminder(reminder: Reminder): Promise<boolean> {
+  const runCount = reminder.runCount + 1;
+  if (runCount >= MAX_RECURRING_RUNS) {
+    await db
+      .update(reminders)
+      .set({ active: false, runCount })
+      .where(eq(reminders.id, reminder.id));
+    return false;
+  }
   const schedule = scheduleOf(reminder);
   const nextRunAt = computeNextRun(schedule, reminder.nextRunAt);
   await db
     .update(reminders)
-    .set({ nextRunAt })
+    .set({ nextRunAt, runCount })
     .where(eq(reminders.id, reminder.id));
+  return true;
 }
 
 function scheduleOf(reminder: Reminder): ReminderSchedule {

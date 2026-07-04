@@ -58,6 +58,39 @@ export function getPermalinkTool({ thread }: { thread: Thread }) {
   });
 }
 
+/** Fetch a URL's text content, stripping HTML tags and truncating. Shared by
+ * fetchUrlTool and the 'script'/'agent' recurring-reminder kinds. */
+export async function fetchUrlText(url: string): Promise<{
+  content: string;
+  contentType: string;
+  truncated: boolean;
+}> {
+  const response = await fetch(url, {
+    headers: { 'User-Agent': 'kyto-slack-bot' },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) {
+    throw new Error(`Fetch failed: ${response.status}`);
+  }
+  const contentType = response.headers.get('content-type') ?? '';
+  const raw = await response.text();
+  // Strip tags for HTML so the model gets readable text, not markup.
+  const text = contentType.includes('text/html')
+    ? raw
+        .replace(/<script[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[\s\S]*?<\/style>/gi, '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+    : raw;
+  const truncated = text.length > MAX_CONTENT_CHARS;
+  return {
+    content: truncated ? text.slice(0, MAX_CONTENT_CHARS) : text,
+    contentType,
+    truncated,
+  };
+}
+
 export function fetchUrlTool() {
   return tool({
     description:
@@ -67,31 +100,8 @@ export function fetchUrlTool() {
     }),
     execute: async ({ url }) => {
       try {
-        const response = await fetch(url, {
-          headers: { 'User-Agent': 'kyto-slack-bot' },
-          signal: AbortSignal.timeout(15_000),
-        });
-        if (!response.ok) {
-          return { error: `Fetch failed: ${response.status}`, success: false };
-        }
-        const contentType = response.headers.get('content-type') ?? '';
-        const raw = await response.text();
-        // Strip tags for HTML so the model gets readable text, not markup.
-        const text = contentType.includes('text/html')
-          ? raw
-              .replace(/<script[\s\S]*?<\/script>/gi, '')
-              .replace(/<style[\s\S]*?<\/style>/gi, '')
-              .replace(/<[^>]+>/g, ' ')
-              .replace(/\s+/g, ' ')
-              .trim()
-          : raw;
-        const truncated = text.length > MAX_CONTENT_CHARS;
-        return {
-          content: truncated ? text.slice(0, MAX_CONTENT_CHARS) : text,
-          contentType,
-          success: true,
-          truncated,
-        };
+        const { content, contentType, truncated } = await fetchUrlText(url);
+        return { content, contentType, success: true, truncated };
       } catch (error) {
         logger.warn({ error: errorMessage(error) }, '[fetchUrl] failed');
         return { error: errorMessage(error), success: false };
