@@ -320,27 +320,32 @@ Run these automatically after each completed change, in order, **without asking*
   description and core prompt also spell out the `@`-required rule with a
   concrete example, as defense in depth for other malformed forms the regex
   doesn't catch.
-- **DM search STILL failed with a correctly-formed `in:@<raw id>` query, on a
-  DM confirmed (by the owner, checking Slack directly) to have real history.**
-  This ruled out both the `to:`-vs-`in:` bug and the missing-`@` bug above —
-  the modifier was syntactically right and the data existed, yet
-  `assistant.search.context` returned 0 results. Best-available explanation:
-  Slack's search backend appears to key a user reference by **handle**
-  (`tanjim`), not by raw internal id (`U09ASUK57K8`) — `in:@U09ASUK57K8` may
-  simply not resolve as a user reference the way `in:@tanjim` does, even
-  though both have the required `@`. Since the model usually only has the raw
-  id (from mention annotation, not necessarily the real handle), this is
-  handled with an automatic **retry**, not a prompt fix:
-  `queryWithResolvedHandles` (`tools/search-slack.ts`) extracts every unique
-  id from `in:@`/`from:@`/`to:@` modifiers, resolves each via `users.info`
-  (`.user.name`, the actual handle), and — only if the first search came back
-  empty — retries once with ids substituted for handles, adopting that result
-  if it found anything. This couldn't be root-caused with certainty (no way to
-  reproduce `assistant.search.context` outside a live Slack turn's ephemeral
-  `action_token` to A/B-test id-vs-handle directly), so if a DM search still
-  comes up empty on data confirmed to exist, check the `[searchSlack] retried
-  with resolved username after 0 results` debug log to see whether the retry
-  fired and what it found.
+- **Root cause, finally confirmed via Slack's own docs**: DM search kept
+  failing even with a correctly-formed `in:@<raw id>` query on a DM confirmed
+  (by the owner, checking Slack directly) to have real history — ruling out
+  both the `to:`-vs-`in:` bug and the missing-`@` bug above. Two real,
+  doc-confirmed issues, both now fixed in `tools/search-slack.ts`:
+  1. **User references need Slack's angle-bracket mention form**, `<@U12345>`
+     — a bare `@U12345` (no brackets) is silently ignored as if the modifier
+     were never given, same failure mode as the missing-`@` case (no error,
+     just 0 results). `normalizeSearchQuery`'s `USER_REF_MODIFIER` regex now
+     rewrites any of `in:U123`/`in:@U123`/`in:<@U123>` to the canonical
+     `in:<@U123>` (idempotent — already-correct queries pass through
+     unchanged) before the query reaches `assistant.search.context`.
+  2. **`assistant.search.context` takes a `channel_types` parameter that we
+     were never passing at all.** Per the docs this independently controls
+     which conversation types (`public_channel`/`private_channel`/`mpim`/`im`)
+     the search covers, separately from `content_types` (which only
+     scopes messages/files/channels/users). Omitting it appears to default to
+     something that excludes DMs, so a DM search could return 0 results
+     regardless of query correctness. The call now always passes
+     `channel_types: 'public_channel,private_channel,mpim,im'` so the
+     `search:read.im`/`.mpim`/`.private` bot scopes actually get used for
+     what they're granted for.
+  The earlier "retry with resolved username" workaround
+  (`queryWithResolvedHandles`) was chasing the wrong hypothesis and has been
+  **removed** now that the real cause is confirmed — no more speculative
+  retries needed here.
 - **Slack search action-token urgency**: the `action_token` backing
   `assistant.search.context` expires roughly 2 minutes after the turn starts.
   The core prompt now tells the model to run all `searchSlack` calls early in
