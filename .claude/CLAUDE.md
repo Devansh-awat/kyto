@@ -346,6 +346,24 @@ Run these automatically after each completed change, in order, **without asking*
   (`queryWithResolvedHandles`) was chasing the wrong hypothesis and has been
   **removed** now that the real cause is confirmed — no more speculative
   retries needed here.
+- **`in:@user` still returned 0 for a real DM even with correct bracket format
+  AND `channel_types` fixed.** Meanwhile `from:<@ownId>` (searching the
+  requesting user's OWN messages) succeeded and returned real results — so the
+  bracket format and scopes are confirmed working, but specifically targeting
+  a DM by participant via `in:` was not. `in:` is documented as targeting a
+  channel/conversation OBJECT (`in:#channel`, `in:<#C0123>`), not "the DM with
+  this person" — Slack's own docs instead show `with:<@U12345>` as the
+  modifier for "messages that involve a user," which is the semantically
+  correct one for a DM lookup. `withModifierFallback` in `tools/search-slack.ts`
+  now retries an `in:<@user>` search as `with:<@user>` if the first attempt
+  comes back empty, and the tool description/core prompt now recommend
+  `with:@user` over `in:@user` for DM lookups directly, rather than relying
+  solely on the fallback. This is still not 100%-confirmed as the final root
+  cause (no way to test `assistant.search.context` outside a live turn's
+  ephemeral `action_token`) — if a DM search comes up empty again after this,
+  check the `[searchSlack] retried in: as with: after 0 results` debug log
+  for the actual result count, and treat the model's next debugging step as
+  the next place to look, not necessarily "no history exists."
 - **Slack search action-token urgency**: the `action_token` backing
   `assistant.search.context` expires roughly 2 minutes after the turn starts.
   The core prompt now tells the model to run all `searchSlack` calls early in

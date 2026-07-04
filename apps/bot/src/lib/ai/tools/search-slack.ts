@@ -20,6 +20,25 @@ function normalizeSearchQuery(query: string): string {
   return query.replace(USER_REF_MODIFIER, '$1:<@$2>');
 }
 
+// `in:` targets a channel/conversation OBJECT (in:#channel, in:<#C0123>) — it
+// is not documented as a way to find "the DM with this person" by their user
+// id. Slack's own assistant.search.context docs instead show `with:<@U12345>`
+// as the modifier for "messages that contain/involve a user", which is the
+// better semantic match for a DM lookup. Since `in:<@user>` looks superficially
+// plausible (and is what both the model and a bare "DM search" instinct reach
+// for) but was observed to reliably return 0 even for confirmed-existing DM
+// history, retry once with `with:` substituted for `in:` on a user-id target
+// specifically (never touching an actual `in:#channel`/`in:<#C0123>` reference).
+const IN_USER_ID_MODIFIER = /\bin:(<@[UW][A-Z0-9]{6,}>)/gi;
+
+function withModifierFallback(query: string): string | undefined {
+  if (!IN_USER_ID_MODIFIER.test(query)) {
+    return;
+  }
+  IN_USER_ID_MODIFIER.lastIndex = 0;
+  return query.replace(IN_USER_ID_MODIFIER, 'with:$1');
+}
+
 // content_types defaults to 'messages' but channel_types has its own
 // independent default that appears to exclude DMs/group-DMs unless listed
 // explicitly — pass all four so a query can reach any conversation the
@@ -116,7 +135,7 @@ export function searchSlackTool({ message }: { message: Message }) {
         .min(1)
         .max(500)
         .describe(
-          'Search text. Supports Slack modifiers like from:@user, in:#channel, in:@user (DM), has:link, has:star, before:2026-01-01, after:2026-01-01, is:thread, filename:name, ext:filetype. To search a DM (including a DM with a bot), use in:@user ALONE with the other party — do NOT pair it with to:@user, which only means "mentioned this user" inside a channel search and does nothing useful for DMs. When you only have a raw user id (not a handle), just write it plainly, e.g. in:@U09ASUK57K8 — this tool automatically converts it to the angle-bracket form Slack actually requires (in:<@U09ASUK57K8>) before searching.'
+          'Search text. Supports Slack modifiers like from:@user, in:#channel, with:@user (DM/messages involving someone), has:link, has:star, before:2026-01-01, after:2026-01-01, is:thread, filename:name, ext:filetype. To find your DM history with someone, prefer with:@user over in:@user — in: is for an actual channel/conversation object, with: is documented specifically for "messages involving this person" and is the more reliable way to reach a DM. When you only have a raw user id (not a handle), just write it plainly, e.g. with:@U09ASUK57K8 — this tool automatically converts it to the angle-bracket form Slack actually requires (with:<@U09ASUK57K8>) before searching, and will also retry in:@user as with:@user automatically if needed.'
         ),
     }),
     execute: async ({ cursor, query }) => {
@@ -144,17 +163,47 @@ export function searchSlackTool({ message }: { message: Message }) {
         );
       }
 
-      const parsedResponse = slackSearchResponseSchema.parse(
-        await slack.webClient.apiCall('assistant.search.context', {
-          action_token: actionToken,
-          channel_types: CHANNEL_TYPES,
-          content_types: ['messages'],
-          cursor,
-          include_context_messages: true,
-          limit: 10,
-          query: normalizedQuery,
-        })
-      );
+      const runSearch = async (searchQuery: string) =>
+        slackSearchResponseSchema.parse(
+          await slack.webClient.apiCall('assistant.search.context', {
+            action_token: actionToken,
+            channel_types: CHANNEL_TYPES,
+            content_types: ['messages'],
+            cursor,
+            include_context_messages: true,
+            limit: 10,
+            query: searchQuery,
+          })
+        );
+
+      let finalQuery = normalizedQuery;
+      let parsedResponse = await runSearch(normalizedQuery);
+
+      if (
+        parsedResponse.ok &&
+        (parsedResponse.results?.messages ?? []).length === 0
+      ) {
+        const altQuery = withModifierFallback(normalizedQuery);
+        if (altQuery) {
+          const altResponse = await runSearch(altQuery);
+          logger.debug(
+            {
+              altCount: altResponse.results?.messages?.length ?? 0,
+              altQuery,
+              originalQuery: normalizedQuery,
+            },
+            '[searchSlack] retried in: as with: after 0 results'
+          );
+          if (
+            altResponse.ok &&
+            (altResponse.results?.messages ?? []).length > 0
+          ) {
+            finalQuery = altQuery;
+            parsedResponse = altResponse;
+          }
+        }
+      }
+
       const messages = parsedResponse.results?.messages ?? [];
       const nextCursor =
         parsedResponse.response_metadata?.next_cursor || undefined;
@@ -162,7 +211,7 @@ export function searchSlackTool({ message }: { message: Message }) {
       if (!parsedResponse.ok) {
         const error = parsedResponse.error ?? 'unknown';
         logger.warn(
-          { error, query: normalizedQuery },
+          { error, query: finalQuery },
           '[searchSlack] search failed'
         );
         return {
@@ -173,7 +222,7 @@ export function searchSlackTool({ message }: { message: Message }) {
       }
 
       logger.debug(
-        { count: messages.length, query: normalizedQuery },
+        { count: messages.length, query: finalQuery },
         '[searchSlack] complete'
       );
       return {
