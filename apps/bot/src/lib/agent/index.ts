@@ -251,6 +251,7 @@ async function executeTurn(
     // spent (and name the cap) instead of showing a generic error.
     let spendLimitMessage: string | undefined;
     let attempt: PiAttempt | undefined;
+    let geminiRetryCount = 0;
     // Built once: the tool set does not depend on the chosen model, and its keys
     // let renderStream hide hallucinated calls to non-existent tools.
     const tools = buildTools({
@@ -519,6 +520,41 @@ async function executeTurn(
         }
         return;
       } catch (error) {
+        const isGemini = currentAttempt.provider === 'gemini';
+        const msg = errorMessage(error);
+        const isRateLimit =
+          (error &&
+            typeof error === 'object' &&
+            (('status' in error && error.status === 429) ||
+              ('statusCode' in error && error.statusCode === 429))) ||
+          /429|rate[-_\s]?limit|resource[-_\s]?exhausted|too[-_\s]?many[-_\s]?requests|quota[-_\s]?exceeded|rpm|tpm/i.test(
+            msg
+          );
+
+        if (isGemini && isRateLimit && geminiRetryCount < 10) {
+          geminiRetryCount++;
+          logger.warn(
+            {
+              attempt: attemptLog(currentAttempt),
+              err: msg,
+              retryCount: geminiRetryCount,
+              threadId,
+            },
+            '[agent] Gemini rate limit hit, waiting 30 seconds before retrying'
+          );
+          yield {
+            id: modelTaskId,
+            status: 'in_progress',
+            title: `Thinking · Gemini rate limit (retrying in 30s) [${geminiRetryCount}/10]`,
+            type: 'task_update',
+          };
+          await session?.detach().catch(() => undefined);
+          session = undefined;
+          await new Promise((resolve) => setTimeout(resolve, 30_000));
+          attempt = currentAttempt;
+          continue;
+        }
+
         // Mark this attempt's model task done so the activity indicator never
         // sticks on a frozen "Model · fallback" spinner when the attempt threw
         // before its post-stream completion yield ran. The guard makes this a
