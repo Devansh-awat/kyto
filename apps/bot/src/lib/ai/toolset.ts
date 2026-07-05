@@ -46,6 +46,7 @@ import { editAsUserTool, sendAsUserTool } from './tools/send-as-user';
 import { skipTool } from './tools/skip';
 import { runSubagentTool } from './tools/subagent';
 import { summarizeThreadTool } from './tools/summarize-thread';
+import { textToSpeechTool } from './tools/text-to-speech';
 import { uploadFileTool } from './tools/upload-file';
 import { fetchUrlTool, getPermalinkTool } from './tools/url';
 import { waitTool } from './tools/wait';
@@ -71,6 +72,7 @@ export function buildTools({
 
   // Email tools run host-side via AgentMail; only registered when a key is set.
   const agentMailKey = env.AGENTMAIL_API_KEY;
+  const geminiApiKey = env.GEMINI_API_KEY;
 
   const { runBackgroundProcess, getProcessOutput, killProcess } =
     backgroundProcessTools({ getSandboxContext });
@@ -108,6 +110,16 @@ export function buildTools({
     deploySite: deploySiteTool({ getSandboxContext }),
     removeSite: removeSiteTool(),
     browse: browseTool({ getSandboxContext }),
+    ...(geminiApiKey && {
+      textToSpeech: textToSpeechTool({
+        upload: async ({ data, filename }) => {
+          await thread.post({
+            files: [{ data, filename }],
+            markdown: 'Generated speech',
+          });
+        },
+      }),
+    }),
     ...(agentMailKey && {
       sendEmail: sendEmailTool({ apiKey: agentMailKey }),
       checkInbox: checkInboxTool({ apiKey: agentMailKey }),

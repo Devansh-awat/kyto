@@ -8,9 +8,11 @@ import {
 import type { Reminder } from '@repo/db/queries';
 import { loadSkills } from '@repo/sandbox';
 import { Message, root } from 'chat';
+import { env } from '@/env';
 import { runAsRecurringJob } from '@/lib/agent/resolved-model';
 import { sandbox } from '@/lib/agent/sandbox';
 import { requestHints } from '@/lib/ai/hints';
+import { runSubagentTool } from '@/lib/ai/tools/subagent';
 import { buildTools } from '@/lib/ai/toolset';
 import { bot } from '@/lib/chat';
 
@@ -78,6 +80,23 @@ export async function runReminderAgent(reminder: Reminder): Promise<string> {
     message,
     thread,
   });
+  // Pin any subagent THIS job launches to the same Gemini attempt, never
+  // openrouter/auto/HackClub — an unattended job's whole tool tree should
+  // stay on the one predictable, separate quota.
+  if (env.GEMINI_API_KEY) {
+    tools.runSubagent = runSubagentTool({
+      bot,
+      message,
+      pinnedModel: {
+        apiKey: env.GEMINI_API_KEY,
+        baseURL:
+          env.GEMINI_BASE_URL ??
+          'https://generativelanguage.googleapis.com/v1beta/openai/',
+        model: REMINDER_AGENT_MODEL,
+      },
+      thread,
+    });
+  }
 
   const agent = createAgent({
     attempt: geminiAttempt(REMINDER_AGENT_MODEL),

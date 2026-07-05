@@ -15,14 +15,18 @@ import { fetchUrlTool } from './url';
 
 // A lightweight delegate for open-ended research that would otherwise burn
 // through the main turn's own context (many searches/fetches whose raw
-// results aren't worth keeping around). Runs through HackClub's
+// results aren't worth keeping around). By default runs through HackClub's
 // openrouter/auto (same tuning/cost-bias as the main turn — see
 // resolved-model.ts's global fetch patch, which keys off the request URL/
 // model id, not which code path called it) as a plain generateText tool
 // loop, NOT the full Pi harness: no sandbox, no session, just a curated
 // read-only research toolset. It cannot post, react, or otherwise act — only
 // investigate and report back.
-const SUBAGENT_MODEL = 'openrouter/auto';
+//
+// A recurring 'agent' reminder (lib/reminders/agent.ts) builds its own tools
+// with `pinnedModel` set to its own Gemini attempt, so a subagent it launches
+// never touches openrouter/auto/HackClub either — keeping the whole
+// unattended job's cost on the same predictable, separate quota.
 const SUBAGENT_MAX_STEPS = 8;
 
 const SUBAGENT_SYSTEM_PROMPT =
@@ -31,10 +35,13 @@ const SUBAGENT_SYSTEM_PROMPT =
 export function runSubagentTool({
   bot,
   message,
+  pinnedModel,
   thread,
 }: {
   bot: Chat;
   message: Message;
+  /** Override the default openrouter/auto model, e.g. to pin to Gemini. */
+  pinnedModel?: { model: string; apiKey: string; baseURL: string };
   thread: Thread;
 }) {
   return tool({
@@ -50,13 +57,15 @@ export function runSubagentTool({
     }),
     execute: async ({ task }) => {
       try {
-        const hackclub = createOpenAICompatible({
-          apiKey: env.HACKCLUB_API_KEY,
-          baseURL: 'https://ai.hackclub.com/proxy/v1',
-          name: 'hackclub',
+        const provider = createOpenAICompatible({
+          apiKey: pinnedModel?.apiKey ?? env.HACKCLUB_API_KEY,
+          baseURL: pinnedModel?.baseURL ?? 'https://ai.hackclub.com/proxy/v1',
+          name: pinnedModel ? 'gemini' : 'hackclub',
         });
         const { text } = await generateText({
-          model: hackclub.languageModel(SUBAGENT_MODEL),
+          model: provider.languageModel(
+            pinnedModel?.model ?? 'openrouter/auto'
+          ),
           prompt: task,
           stopWhen: stepCountIs(SUBAGENT_MAX_STEPS),
           system: SUBAGENT_SYSTEM_PROMPT,
