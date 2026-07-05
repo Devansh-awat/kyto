@@ -3,6 +3,7 @@ import type { SandboxContext } from '@repo/ai';
 import type { ToolSet } from 'ai';
 import type { Chat, Message, Thread } from 'chat';
 import { env } from '@/env';
+import { mcpTools } from './mcp';
 import { backgroundProcessTools } from './tools/background';
 import { browseTool } from './tools/browse';
 import {
@@ -190,5 +191,6 @@ export function buildTools({
         return { filename: resolvedFilename, uploaded: true };
       },
     }),
+    ...mcpTools(),
   };
 }

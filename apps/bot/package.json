@@ -15,6 +15,7 @@
     "@chat-adapter/slack": "^4.30.0",
     "@chat-adapter/state-pg": "^4.30.0",
     "@langfuse/otel": "^5.4.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@opentelemetry/sdk-trace-node": "^2.8.0",
     "@repo/ai": "workspace:*",
     "@repo/db": "workspace:*",

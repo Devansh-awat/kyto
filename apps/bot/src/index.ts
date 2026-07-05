@@ -1,6 +1,7 @@
 import { bot } from '@/bot';
 import { stopAllTurns } from '@/lib/agent';
 import { installModelCapture } from '@/lib/agent/resolved-model';
+import { initMcp } from '@/lib/ai/mcp';
 import { buildAllowlist } from '@/lib/allowed-users';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
@@ -28,6 +29,12 @@ try {
   await buildAllowlist();
   await startSitesServer();
   startReminderScheduler(bot);
+  // Fire-and-forget: a slow/broken MCP server should never delay kyto coming
+  // online for normal chat. buildTools() just sees an empty MCP tool set
+  // until this resolves.
+  initMcp().catch((error: unknown) => {
+    logger.error({ err: error }, '[mcp] init failed');
+  });
   const botProfile = slack.botUserId
     ? await slack.webClient.users
         .info({ user: slack.botUserId })
