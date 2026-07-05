@@ -1,6 +1,7 @@
 import type { Message, Thread } from 'chat';
 import { runTurn, stopTurn } from '@/lib/agent';
 import { isUserAllowed } from '@/lib/allowed-users';
+import { continueBtw, isBtwThread, triggerBtw } from '@/lib/btw';
 import { bot, slack } from '@/lib/chat';
 import { handleCommand } from '@/lib/commands';
 import logger from '@/lib/logger';
@@ -86,6 +87,13 @@ async function runCommandOrTurn(
   thread: Thread,
   message: Message
 ): Promise<void> {
+  if (isBtwThread(thread.id)) {
+    await continueBtw({ message, thread });
+    return;
+  }
+  if (await triggerBtw({ bot, message, thread })) {
+    return;
+  }
   if (await handleCommand({ message, thread })) {
     return;
   }

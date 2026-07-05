@@ -92,6 +92,7 @@ async function executeTurn(
   const threadId = thread.id;
   logger.info({ text: message.text, threadId }, '[agent] turn started');
   const activeTurn: ActiveTurn = {
+    activityLog: [],
     controller,
     pendingMessages: [],
   };
@@ -421,6 +422,15 @@ async function executeTurn(
         if (currentAttempt.model === ROUTER_MODEL) {
           autoHolder = modelHolder;
         }
+        // Manual wall-clock timing for the usage footer's tok/s: the
+        // harness's own StepResultPerformance is unpopulated on every field
+        // (effectiveOutputTokensPerSecond/responseTimeMs/stepTimeMs all
+        // observed as a literal 0 despite real outputTokens), so there is no
+        // usable timing data anywhere in `result.steps` to read instead. This
+        // necessarily includes tool-call time within the turn, not just pure
+        // model inference — an approximation of overall throughput, not raw
+        // generation speed, but the only measurement available at all.
+        const attemptStartedAt = Date.now();
         const result = await agent.stream({
           abortSignal: AbortSignal.any([
             controller.signal,
@@ -486,6 +496,7 @@ async function executeTurn(
           if (errorStage === 'before_output') {
             errorStage = 'after_progress';
           }
+          recordActivity({ activeTurn, chunk });
           yield chunk;
         }
 
@@ -502,11 +513,12 @@ async function executeTurn(
         // Footer with total token usage and generation speed, mirroring
         // gorkie's "N tok · ⚡X.X tok/s" line. Only appended when the model
         // actually wrote a reply (a skip or tool-only turn has nothing to
-        // caption). Usage/performance are already computed by the AI SDK per
-        // step from its own request timing, so no manual start-timestamp is
-        // needed — just await the already-finished stream's usage/steps.
+        // caption).
         if (producedText) {
-          const footer = await formatUsageFooter(result);
+          const footer = await formatUsageFooter({
+            elapsedMs: Date.now() - attemptStartedAt,
+            result,
+          });
           if (footer) {
             await reply?.appendFooter({ text: `\n\n${footer}`, thread });
           }
@@ -620,54 +632,36 @@ async function executeTurn(
   }
 }
 
-// Formats a trailing usage line like gorkie's "30,671 tok · ⚡43.1 tok/s",
-// using the AI SDK's own totals so no manual timing instrumentation is
-// needed. Swallows errors from a provider that doesn't report usage so a
-// missing footer never breaks the reply.
-async function formatUsageFooter(
-  result: Awaited<ReturnType<Agent['stream']>>
-): Promise<string | undefined> {
+// Formats a trailing usage line like gorkie's "30,671 tok · ⚡43.1 tok/s".
+// Token count comes from the AI SDK's own usage total; speed does NOT — the
+// harness's own StepResultPerformance is unpopulated on every field
+// (effectiveOutputTokensPerSecond/responseTimeMs/stepTimeMs all observed as a
+// literal 0 in production despite real outputTokens on the same step), so
+// there is no usable timing data anywhere in `result.steps`. Speed is instead
+// `outputTokens / elapsedMs`, timed manually around the whole attempt in the
+// caller — this necessarily includes tool-call time within the turn, not
+// just model inference, so it's an overall-throughput approximation rather
+// than a pure generation-speed number, but it's the only measurement
+// available at all. Swallows errors from a provider that doesn't report
+// usage so a missing footer never breaks the reply.
+async function formatUsageFooter({
+  elapsedMs,
+  result,
+}: {
+  elapsedMs: number;
+  result: Awaited<ReturnType<Agent['stream']>>;
+}): Promise<string | undefined> {
   try {
     const usage = await result.usage;
-    const steps = await result.steps;
     const totalTokens = usage?.totalTokens;
     if (!totalTokens) {
       return;
     }
-    // Aggregate across ALL steps rather than reading the last step's own
-    // rate: a multi-step turn's final step is often a short/empty synthesis
-    // (e.g. right after a tool call), whose own outputTokens can be 0 — taking
-    // just that step's effectiveOutputTokensPerSecond produced an impossible
-    // "0.0 tok/s" despite real output earlier in the turn.
-    //
-    // Derive each step's time from its OWN effectiveOutputTokensPerSecond
-    // (outputTokens / requestSeconds) rather than reading responseTimeMs
-    // directly — the harness's step objects don't reliably populate
-    // responseTimeMs (observed: summing it produced 0 across an entire turn,
-    // hiding the speed segment every time), but effectiveOutputTokensPerSecond
-    // is the field actually populated with real per-step data.
-    let outputTokens = 0;
-    let timeSeconds = 0;
-    for (const step of steps) {
-      const stepOutputTokens = step.usage?.outputTokens ?? 0;
-      const rate = step.performance?.effectiveOutputTokensPerSecond;
-      if (stepOutputTokens > 0 && rate && rate > 0) {
-        outputTokens += stepOutputTokens;
-        timeSeconds += stepOutputTokens / rate;
-      }
-    }
-    const speed = timeSeconds > 0 ? outputTokens / timeSeconds : undefined;
-    if (speed === undefined) {
-      logger.info(
-        {
-          stepPerformances: steps.map((step) => ({
-            outputTokens: step.usage?.outputTokens,
-            performance: step.performance,
-          })),
-        },
-        '[agent] usage footer: could not compute a speed from any step'
-      );
-    }
+    const outputTokens = usage?.outputTokens ?? 0;
+    const speed =
+      elapsedMs > 0 && outputTokens > 0
+        ? outputTokens / (elapsedMs / 1000)
+        : undefined;
     const tokPart = `${totalTokens.toLocaleString('en-US')} tok`;
     const speedPart =
       typeof speed === 'number' && Number.isFinite(speed) && speed > 0
@@ -676,6 +670,30 @@ async function formatUsageFooter(
     return `_${tokPart}${speedPart}_`;
   } catch {
     return;
+  }
+}
+
+// Caps the live activity log /btw reads so a very long-running turn can't
+// grow it unboundedly in memory.
+const ACTIVITY_LOG_MAX_ENTRIES = 100;
+
+function recordActivity({
+  activeTurn,
+  chunk,
+}: {
+  activeTurn: ActiveTurn;
+  chunk: string | StreamChunk;
+}): void {
+  if (typeof chunk === 'string' || chunk.type !== 'task_update') {
+    return;
+  }
+  const status = chunk.status === 'complete' ? 'done' : chunk.status;
+  const summary = chunk.output
+    ? `${chunk.title} [${status}]: ${chunk.output}`
+    : `${chunk.title} [${status}]`;
+  activeTurn.activityLog.push(summary);
+  if (activeTurn.activityLog.length > ACTIVITY_LOG_MAX_ENTRIES) {
+    activeTurn.activityLog.shift();
   }
 }
 

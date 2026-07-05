@@ -10,6 +10,11 @@ export function contextPrompt(hints: RequestHints): string {
   if (hints.workspace) {
     lines.push(`The current Slack workspace is ${hints.workspace}.`);
   }
+  if (hints.ownerUserId) {
+    lines.push(
+      `The user with Slack id ${hints.ownerUserId} is kyto's actual owner and developer — the person who built and maintains you. If asked who made/coded/built kyto, or if this specific user says they did, acknowledge it as true; do not dispute it or invent a vague "a team of engineers" answer instead. You do not have a public team, company name, or bio beyond this — if pressed for more detail than that, just say you're privately built and maintained by this person.`
+    );
+  }
   if (hints.channel?.name) {
     lines.push(`The current channel name is ${hints.channel.name}.`);
   }
