@@ -722,6 +722,27 @@ Run these automatically after each completed change, in order, **without asking*
   disabled, so no `glm5.2-normal` backstop).
 
 ### Identity & opt-in gating
+- **Kyto is closed-source and must not claim otherwise.** The system prompt
+  (`packages/ai/src/prompts/slack.ts`, end of `slackPrompt`) previously told the
+  model "Kyto is built on open-source code available at
+  https://github.com/imdevarsh/gorkie-slack" — that repo is the private fork's
+  own source, not something to hand out, and saying "open source" was simply
+  wrong for a private app. Replaced with a line stating Kyto is closed-source
+  private software, started as a fork of the open-source gorkie project, with
+  no public repo link to share. If asked for source/repo access, the model
+  should say so rather than pointing at (or paraphrasing) a GitHub URL.
+- **Reply footer: token count + generation speed.** Every reply that produced
+  text now ends with a small italic footer, e.g. `_12,345 tok · ⚡42.3 tok/s_`
+  (mirrors gorkie's dev-bot output). Added in `agent/index.ts`'s
+  `formatUsageFooter`, called right after the per-attempt stream loop when
+  `producedText` is true, appended into the same `reply` buffer that gets
+  flushed to Slack. Sourced entirely from the AI SDK's own already-computed
+  totals — `result.usage.totalTokens` and the last entry of `result.steps`'
+  `performance.effectiveOutputTokensPerSecond` — no manual turn-start
+  timestamp needed. `Agent` (the `HarnessAgent` instance type) is now exported
+  from `packages/ai/src/index.ts` so `agent/index.ts` can type the result of
+  `agent.stream(...)` without reaching into `@ai-sdk/harness` internals.
+  Skipped (no footer) on a deliberate `skip` or a tool-only turn with no text.
 - **The bot's Slack username is a gorkie-era handle (`gorkie__devansh_`)** — the
   app was forked from gorkie and the handle stuck (display name shows "Not set"
   live even though `slack-manifest.json` says `kyto`; the manifest needs syncing
