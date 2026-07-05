@@ -673,7 +673,7 @@ async function formatUsageFooter({
   }
 }
 
-// Caps the live activity log /btw reads so a very long-running turn can't
+// Caps the live activity log ?btw reads so a very long-running turn can't
 // grow it unboundedly in memory.
 const ACTIVITY_LOG_MAX_ENTRIES = 100;
 

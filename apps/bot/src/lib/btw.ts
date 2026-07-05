@@ -18,10 +18,10 @@ import { rawText, withoutLeadingMentions } from '@/lib/utils/message';
 // touching the main conversation at all. Its own answers are NEVER fed back
 // into the main turn's context — it's purely an observer.
 //
-// UX: typing "/btw <question>" anywhere kyto is listening creates (or
+// UX: typing "?btw <question>" anywhere kyto is listening creates (or
 // reuses) a dedicated #kyto-btw channel, starts a fresh thread there linking
 // back to the original message, subscribes that thread so follow-ups don't
-// need to repeat "/btw", and posts an ephemeral pointer to it in the
+// need to repeat "?btw", and posts an ephemeral pointer to it in the
 // ORIGINAL channel (visible only to the asker). Each answer reads the
 // original turn's live activityLog (agent/index.ts's recordActivity) if one
 // is still running, or notes that it finished, and runs on a plain
@@ -34,7 +34,12 @@ import { rawText, withoutLeadingMentions } from '@/lib/utils/message';
 const BTW_CHANNEL_NAME = 'kyto-btw';
 const BTW_MODEL = 'gemini-3.1-flash-lite';
 const BTW_MAX_STEPS = 6;
-const BTW_TRIGGER = /^\/btw\b\s*(.*)$/is;
+// Deliberately NOT a leading "/" — Slack's client blocks any message
+// starting with "/" from being sent at all inside a thread reply composer
+// (it treats it as a slash-command attempt, even with no command registered
+// for it), so "/btw" silently never reached kyto from a thread. "?btw" is
+// plain text and works everywhere.
+const BTW_TRIGGER = /^\?btw\b\s*(.*)$/is;
 
 const BTW_SYSTEM_PROMPT =
   "You are kyto's read-only status assistant. Someone is asking, on the side, what kyto is currently doing (or did) in another conversation — you are NOT kyto itself and cannot post, react, or take any action, only look things up and answer. You are given kyto's live activity log for that conversation (if it's still working) or told it finished. Answer the question directly and concisely based on that log and whatever you look up. If the log is empty or unavailable, say so plainly rather than guessing.";
@@ -213,7 +218,7 @@ export async function continueBtw({
   });
 }
 
-/** Detect and handle a "/btw <question>" trigger. Returns true if handled. */
+/** Detect and handle a "?btw <question>" trigger. Returns true if handled. */
 export async function triggerBtw({
   bot,
   message,
@@ -266,7 +271,7 @@ export async function triggerBtw({
       '[btw] failed to handle trigger'
     );
     await thread
-      .postEphemeral(message.author, `/btw failed: ${errorMessage(error)}`, {
+      .postEphemeral(message.author, `?btw failed: ${errorMessage(error)}`, {
         fallbackToDM: false,
       })
       .catch(() => undefined);
