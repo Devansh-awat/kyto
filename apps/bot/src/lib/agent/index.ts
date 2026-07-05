@@ -634,10 +634,22 @@ async function formatUsageFooter(
     if (!totalTokens) {
       return;
     }
-    const speed = steps.at(-1)?.performance?.effectiveOutputTokensPerSecond;
+    // Aggregate across ALL steps rather than reading the last step's own
+    // rate: a multi-step turn's final step is often a short/empty synthesis
+    // (e.g. right after a tool call), whose own outputTokens can be 0 — taking
+    // just that step's effectiveOutputTokensPerSecond produced an impossible
+    // "0.0 tok/s" despite real output earlier in the turn.
+    let outputTokens = 0;
+    let responseMs = 0;
+    for (const step of steps) {
+      outputTokens += step.usage?.outputTokens ?? 0;
+      responseMs += step.performance?.responseTimeMs ?? 0;
+    }
+    const speed =
+      responseMs > 0 ? outputTokens / (responseMs / 1000) : undefined;
     const tokPart = `${totalTokens.toLocaleString('en-US')} tok`;
     const speedPart =
-      typeof speed === 'number' && Number.isFinite(speed)
+      typeof speed === 'number' && Number.isFinite(speed) && speed > 0
         ? ` · ⚡${speed.toFixed(1)} tok/s`
         : '';
     return `_${tokPart}${speedPart}_`;
