@@ -1,4 +1,4 @@
-export { createAgent } from './agent';
+export { type Agent, createAgent } from './agent';
 export { type RequestHints, systemPrompt } from './prompts';
 export { type Persona, personas } from './prompts/presets';
 export { provider } from './providers/models';

@@ -1,4 +1,5 @@
 import {
+  type Agent,
   catalogAttempt,
   createAgent,
   LEADERBOARD_FALLBACK,
@@ -498,6 +499,19 @@ async function executeTurn(
           }
         }
 
+        // Footer with total token usage and generation speed, mirroring
+        // gorkie's "N tok · ⚡X.X tok/s" line. Only appended when the model
+        // actually wrote a reply (a skip or tool-only turn has nothing to
+        // caption). Usage/performance are already computed by the AI SDK per
+        // step from its own request timing, so no manual start-timestamp is
+        // needed — just await the already-finished stream's usage/steps.
+        if (producedText) {
+          const footer = await formatUsageFooter(result);
+          if (footer) {
+            await reply?.append({ text: `\n\n${footer}`, thread });
+          }
+        }
+
         // Decide whether this completion delivered anything. Reply text or a
         // deliberate skip always counts. Tool activity counts as real work ONLY
         // if the stream also ended on a clean `stop` — i.e. the model ran tools
@@ -603,6 +617,32 @@ async function executeTurn(
         clearTimeout(attemptTimer);
       }
     }
+  }
+}
+
+// Formats a trailing usage line like gorkie's "30,671 tok · ⚡43.1 tok/s",
+// using the AI SDK's own totals so no manual timing instrumentation is
+// needed. Swallows errors from a provider that doesn't report usage so a
+// missing footer never breaks the reply.
+async function formatUsageFooter(
+  result: Awaited<ReturnType<Agent['stream']>>
+): Promise<string | undefined> {
+  try {
+    const usage = await result.usage;
+    const steps = await result.steps;
+    const totalTokens = usage?.totalTokens;
+    if (!totalTokens) {
+      return;
+    }
+    const speed = steps.at(-1)?.performance?.effectiveOutputTokensPerSecond;
+    const tokPart = `${totalTokens.toLocaleString('en-US')} tok`;
+    const speedPart =
+      typeof speed === 'number' && Number.isFinite(speed)
+        ? ` · ⚡${speed.toFixed(1)} tok/s`
+        : '';
+    return `_${tokPart}${speedPart}_`;
+  } catch {
+    return;
   }
 }
 
