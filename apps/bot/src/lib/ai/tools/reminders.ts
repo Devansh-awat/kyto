@@ -3,8 +3,10 @@ import {
   createReminder,
   listActiveReminders,
   MAX_RECURRING_RUNS,
+  pauseReminder as pauseReminderRow,
   type Reminder,
   type ReminderSchedule,
+  resumeReminder as resumeReminderRow,
 } from '@repo/db/queries';
 import { tool } from 'ai';
 import type { Message } from 'chat';
@@ -259,6 +261,7 @@ export function listRemindersTool({ message }: { message: Message }) {
           id: row.id,
           kind: row.kind,
           nextRunAt: row.nextRunAt.toISOString(),
+          paused: row.paused,
           recurrence: row.recurrence,
           runsSoFar: row.runCount,
           runsRemaining: MAX_RECURRING_RUNS - row.runCount,
@@ -275,7 +278,7 @@ export function listRemindersTool({ message }: { message: Message }) {
 export function cancelReminderTool({ message }: { message: Message }) {
   return tool({
     description:
-      "Cancel one of the current user's recurring reminders by id (get the id from listReminders).",
+      "Cancel one of the current user's recurring reminders by id (get the id from listReminders). This permanently deletes it; use pauseReminder instead to stop it temporarily.",
     inputSchema: z.object({
       id: z.string().min(1),
     }),
@@ -288,6 +291,50 @@ export function cancelReminderTool({ message }: { message: Message }) {
         ? { success: true }
         : {
             error: 'No matching active reminder found for this user.',
+            success: false,
+          };
+    },
+  });
+}
+
+export function pauseReminderTool({ message }: { message: Message }) {
+  return tool({
+    description:
+      "Temporarily pause one of the current user's recurring reminders by id — the scheduler skips it until resumeReminder is called. Unlike cancelReminder, this does not delete it.",
+    inputSchema: z.object({
+      id: z.string().min(1),
+    }),
+    execute: async ({ id }) => {
+      const paused = await pauseReminderRow({
+        id,
+        userId: message.author.userId,
+      });
+      return paused
+        ? { success: true }
+        : {
+            error: 'No matching active, unpaused reminder found for this user.',
+            success: false,
+          };
+    },
+  });
+}
+
+export function resumeReminderTool({ message }: { message: Message }) {
+  return tool({
+    description:
+      "Resume one of the current user's paused recurring reminders by id. Recomputes the next fire time from now, so a long pause doesn't fire a backlog of missed runs.",
+    inputSchema: z.object({
+      id: z.string().min(1),
+    }),
+    execute: async ({ id }) => {
+      const resumed = await resumeReminderRow({
+        id,
+        userId: message.author.userId,
+      });
+      return resumed
+        ? { success: true }
+        : {
+            error: 'No matching paused reminder found for this user.',
             success: false,
           };
     },

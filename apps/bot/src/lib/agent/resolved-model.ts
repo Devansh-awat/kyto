@@ -26,13 +26,29 @@ export interface ModelHolder {
 
 const store = new AsyncLocalStorage<ModelHolder>();
 
+// Marks the current async branch as a recurring-reminder job rather than a
+// live chat turn, so the auto-router (if ever reached from that branch — the
+// pinned Gemini attempt used today doesn't normally hit it, but a future
+// fallback might) is biased even cheaper than normal chat. Separate from
+// `store`/`ModelHolder` since it's a plain boolean flag, not per-turn state.
+const recurringJobStore = new AsyncLocalStorage<true>();
+
+/** Run `fn` marked as a recurring-reminder job for the auto-router cost bias. */
+export function runAsRecurringJob<T>(fn: () => T): T {
+  return recurringJobStore.run(true, fn);
+}
+
 const COMPLETIONS_HINT = '/chat/completions';
 const MODEL_FIELD = /"model"\s*:\s*"([^"]+)"/;
 // Read at most this many bytes of the response before giving up on finding the
 // model field — the slug appears in the first SSE chunk, so this is generous.
 const MAX_SCAN_BYTES = 16_384;
-// Auto-router cost/quality bias: 7 is OpenRouter's default, 10 is cheapest.
-const COST_QUALITY_TRADEOFF = 7;
+// Auto-router cost/quality bias: 0 = pure quality, 7 = OpenRouter's own
+// default, 10 = cheapest. 9 for normal chat turns, 10 (cheapest) for recurring
+// reminder jobs — both biased well past the default toward cost, chosen by
+// the owner over the previous default-ish 7.
+const COST_QUALITY_TRADEOFF = 9;
+const RECURRING_JOB_COST_QUALITY_TRADEOFF = 10;
 // Cap output tokens on HackClub requests. OpenRouter enforces the daily spend
 // limit PESSIMISTICALLY: with no `max_tokens` it assumes the model could emit
 // its full max output, projects that worst-case cost, and returns
@@ -165,13 +181,16 @@ function tuneCompletionsBody(
     let changed = false;
     if (payload.model === ROUTER_MODEL_ID) {
       const plugins = Array.isArray(payload.plugins) ? payload.plugins : [];
+      const tradeoff = recurringJobStore.getStore()
+        ? RECURRING_JOB_COST_QUALITY_TRADEOFF
+        : COST_QUALITY_TRADEOFF;
       payload.plugins = [
         ...plugins.filter(
           (plugin: { id?: string }) => plugin?.id !== AUTO_ROUTER_PLUGIN_ID
         ),
         {
           id: AUTO_ROUTER_PLUGIN_ID,
-          cost_quality_tradeoff: COST_QUALITY_TRADEOFF,
+          cost_quality_tradeoff: tradeoff,
           allowed_models: ALLOWED_MODELS,
         },
       ];

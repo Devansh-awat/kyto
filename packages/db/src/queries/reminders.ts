@@ -104,11 +104,73 @@ export async function cancelReminder({
   return deleted.length > 0;
 }
 
+/** Pause an active, not-yet-paused reminder — the scheduler skips it until resumed. */
+export async function pauseReminder({
+  id,
+  userId,
+}: {
+  id: string;
+  userId: string;
+}): Promise<boolean> {
+  const updated = await db
+    .update(reminders)
+    .set({ paused: true })
+    .where(
+      and(
+        eq(reminders.id, id),
+        eq(reminders.userId, userId),
+        eq(reminders.active, true),
+        eq(reminders.paused, false)
+      )
+    )
+    .returning({ id: reminders.id });
+  return updated.length > 0;
+}
+
+/**
+ * Resume a paused reminder. Recomputes nextRunAt from "now" (not the original
+ * schedule anchor) so a long pause doesn't fire a backlog of missed runs.
+ */
+export async function resumeReminder({
+  id,
+  userId,
+}: {
+  id: string;
+  userId: string;
+}): Promise<boolean> {
+  const [row] = await db
+    .select()
+    .from(reminders)
+    .where(
+      and(
+        eq(reminders.id, id),
+        eq(reminders.userId, userId),
+        eq(reminders.active, true),
+        eq(reminders.paused, true)
+      )
+    );
+  if (!row) {
+    return false;
+  }
+  const nextRunAt = computeNextRun(scheduleOf(row), new Date());
+  await db
+    .update(reminders)
+    .set({ paused: false, nextRunAt })
+    .where(eq(reminders.id, id));
+  return true;
+}
+
 export async function getDueReminders(now: Date): Promise<Reminder[]> {
   return await db
     .select()
     .from(reminders)
-    .where(and(eq(reminders.active, true), lte(reminders.nextRunAt, now)));
+    .where(
+      and(
+        eq(reminders.active, true),
+        eq(reminders.paused, false),
+        lte(reminders.nextRunAt, now)
+      )
+    );
 }
 
 /**

@@ -256,6 +256,25 @@ export function catalogAttempt(model: string): PiAttempt {
   };
 }
 
+/**
+ * Build a direct-Gemini-key attempt for any model id (bypasses HackClub/
+ * OpenRouter entirely). Used to pin the full-harness recurring 'agent'
+ * reminders to the owner's own Gemini key rather than the auto-router.
+ */
+export function geminiAttempt(model: string): PiAttempt {
+  if (!env.GEMINI_API_KEY) {
+    throw new Error('GEMINI_API_KEY is not configured.');
+  }
+  return {
+    customEnv: {
+      GEMINI_API_KEY: env.GEMINI_API_KEY,
+      GEMINI_BASE_URL,
+    },
+    model,
+    provider: GEMINI_PROVIDER,
+  };
+}
+
 // Deep backup after the whole catalog has been exhausted: the same model
 // families on baishui, then Gemini. Keeps the bot resilient if HackClub is down.
 export const deepFallbackAttempts: PiAttempt[] = [

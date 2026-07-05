@@ -3,6 +3,7 @@ import type { SandboxContext } from '@repo/ai';
 import type { ToolSet } from 'ai';
 import type { Chat, Message, Thread } from 'chat';
 import { env } from '@/env';
+import { backgroundProcessTools } from './tools/background';
 import { browseTool } from './tools/browse';
 import {
   canvasDeleteTool,
@@ -13,6 +14,7 @@ import {
 import { createChannelTool, setChannelTopicTool } from './tools/channels';
 import { deploySiteTool, removeSiteTool } from './tools/deploy-site';
 import { checkInboxTool, replyEmailTool, sendEmailTool } from './tools/email';
+import { deleteFileTool, fileStatTool } from './tools/files';
 import { generateImageTool } from './tools/generate-image';
 import { getChannelInfoTool } from './tools/get-channel-info';
 import { getFileTool } from './tools/get-file';
@@ -28,11 +30,13 @@ import {
 } from './tools/pins';
 import { pollTool } from './tools/poll';
 import { postMessageTool } from './tools/post-message';
-import { reactTool } from './tools/react';
+import { reactTool, unreactTool } from './tools/react';
 import { readConversationHistoryTool } from './tools/read-conversation-history';
 import {
   cancelReminderTool,
   listRemindersTool,
+  pauseReminderTool,
+  resumeReminderTool,
   scheduleRecurringReminderTool,
 } from './tools/reminders';
 import { scheduleReminderTool } from './tools/schedule-reminder';
@@ -40,9 +44,11 @@ import { searchSlackTool } from './tools/search-slack';
 import { searchWebTool } from './tools/search-web';
 import { editAsUserTool, sendAsUserTool } from './tools/send-as-user';
 import { skipTool } from './tools/skip';
+import { runSubagentTool } from './tools/subagent';
 import { summarizeThreadTool } from './tools/summarize-thread';
 import { uploadFileTool } from './tools/upload-file';
 import { fetchUrlTool, getPermalinkTool } from './tools/url';
+import { waitTool } from './tools/wait';
 
 export function buildTools({
   bot,
@@ -66,8 +72,18 @@ export function buildTools({
   // Email tools run host-side via AgentMail; only registered when a key is set.
   const agentMailKey = env.AGENTMAIL_API_KEY;
 
+  const { runBackgroundProcess, getProcessOutput, killProcess } =
+    backgroundProcessTools({ getSandboxContext });
+
   return {
     react: reactTool({ bot }),
+    unreact: unreactTool({ bot }),
+    wait: waitTool(),
+    deleteFile: deleteFileTool({ getSandboxContext }),
+    fileStat: fileStatTool({ getSandboxContext }),
+    runBackgroundProcess,
+    getProcessOutput,
+    killProcess,
     getUser: getUserTool(),
     postMessage: postMessageTool({ bot }),
     getFile: getFileTool({ getSandboxContext }),
@@ -108,9 +124,12 @@ export function buildTools({
     scheduleRecurringReminder: scheduleRecurringReminderTool({ message }),
     listReminders: listRemindersTool({ message }),
     cancelReminder: cancelReminderTool({ message }),
+    pauseReminder: pauseReminderTool({ message }),
+    resumeReminder: resumeReminderTool({ message }),
     searchSlack: searchSlackTool({ message }),
     searchWeb: searchWebTool({ apiKey: env.EXA_API_KEY }),
     summarizeThread: summarizeThreadTool({ bot, threadId: thread.id }),
+    runSubagent: runSubagentTool({ bot, message, thread }),
     generateImage: generateImageTool({
       upload: async ({ bytes, mediaType, index, total }) => {
         const filename = `kyto-image-${index + 1}.${mediaType.split('/').at(1) ?? 'png'}`;

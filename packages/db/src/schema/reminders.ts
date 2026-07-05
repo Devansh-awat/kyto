@@ -59,6 +59,11 @@ export const reminders = pgTable(
     weekday: integer('weekday'),
     nextRunAt: timestamp('next_run_at', { withTimezone: true }).notNull(),
     active: boolean('active').notNull().default(true),
+    // Distinct from `active`: a paused reminder is still active (not
+    // cancelled, not auto-stopped at the run cap) but temporarily skipped by
+    // the scheduler. Resuming recomputes nextRunAt from "now" so a long pause
+    // doesn't fire a backlog of missed runs.
+    paused: boolean('paused').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),

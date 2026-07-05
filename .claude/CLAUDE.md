@@ -175,7 +175,40 @@ Run these automatically after each completed change, in order, **without asking*
   `bookmarkLink`, `createChannel`, `setChannelTopic`, `poll`, `getPermalink`,
   `fetchUrl`, `deploySite`, `removeSite`, `skip`, `sendAsUser`, `editAsUser`,
   `browse`, `sendEmail`/`checkInbox`/`replyEmail`, `joinThread`,
-  `scheduleRecurringReminder`/`listReminders`/`cancelReminder`.
+  `scheduleRecurringReminder`/`listReminders`/`cancelReminder`/
+  `pauseReminder`/`resumeReminder`, `unreact` (removeReaction), `wait`,
+  `deleteFile`/`fileStat`, `runBackgroundProcess`/`getProcessOutput`/
+  `killProcess`, `runSubagent`.
+- **`unreact`** (`tools/react.ts`): mirrors `react` but calls
+  `thread.adapter.removeReaction`.
+- **`wait`** (`tools/wait.ts`): a mid-turn pause — sleeps up to 4 minutes then
+  returns control to the model, for spacing out steps or riding out a brief
+  external delay. Capped well under `ATTEMPT_TIMEOUT_MS` (10 min default) so it
+  can never itself trip the per-attempt watchdog. For anything longer, use
+  `scheduleReminder` instead — this does not survive past the current turn.
+- **`deleteFile`/`fileStat`** (`tools/files.ts`): sandbox file ops. `SandboxContext`
+  only exposes `readBinaryFile`/`writeBinaryFile`/`run` (no dedicated delete/stat
+  API), so both shell out via `session.run` (`rm`/`stat`), same pattern as
+  `browse.ts`/`deploy-site.ts`, with the same workspace-path containment check
+  `uploadFile` uses.
+- **Background process control** (`tools/background.ts`): `runBackgroundProcess`/
+  `getProcessOutput`/`killProcess`. The harness's `ExecutionEnv.Shell.exec` is a
+  single blocking call with no native detached-process concept, so this is a
+  standard nohup-and-logfile trick on top of it (start detached, capture the
+  pid, poll the logfile/pid liveness). Handles live in an in-memory `Map` closed
+  over per-turn (`buildTools()` runs fresh each turn) — no persistence, and any
+  still-running background process dies with the turn's sandbox.
+- **`runSubagent`** (`tools/subagent.ts`): delegates a research task to a
+  separate, lightweight tool loop so it doesn't clutter the main turn's own
+  context. NOT the full Pi harness — a plain `generateText` call (like the old
+  reminder-agent design) through HackClub's `openrouter/auto`, with a curated
+  read-only toolset (`searchWeb`, `searchSlack`, `fetchUrl`, `getUser`,
+  `getChannelInfo`, `readConversationHistory`, `listThreads`,
+  `summarizeThread`) — no posting/reacting/acting, no sandbox. Capped at 8
+  steps. Because it also targets `openrouter/auto`, it picks up the same
+  request tuning as the main turn (resolved-model.ts's fetch patch keys off the
+  request URL/model id, not the call site) — same cost bias, same
+  `max_tokens` cap on HackClub.
 - **Recurring reminders** (`tools/reminders.ts`, `lib/reminders/scheduler.ts`,
   `lib/reminders/agent.ts`, `@repo/db` schema/queries `reminders`): unlike the
   pre-existing one-time `scheduleReminder` (which uses Slack's native
@@ -214,18 +247,28 @@ Run these automatically after each completed change, in order, **without asking*
     of any Pi turn. Output is truncated to 4000 chars. Min interval **300s (5
     minutes)** — spinning a real sandbox each run has real compute cost, above
     `'script'`'s bare HTTP fetch but well below `'agent'`'s LLM call.
-  - `'agent'`: runs a small one-shot `generateText` call (`lib/reminders/
-    agent.ts`, `runReminderAgent`) using the owner's **own Gemini key**
-    (`GEMINI_API_KEY`, direct Google OpenAI-compatible endpoint — NOT the
-    HackClub-routed main model) on **`gemini-3.1-flash-lite`** specifically,
-    with `text` as the instructions and one `fetchUrl` tool (`stopWhen:
-    stepCountIs(4)`); whatever text it returns is posted. This is a plain AI
-    SDK call via `@ai-sdk/openai-compatible`'s `createOpenAICompatible`, NOT
-    the full Pi harness — no sandbox, no session, no tool loop beyond the one
-    fetch tool, deliberately kept minimal since it runs unattended. Min
-    interval **3600s (1 hour)** — a real (if cheap) model call each run, so the
-    floor exists to keep unattended cost predictable regardless of how the
-    reminder text is phrased.
+  - `'agent'`: runs through the **SAME Pi harness** as a normal chat turn
+    (`lib/reminders/agent.ts`, `runReminderAgent`) — full lazy sandbox, full
+    tool set (search, canvas, pins, sites, the works), via `buildTools()` —
+    but pinned to the owner's **own Gemini key** (`geminiAttempt('gemini-3.1-flash-lite')`,
+    `packages/ai/src/providers/pi.ts`), never `openrouter/auto`/HackClub, so an
+    unattended job's cost stays predictable regardless of what the reminder
+    text asks for. Upgraded from a bare `generateText` + single `fetchUrl`
+    tool (the original minimal design) specifically so it can genuinely "do
+    all kyto can." Since there's no live Slack event to build a `Thread`/
+    `Message` from, `runReminderAgent` mints one: a synthetic `Message` (`new
+    Message({...})`, the `chat` SDK class has a public constructor) plus a
+    real `Thread` — `bot.openDM(reminder.userId)` for the default DM case, or
+    a small marker post to `bot.channel(channelId)` (to get a `threadId`) then
+    `bot.thread(...)` for a channel-targeted one. Runs via `agent.generate()`
+    (non-streaming — no live user watching a "thinking" card), and the
+    scheduler posts whatever final text it returns, same as before. Caveat:
+    `searchSlack` needs a live per-event Slack search `action_token`, which a
+    scheduled fire doesn't have — the system prompt and tool docs tell the
+    model to prefer `searchWeb` instead. Min interval **3600s (1 hour)**
+    unchanged — a real model call each run (plus now, potentially, real
+    sandbox/tool cost), so the floor stays high to keep unattended cost
+    predictable.
   Every recurring reminder, regardless of kind, now **auto-cancels after
   `MAX_RECURRING_RUNS` (20) fires** (`queries/reminders.ts`) — `advanceReminder`
   increments `run_count` and flips `active: false` instead of computing a next
@@ -243,13 +286,23 @@ Run these automatically after each completed change, in order, **without asking*
   always-on systemd process that polls `reminders WHERE active AND
   next_run_at <= now()`, builds the message per-kind, resolves the target
   (`bot.channel(...)` or `bot.openDM(...)`), posts, then calls
-  `advanceReminder`. `listReminders`/`cancelReminder` let the model manage a
-  user's own reminders (cancel is scoped by `user_id`, so a user can only
-  cancel their own; `listReminders` now also surfaces `kind`, `channelId`,
-  `url`, and `runsRemaining`). This durable state is a deliberate exception to
-  the "no persistence" policy elsewhere (turns/sandbox) — a reminder's entire
-  purpose is to outlive the turn that created it, same precedent as site
-  hosting and the opt-in allowlist.
+  `advanceReminder`. `listReminders`/`cancelReminder`/`pauseReminder`/
+  `resumeReminder` let the model manage a user's own reminders (all scoped by
+  `user_id`, so a user can only touch their own; `listReminders` now also
+  surfaces `kind`, `channelId`, `url`, `paused`, and `runsRemaining`). This
+  durable state is a deliberate exception to the "no persistence" policy
+  elsewhere (turns/sandbox) — a reminder's entire purpose is to outlive the
+  turn that created it, same precedent as site hosting and the opt-in
+  allowlist.
+  **Pause/resume** (`paused` column, `packages/db/src/schema/reminders.ts` +
+  `queries/reminders.ts`, added via the same one-off raw-SQL `ADD COLUMN IF
+  NOT EXISTS` pattern as above — never `db:push`, same data-loss risk):
+  distinct from `active` (cancel deletes the row; the run-cap sets
+  `active: false` permanently). `pauseReminder` only flips `paused: true` on
+  an active, not-already-paused row; `getDueReminders` filters `paused =
+  false` so the scheduler skips it. `resumeReminder` flips it back **and**
+  recomputes `next_run_at` from *now* (not the original schedule anchor) so a
+  long pause doesn't fire a backlog of missed runs.
 - **`joinThread`/`leaveThread`** (`tools/join-thread.ts`/`tools/leave-thread.ts`):
   let the model opt itself into (or out of) auto-responding to a thread's
   future messages **without** needing a fresh @mention each time. Both just
@@ -578,8 +631,18 @@ Run these automatically after each completed change, in order, **without asking*
   so we patch it to tune the request and read the response:
   - **Tune the auto-router**: inject the `auto-router` plugin into the
     `openrouter/auto` request body with `cost_quality_tradeoff` (0 = best/dearest,
-    7 = default, 10 = cheapest; we use **7** — the default, biased away from the
-    always-premium routing that blew up cost) and an **`allowed_models`** allowlist
+    7 = OpenRouter's own default, 10 = cheapest). Two tiers, both biased well past
+    the default toward cost, chosen by the owner: **9** for a normal chat turn
+    (`COST_QUALITY_TRADEOFF`), **10** (cheapest) when the call originates from a
+    recurring-reminder job (`RECURRING_JOB_COST_QUALITY_TRADEOFF`) — the latter
+    is picked via `runAsRecurringJob()`'s `AsyncLocalStorage` flag
+    (`recurringJobStore`), read by `tuneCompletionsBody` at request time. Note the
+    recurring `'agent'` reminder kind is pinned to a direct Gemini attempt (see
+    reminders section above) so it doesn't normally reach `openrouter/auto` at
+    all today — the flag exists for if/when a HackClub fallback is added to that
+    path, and is exercised right now by `runSubagent` (`tools/subagent.ts`, which
+    also targets `openrouter/auto` and picks up whichever tier is active for its
+    caller). An **`allowed_models`** allowlist
     of **exact slugs** (the field is `allowed_models` — the older `model_patterns`
     name is silently ignored by the proxy; not globs, so no
     `-nano`/`-mini`/`-flash-lite`/`-fast` or `claude-fable-5` leakage):
