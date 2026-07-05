@@ -198,17 +198,29 @@ Run these automatically after each completed change, in order, **without asking*
   pid, poll the logfile/pid liveness). Handles live in an in-memory `Map` closed
   over per-turn (`buildTools()` runs fresh each turn) — no persistence, and any
   still-running background process dies with the turn's sandbox.
-- **`runSubagent`** (`tools/subagent.ts`): delegates a research task to a
-  separate, lightweight tool loop so it doesn't clutter the main turn's own
-  context. NOT the full Pi harness — a plain `generateText` call (like the old
-  reminder-agent design) through HackClub's `openrouter/auto`, with a curated
-  read-only toolset (`searchWeb`, `searchSlack`, `fetchUrl`, `getUser`,
-  `getChannelInfo`, `readConversationHistory`, `listThreads`,
-  `summarizeThread`) — no posting/reacting/acting, no sandbox. Capped at 8
-  steps. Because it also targets `openrouter/auto`, it picks up the same
-  request tuning as the main turn (resolved-model.ts's fetch patch keys off the
-  request URL/model id, not the call site) — same cost bias, same
-  `max_tokens` cap on HackClub.
+- **`runSubagent`** (`tools/subagent.ts`): a subagent is kyto itself — the
+  SAME full Pi harness, sandbox, and complete toolset (including this tool, so
+  it can delegate further), so it doesn't clutter the caller's own context.
+  Upgraded from the original design (a stripped-down `generateText` loop with
+  a curated read-only toolset, no sandbox) specifically so it can genuinely
+  act, not just research. Two deliberate differences from a normal turn: (1)
+  pinned to the owner's own Gemini key (`geminiAttempt('gemini-3.1-flash-lite')`)
+  rather than `openrouter/auto`/HackClub, so delegating doesn't touch the
+  shared HackClub budget; (2) runs `subagentSystemPrompt` (`prompts/index.ts`)
+  instead of `systemPrompt` — same operational guidance (finishing the job,
+  parallel tool calls, sandbox rules, tool docs) but omits `identityPrompt`
+  (the "kyto is one of the best agents around" self-framing, split out of
+  `corePrompt` in `prompts/core.ts` specifically to make this possible) and
+  `personalityPrompt` (tone-mirroring, irrelevant to something that never
+  talks to a user directly). Runs via `agent.generate()` (non-streaming) in
+  its own fresh sandbox session (not the caller's), built the same way
+  `runReminderAgent` builds one. Since it can recursively call itself, depth
+  is capped at `MAX_SUBAGENT_DEPTH` (2) via an `AsyncLocalStorage` counter —
+  otherwise a runaway recursive spawn has no natural backstop. Because the
+  full toolset includes this tool itself, `tools/subagent.ts` and
+  `toolset.ts` are mutually referential; the cycle is broken with a lazy
+  `await import('@/lib/ai/toolset')` inside `execute()` rather than a static
+  top-level import, so there's no circular-import issue at module load time.
 - **Recurring reminders** (`tools/reminders.ts`, `lib/reminders/scheduler.ts`,
   `lib/reminders/agent.ts`, `@repo/db` schema/queries `reminders`): unlike the
   pre-existing one-time `scheduleReminder` (which uses Slack's native

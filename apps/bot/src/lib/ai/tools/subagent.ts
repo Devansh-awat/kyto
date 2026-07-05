@@ -1,95 +1,117 @@
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { generateText, stepCountIs, tool } from 'ai';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import {
+  createAgent,
+  geminiAttempt,
+  openSession,
+  type SandboxContext,
+  subagentSystemPrompt,
+} from '@repo/ai';
+import { loadSkills } from '@repo/sandbox';
+import { tool } from 'ai';
 import type { Chat, Message, Thread } from 'chat';
 import { z } from 'zod';
-import { env } from '@/env';
+import { sandbox } from '@/lib/agent/sandbox';
+import { requestHints } from '@/lib/ai/hints';
 import { errorMessage } from '@/lib/utils/error';
-import { getChannelInfoTool } from './get-channel-info';
-import { getUserTool } from './get-user';
-import { listThreadsTool } from './list-threads';
-import { readConversationHistoryTool } from './read-conversation-history';
-import { searchSlackTool } from './search-slack';
-import { searchWebTool } from './search-web';
-import { summarizeThreadTool } from './summarize-thread';
-import { fetchUrlTool } from './url';
 
-// A lightweight delegate for open-ended research that would otherwise burn
-// through the main turn's own context (many searches/fetches whose raw
-// results aren't worth keeping around). By default runs through HackClub's
-// openrouter/auto (same tuning/cost-bias as the main turn — see
-// resolved-model.ts's global fetch patch, which keys off the request URL/
-// model id, not which code path called it) as a plain generateText tool
-// loop, NOT the full Pi harness: no sandbox, no session, just a curated
-// read-only research toolset. It cannot post, react, or otherwise act — only
-// investigate and report back.
+// A subagent is kyto itself — same full Pi harness, same sandbox, same
+// complete toolset (including this very tool, so it can delegate further) —
+// apart from two deliberate differences: it's pinned to the owner's own
+// Gemini key (gemini-3.1-flash-lite) rather than openrouter/auto/HackClub,
+// and it runs `subagentSystemPrompt` instead of the normal `systemPrompt`
+// (drops the "kyto is one of the best agents around" self-framing and the
+// tone-mirroring personality guidance, neither of which make sense for a
+// one-shot delegate that never talks to a user directly). This makes it a
+// genuine, if smaller/cheaper, kyto instance rather than a stripped-down
+// research-only loop (the tool's original design).
 //
-// A recurring 'agent' reminder (lib/reminders/agent.ts) builds its own tools
-// with `pinnedModel` set to its own Gemini attempt, so a subagent it launches
-// never touches openrouter/auto/HackClub either — keeping the whole
-// unattended job's cost on the same predictable, separate quota.
-const SUBAGENT_MAX_STEPS = 8;
+// Since it can spawn its own subagents recursively, depth is capped via
+// AsyncLocalStorage — a runaway recursive spawn would otherwise be a real
+// cost/time risk with no natural backstop.
+const SUBAGENT_MODEL = 'gemini-3.1-flash-lite';
+const MAX_SUBAGENT_DEPTH = 2;
 
-const SUBAGENT_SYSTEM_PROMPT =
-  'You are a focused research subagent delegated a single task by the main kyto agent. You have read-only research tools (searchWeb, searchSlack, fetchUrl, getUser, getChannelInfo, readConversationHistory, listThreads, summarizeThread) but cannot post messages, react, or otherwise act. Investigate thoroughly using the tools available, then reply with ONLY a clear, well-organized written report of your findings — no preamble, no meta-commentary about being a subagent.';
+const depthStore = new AsyncLocalStorage<number>();
 
 export function runSubagentTool({
   bot,
   message,
-  pinnedModel,
   thread,
 }: {
   bot: Chat;
   message: Message;
-  /** Override the default openrouter/auto model, e.g. to pin to Gemini. */
-  pinnedModel?: { model: string; apiKey: string; baseURL: string };
   thread: Thread;
 }) {
   return tool({
     description:
-      'Delegate a focused research task to a lightweight subagent with its own tool loop and separate context — use for open-ended investigation (searching Slack/the web, reading history, looking things up) that would otherwise clutter your own context. Returns a written report. It is read-only: it cannot post messages, react, or take any action, only investigate and report back.',
+      'Delegate a task to a subagent — a full copy of kyto (same sandbox, same tools, can even delegate further) except it runs on a cheaper pinned model and has no "chat personality" framing, since it never talks to a user directly. Use it for open-ended investigation or self-contained work that would otherwise clutter your own context. Returns a written report.',
     inputSchema: z.object({
       task: z
         .string()
         .min(1)
         .describe(
-          'The research task or question to delegate, with as much detail/context as the subagent will need (it has no access to this conversation).'
+          'The task to delegate, with as much detail/context as the subagent will need (it has no access to this conversation beyond what you pass here).'
         ),
     }),
     execute: async ({ task }) => {
+      const depth = depthStore.getStore() ?? 0;
+      if (depth >= MAX_SUBAGENT_DEPTH) {
+        return {
+          error: `Subagent nesting limit (${MAX_SUBAGENT_DEPTH}) reached — cannot delegate further.`,
+          success: false,
+        };
+      }
       try {
-        const provider = createOpenAICompatible({
-          apiKey: pinnedModel?.apiKey ?? env.HACKCLUB_API_KEY,
-          baseURL: pinnedModel?.baseURL ?? 'https://ai.hackclub.com/proxy/v1',
-          name: pinnedModel ? 'gemini' : 'hackclub',
+        return await depthStore.run(depth + 1, async () => {
+          const hints = await requestHints({ message, thread });
+          const skills = await loadSkills();
+          let sandboxContext: SandboxContext | undefined;
+          // Import lazily to avoid a hard circular-import cycle at module
+          // load time (toolset.ts registers this tool; this tool needs
+          // toolset.ts's buildTools to give the subagent its own full set).
+          const { buildTools } = await import('@/lib/ai/toolset');
+          const tools = buildTools({
+            bot,
+            getSandboxContext: () => sandboxContext,
+            message,
+            thread,
+          });
+          const subagentSessionId = `${thread.id}-subagent-${crypto.randomUUID()}`;
+          const agent = createAgent({
+            attempt: geminiAttempt(SUBAGENT_MODEL),
+            onSandboxReady: (context) => {
+              sandboxContext = context;
+            },
+            sandbox,
+            sessionId: subagentSessionId,
+            skills,
+            systemPrompt: subagentSystemPrompt({ hints }),
+            tools,
+          });
+          const session = await openSession({
+            agent,
+            threadId: subagentSessionId,
+          });
+          try {
+            const result = await agent.generate({ prompt: task, session });
+            const report = result.text.trim();
+            if (report) {
+              return { report, success: true };
+            }
+            if (result.toolCalls.length > 0) {
+              return {
+                report: '(Completed actions with no additional message.)',
+                success: true,
+              };
+            }
+            return {
+              error: 'Subagent produced an empty report.',
+              success: false,
+            };
+          } finally {
+            await session.destroy().catch(() => undefined);
+          }
         });
-        const { text } = await generateText({
-          model: provider.languageModel(
-            pinnedModel?.model ?? 'openrouter/auto'
-          ),
-          prompt: task,
-          stopWhen: stepCountIs(SUBAGENT_MAX_STEPS),
-          system: SUBAGENT_SYSTEM_PROMPT,
-          tools: {
-            fetchUrl: fetchUrlTool(),
-            getChannelInfo: getChannelInfoTool({ currentThreadId: thread.id }),
-            getUser: getUserTool(),
-            listThreads: listThreadsTool({ currentThreadId: thread.id }),
-            readConversationHistory: readConversationHistoryTool({
-              currentThreadId: thread.id,
-            }),
-            searchSlack: searchSlackTool({ message }),
-            searchWeb: searchWebTool({ apiKey: env.EXA_API_KEY }),
-            summarizeThread: summarizeThreadTool({ bot, threadId: thread.id }),
-          },
-        });
-        const report = text.trim();
-        if (!report) {
-          return {
-            error: 'Subagent produced an empty report.',
-            success: false,
-          };
-        }
-        return { report, success: true };
       } catch (error) {
         return { error: errorMessage(error), success: false };
       }
