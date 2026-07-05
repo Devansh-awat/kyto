@@ -19,6 +19,7 @@ import { generateImageTool } from './tools/generate-image';
 import { getChannelInfoTool } from './tools/get-channel-info';
 import { getFileTool } from './tools/get-file';
 import { getUserTool } from './tools/get-user';
+import { ghTool } from './tools/gh';
 import { joinThreadTool } from './tools/join-thread';
 import { leaveThreadTool } from './tools/leave-thread';
 import { listThreadsTool } from './tools/list-threads';
@@ -112,6 +113,7 @@ export function buildTools({
     deploySite: deploySiteTool({ getSandboxContext }),
     removeSite: removeSiteTool(),
     browse: browseTool({ getSandboxContext }),
+    ...(env.GH_TOKEN && { gh: ghTool({ getSandboxContext }) }),
     ...(hasVoiceKey && {
       textToSpeech: textToSpeechTool({
         upload: async ({ data, filename }) => {

@@ -51,6 +51,9 @@ export const env = createEnv({
     // a distinct key confirmed to have it enabled. Optional — voice tools
     // fall back to Gemini TTS (or are unavailable) if unset.
     HACKCLUB_REPLICATE_API_KEY: z.string().min(1).optional(),
+    // gh CLI token — injected only per-call into the agent's own sandbox
+    // (never as a persistent session env var); see tools/gh.ts.
+    GH_TOKEN: z.string().min(1).optional(),
 
     LANGFUSE_BASEURL: z.url().optional(),
     LANGFUSE_PUBLIC_KEY: z.string().min(1).optional(),
