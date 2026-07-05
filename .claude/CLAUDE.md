@@ -284,9 +284,20 @@ Run these automatically after each completed change, in order, **without asking*
   channel. Omit `channelId` to keep the original DM-the-creator behavior.
   `startReminderScheduler` (`index.ts`) runs a `setInterval` (30s) on the
   always-on systemd process that polls `reminders WHERE active AND
-  next_run_at <= now()`, builds the message per-kind, resolves the target
-  (`bot.channel(...)` or `bot.openDM(...)`), posts, then calls
-  `advanceReminder`. `listReminders`/`cancelReminder`/`pauseReminder`/
+  next_run_at <= now()`, builds the message per-kind, then **posts with a
+  distinct "kyto (reminder)" identity** (`postReminderMessage` in
+  `scheduler.ts`) so a reminder-fired message reads as visibly different from
+  a live reply — a raw `chat.postMessage` call with `username`/`icon_emoji`
+  overrides, needing the `chat:write.customize` scope (added to
+  `slack-manifest.json`, synced, app reinstall required to actually grant
+  it). This **bypasses** the chat-sdk's own `Thread.post`/`Channel.post` —
+  traced into `@chat-adapter/slack`'s `postMessage` and confirmed it forwards
+  no username/icon override at any of its 3 `chat.postMessage` call sites, so
+  supporting this properly would mean patching 3 sites across 2 packages;
+  reusing the adapter's own **exported** `SlackFormatConverter`
+  (`toSlackPayload`) instead gets identical markdown rendering with one small
+  local function, no patch needed. Then calls `advanceReminder`.
+  `listReminders`/`cancelReminder`/`pauseReminder`/
   `resumeReminder` let the model manage a user's own reminders (all scoped by
   `user_id`, so a user can only touch their own; `listReminders` now also
   surfaces `kind`, `channelId`, `url`, `paused`, and `runsRemaining`). This
@@ -587,7 +598,9 @@ Run these automatically after each completed change, in order, **without asking*
   **UP** from that model toward the best (closest-better first), then **DOWN**
   toward the weakest. `LEADERBOARD_FALLBACK` is the owner's arena leaderboard,
   best→worst, restricted to reachable models: the strong tier on HackClub
-  (opus-4.8/4.7/4.6, gpt-5.5/5.4, glm-5.2/5.1, sonnet-4.6), then the rest of the
+  (opus-4.8, gpt-5.5, opus-4.7, **glm-5.2**, gpt-5.4, opus-4.6, sonnet-4.6,
+  glm-5.1 — re-ranked 2026-07-05 per refreshed arena data: glm-5.2 now beats
+  gpt-5.4 and opus-4.6, previously ordered the other way), then the rest of the
   leaderboard appended in rank order (kimi-k2.7-code, gemini-3.1-pro-preview,
   gemini-3.5-flash, deepseek-v4-flash, kimi-k2.6, minimax-m3, deepseek-v4-pro,
   qwen3.6-plus, grok-4.3, grok-build-0.1, gemini-3-flash-preview, minimax-m2.7,
@@ -699,7 +712,12 @@ Run these automatically after each completed change, in order, **without asking*
   → <resolved>`); the `in_progress` emit carries **no `output`** — setting it on
   both states made the finished row render the `provider · model` line **twice**
   (the "model name shown twice" bug). Reasoning tokens the model streams render as
-  a **separate `Reasoning` task** (`stream/index.ts`) so the two don't collide.
+  a **separate task, also titled `Thinking`** (`stream/index.ts`, own
+  `reasoningTaskId` — was titled `Reasoning` until the owner reported the two
+  differently-labeled blocks read as confusing/disconnected when collapsed;
+  same title now reads as one continuous "kyto is thinking" section — model
+  choice, then its reasoning — while staying a separate task id/row so each
+  still completes independently and ordering is preserved).
   Emitted **`in_progress` while the attempt runs** (so the activity indicator reads
   as working, never a misleading "completed" before anything has happened) and
   marked **`complete` exactly once** via the `completeModelTask()` guard
@@ -800,12 +818,20 @@ Run these automatically after each completed change, in order, **without asking*
   `formatUsageFooter`, called right after the per-attempt stream loop when
   `producedText` is true, appended into the same `reply` buffer that gets
   flushed to Slack. Sourced entirely from the AI SDK's own already-computed
-  totals — `result.usage.totalTokens` and the last entry of `result.steps`'
-  `performance.effectiveOutputTokensPerSecond` — no manual turn-start
-  timestamp needed. `Agent` (the `HarnessAgent` instance type) is now exported
-  from `packages/ai/src/index.ts` so `agent/index.ts` can type the result of
-  `agent.stream(...)` without reaching into `@ai-sdk/harness` internals.
-  Skipped (no footer) on a deliberate `skip` or a tool-only turn with no text.
+  totals — `result.usage.totalTokens` for the count. Speed is the
+  **aggregate** `outputTokens / responseTimeMs` summed across **all** of
+  `result.steps`, not any single step's own
+  `performance.effectiveOutputTokensPerSecond` — that was the original
+  implementation and produced an impossible **"0.0 tok/s"** bug: a
+  multi-step turn's *last* step is often a short/empty synthesis right after
+  a tool call, with 0 output tokens of its own, so reading only that step's
+  rate could be zero despite real output earlier in the turn. The speed
+  segment is omitted entirely (not shown as `0.0`) if the aggregate can't
+  produce a positive rate. `Agent` (the `HarnessAgent` instance type) is now
+  exported from `packages/ai/src/index.ts` so `agent/index.ts` can type the
+  result of `agent.stream(...)` without reaching into `@ai-sdk/harness`
+  internals. Skipped (no footer) on a deliberate `skip` or a tool-only turn
+  with no text.
 - **The bot's Slack username is a gorkie-era handle (`gorkie__devansh_`)** — the
   app was forked from gorkie and the handle stuck (display name shows "Not set"
   live even though `slack-manifest.json` says `kyto`; the manifest needs syncing
