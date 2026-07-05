@@ -311,9 +311,12 @@ export const LEADERBOARD_FALLBACK: PiAttempt[] = [
   catalogAttempt('anthropic/claude-opus-4.8'),
   catalogAttempt('openai/gpt-5.5'),
   catalogAttempt('anthropic/claude-opus-4.7'),
-  catalogAttempt('anthropic/claude-opus-4.6'),
-  catalogAttempt('openai/gpt-5.4'),
+  // Re-ranked 2026-07-05 per the owner's refreshed arena data: GLM 5.2 now
+  // beats GPT 5.4 and Claude Opus 4.6 (previously ordered opus-4.6, gpt-5.4,
+  // glm-5.2 — just this one swap changed vs. the prior ranking).
   catalogAttempt('z-ai/glm-5.2'),
+  catalogAttempt('openai/gpt-5.4'),
+  catalogAttempt('anthropic/claude-opus-4.6'),
   catalogAttempt('anthropic/claude-sonnet-4.6'),
   catalogAttempt('z-ai/glm-5.1'),
   // Below this point: the rest of the owner's leaderboard, appended in rank

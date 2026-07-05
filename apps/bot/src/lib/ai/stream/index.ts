@@ -97,6 +97,12 @@ export async function* renderStream({
         break;
       }
       case 'reasoning-start': {
+        // Titled "Thinking" — same title as the model-pick task in
+        // agent/index.ts — so the two read as one continuous "kyto is
+        // thinking" section (model choice, then its reasoning) rather than
+        // two differently-labeled blocks. Kept as a SEPARATE task id/row (own
+        // `reasoningTaskId`) so ordering (model chosen, then its reasoning)
+        // is preserved and each still completes independently.
         tally.reasoningParts += 1;
         const id = reasoningTaskId(part.id);
         if (!showTask({ id, visibleTaskIds })) {
@@ -108,7 +114,7 @@ export async function* renderStream({
         yield {
           id,
           status: 'in_progress',
-          title: 'Reasoning',
+          title: 'Thinking',
           type: 'task_update',
         };
         break;
@@ -130,7 +136,7 @@ export async function* renderStream({
           id,
           output: text ? clamp(text, REASONING_OUTPUT_MAX_LENGTH) : undefined,
           status: 'complete',
-          title: 'Reasoning',
+          title: 'Thinking',
           type: 'task_update',
         };
         reasoning.delete(id);
