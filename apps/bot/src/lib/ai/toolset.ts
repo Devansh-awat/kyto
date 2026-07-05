@@ -72,7 +72,9 @@ export function buildTools({
 
   // Email tools run host-side via AgentMail; only registered when a key is set.
   const agentMailKey = env.AGENTMAIL_API_KEY;
-  const geminiApiKey = env.GEMINI_API_KEY;
+  const hasVoiceKey = Boolean(
+    env.HACKCLUB_REPLICATE_API_KEY || env.GEMINI_API_KEY
+  );
 
   const { runBackgroundProcess, getProcessOutput, killProcess } =
     backgroundProcessTools({ getSandboxContext });
@@ -110,7 +112,7 @@ export function buildTools({
     deploySite: deploySiteTool({ getSandboxContext }),
     removeSite: removeSiteTool(),
     browse: browseTool({ getSandboxContext }),
-    ...(geminiApiKey && {
+    ...(hasVoiceKey && {
       textToSpeech: textToSpeechTool({
         upload: async ({ data, filename }) => {
           await thread.post({

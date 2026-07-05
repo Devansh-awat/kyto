@@ -46,6 +46,11 @@ export const env = createEnv({
 
     E2B_API_KEY: z.string().min(1),
     AGENTMAIL_API_KEY: z.string().min(1).optional(),
+    // Separate from HACKCLUB_API_KEY: Replicate access on HackClub's proxy is
+    // gated per-key (the main key 401s on /proxy/v1/replicate/*), so this is
+    // a distinct key confirmed to have it enabled. Optional — voice tools
+    // fall back to Gemini TTS (or are unavailable) if unset.
+    HACKCLUB_REPLICATE_API_KEY: z.string().min(1).optional(),
 
     LANGFUSE_BASEURL: z.url().optional(),
     LANGFUSE_PUBLIC_KEY: z.string().min(1).optional(),
