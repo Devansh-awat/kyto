@@ -508,7 +508,7 @@ async function executeTurn(
         if (producedText) {
           const footer = await formatUsageFooter(result);
           if (footer) {
-            await reply?.append({ text: `\n\n${footer}`, thread });
+            await reply?.appendFooter({ text: `\n\n${footer}`, thread });
           }
         }
 

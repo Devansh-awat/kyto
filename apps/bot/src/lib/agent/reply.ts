@@ -19,6 +19,11 @@ const TABLE_SEPARATOR = /^\|?[\s:|-]*-{2,}[\s:|-]*$/;
 export function createReply({ threadId }: { threadId: string }) {
   let buffer = '';
   let lastPostAt = Date.now();
+  // Tracks the most recently posted chunk so a trailing footer can be
+  // appended to it in place (via edit) instead of always becoming a new
+  // Slack message — see `appendFooter`.
+  let lastSent: { edit(text: string): Promise<unknown> } | undefined;
+  let lastSentText = '';
 
   async function drain({
     force,
@@ -38,8 +43,10 @@ export function createReply({ threadId }: { threadId: string }) {
       }
       await thread
         .post({ markdown: chunk })
-        .then(() => {
+        .then((sent) => {
           lastPostAt = Date.now();
+          lastSent = sent;
+          lastSentText = chunk;
         })
         .catch((error: unknown) => {
           logger.warn({ err: error, threadId }, '[agent] reply post failed');
@@ -106,6 +113,37 @@ export function createReply({ threadId }: { threadId: string }) {
     append({ text, thread }: { text: string; thread: Thread }): Promise<void> {
       buffer += text;
       return drain({ force: false, thread });
+    },
+    // Appends trailing text (the usage footer) to the END of the actual final
+    // message rather than risking it going out as its own new Slack message.
+    // If there's still unflushed content buffered, just tack the text on —
+    // it rides out together in the next flush. Otherwise (the main reply
+    // already fully posted), edit the last posted message in place.
+    async appendFooter({
+      text,
+      thread,
+    }: {
+      text: string;
+      thread: Thread;
+    }): Promise<void> {
+      if (buffer.trim()) {
+        buffer += text;
+        return;
+      }
+      if (!lastSent) {
+        buffer += text;
+        return drain({ force: false, thread });
+      }
+      const combined = `${lastSentText}${text}`;
+      try {
+        await lastSent.edit(combined);
+        lastSentText = combined;
+      } catch (error) {
+        logger.warn(
+          { err: error, threadId },
+          '[agent] failed to edit reply with usage footer'
+        );
+      }
     },
     flush({ thread }: { thread: Thread }): Promise<void> {
       return drain({ force: true, thread });
