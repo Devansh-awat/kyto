@@ -639,14 +639,35 @@ async function formatUsageFooter(
     // (e.g. right after a tool call), whose own outputTokens can be 0 — taking
     // just that step's effectiveOutputTokensPerSecond produced an impossible
     // "0.0 tok/s" despite real output earlier in the turn.
+    //
+    // Derive each step's time from its OWN effectiveOutputTokensPerSecond
+    // (outputTokens / requestSeconds) rather than reading responseTimeMs
+    // directly — the harness's step objects don't reliably populate
+    // responseTimeMs (observed: summing it produced 0 across an entire turn,
+    // hiding the speed segment every time), but effectiveOutputTokensPerSecond
+    // is the field actually populated with real per-step data.
     let outputTokens = 0;
-    let responseMs = 0;
+    let timeSeconds = 0;
     for (const step of steps) {
-      outputTokens += step.usage?.outputTokens ?? 0;
-      responseMs += step.performance?.responseTimeMs ?? 0;
+      const stepOutputTokens = step.usage?.outputTokens ?? 0;
+      const rate = step.performance?.effectiveOutputTokensPerSecond;
+      if (stepOutputTokens > 0 && rate && rate > 0) {
+        outputTokens += stepOutputTokens;
+        timeSeconds += stepOutputTokens / rate;
+      }
     }
-    const speed =
-      responseMs > 0 ? outputTokens / (responseMs / 1000) : undefined;
+    const speed = timeSeconds > 0 ? outputTokens / timeSeconds : undefined;
+    if (speed === undefined) {
+      logger.info(
+        {
+          stepPerformances: steps.map((step) => ({
+            outputTokens: step.usage?.outputTokens,
+            performance: step.performance,
+          })),
+        },
+        '[agent] usage footer: could not compute a speed from any step'
+      );
+    }
     const tokPart = `${totalTokens.toLocaleString('en-US')} tok`;
     const speedPart =
       typeof speed === 'number' && Number.isFinite(speed) && speed > 0

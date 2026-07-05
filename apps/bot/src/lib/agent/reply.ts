@@ -1,4 +1,5 @@
 import { StreamingMarkdownRenderer, type Thread } from 'chat';
+import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
 
 // Slack rejects oversized messages (`msg_blocks_too_long`), so streamed prose is
@@ -19,10 +20,10 @@ const TABLE_SEPARATOR = /^\|?[\s:|-]*-{2,}[\s:|-]*$/;
 export function createReply({ threadId }: { threadId: string }) {
   let buffer = '';
   let lastPostAt = Date.now();
-  // Tracks the most recently posted chunk so a trailing footer can be
-  // appended to it in place (via edit) instead of always becoming a new
-  // Slack message — see `appendFooter`.
-  let lastSent: { edit(text: string): Promise<unknown> } | undefined;
+  // Tracks the most recently posted chunk's id/text so a trailing footer can
+  // be attached to it in place (via a block-kit edit) instead of always
+  // becoming a new Slack message — see `appendFooter`.
+  let lastSentId: string | undefined;
   let lastSentText = '';
 
   async function drain({
@@ -45,7 +46,7 @@ export function createReply({ threadId }: { threadId: string }) {
         .post({ markdown: chunk })
         .then((sent) => {
           lastPostAt = Date.now();
-          lastSent = sent;
+          lastSentId = sent.id;
           lastSentText = chunk;
         })
         .catch((error: unknown) => {
@@ -114,11 +115,16 @@ export function createReply({ threadId }: { threadId: string }) {
       buffer += text;
       return drain({ force: false, thread });
     },
-    // Appends trailing text (the usage footer) to the END of the actual final
-    // message rather than risking it going out as its own new Slack message.
-    // If there's still unflushed content buffered, just tack the text on —
-    // it rides out together in the next flush. Otherwise (the main reply
-    // already fully posted), edit the last posted message in place.
+    // Attaches trailing text (the usage footer) to the actual final message
+    // as a Slack "context" block — the real smaller/muted-text primitive
+    // (`markdown_text`/plain text has no font-size control at all) — instead
+    // of risking it going out as its own new message. Force-flushes any
+    // remaining buffered content first so there's always a genuine "last
+    // message" to attach to, then edits that message via a direct
+    // chat.update bypass: `markdown_text` and `blocks` are mutually
+    // exclusive on Slack's API, so once we want a context block we have to
+    // render the whole message as blocks (a `markdown` block reproducing
+    // what `markdown_text` would have shown, plus the context block).
     async appendFooter({
       text,
       thread,
@@ -126,22 +132,28 @@ export function createReply({ threadId }: { threadId: string }) {
       text: string;
       thread: Thread;
     }): Promise<void> {
-      if (buffer.trim()) {
-        buffer += text;
+      await drain({ force: true, thread });
+      if (!lastSentId) {
         return;
       }
-      if (!lastSent) {
-        buffer += text;
-        return drain({ force: false, thread });
-      }
-      const combined = `${lastSentText}${text}`;
       try {
-        await lastSent.edit(combined);
-        lastSentText = combined;
+        const { channel } = slack.decodeThreadId(thread.id);
+        await slack.webClient.apiCall('chat.update', {
+          blocks: [
+            { text: lastSentText, type: 'markdown' },
+            {
+              elements: [{ text: text.replace(/^\n+/, ''), type: 'mrkdwn' }],
+              type: 'context',
+            },
+          ],
+          channel,
+          text: lastSentText,
+          ts: lastSentId,
+        });
       } catch (error) {
         logger.warn(
           { err: error, threadId },
-          '[agent] failed to edit reply with usage footer'
+          '[agent] failed to attach usage footer to reply'
         );
       }
     },
