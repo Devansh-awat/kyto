@@ -381,16 +381,20 @@ Run these automatically after each completed change, in order, **without asking*
   toward the weakest. `LEADERBOARD_FALLBACK` is the owner's arena leaderboard,
   best→worst, restricted to reachable models: the strong tier on HackClub
   (opus-4.8/4.7/4.6, gpt-5.5/5.4, glm-5.2/5.1, sonnet-4.6), then the rest of the
-  leaderboard appended in rank order (kimi-k2.7-code, gemini-3.1-pro-preview,
-  gemini-3.5-flash, deepseek-v4-flash, kimi-k2.6, minimax-m3, deepseek-v4-pro,
+  leaderboard appended in rank order (kimi-k2.7-code, gemini-3.5-flash,
+  deepseek-v4-flash, kimi-k2.6, minimax-m3, deepseek-v4-pro,
   qwen3.6-plus, grok-4.3, grok-build-0.1, gemini-3-flash-preview, minimax-m2.7,
   nemotron-3-ultra-550b-a55b — all verified present on
   `ai.hackclub.com/proxy/v1/models`). Claude Fable 5 is also reachable there now
   (`anthropic/claude-fable-5`) but deliberately excluded — ~2x opus-4.8's
-  per-token cost, not worth it against the daily HackClub spend cap. Both
-  gemini-3.1-pro-preview and gemini-3.5-flash were previously excluded here too
-  for a confirmed 100%-empty-response failure, then re-added at the owner's
-  request (see below) — re-remove if the failure recurs.
+  per-token cost, not worth it against the daily HackClub spend cap.
+  gemini-3.5-flash was previously excluded here too for a confirmed
+  100%-empty-response failure, then re-added at the owner's request (see
+  below) — re-remove if the failure recurs. `gemini-3.1-pro-preview` was
+  re-added at the same time but then dropped again (2026-07-06, owner: too
+  expensive for the quality it delivers against this daily budget) — removed
+  from here, `ALLOWED_MODELS` (`resolved-model.ts`), and `GEMINI_MODELS`
+  (`pi.ts`).
   The **baishui proxy** tail (`jam06452.uk`) is **commented out** — its `/models`
   endpoint answers but every completion fails ("upstream authentication failed" /
   "all provider keys rate-limited or in cooldown"), so it only wasted fallback
@@ -433,28 +437,27 @@ Run these automatically after each completed change, in order, **without asking*
     **gemini-3.1-flash-lite** (the cheap rung — added so auto
     can route simple/casual turns off the premium tier, the main cost blowup, and
     as the signal for handing a turn to the owner's Gemini key), plus
-    `gemini-3.1-pro-preview` and `gemini-3.5-flash` (re-added 2026-07-02 at the
-    owner's request). Both were previously removed: `gemini-3.1-pro-preview`
-    once ended a turn right after its tool calls without ever writing a reply
-    (the empty-response guard counted that as a failed attempt and burned the
-    fallback chain), and `gemini-3.5-flash` returned an **empty response on
-    100% of observed attempts** (22/22 direct via `geminiAttempts`/
-    `GEMINI_MODELS` in `pi.ts`, 10/10 via the auto-router's
-    `google/gemini-3.5-flash` slug in `LEADERBOARD_FALLBACK`) — the owner's
-    Google AI Studio dashboard showed **zero requests metered** against it
-    despite these attempts, meaning the calls were rejected before reaching
-    generation (likely not enabled for a free-tier key at the time), not that
-    the model burned its output budget on thinking; it also only carries a 20
-    RPD free-tier quota vs. 3.1-flash-lite's 500 RPD. Because of that dashboard
-    signal, `gemini-3.5-flash` was kept OUT of `GEMINI_MODELS` (`pi.ts`, the
-    direct-key path) when re-adding it here and to `LEADERBOARD_FALLBACK` — the
-    HackClub-proxied call is a different request path and may not be tier-gated
-    the same way; `gemini-3.1-pro-preview` was re-added to all three (it's not
-    known to have that dashboard issue). If the empty-response failure recurs
-    on either model, watch `[stream] tally` in the logs (0 textDeltas/
-    reasoningParts despite tool activity) and re-remove from `ALLOWED_MODELS`
-    (here) and `LEADERBOARD_FALLBACK` (`pi.ts`), plus `GEMINI_MODELS` (`pi.ts`)
-    for `gemini-3.1-pro-preview`. The
+    `gemini-3.5-flash` (re-added 2026-07-02 at the owner's request after
+    previously being removed for returning an **empty response on 100% of
+    observed attempts** — 22/22 direct via `geminiAttempts`/`GEMINI_MODELS` in
+    `pi.ts`, 10/10 via the auto-router's `google/gemini-3.5-flash` slug in
+    `LEADERBOARD_FALLBACK`). The owner's Google AI Studio dashboard showed
+    **zero requests metered** against it despite these attempts, meaning the
+    calls were rejected before reaching generation (likely not enabled for a
+    free-tier key at the time), not that the model burned its output budget on
+    thinking; it also only carries a 20 RPD free-tier quota vs.
+    3.1-flash-lite's 500 RPD. Because of that dashboard signal,
+    `gemini-3.5-flash` was kept OUT of `GEMINI_MODELS` (`pi.ts`, the direct-key
+    path) when re-adding it here and to `LEADERBOARD_FALLBACK` — the
+    HackClub-proxied call is a different request path and may not be
+    tier-gated the same way. If the empty-response failure recurs, watch
+    `[stream] tally` in the logs (0 textDeltas/reasoningParts despite tool
+    activity) and re-remove from `ALLOWED_MODELS` (here) and
+    `LEADERBOARD_FALLBACK` (`pi.ts`). `gemini-3.1-pro-preview` was also
+    re-added at the same time, then dropped again 2026-07-06 (owner: too
+    expensive) from all three of `ALLOWED_MODELS` (here), `LEADERBOARD_FALLBACK`
+    (`pi.ts`), and `GEMINI_MODELS` (`pi.ts`) — it's not known to have the
+    dashboard/empty-response issue, this was purely a cost call. The
     interceptor strips a stale `Content-Length` when re-issuing the tuned
     (longer) body so the appended `plugins` isn't truncated. Verified honored
     by the HackClub proxy. Edit `COST_QUALITY_TRADEOFF`/`ALLOWED_MODELS`.
@@ -578,6 +581,27 @@ Run these automatically after each completed change, in order, **without asking*
   `offerOptIn` (`lib/onboarding.ts`) — a **visible in-thread reply** (not
   ephemeral) with an "i accept" button, mirroring how gorkie surfaces its join
   gate. Membership of `OPT_IN_CHANNEL` is the allowlist (`lib/allowed-users.ts`).
+- **Kyto is closed-source.** `packages/ai/src/prompts/slack.ts` states plainly
+  that Kyto's own code is private with no public repo link to share (it
+  started as a private fork of the open-source gorkie project, but that's as
+  far as the public trail goes). This replaced an earlier line that
+  (incorrectly) told users Kyto's source was available at
+  `github.com/imdevarsh/gorkie-slack` — that's the upstream fork source, not
+  Kyto's own repo, and it isn't public.
+- **Owner grounding**: without it, asked "who coded you", kyto had confabulated
+  answers like "a team of engineers at a private organization" and disputed
+  the truth when the real owner said so. `RequestHints.ownerUserId` (from
+  `OWNER_USER_ID`, populated in `apps/bot/src/lib/ai/hints.ts`) is rendered
+  into the context block (`packages/ai/src/prompts/context.ts`) as a plain
+  statement of who owns/built Kyto, with an explicit instruction not to hedge
+  or invent a different origin. Skipped if `OWNER_USER_ID` is unset.
+- **`main` is the branch actually deployed** (`kyto.service`'s working
+  directory tracks whatever is checked out here). A separate branch,
+  `rebuild-on-upstream`, diverged with its own version of these identity fixes
+  plus unrelated features (MCP client, `gh` CLI tool, `/btw` side-channel,
+  Replicate TTS) — it was never merged and is **not** the source of truth for
+  this doc. Don't assume anything on that branch is live; re-derive fixes
+  directly on `main` instead of assuming a merge will happen.
 
 ### DM threading (patched @chat-adapter/slack)
 - **Every DM reply is now threaded, mirroring channel behavior.** The upstream

@@ -7,6 +7,11 @@ export function contextPrompt(hints: RequestHints): string {
       `Your own Slack user id is ${hints.botUserId}. A message that mentions <@${hints.botUserId}> (or @kyto) is addressed to YOU — never mistake it for another bot like gorkie. Never look this id up as a user.`
     );
   }
+  if (hints.ownerUserId) {
+    lines.push(
+      `Your owner and creator is <@${hints.ownerUserId}> — they personally built and run Kyto. If asked who made you, coded you, or owns you, state this plainly and don't hedge, deflect, or invent a different origin (e.g. "a team of engineers").`
+    );
+  }
   if (hints.workspace) {
     lines.push(`The current Slack workspace is ${hints.workspace}.`);
   }

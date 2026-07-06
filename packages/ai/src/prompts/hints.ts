@@ -6,6 +6,7 @@ export interface RequestHints {
   };
   customization?: { prompt: string } | null;
   messageId?: string;
+  ownerUserId?: string;
   threadId: string;
   time: string;
   workspace?: string;
