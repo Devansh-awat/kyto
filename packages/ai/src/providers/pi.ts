@@ -307,17 +307,18 @@ export const deepFallbackAttempts: PiAttempt[] = [
 // the exact model it resolved to, then walks THIS list UP from that model
 // (toward #1) and then DOWN (toward the weakest). Order matters: the index of
 // each entry is the rank used for the up/down pivot.
+// Pruned 2026-07-06: same OpenRouter pricing check as ALLOWED_MODELS
+// (resolved-model.ts) — dropped the 5 most expensive entries by blended
+// (prompt+completion) price: openai/gpt-5.5 ($0.000035), and
+// anthropic/claude-opus-4.8/4.7/4.6 (all $0.00003, tied) and
+// anthropic/claude-sonnet-4.6 ($0.000018). Re-run the same pricing check
+// before re-adding any of these.
 export const LEADERBOARD_FALLBACK: PiAttempt[] = [
-  catalogAttempt('anthropic/claude-opus-4.8'),
-  catalogAttempt('openai/gpt-5.5'),
-  catalogAttempt('anthropic/claude-opus-4.7'),
   // Re-ranked 2026-07-05 per the owner's refreshed arena data: GLM 5.2 now
   // beats GPT 5.4 and Claude Opus 4.6 (previously ordered opus-4.6, gpt-5.4,
   // glm-5.2 — just this one swap changed vs. the prior ranking).
   catalogAttempt('z-ai/glm-5.2'),
   catalogAttempt('openai/gpt-5.4'),
-  catalogAttempt('anthropic/claude-opus-4.6'),
-  catalogAttempt('anthropic/claude-sonnet-4.6'),
   catalogAttempt('z-ai/glm-5.1'),
   // Below this point: the rest of the owner's leaderboard, appended in rank
   // order (verified reachable via ai.hackclub.com/proxy/v1/models).
