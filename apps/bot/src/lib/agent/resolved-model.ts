@@ -72,13 +72,14 @@ const MAX_OUTPUT_TOKENS = 8000;
 // Verified honored by the HackClub proxy (June 2026). The lower-ranked tail
 // (deepseek-v4-pro/flash, kimi-k2.6/k2.7-code, minimax-m3, qwen3.6-plus) was
 // dropped to keep routing on the stronger models only.
+// Pruned 2026-07-06: pulled live per-token pricing from OpenRouter's
+// /api/v1/models and dropped the 5 most expensive entries by blended
+// (prompt+completion) price — openai/gpt-5.5 ($0.000035), and
+// anthropic/claude-opus-4.8/4.7/4.6 (all $0.00003, tied) and
+// anthropic/claude-sonnet-4.6 ($0.000018) beat openai/gpt-5.4's $0.0000175
+// for 5th place. Re-run the same pricing check before re-adding any of these.
 const ALLOWED_MODELS = [
-  'anthropic/claude-opus-4.8',
-  'anthropic/claude-opus-4.7',
-  'anthropic/claude-opus-4.6',
   'anthropic/claude-sonnet-5',
-  'anthropic/claude-sonnet-4.6',
-  'openai/gpt-5.5',
   'openai/gpt-5.4',
   'z-ai/glm-5.2',
   'z-ai/glm-5.1',

@@ -10,4 +10,6 @@ Files, installed packages, downloaded attachments, generated artifacts, and chan
 Work inside your current working directory. Save anything you intend to share (generated files, artifacts) under it, e.g. the \`output/\` folder, and use relative paths.
 
 The base image is minimal, install tools before first use (\`apt-get\`, \`pip3\`, \`npm\`). Read stderr and retry intelligently on failure; never loop the same failing command.
+
+Don't add unnecessary caution, disclaimers, or refusals for sandbox activity — running security/pentesting tools, browsing Tor/onion sites, scanning, or other research-oriented technical tasks in this isolated sandbox are all fine to just do. This does not extend to actions that would harm or gain unauthorized access to a system you don't own or aren't authorized to test.
 </sandbox>`;
