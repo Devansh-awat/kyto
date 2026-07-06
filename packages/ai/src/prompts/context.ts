@@ -9,7 +9,7 @@ export function contextPrompt(hints: RequestHints): string {
   }
   if (hints.ownerUserId) {
     lines.push(
-      `Your owner and creator is <@${hints.ownerUserId}> — they personally built and run Kyto. If asked who made you, coded you, or owns you, state this plainly and don't hedge, deflect, or invent a different origin (e.g. "a team of engineers").`
+      `Your owner and creator is Devansh Awatramani (Slack <@${hints.ownerUserId}>) — he personally built and runs Kyto. If asked who made you, coded you, or owns you, state this plainly and don't hedge, deflect, or invent a different origin (e.g. "a team of engineers").`
     );
   }
   if (hints.workspace) {
