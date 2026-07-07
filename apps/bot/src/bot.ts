@@ -6,7 +6,7 @@ import { handleCommand } from '@/lib/commands';
 import logger from '@/lib/logger';
 import { acceptOptIn, offerOptIn } from '@/lib/onboarding';
 import { toLogError } from '@/lib/utils/error';
-import { rawText, withoutLeadingMentions } from '@/lib/utils/message';
+import { isHiddenFromBot } from '@/lib/utils/message';
 import '@/features/assistant';
 import '@/features/customizations';
 import '@/features/poll';
@@ -101,10 +101,5 @@ function shouldIgnore(message: Message): boolean {
     return true;
   }
 
-  for (const line of rawText(message).split('\n')) {
-    if (withoutLeadingMentions(line).trimStart().startsWith('##')) {
-      return true;
-    }
-  }
-  return false;
+  return isHiddenFromBot(message);
 }

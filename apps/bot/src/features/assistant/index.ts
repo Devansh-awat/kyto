@@ -76,6 +76,14 @@ bot.onMemberJoinedChannel(async (event) => {
     return;
   }
 
+  // Only greet when a human actually invited Kyto. A programmatic self-join
+  // (e.g. joining a public channel just to search or read a canvas) carries no
+  // `inviter`, and greeting there is both noise and a ban risk in channels
+  // where normal members aren't allowed to post.
+  if (!event.inviter) {
+    return;
+  }
+
   await bot
     .channel(event.channelId)
     .post(

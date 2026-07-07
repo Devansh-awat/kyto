@@ -114,6 +114,12 @@ export interface AssistantThreadEvent {
 
 export interface MemberJoinedEvent {
   channelId: string;
+  /**
+   * The user who invited this member, when present. Absent on a programmatic
+   * self-join (e.g. `conversations.join` to search a channel), which is how we
+   * tell an intentional human add apart from a silent search-join.
+   */
+  inviter?: string;
   userId: string;
 }
 

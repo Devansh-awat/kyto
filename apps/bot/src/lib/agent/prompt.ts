@@ -5,7 +5,7 @@ import {
 } from '@/harness';
 import { annotateMentions } from '@/lib/agent/mentions';
 import { slack } from '@/lib/chat';
-import { rawSlackText } from '@/lib/utils/message';
+import { isHiddenFromBot, rawSlackText } from '@/lib/utils/message';
 
 // We never persist a session, so the whole Slack thread is the agent's only
 // memory. Cap how many prior messages we replay to bound prompt size.
@@ -48,7 +48,8 @@ export async function buildPrompt(
       .fetchMessages(thread.id, { limit: MAX_THREAD_MESSAGES })
       .catch(() => undefined);
     const prior = (fetched?.messages ?? []).filter(
-      (entry): entry is Message => entry.id !== message.id
+      (entry): entry is Message =>
+        entry.id !== message.id && !isHiddenFromBot(entry)
     );
     if (prior.length > 0) {
       const rendered = await Promise.all(prior.map(renderMessage));

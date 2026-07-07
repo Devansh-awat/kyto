@@ -185,7 +185,9 @@ export class KytoBot {
     socket.on('slack_event', (envelope: SocketEnvelope) => {
       switch (envelope.type) {
         case 'events_api':
-          this.handleEnvelope(envelope, () => this.dispatchEvent(envelope.body));
+          this.handleEnvelope(envelope, () =>
+            this.dispatchEvent(envelope.body)
+          );
           return;
         case 'interactive':
           this.handleInteractive(envelope);
@@ -278,6 +280,7 @@ export class KytoBot {
       case 'member_joined_channel':
         await runAll(this.memberJoinedHandlers, {
           channelId: String(event.channel ?? ''),
+          inviter: event.inviter ? String(event.inviter) : undefined,
           userId: String(event.user ?? ''),
         });
         return;
