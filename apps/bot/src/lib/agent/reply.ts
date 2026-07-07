@@ -1,4 +1,4 @@
-import { StreamingMarkdownRenderer, type Thread } from 'chat';
+import { healMarkdown, type ThreadHandle as Thread } from '@/harness';
 import logger from '@/lib/logger';
 
 // Slack rejects oversized messages (`msg_blocks_too_long`), so streamed prose is
@@ -124,9 +124,7 @@ function hardCut(text: string): number {
 }
 
 function heal(markdown: string): string {
-  const renderer = new StreamingMarkdownRenderer();
-  renderer.push(markdown);
-  return renderer.finish().trim();
+  return healMarkdown(markdown).trim();
 }
 
 function openFence(text: string): string | null {

@@ -1,6 +1,6 @@
 import { tool } from 'ai';
-import type { Message } from 'chat';
 import { z } from 'zod';
+import type { Message } from '@/harness';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
 

@@ -1,16 +1,14 @@
-import { callSlackApi, openSlackView } from '@chat-adapter/slack/api';
-import {
-  createSlackMrkdwn,
-  createSlackPlainText,
-} from '@chat-adapter/slack/format';
 import { personas } from '@repo/ai';
 import {
+  addMcpServer,
   clearUserCustomization,
   getUserCustomization,
+  removeMcpServer,
   setUserCustomization,
 } from '@repo/db/queries';
-import { env } from '@/env';
-import { bot } from '@/lib/chat';
+import type { ModalSubmitEvent, ModalSubmitResult } from '@/harness';
+import { mrkdwn, plainText } from '@/harness';
+import { bot, slack } from '@/lib/chat';
 import logger from '@/lib/logger';
 import { toLogError } from '@/lib/utils/error';
 import {
@@ -20,7 +18,7 @@ import {
   slackActionViewSchema,
 } from './schema';
 import { publishHome } from './service';
-import { buildPresetModal, buildPromptModal } from './views';
+import { buildMcpModal, buildPresetModal, buildPromptModal } from './views';
 
 bot.onAppHomeOpened(async (event) => {
   await publishHome({ userId: event.userId }).catch((error: unknown) => {
@@ -40,28 +38,29 @@ bot.onAction('home_edit_prompt', async (event) => {
     return;
   }
 
-  const opened = await openSlackView({
-    token: env.SLACK_BOT_TOKEN,
-    triggerId: event.triggerId,
-    view: {
-      blocks: [
-        {
-          text: createSlackMrkdwn('Loading custom instructions...'),
-          type: 'section',
-        },
-      ],
-      callback_id: 'home_save_prompt',
-      close: createSlackPlainText('Cancel'),
-      title: createSlackPlainText('Custom Instructions'),
-      type: 'modal',
-    },
-  }).catch((error: unknown) => {
-    logger.warn(
-      { ...toLogError(error), userId: event.user.userId },
-      'Failed to open custom instructions modal'
-    );
-    return null;
-  });
+  const opened = await slack.webClient.views
+    .open({
+      trigger_id: event.triggerId,
+      view: {
+        blocks: [
+          {
+            text: mrkdwn('Loading custom instructions...'),
+            type: 'section',
+          },
+        ],
+        callback_id: 'home_save_prompt',
+        close: plainText('Cancel'),
+        title: plainText('Custom Instructions'),
+        type: 'modal',
+      },
+    })
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), userId: event.user.userId },
+        'Failed to open custom instructions modal'
+      );
+      return null;
+    });
   const view = openedViewSchema.safeParse(opened?.view);
   if (!view.success) {
     return;
@@ -77,20 +76,20 @@ bot.onAction('home_edit_prompt', async (event) => {
     }
   );
 
-  await callSlackApi(
-    'views.update',
-    {
+  await slack.webClient.views
+    .update({
       hash: view.data.hash,
-      view: buildPromptModal({ prompt: customization?.prompt ?? null }),
+      view: buildPromptModal({
+        prompt: customization?.prompt ?? null,
+      }) as never,
       view_id: view.data.id,
-    },
-    { token: env.SLACK_BOT_TOKEN }
-  ).catch((error: unknown) => {
-    logger.warn(
-      { ...toLogError(error), userId: event.user.userId },
-      'Failed to load custom instructions modal'
-    );
-  });
+    })
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), userId: event.user.userId },
+        'Failed to load custom instructions modal'
+      );
+    });
 });
 
 bot.onAction('modal_toggle_presets', async (event) => {
@@ -106,20 +105,21 @@ bot.onAction('modal_toggle_presets', async (event) => {
   const state = parseModalState({ metadata: raw.data.view.private_metadata });
   const prompt = promptFromViewValues({ values: raw.data.view.state?.values });
 
-  await callSlackApi(
-    'views.update',
-    {
+  await slack.webClient.views
+    .update({
       hash: raw.data.view.hash,
-      view: buildPromptModal({ prompt, showPresets: !state.showPresets }),
+      view: buildPromptModal({
+        prompt,
+        showPresets: !state.showPresets,
+      }) as never,
       view_id: raw.data.view.id,
-    },
-    { token: env.SLACK_BOT_TOKEN }
-  ).catch((error: unknown) => {
-    logger.warn(
-      { ...toLogError(error), userId: event.user.userId },
-      'Failed to toggle custom instruction presets'
-    );
-  });
+    })
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), userId: event.user.userId },
+        'Failed to toggle custom instruction presets'
+      );
+    });
 });
 
 bot.onAction('modal_load_preset', async (event) => {
@@ -132,19 +132,21 @@ bot.onAction('modal_load_preset', async (event) => {
     return;
   }
 
-  await callSlackApi(
-    'views.push',
-    {
+  await slack.webClient.views
+    .push({
       trigger_id: event.triggerId,
-      view: buildPresetModal(preset),
-    },
-    { token: env.SLACK_BOT_TOKEN }
-  ).catch((error: unknown) => {
-    logger.warn(
-      { ...toLogError(error), presetId: preset.id, userId: event.user.userId },
-      'Failed to open custom instruction preset'
-    );
-  });
+      view: buildPresetModal(preset) as never,
+    })
+    .catch((error: unknown) => {
+      logger.warn(
+        {
+          ...toLogError(error),
+          presetId: preset.id,
+          userId: event.user.userId,
+        },
+        'Failed to open custom instruction preset'
+      );
+    });
 });
 
 bot.onAction('home_clear_prompt', async (event) => {
@@ -199,5 +201,80 @@ bot.onModalSubmit(
     if (event.callbackId === 'home_save_preset_prompt') {
       return { action: 'clear' };
     }
+  }
+);
+
+// ── MCP servers (per-user, App Home) ────────────────────────────────────────
+
+bot.onAction('home_add_mcp', async (event) => {
+  if (!event.triggerId) {
+    logger.warn(
+      { userId: event.user.userId },
+      'Add-MCP action missing trigger ID'
+    );
+    return;
+  }
+  await slack.webClient.views
+    .open({ trigger_id: event.triggerId, view: buildMcpModal() as never })
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), userId: event.user.userId },
+        'Failed to open MCP modal'
+      );
+    });
+});
+
+bot.onAction('home_remove_mcp', async (event) => {
+  const name = event.value;
+  if (!name) {
+    return;
+  }
+  await removeMcpServer({ name, userId: event.user.userId })
+    .then(() => publishHome({ userId: event.user.userId }))
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), name, userId: event.user.userId },
+        'Failed to remove MCP server'
+      );
+    });
+});
+
+bot.onModalSubmit(
+  'home_add_mcp_server',
+  async (event: ModalSubmitEvent): Promise<ModalSubmitResult> => {
+    const name = event.values.mcp_name?.trim().toLowerCase();
+    const url = event.values.mcp_url?.trim();
+    const authorization = event.values.mcp_authorization?.trim() || undefined;
+    if (!(name && /^[\w-]+$/.test(name))) {
+      return {
+        action: 'errors',
+        errors: { mcp_name: 'Use letters, digits, - or _ only.' },
+      };
+    }
+    if (!(url && /^https?:\/\//.test(url))) {
+      return {
+        action: 'errors',
+        errors: { mcp_url: 'Enter an http(s) URL.' },
+      };
+    }
+    try {
+      await addMcpServer({
+        authorization,
+        name,
+        url,
+        userId: event.user.userId,
+      });
+    } catch (error) {
+      logger.warn(
+        { ...toLogError(error), name, userId: event.user.userId },
+        'Failed to add MCP server'
+      );
+      return {
+        action: 'errors',
+        errors: { mcp_url: 'Could not save this server. Try again.' },
+      };
+    }
+    await publishHome({ userId: event.user.userId }).catch(() => undefined);
+    return;
   }
 );

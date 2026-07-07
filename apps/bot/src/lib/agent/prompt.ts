@@ -1,5 +1,8 @@
-import { slackMrkdwnToMarkdown } from '@chat-adapter/slack/format';
-import type { Message, Thread } from 'chat';
+import {
+  type Message,
+  mrkdwnToMarkdown,
+  type ThreadHandle as Thread,
+} from '@/harness';
 import { annotateMentions } from '@/lib/agent/mentions';
 import { slack } from '@/lib/chat';
 import { rawSlackText } from '@/lib/utils/message';
@@ -22,7 +25,7 @@ function authorLabel(message: Message): string {
 async function renderMessage(message: Message): Promise<string> {
   const slackText = rawSlackText(message);
   const text = slackText
-    ? slackMrkdwnToMarkdown(await annotateMentions(slackText))
+    ? mrkdwnToMarkdown(await annotateMentions(slackText))
     : message.text;
   return `@${authorLabel(message)} (${message.author.userId}): ${text}`;
 }

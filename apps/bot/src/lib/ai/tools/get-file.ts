@@ -1,5 +1,4 @@
 import nodePath from 'node:path/posix';
-import { fetchSlackFile } from '@chat-adapter/slack/api';
 import type { SandboxContext } from '@repo/ai';
 import { tool } from 'ai';
 import { z } from 'zod';
@@ -46,9 +45,8 @@ export function getFileTool({
         throw new Error(`Could not resolve a download URL for: ${file}`);
       }
 
-      const response = await fetchSlackFile({
-        token: env.SLACK_BOT_TOKEN,
-        url,
+      const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${env.SLACK_BOT_TOKEN}` },
       });
       if (!response.ok) {
         throw new Error(`Failed to download Slack file: ${response.status}`);

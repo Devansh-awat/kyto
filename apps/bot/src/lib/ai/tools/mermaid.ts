@@ -1,7 +1,7 @@
 import { deflateSync } from 'node:zlib';
 import { tool } from 'ai';
-import type { Thread } from 'chat';
 import { z } from 'zod';
+import type { ThreadHandle as Thread } from '@/harness';
 import { errorMessage } from '@/lib/utils/error';
 
 export function mermaidTool({ thread }: { thread: Thread }) {

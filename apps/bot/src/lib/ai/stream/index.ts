@@ -1,5 +1,5 @@
 import type { TextStreamPart, ToolSet } from 'ai';
-import type { StreamChunk } from 'chat';
+import type { StreamChunk } from '@/harness';
 import logger from '@/lib/logger';
 import { clamp } from '@/lib/utils/text';
 import { renderTask } from './tasks';

@@ -6,8 +6,8 @@ import {
   type ReminderSchedule,
 } from '@repo/db/queries';
 import { tool } from 'ai';
-import type { Message } from 'chat';
 import { z } from 'zod';
+import type { Message } from '@/harness';
 import { errorMessage } from '@/lib/utils/error';
 
 const WEEKDAY_NAMES = [

@@ -1,8 +1,12 @@
 import nodePath from 'node:path/posix';
 import type { SandboxContext } from '@repo/ai';
-import type { ToolSet } from 'ai';
-import type { Chat, Message, Thread } from 'chat';
+import { listMcpServers } from '@repo/db/queries';
+import { type Tool, type ToolSet, tool } from 'ai';
+import { z } from 'zod';
 import { env } from '@/env';
+import type { KytoBot, Message, ThreadHandle } from '@/harness';
+import { buildMcpTools } from '@/lib/ai/mcp';
+import logger from '@/lib/logger';
 import { browseTool } from './tools/browse';
 import {
   canvasDeleteTool,
@@ -35,6 +39,12 @@ import {
   listRemindersTool,
   scheduleRecurringReminderTool,
 } from './tools/reminders';
+import {
+  bashTool,
+  editFileTool,
+  readFileTool,
+  writeFileTool,
+} from './tools/sandbox';
 import { scheduleReminderTool } from './tools/schedule-reminder';
 import { searchSlackTool } from './tools/search-slack';
 import { searchWebTool } from './tools/search-web';
@@ -44,66 +54,63 @@ import { summarizeThreadTool } from './tools/summarize-thread';
 import { uploadFileTool } from './tools/upload-file';
 import { fetchUrlTool, getPermalinkTool } from './tools/url';
 
-export function buildTools({
+export interface BuiltTools {
+  /** Live view of the tool names currently exposed to the model. */
+  activeTools: () => string[];
+  /** Close per-turn resources (MCP connections). */
+  close: () => Promise<void>;
+  tools: ToolSet;
+}
+
+/**
+ * Build the turn's toolset. Core tools are always visible; uncommon tools
+ * (browser, email, rare Slack ops) and the user's MCP tools are DEFERRED —
+ * registered but hidden from the model until it calls `loadTools`, so their
+ * schemas don't ride along in every prompt. `activeTools` feeds streamText's
+ * prepareStep, which is what actually gates visibility per step.
+ */
+export async function buildTools({
   bot,
   getSandboxContext,
   message,
   thread,
 }: {
-  bot: Chat;
-  getSandboxContext: () => SandboxContext | undefined;
+  bot: KytoBot;
+  getSandboxContext: () => SandboxContext;
   message: Message;
-  thread: Thread;
-}): ToolSet {
-  // Only expose "act as the owner" tools when this turn was triggered by the
-  // owner. Registering them conditionally means other users never get access.
+  thread: ThreadHandle;
+}): Promise<BuiltTools> {
   const authorUserId = message.author.userId;
   const canActAsOwner =
     Boolean(env.SLACK_USER_TOKEN) &&
     Boolean(env.OWNER_USER_ID) &&
     authorUserId === env.OWNER_USER_ID;
-
-  // Email tools run host-side via AgentMail; only registered when a key is set.
   const agentMailKey = env.AGENTMAIL_API_KEY;
 
-  return {
+  const core: ToolSet = {
+    bash: bashTool({ getSandboxContext }),
+    readFile: readFileTool({ getSandboxContext }),
+    writeFile: writeFileTool({ getSandboxContext }),
+    editFile: editFileTool({ getSandboxContext }),
     react: reactTool({ bot }),
     getUser: getUserTool(),
     postMessage: postMessageTool({ bot }),
     getFile: getFileTool({ getSandboxContext }),
     joinThread: joinThreadTool({ thread }),
     leaveThread: leaveThreadTool({ thread }),
-    ...(canActAsOwner && {
-      sendAsUser: sendAsUserTool({ authorUserId, thread }),
-      editAsUser: editAsUserTool({ authorUserId, thread }),
-    }),
     canvasRead: canvasReadTool(),
     canvasWrite: canvasWriteTool({ thread }),
     canvasList: canvasListTool({ thread }),
-    canvasDelete: canvasDeleteTool(),
-    pinMessage: pinMessageTool({ authorUserId, thread }),
-    unpinMessage: unpinMessageTool({ authorUserId, thread }),
-    bookmarkLink: bookmarkLinkTool({ thread }),
-    createChannel: createChannelTool(),
-    setChannelTopic: setChannelTopicTool({ thread }),
-    poll: pollTool({ thread }),
     getPermalink: getPermalinkTool({ thread }),
     fetchUrl: fetchUrlTool(),
     deploySite: deploySiteTool({ getSandboxContext }),
     removeSite: removeSiteTool(),
-    browse: browseTool({ getSandboxContext }),
-    ...(agentMailKey && {
-      sendEmail: sendEmailTool({ apiKey: agentMailKey }),
-      checkInbox: checkInboxTool({ apiKey: agentMailKey }),
-      replyEmail: replyEmailTool({ apiKey: agentMailKey }),
-    }),
     skip: skipTool({ threadId: thread.id }),
     listThreads: listThreadsTool({ currentThreadId: thread.id }),
     readConversationHistory: readConversationHistoryTool({
       currentThreadId: thread.id,
     }),
     getChannelInfo: getChannelInfoTool({ currentThreadId: thread.id }),
-    mermaid: mermaidTool({ thread }),
     scheduleReminder: scheduleReminderTool({ message }),
     scheduleRecurringReminder: scheduleRecurringReminderTool({ message }),
     listReminders: listRemindersTool({ message }),
@@ -115,7 +122,7 @@ export function buildTools({
       upload: async ({ bytes, mediaType, index, total }) => {
         const filename = `kyto-image-${index + 1}.${mediaType.split('/').at(1) ?? 'png'}`;
         await thread.post({
-          files: [{ data: Buffer.from(bytes), filename }],
+          files: [{ data: bytes, filename }],
           markdown:
             total > 1 ? `Generated image ${index + 1}` : 'Generated image',
         });
@@ -124,10 +131,6 @@ export function buildTools({
     uploadFile: uploadFileTool({
       upload: async ({ filename, path, title }) => {
         const sandboxContext = getSandboxContext();
-        if (!sandboxContext) {
-          throw new Error('No active sandbox session is available.');
-        }
-
         const { session, sessionWorkDir } = sandboxContext;
         const sandboxPath = nodePath.normalize(
           path.startsWith('/') ? path : nodePath.join(sessionWorkDir, path)
@@ -140,20 +143,149 @@ export function buildTools({
             'uploadFile can only upload files from the workspace.'
           );
         }
-
         const bytes = await session.readBinaryFile({ path: sandboxPath });
         if (!bytes) {
           throw new Error(`Could not find file: ${path}`);
         }
-
         const resolvedFilename =
           filename ?? nodePath.basename(sandboxPath) ?? 'artifact';
         await thread.post({
-          files: [{ data: Buffer.from(bytes), filename: resolvedFilename }],
+          files: [{ data: bytes, filename: resolvedFilename }],
           markdown: title ?? resolvedFilename,
         });
         return { filename: resolvedFilename, uploaded: true };
       },
     }),
+  };
+
+  // Deferred: registered but hidden until loadTools names them.
+  const deferred: Record<string, { summary: string; tool: Tool }> = {
+    browse: {
+      summary: 'drive a real Chromium browser (screenshots, clicks, scraping)',
+      tool: browseTool({ getSandboxContext }),
+    },
+    canvasDelete: {
+      summary: 'delete a Slack canvas',
+      tool: canvasDeleteTool(),
+    },
+    createChannel: {
+      summary: 'create a Slack channel',
+      tool: createChannelTool(),
+    },
+    setChannelTopic: {
+      summary: 'set a channel topic',
+      tool: setChannelTopicTool({ thread }),
+    },
+    bookmarkLink: {
+      summary: 'add a bookmark to a channel',
+      tool: bookmarkLinkTool({ thread }),
+    },
+    pinMessage: {
+      summary: 'pin a message',
+      tool: pinMessageTool({ authorUserId, thread }),
+    },
+    unpinMessage: {
+      summary: 'unpin a message',
+      tool: unpinMessageTool({ authorUserId, thread }),
+    },
+    poll: {
+      summary: 'post an interactive poll',
+      tool: pollTool({ thread }),
+    },
+    mermaid: {
+      summary: 'render a mermaid diagram as an image',
+      tool: mermaidTool({ thread }),
+    },
+    ...(agentMailKey
+      ? {
+          sendEmail: {
+            summary: 'send an email from kyto’s inbox',
+            tool: sendEmailTool({ apiKey: agentMailKey }),
+          },
+          checkInbox: {
+            summary: 'check kyto’s email inbox',
+            tool: checkInboxTool({ apiKey: agentMailKey }),
+          },
+          replyEmail: {
+            summary: 'reply to an email thread',
+            tool: replyEmailTool({ apiKey: agentMailKey }),
+          },
+        }
+      : {}),
+    ...(canActAsOwner
+      ? {
+          sendAsUser: {
+            summary: 'send a Slack message AS the owner',
+            tool: sendAsUserTool({ authorUserId, thread }),
+          },
+          editAsUser: {
+            summary: 'edit one of the owner’s Slack messages',
+            tool: editAsUserTool({ authorUserId, thread }),
+          },
+        }
+      : {}),
+  };
+
+  // The requesting user's remote MCP servers (added via kyto's App Home tab),
+  // also deferred behind loadTools.
+  const servers = await listMcpServers(authorUserId).catch((error: unknown) => {
+    logger.warn({ err: error, userId: authorUserId }, '[mcp] listing failed');
+    return [];
+  });
+  const mcp = await buildMcpTools({ logger, servers });
+  for (const [name, mcpTool] of Object.entries(mcp.tools)) {
+    deferred[name] = {
+      summary: `MCP tool (${name})`,
+      tool: mcpTool,
+    };
+  }
+
+  const catalog = Object.entries(deferred)
+    .map(([name, entry]) => `- ${name}: ${entry.summary}`)
+    .join('\n');
+  const active = new Set(Object.keys(core));
+  active.add('loadTools');
+
+  const loadTools = tool({
+    description: `Load additional tools by name before using them (their schemas stay out of the prompt until needed). Available:\n${catalog || '- (none)'}`,
+    inputSchema: z.object({
+      tools: z
+        .array(z.string())
+        .min(1)
+        .describe('Deferred tool names to load.'),
+    }),
+    execute: ({ tools: names }) => {
+      const loaded: string[] = [];
+      const unknown: string[] = [];
+      for (const name of names) {
+        if (deferred[name]) {
+          active.add(name);
+          loaded.push(name);
+        } else {
+          unknown.push(name);
+        }
+      }
+      return Promise.resolve({
+        loaded,
+        summary: loaded.length
+          ? `Loaded: ${loaded.join(', ')}. They are available as tools from the next step.`
+          : 'No matching tools.',
+        unknown,
+      });
+    },
+  });
+
+  const tools: ToolSet = {
+    ...core,
+    loadTools,
+    ...Object.fromEntries(
+      Object.entries(deferred).map(([name, entry]) => [name, entry.tool])
+    ),
+  };
+
+  return {
+    activeTools: () => [...active],
+    close: mcp.close,
+    tools,
   };
 }

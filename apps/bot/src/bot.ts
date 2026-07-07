@@ -1,4 +1,4 @@
-import type { Message, Thread } from 'chat';
+import type { Message, ThreadHandle as Thread } from '@/harness';
 import { runTurn, stopTurn } from '@/lib/agent';
 import { isUserAllowed } from '@/lib/allowed-users';
 import { bot, slack } from '@/lib/chat';

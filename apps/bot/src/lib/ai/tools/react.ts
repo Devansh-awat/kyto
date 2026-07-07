@@ -1,6 +1,6 @@
 import { tool } from 'ai';
-import type { Chat } from 'chat';
 import { z } from 'zod';
+import type { KytoBot as Chat } from '@/harness';
 
 export function reactTool({ bot }: { bot: Chat }) {
   return tool({

@@ -1,6 +1,5 @@
-import { callSlackApi } from '@chat-adapter/slack/api';
-import { getUserCustomization } from '@repo/db/queries';
-import { env } from '@/env';
+import { getUserCustomization, listMcpServers } from '@repo/db/queries';
+import { slack } from '@/lib/chat';
 import { buildHomeView } from './views';
 
 export async function publishHome({
@@ -8,14 +7,16 @@ export async function publishHome({
 }: {
   userId: string;
 }): Promise<void> {
-  const customization = await getUserCustomization(userId);
+  const [customization, mcpServers] = await Promise.all([
+    getUserCustomization(userId),
+    listMcpServers(userId).catch(() => []),
+  ]);
 
-  await callSlackApi(
-    'views.publish',
-    {
-      user_id: userId,
-      view: buildHomeView({ prompt: customization?.prompt ?? null }),
-    },
-    { token: env.SLACK_BOT_TOKEN }
-  );
+  await slack.webClient.views.publish({
+    user_id: userId,
+    view: buildHomeView({
+      mcpServers,
+      prompt: customization?.prompt ?? null,
+    }) as never,
+  });
 }

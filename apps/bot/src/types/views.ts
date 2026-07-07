@@ -1,17 +1,12 @@
-import type {
-  createSlackMrkdwn,
-  createSlackPlainText,
-} from '@chat-adapter/slack/format';
+import type { mrkdwn, plainText } from '@/harness';
 
-type SlackText = ReturnType<
-  typeof createSlackMrkdwn | typeof createSlackPlainText
->;
+type SlackText = ReturnType<typeof mrkdwn | typeof plainText>;
 
 interface SlackButtonElement {
   action_id?: string;
   confirm?: SlackConfirm;
   style?: 'danger' | 'primary';
-  text: ReturnType<typeof createSlackPlainText>;
+  text: ReturnType<typeof plainText>;
   type: 'button';
   value?: string;
 }
@@ -21,15 +16,15 @@ interface SlackTextInputElement {
   initial_value?: string;
   max_length?: number;
   multiline?: boolean;
-  placeholder?: ReturnType<typeof createSlackPlainText>;
+  placeholder?: ReturnType<typeof plainText>;
   type: 'plain_text_input';
 }
 
 interface SlackConfirm {
-  confirm: ReturnType<typeof createSlackPlainText>;
-  deny: ReturnType<typeof createSlackPlainText>;
-  text: ReturnType<typeof createSlackMrkdwn>;
-  title: ReturnType<typeof createSlackPlainText>;
+  confirm: ReturnType<typeof plainText>;
+  deny: ReturnType<typeof plainText>;
+  text: ReturnType<typeof mrkdwn>;
+  title: ReturnType<typeof plainText>;
 }
 
 export type SlackBlock =
@@ -39,7 +34,7 @@ export type SlackBlock =
     }
   | {
       accessory?: SlackButtonElement;
-      text: ReturnType<typeof createSlackMrkdwn>;
+      text: ReturnType<typeof mrkdwn>;
       type: 'section';
     }
   | {
@@ -50,14 +45,15 @@ export type SlackBlock =
       type: 'divider';
     }
   | {
-      text: ReturnType<typeof createSlackPlainText>;
+      text: ReturnType<typeof plainText>;
       type: 'header';
     }
   | {
       block_id: string;
       element: SlackTextInputElement;
-      hint?: ReturnType<typeof createSlackPlainText>;
-      label: ReturnType<typeof createSlackPlainText>;
+      hint?: ReturnType<typeof plainText>;
+      label: ReturnType<typeof plainText>;
+      optional?: boolean;
       type: 'input';
     };
 
@@ -69,9 +65,9 @@ export interface SlackHomeView {
 export interface SlackModalView {
   blocks: SlackBlock[];
   callback_id: string;
-  close: ReturnType<typeof createSlackPlainText>;
+  close: ReturnType<typeof plainText>;
   private_metadata?: string;
-  submit?: ReturnType<typeof createSlackPlainText>;
-  title: ReturnType<typeof createSlackPlainText>;
+  submit?: ReturnType<typeof plainText>;
+  title: ReturnType<typeof plainText>;
   type: 'modal';
 }

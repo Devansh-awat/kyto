@@ -1,4 +1,4 @@
-import type { Message, Thread } from 'chat';
+import type { Message, ThreadHandle as Thread } from '@/harness';
 import { stopTurn } from '@/lib/agent';
 import logger from '@/lib/logger';
 import { toLogError } from '@/lib/utils/error';

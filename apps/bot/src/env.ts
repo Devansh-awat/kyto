@@ -14,7 +14,7 @@ export const env = createEnv({
 
     SLACK_BOT_TOKEN: z.string().min(1),
     SLACK_SIGNING_SECRET: z.string().min(1),
-    SLACK_APP_TOKEN: z.string().optional(),
+    SLACK_APP_TOKEN: z.string().min(1),
     // User OAuth token (xoxp-) used to post/edit AS the owner. Only ever applied
     // when the turn was triggered by OWNER_USER_ID; see the sendAsUser tool.
     SLACK_USER_TOKEN: z.string().optional(),

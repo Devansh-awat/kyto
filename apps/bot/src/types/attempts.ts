@@ -1,6 +1,6 @@
-import type { PiAttempt } from '@repo/ai';
+import type { ModelAttempt } from '@repo/ai';
 
 export interface AttemptFailure {
-  attempt: PiAttempt;
+  attempt: ModelAttempt;
   error: unknown;
 }

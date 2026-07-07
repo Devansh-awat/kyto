@@ -1,25 +1,18 @@
 import {
   catalogAttempt,
-  createAgent,
   LEADERBOARD_FALLBACK,
-  openSession,
-  type PiAttempt,
+  type ModelAttempt,
+  type ResolvedModelHolder,
   ROUTER_MODEL,
   type SandboxContext,
+  streamAttempt,
   systemPrompt,
 } from '@repo/ai';
-import { loadSkills } from '@repo/sandbox';
-import {
-  type Message,
-  type StreamChunk,
-  StreamingPlan,
-  type Thread,
-} from 'chat';
-import { deleteControls, type postControls } from '@/lib/agent/controls';
+import { LazySandbox } from '@repo/sandbox';
+import { env } from '@/env';
+import type { Message, StreamChunk, ThreadHandle } from '@/harness';
 import { buildPrompt } from '@/lib/agent/prompt';
 import { createReply } from '@/lib/agent/reply';
-import { enterModelCapture } from '@/lib/agent/resolved-model';
-import { sandbox } from '@/lib/agent/sandbox';
 import {
   abortReasonOf,
   interruptTurn,
@@ -46,12 +39,9 @@ const SPEND_LIMIT_PATTERN = /spending limit|insufficient credits|daily limit/i;
 
 // Hard ceiling on a single model attempt (the whole multi-step agentic stream).
 // Without it, a stalled upstream SSE connection or a hung tool leaves the turn
-// awaiting forever and the Slack "thinking" spinner never resolves — observed: a
-// website-build turn froze indefinitely after streaming a "On it…" preamble and
-// then issuing a browser open that never returned. On expiry we abort only THIS
-// attempt's signal (not the shared turn controller), so the existing recovery
-// path takes over: fall back to the next model if no reply text was streamed
-// yet, or surface an error if it was. Override with AGENT_ATTEMPT_TIMEOUT_MS.
+// awaiting forever. On expiry we abort only THIS attempt's signal (not the
+// shared turn controller), so the normal recovery path takes over: fall back to
+// the next model if no reply text was streamed yet, or surface an error.
 const ATTEMPT_TIMEOUT_MS =
   Number(process.env.AGENT_ATTEMPT_TIMEOUT_MS) || 10 * 60 * 1000;
 
@@ -68,7 +58,7 @@ export { stopAllTurns, stopTurn } from '@/lib/agent/turns';
 
 export function runTurn(input: {
   message: Message;
-  thread: Thread;
+  thread: ThreadHandle;
 }): Promise<void> {
   const turn = getTurn({ threadId: input.thread.id });
   if (!turn) {
@@ -81,11 +71,12 @@ export function runTurn(input: {
   interruptTurn({ activeTurn: turn, input });
   return slack
     .addReaction(input.thread.id, input.message.id, 'white_check_mark')
+    .then(() => undefined)
     .catch(() => undefined);
 }
 
 async function executeTurn(
-  { message, thread }: { message: Message; thread: Thread },
+  { message, thread }: { message: Message; thread: ThreadHandle },
   controller: AbortController
 ): Promise<void> {
   const threadId = thread.id;
@@ -98,48 +89,37 @@ async function executeTurn(
   await startThinking({ thread });
   const hints = await requestHints({ thread, message });
 
-  let session: Awaited<ReturnType<typeof openSession>> | undefined;
-  let activeAttempt: PiAttempt | undefined;
-  const controls: Awaited<ReturnType<typeof postControls>> = null;
-  let sandboxContext: SandboxContext | undefined;
+  // The lazy sandbox: creating this object is free — the real E2B sandbox
+  // materializes only when a tool first touches it, and destroy() at turn end
+  // kills it iff it materialized. Nothing persists between turns.
+  const sandboxSession = new LazySandbox({
+    apiKey: env.E2B_API_KEY,
+    logger,
+    sessionId: threadId,
+  });
+  const sandboxContext: SandboxContext = {
+    session: sandboxSession,
+    sessionWorkDir: sandboxSession.workDir,
+  };
+  let closeTools: (() => Promise<void>) | undefined;
+  let activeAttempt: ModelAttempt | undefined;
   let reply: ReturnType<typeof createReply> | undefined;
   let errorStage: AgentErrorStage = 'before_output';
 
-  // No persistence: the Slack thread is the only memory, fed whole into each
-  // turn. Tear the session down (kills the E2B sandbox iff it was materialized;
-  // a chat-only turn never created one, so this is a cheap no-op there).
-  const endSession = async (): Promise<void> => {
-    if (!session) {
-      return;
-    }
-    await session.destroy().catch(() => undefined);
+  const cleanup = async (): Promise<void> => {
+    await closeTools?.().catch(() => undefined);
+    await sandboxSession.destroy().catch(() => undefined);
   };
 
   try {
-    // Slack's native streaming API (StreamingPlan -> adapter.stream) requires a
-    // real threadTs. The patched @chat-adapter/slack (see patches/) now assigns
-    // every message — DM or channel — a threadTs (falling back to the message's
-    // own ts), so this should always be populated; kept as a defensive fallback
-    // (mirrors the same check `startThinking` does) in case some other path
-    // ever produces a threadId with no threadTs. Drains the turn generator
-    // directly in that case — the reply text still goes out via
-    // `reply.append`'s plain `thread.post`, we just skip the native task-card UI
-    // that needs streaming.
-    const { threadTs } = slack.decodeThreadId(thread.id);
-    if (threadTs) {
-      await thread.post(
-        new StreamingPlan(renderTurn({ message, thread }), {
-          groupTasks: 'plan',
-        })
-      );
-    } else {
-      for await (const _chunk of renderTurn({ message, thread })) {
-        // Drained without posting task-card chunks; see comment above.
-      }
-    }
-    if (!session) {
-      throw new Error('Agent turn ended before session was recorded.');
-    }
+    // Slack's native streaming API renders the thinking/task-card UI. Every
+    // message threads (a top-level message roots its own thread), so a valid
+    // threadTs always exists.
+    await slack.stream(threadId, renderTurn({ message, thread }), {
+      recipientTeamId: slack.teamId ?? '',
+      recipientUserId: message.author.userId,
+      taskDisplayMode: 'plan',
+    });
     await reply?.flush({ thread });
     if (hints.customization?.prompt && !slack.isDM(thread.id)) {
       await thread
@@ -148,8 +128,7 @@ async function executeTurn(
         })
         .catch(() => undefined);
     }
-    await deleteControls({ controls });
-    await endSession();
+    await cleanup();
     logger.info(
       { attempt: attemptLog(activeAttempt), threadId },
       '[agent] turn complete'
@@ -158,19 +137,14 @@ async function executeTurn(
     const reason = abortReasonOf(controller.signal);
     if (reason) {
       logger.info({ reason, threadId }, '[agent] turn interrupted');
-      await deleteControls({ controls });
-      // No persistence: an interrupt re-runs immediately and the follow-up
-      // rebuilds context from the whole Slack thread, so we always tear the
-      // session down (and its sandbox, if any) regardless of the reason.
-      await endSession();
+      await cleanup();
     } else {
       logger.error(
         { attempt: attemptLog(activeAttempt), err: error, threadId },
         '[agent] turn failed'
       );
       await reply?.flush({ thread });
-      await endSession();
-      await deleteControls({ controls });
+      await cleanup();
       await thread.post(agentErrorMessage({ error, stage: errorStage }));
     }
   } finally {
@@ -192,96 +166,81 @@ async function executeTurn(
   }
 
   async function* renderTurn({
-    message,
-    thread,
+    message: turnMessage,
+    thread: turnThread,
   }: {
     message: Message;
-    thread: Thread;
-  }) {
-    const skills = await loadSkills();
-    const messageText = await buildPrompt(message, {
+    thread: ThreadHandle;
+  }): AsyncGenerator<string | StreamChunk> {
+    const messageText = await buildPrompt(turnMessage, {
       customizationPrompt: hints.customization?.prompt,
-      thread,
+      thread: turnThread,
     });
-    let attachments: Awaited<ReturnType<typeof seedAttachments>> = [];
+    // Seed attached files into the sandbox up front (materializes it only when
+    // the message actually carries files — chat-only turns stay sandbox-free).
+    const attachments =
+      turnMessage.attachments.length > 0
+        ? await seedAttachments({ message: turnMessage, sandboxContext })
+        : [];
     // Distinguish a turn that did real work from a truly empty completion. Only
     // a completion that produced NEITHER reply text, NOR a deliberate skip, NOR
-    // any tool activity (e.g. an upstream 504 swallowed into an empty stream) is
-    // treated as empty and falls through to another model. A turn that ran tools
-    // did real work — restarting it on a fresh model would throw that away and
-    // burn the fallback chain — so tool activity counts as a handled turn even if
-    // the model never wrote a final summary.
+    // tool activity that ended on a clean `stop` is treated as unhandled and
+    // falls through to another model (see the handled check below).
     let producedText = false;
     let skipped = false;
     let producedToolActivity = false;
     // Tool results gathered so far this turn, deduped by tool+input. If a later
-    // step truncates and the turn falls back to another model, these are replayed
-    // into the fallback prompt so the new model answers from them instead of
-    // re-running the same tools (e.g. identical web searches). Capped in
-    // renderCarryover so the replay can't blow up context.
+    // step truncates and the turn falls back to another model, these are
+    // replayed into the fallback prompt so the new model answers from them
+    // instead of re-running the same tools.
     const gatheredResults: GatheredResult[] = [];
     const gatheredKeys = new Set<string>();
     const attempts: AttemptFailure[] = [];
     // The main query runs on OpenRouter's own model router via HackClub
-    // (`openrouter/auto`): OpenRouter picks the best underlying model per
-    // request. On failure we (1) retry the exact model auto resolved to, then
-    // (2) walk the leaderboard UP from that model (toward the best) and then
-    // DOWN (toward the weakest) — see routeNextAttempt. Keeps the bot answering
-    // and biases recovery toward stronger models when the chosen one fails.
+    // (`openrouter/auto`). On failure we (1) retry the exact model auto
+    // resolved to, then (2) walk the leaderboard UP from that model (toward
+    // the best) and then DOWN — see routeNextAttempt.
     const failedKeys = new Set<string>();
     let triedAuto = false;
     let triedResolved = false;
-    // The up-then-down leaderboard queue, built lazily once we know what
-    // `openrouter/auto` resolved to (its rank is the pivot).
-    let fallbackQueue: PiAttempt[] | undefined;
-    // The per-turn model holder for the auto attempt; its `.model` is filled by
-    // the fetch interceptor with the slug auto actually resolved to.
-    let autoHolder: ReturnType<typeof enterModelCapture> | undefined;
-    // Set when a HackClub call returns the daily-spend-limit 429. The limit is
-    // enforced pessimistically (OpenRouter projects each request's worst-case
-    // cost), so the dearer models get rejected first while budget remains — but
-    // the capped `max_tokens` (resolved-model.ts) keeps the cheaper models'
-    // projection low enough to still fit. So instead of skipping HackClub
-    // entirely, this flips the fallback queue to try the HackClub rungs
-    // CHEAPEST-first (most likely to pass) before failing over to the unmetered
-    // baishui proxy (see buildFallbackQueue).
+    let fallbackQueue: ModelAttempt[] | undefined;
+    // The auto attempt's holder; `.model` is filled with the slug auto
+    // actually resolved to (read off the response by streamAttempt's fetch).
+    let autoHolder: ResolvedModelHolder | undefined;
+    // Set when a HackClub call returns the daily-spend-limit 429. The whole
+    // HackClub budget is shared, so once one call 429s every HackClub rung
+    // would too — the fallback queue then goes straight to the owner's Gemini
+    // key (separate quota) instead of burning attempts.
     let hackclubBudgetExhausted = false;
-    // The raw daily-spend-limit 429 text (e.g. "Daily spending limit of $3
-    // reached"), captured so a fully-failed turn can tell the user the budget is
-    // spent (and name the cap) instead of showing a generic error.
     let spendLimitMessage: string | undefined;
-    let attempt: PiAttempt | undefined;
-    // Built once: the tool set does not depend on the chosen model, and its keys
-    // let renderStream hide hallucinated calls to non-existent tools.
-    const tools = buildTools({
+    let attempt: ModelAttempt | undefined;
+    // Built once: the toolset does not depend on the chosen model. Its keys let
+    // renderStream hide hallucinated calls to non-existent tools; activeTools
+    // drives deferred-tool visibility via prepareStep.
+    const built = await buildTools({
       bot,
       getSandboxContext: () => sandboxContext,
-      message,
-      thread,
+      message: turnMessage,
+      thread: turnThread,
     });
-    const knownTools = new Set(Object.keys(tools));
-    // Build the up-then-down leaderboard queue around the resolved model: climb
-    // to better-ranked models first (closest-better → best), then descend to the
-    // lower-ranked ones. If the resolved slug isn't on the leaderboard (or is
-    // unknown), fall back to the full best→worst order.
-    const buildFallbackQueue = (pivotModel?: string): PiAttempt[] => {
-      // HackClub daily spend limit hit: the whole HackClub budget is shared, so
-      // once the first call returns the spend-limit 429 EVERY other HackClub rung
-      // 429s the same way (they just burn attempts at ~4ms each). Skip all of
-      // them and go **straight to the owner's Gemini key** (separate quota,
-      // reliable, cheap) — then any other non-HackClub rung (baishui, if
-      // re-enabled). No more cheapest-first HackClub retries.
+    closeTools = built.close;
+    const knownTools = new Set(Object.keys(built.tools));
+
+    const buildFallbackQueue = (pivotModel?: string): ModelAttempt[] => {
       if (hackclubBudgetExhausted) {
         const gemini = LEADERBOARD_FALLBACK.filter(
-          (a) => a.provider === 'gemini'
+          (candidate) => candidate.provider === 'gemini'
         );
         const otherNonHackclub = LEADERBOARD_FALLBACK.filter(
-          (a) => a.provider !== 'hackclub' && a.provider !== 'gemini'
+          (candidate) =>
+            candidate.provider !== 'hackclub' && candidate.provider !== 'gemini'
         );
         return [...gemini, ...otherNonHackclub];
       }
       const idx = pivotModel
-        ? LEADERBOARD_FALLBACK.findIndex((a) => a.model === pivotModel)
+        ? LEADERBOARD_FALLBACK.findIndex(
+            (candidate) => candidate.model === pivotModel
+          )
         : -1;
       if (idx === -1) {
         return [...LEADERBOARD_FALLBACK];
@@ -290,9 +249,6 @@ async function executeTurn(
       const down = LEADERBOARD_FALLBACK.slice(idx + 1);
       return [...up, ...down];
     };
-    // Selects the next attempt as a side effect: `openrouter/auto` first, then a
-    // pinned retry of the model it resolved to, then the up-then-down queue
-    // (each entry tried at most once, tracked via failedKeys).
     const routeNextAttempt = () => {
       if (!triedAuto) {
         triedAuto = true;
@@ -304,8 +260,8 @@ async function executeTurn(
         triedResolved = true;
         fallbackQueue = buildFallbackQueue(resolved);
         // Retry the exact model auto resolved to (auto's failure may be
-        // transient or an empty completion), if known and not already tried —
-        // unless HackClub's budget is exhausted (the pinned retry is HackClub).
+        // transient), unless HackClub's budget is exhausted (that retry is a
+        // HackClub call too).
         if (
           !hackclubBudgetExhausted &&
           resolved &&
@@ -327,25 +283,15 @@ async function executeTurn(
     );
     while (attempt) {
       const currentAttempt = attempt;
-      // Per-attempt: did THIS attempt's stream finish deliberately (`stop`)?
-      // Reset each attempt so a stale stop from a prior model can't mask a
-      // truncated current one. A turn that ran tools but ended without a clean
-      // stop (an empty/truncated synthesis step — the "stops mid-task" bug) never
-      // delivered an answer, so it must fall back rather than end silently.
+      // Did THIS attempt's stream finish deliberately (`stop`)? Reset per
+      // attempt so a stale stop from a prior model can't mask a truncated one.
       let sawCleanStop = false;
-      // Declared outside the try so the catch can complete the same task.
       const modelTaskId = `model-${attempts.length}`;
-      // The model-lifecycle row reads as "Thinking" (the model is working) while
-      // it runs, and completes to show which model actually answered. Tool rows
-      // render separately, so a turn shows Thinking → tool activity → done.
       const modelTaskTitle =
         attempts.length > 0 ? 'Thinking · fallback' : 'Thinking';
-      // Per-turn model holder for this attempt (filled with the slug auto/glm
-      // resolved to). Declared outside the try so the catch can read it when it
-      // completes the task. Guard so the Model task is completed EXACTLY once —
-      // previously the post-stream complete AND the catch both fired when a
-      // streamed attempt then failed the empty-check, rendering the model 2–3×.
-      let modelHolder: ReturnType<typeof enterModelCapture> | undefined;
+      // Filled by streamAttempt's fetch with the resolved slug. The guard
+      // completes the model task EXACTLY once (post-stream success or catch).
+      const holder: ResolvedModelHolder = {};
       let modelTaskDone = false;
       const completeModelTask = (): StreamChunk | undefined => {
         if (modelTaskDone) {
@@ -353,8 +299,8 @@ async function executeTurn(
         }
         modelTaskDone = true;
         const resolved =
-          modelHolder?.model && modelHolder.model !== currentAttempt.model
-            ? ` → ${modelHolder.model}`
+          holder.model && holder.model !== currentAttempt.model
+            ? ` → ${holder.model}`
             : '';
         return {
           id: modelTaskId,
@@ -364,90 +310,58 @@ async function executeTurn(
           type: 'task_update',
         };
       };
-      // Per-attempt watchdog: if this attempt stalls (a frozen upstream SSE
-      // stream or a hung tool that never returns), abort just THIS attempt so
-      // the catch below can recover instead of the turn hanging forever. Kept
-      // separate from `controller` so a timeout is NOT mistaken for a user
-      // interrupt (which tears the turn down silently); the combined signal
-      // also reaches tool execution, so a hung sandbox command is killed too.
+      // Per-attempt watchdog: if this attempt stalls, abort just THIS attempt
+      // so the catch below can recover instead of the turn hanging forever.
+      // Kept separate from `controller` so a timeout is NOT mistaken for a
+      // user interrupt. The combined signal also reaches tool execution.
       const attemptAbort = new AbortController();
       const attemptTimer = setTimeout(() => {
         attemptAbort.abort(new AttemptTimeoutError(ATTEMPT_TIMEOUT_MS));
       }, ATTEMPT_TIMEOUT_MS);
       try {
         activeAttempt = currentAttempt;
-        const agent = createAgent({
-          attempt: currentAttempt,
-          onSandboxReady: async (context) => {
-            sandboxContext = context;
-            // Only seeding attachments touches the sandbox here, and only when
-            // the message actually has files — so a chat-only turn leaves the
-            // lazy sandbox unmaterialized (zero E2B cost).
-            attachments = await seedAttachments({
-              message,
-              sandboxContext: context,
-            });
-          },
-          sandbox,
-          sessionId: threadId,
-          skills,
-          systemPrompt: systemPrompt({ hints }),
-          tools,
-        });
-        session = await openSession({ agent, threadId });
-        reply = createReply({ threadId });
-        // Surface the model in the thinking section (not the reply text).
-        // Emitted `in_progress` while this attempt actually runs, so the
-        // activity indicator reads as working (never a misleading "completed"
-        // before anything has happened). It is marked `complete` after streaming
-        // (below) on success, AND in the catch on failure, so it transitions to
-        // done at the right moment and never sticks as a frozen spinner.
-        // NO `output` while in progress: the completed emit (completeModelTask)
-        // carries the model detail. Setting it on both states made the plan
-        // render the provider·model line twice on the finished row.
+        if (currentAttempt.model === ROUTER_MODEL) {
+          autoHolder = holder;
+        }
+        reply ??= createReply({ threadId });
+        // Surface the model in the thinking section: `in_progress` while this
+        // attempt runs, completed exactly once with the resolved model.
         yield {
           id: modelTaskId,
           status: 'in_progress',
           title: modelTaskTitle,
           type: 'task_update',
         };
-        // `openrouter/auto` resolves the real model server-side; capture it off
-        // the global fetch so we can show the concrete pick (see resolved-model)
-        // and pin it as the first fallback. Keep the holder ref for the auto
-        // attempt so routeNextAttempt can read the resolved slug even on failure.
-        modelHolder = enterModelCapture();
-        if (currentAttempt.model === ROUTER_MODEL) {
-          autoHolder = modelHolder;
-        }
-        const result = await agent.stream({
+        const result = streamAttempt({
           abortSignal: AbortSignal.any([
             controller.signal,
             attemptAbort.signal,
           ]),
+          activeTools: built.activeTools,
+          attempt: currentAttempt,
+          holder,
           prompt: promptWithAttachments({
             attachments,
-            // On a fallback attempt, replay any tool results already gathered so
-            // the new model continues from them instead of re-running the same
-            // tools. First attempt (no prior failures) sends the plain prompt.
+            // On a fallback attempt, replay any tool results already gathered
+            // so the new model continues from them instead of re-running them.
             text:
               attempts.length > 0 && gatheredResults.length > 0
                 ? `${messageText}\n\n${renderCarryover(gatheredResults)}`
                 : messageText,
           }),
-          session,
+          system: systemPrompt({ hints }),
+          tools: built.tools,
         });
         for await (const chunk of renderStream({
           knownTools,
           onSkip: () => {
-            // A skip is a deliberate, successful "no reply" — mark the turn as
-            // handled so the empty-response guard below does NOT advance the
-            // fallback chain (which previously produced placeholder garbage).
+            // A skip is a deliberate, successful "no reply".
             skipped = true;
           },
           onTextDelta: async (text) => {
             producedText = true;
             errorStage = 'after_text';
-            await reply?.append({ text, thread });
+            await reply?.append({ text, thread: turnThread });
           },
           onToolActivity: () => {
             producedToolActivity = true;
@@ -461,16 +375,12 @@ async function executeTurn(
             gatheredResults.push(info);
           },
           onFinish: (reason) => {
-            // `stop` = the model deliberately ended its generation. Any other
-            // reason (tool-calls/length) or no finish at all means the turn
-            // didn't conclude on its own terms.
             if (reason === 'stop') {
               sawCleanStop = true;
             }
           },
           onError: (msg) => {
-            // A HackClub daily-spend-limit 429 dooms every HackClub rung — flag
-            // it so routeNextAttempt skips them and fails over to baishui.
+            // A HackClub daily-spend-limit 429 dooms every HackClub rung.
             if (
               currentAttempt.provider === 'hackclub' &&
               SPEND_LIMIT_PATTERN.test(msg)
@@ -479,7 +389,7 @@ async function executeTurn(
               spendLimitMessage = msg;
             }
           },
-          stream: result.stream,
+          stream: result.fullStream,
         })) {
           if (errorStage === 'before_output') {
             errorStage = 'after_progress';
@@ -487,9 +397,6 @@ async function executeTurn(
           yield chunk;
         }
 
-        // Complete the Model task exactly once (the guard ensures the catch
-        // won't re-complete it), appending the concrete model OpenRouter resolved
-        // `openrouter/auto` to (now known from the streamed response).
         {
           const done = completeModelTask();
           if (done) {
@@ -497,17 +404,11 @@ async function executeTurn(
           }
         }
 
-        // Decide whether this completion delivered anything. Reply text or a
-        // deliberate skip always counts. Tool activity counts as real work ONLY
-        // if the stream also ended on a clean `stop` — i.e. the model ran tools
-        // and then deliberately finished (it just didn't narrate). If it ran
-        // tools but the stream ended WITHOUT a clean stop (an empty/truncated
-        // synthesis step that emitted no text — the "stops mid-task" bug, e.g. a
-        // spend-limit 429 or 504 swallowed into an empty continuation), the user
-        // got no answer, so fall back to another model instead of returning
-        // silently. A truly empty completion (no text, skip, or tools) also falls
-        // back. This keeps the anti-cascade behavior (deliberate tool-then-stop
-        // is handled) while never leaving a turn answerless mid-task.
+        // Reply text or a deliberate skip always counts as handled. Tool
+        // activity counts ONLY with a clean `stop` (the model ran tools then
+        // deliberately finished); tool activity that ends WITHOUT a clean stop
+        // (an empty/truncated synthesis step — the "stops mid-task" bug) falls
+        // back so the user actually gets an answer.
         const handled =
           producedText || skipped || (producedToolActivity && sawCleanStop);
         if (!handled) {
@@ -519,11 +420,6 @@ async function executeTurn(
         }
         return;
       } catch (error) {
-        // Mark this attempt's model task done so the activity indicator never
-        // sticks on a frozen "Model · fallback" spinner when the attempt threw
-        // before its post-stream completion yield ran. The guard makes this a
-        // no-op if the post-stream completion already fired (so the model never
-        // renders twice).
         {
           const done = completeModelTask();
           if (done) {
@@ -534,18 +430,12 @@ async function executeTurn(
         failedKeys.add(`${currentAttempt.provider}:${currentAttempt.model}`);
         routeNextAttempt();
         const retryAttempt = attempt;
-        // Gate on `producedText`, not `streamed`: if the model only emitted tool
-        // activity (no reply text) before failing — including the empty-response
-        // throw above — nothing user-visible was shown, so it is safe to fall
-        // back to another model. Only a turn that already streamed real reply
-        // text must not fall back (it would duplicate the user-facing output).
+        // Only a turn that already streamed real reply text must not fall back
+        // (it would duplicate user-facing output).
         if (controller.signal.aborted || producedText) {
           throw error;
         }
         if (!retryAttempt) {
-          // Every model is exhausted. If the daily spend limit started the
-          // cascade, surface that (the budget is the real cause) rather than the
-          // last provider's generic error.
           if (hackclubBudgetExhausted) {
             throw new BudgetExhaustedError(spendLimitMessage, { cause: error });
           }
@@ -560,8 +450,6 @@ async function executeTurn(
           },
           '[agent] attempt failed, falling back'
         );
-        await session?.detach().catch(() => undefined);
-        session = undefined;
         attempt = retryAttempt;
       } finally {
         clearTimeout(attemptTimer);
@@ -570,7 +458,7 @@ async function executeTurn(
   }
 }
 
-function attemptLog(attempt: PiAttempt | undefined) {
+function attemptLog(attempt: ModelAttempt | undefined) {
   return attempt
     ? { model: attempt.model, provider: attempt.provider }
     : undefined;

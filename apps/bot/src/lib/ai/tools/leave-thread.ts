@@ -1,6 +1,6 @@
 import { tool } from 'ai';
-import type { Thread } from 'chat';
 import { z } from 'zod';
+import type { ThreadHandle as Thread } from '@/harness';
 
 export function leaveThreadTool({ thread }: { thread: Thread }) {
   return tool({

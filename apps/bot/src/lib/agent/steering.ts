@@ -1,4 +1,4 @@
-import { Message, parseMarkdown } from 'chat';
+import type { Message } from '@/harness';
 import type { AbortReason, ActiveTurn, TurnInput } from '@/types/agent';
 
 export class TurnAbort extends Error {
@@ -43,24 +43,17 @@ export function queuedInput(activeTurn: ActiveTurn): TurnInput | undefined {
     .filter(Boolean)
     .join('\n\n');
 
-  return {
-    message: new Message({
-      attachments: latest.message.attachments,
-      author: latest.message.author,
-      formatted: parseMarkdown(text),
-      id: latest.message.id,
-      isMention: latest.message.isMention,
-      links: latest.message.links,
-      metadata: latest.message.metadata,
-      raw: {
-        combinedFrom: activeTurn.pendingMessages.map(({ message }) => ({
-          id: message.id,
-          text: message.text,
-        })),
-      },
-      text,
-      threadId: latest.message.threadId,
-    }),
-    thread: latest.thread,
+  // Merge a rapid burst into one follow-up message so steering keeps every
+  // intermediate correction.
+  const merged: Message = {
+    ...latest.message,
+    raw: {
+      combinedFrom: activeTurn.pendingMessages.map(({ message }) => ({
+        id: message.id,
+        text: message.text,
+      })),
+    },
+    text,
   };
+  return { message: merged, thread: latest.thread };
 }

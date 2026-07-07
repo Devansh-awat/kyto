@@ -1,6 +1,6 @@
 import { tool } from 'ai';
-import type { Message } from 'chat';
 import { z } from 'zod';
+import type { Message } from '@/harness';
 import { bot } from '@/lib/chat';
 import { errorMessage } from '@/lib/utils/error';
 

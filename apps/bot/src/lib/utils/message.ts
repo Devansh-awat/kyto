@@ -1,4 +1,4 @@
-import type { Message } from 'chat';
+import type { Message } from '@/harness';
 
 const leadingMentions = /^\s*(?:<@[A-Z0-9][A-Z0-9._-]*(?:\|[^>]+)?>\s*)+/;
 

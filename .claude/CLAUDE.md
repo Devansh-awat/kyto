@@ -166,6 +166,85 @@ Run these automatically after each completed change, in order, **without asking*
   pre-authorized; `gh pr create` (or any cross-repo publish) requires explicit
   user confirmation.
 
+### Architecture — fully custom harness (July 2026 rewrite)
+- **The Vercel Chat SDK (`chat`/`@chat-adapter/slack`/`state-pg`), the Pi agent
+  framework, and `@ai-sdk/harness*` were completely removed** in a ground-up
+  rewrite. Kyto now runs on:
+  - **Custom Slack harness** (`apps/bot/src/harness/`): `@slack/socket-mode` +
+    `@slack/web-api` directly. `SlackHarness` (`harness.ts`) is the Web API
+    facade (thread-id codec `slack:CHANNEL[:TS]`, message building,
+    fetch/history/listThreads, reactions, assistant status/prompts, native
+    streaming via `webClient.chatStream` — task cards use the same
+    `task_update` chunk shape as before, `task_display_mode: 'plan'`).
+    `KytoBot` (`bot.ts`) owns the Socket Mode connection and event routing
+    (`onNewMention`/`onDirectMessage`/`onSubscribedMessage`/`onAction`/
+    `onModalSubmit`/`onAppHomeOpened`/assistant events/`onMemberJoinedChannel`
+    — same handler names as the old chat-sdk, so call-sites barely changed).
+    `ThreadHandle` (`thread.ts`) is the thread surface: `post` (Block Kit
+    native `markdown` blocks; files via `filesUploadV2`; **per-message profile
+    overrides** via `username`/`iconUrl`/`iconEmoji` — needs the
+    `chat:write.customize` scope, added to the manifest), `postEphemeral`,
+    `schedule`, `subscribe`/`setState` (thread subscriptions now live in our
+    own `thread_subscriptions` Postgres table + 30s in-memory cache — the
+    chat-sdk state-pg tables are orphaned), `fetchMetadata`. `app_mention`
+    events are deliberately ignored — everything routes off `message` events
+    (mention = text contains the bot id), which is what kills the old
+    dupe/dedupe problem. Slash command `/kyto` is acked with a help line in
+    the router. Every message threads (top-level DM/channel message roots its
+    own thread) — the old DM-threading `bun patch` is gone with the adapter.
+  - **Custom agent loop** on `ai` `streamText` (`packages/ai/src/agent.ts`
+    `streamAttempt` + `apps/bot/src/lib/agent/index.ts`): multi-step tool loop
+    (`stopWhen: stepCountIs(60)`), per-attempt `@ai-sdk/openai-compatible`
+    provider. The old **global fetch interceptor is gone** — a per-provider
+    `fetch` in `streamAttempt` injects the `auto-router` plugin
+    (`ALLOWED_MODELS`/`COST_QUALITY_TRADEOFF`, now in
+    `packages/ai/src/providers/attempts.ts`), adds `reasoning: {effort:
+    'medium'}` on HackClub, and captures the resolved model into a per-attempt
+    `ResolvedModelHolder` (no AsyncLocalStorage). `max_tokens` capping is now
+    just `maxOutputTokens: MAX_OUTPUT_TOKENS` (8000) on HackClub attempts.
+    The fallback state machine (auto → pinned resolved retry → leaderboard
+    up/down walk, spend-limit-429 → straight to Gemini, carryover of gathered
+    tool results, per-attempt watchdog, clean-stop handled check) ported
+    unchanged. `renderStream` consumes `result.fullStream` (same
+    `TextStreamPart` shapes). System prompt goes directly to `streamText` —
+    the SYSTEM.md tmp-file hack died with Pi. Old `attempts.ts` → `attempts.ts`
+    (`PiAttempt` → `ModelAttempt {provider, model, baseURL, apiKey}`); the
+    dead catalog/attemptsFor/deepFallback exports were deleted.
+  - **Sandbox tools are ours** (`apps/bot/src/lib/ai/tools/sandbox.ts`):
+    `bash`, `readFile`, `writeFile`, `editFile` run against `LazySandbox`
+    (`packages/sandbox/src/lazy-sandbox.ts`) — E2B `Sandbox.create` happens on
+    the FIRST tool call that needs it (chat-only turns cost zero E2B), killed
+    at turn end. The old harness-bootstrap command-faking (`lazy-session.ts`)
+    is gone — nothing to fake when we own the loop. Pi skills are gone too.
+  - **Deferred tools**: uncommon tools (browse, email trio, canvasDelete,
+    createChannel, setChannelTopic, bookmarkLink, pins, poll, mermaid,
+    sendAsUser/editAsUser, and all MCP tools) are registered but hidden from
+    the model until it calls the **`loadTools`** meta-tool (whose description
+    lists them). Visibility is enforced per step via `streamText`'s
+    `prepareStep`/`activeTools` (`buildTools` returns `{tools, activeTools,
+    close}` — `close` tears down per-turn MCP connections).
+  - **Per-user MCP servers** (`apps/bot/src/lib/ai/mcp.ts`, `user_mcp_servers`
+    table): users add remote Streamable-HTTP MCP servers from kyto's **App
+    Home tab** (Add/Remove UI in `features/customizations`, modal callback
+    `home_add_mcp_server`; optional Authorization header stored as-is). A
+    hand-rolled ~200-line JSON-RPC client (initialize / tools/list /
+    tools/call; SSE-response parsing; NO legacy SSE-only transport) connects
+    lazily per turn; tool listings are cached 10 min per URL; tools are
+    namespaced `mcp_<server>_<tool>` and deferred behind `loadTools`. A dead
+    server degrades that turn's toolset only. Local (user-machine) MCP servers
+    are impossible over Slack by design.
+  - **Chat-sdk state replacement**: `bot.getState()` is now an in-memory TTL
+    KV (`harness/kv.ts`) — fine because everything stored there (allowlist,
+    name caches) is rebuilt at startup or on demand. Markdown conversion is
+    ours (`harness/markdown.ts`): inbound mrkdwn→markdown for prompts,
+    `healMarkdown` closes dangling fences/markers in chunked replies
+    (replaces StreamingMarkdownRenderer). Modals/App Home go through
+    `webClient.views.*` directly.
+- **Env**: `SLACK_APP_TOKEN` is now required (socket mode is the only mode).
+- New tables were pushed with a one-off SQL script (drizzle-kit push is
+  interactive in non-TTY): `thread_subscriptions`, `user_mcp_servers` (NOTE:
+  `authorization` is a reserved word — quoted in DDL).
+
 ### AI tools
 - Agent tools live in `apps/bot/src/lib/ai/tools/` and are registered in
   `apps/bot/src/lib/ai/toolset.ts`. Raw Slack Web API access is via
@@ -366,7 +445,7 @@ Run these automatically after each completed change, in order, **without asking*
 
 ### Models / LLM model router + fallback
 - **The main query runs on OpenRouter's own auto-router via HackClub**
-  (`ROUTER_MODEL = 'openrouter/auto'` in `packages/ai/src/providers/pi.ts`). The
+  (`ROUTER_MODEL = 'openrouter/auto'` in `packages/ai/src/providers/attempts.ts`). The
   HackClub proxy is OpenRouter-compatible, so sending model id `openrouter/auto`
   hands routing to OpenRouter, which picks the best underlying model per request
   (e.g. it resolved to `openai/gpt-5.5` in testing). This replaced the old
@@ -376,7 +455,7 @@ Run these automatically after each completed change, in order, **without asking*
 - **Fallback on failure** (`agent/index.ts`, `routeNextAttempt`): `openrouter/auto`
   is attempt 0. On any error or empty completion it (1) retries the **exact model
   auto resolved to**, pinned via HackClub (auto's failure is often transient/an
-  empty completion), then (2) walks the `LEADERBOARD_FALLBACK` list (`pi.ts`)
+  empty completion), then (2) walks the `LEADERBOARD_FALLBACK` list (`attempts.ts`)
   **UP** from that model toward the best (closest-better first), then **DOWN**
   toward the weakest. `LEADERBOARD_FALLBACK` is the owner's arena leaderboard,
   best→worst, restricted to reachable models: the strong tier on HackClub
@@ -393,8 +472,8 @@ Run these automatically after each completed change, in order, **without asking*
   below) — re-remove if the failure recurs. `gemini-3.1-pro-preview` was
   re-added at the same time but then dropped again (2026-07-06, owner: too
   expensive for the quality it delivers against this daily budget) — removed
-  from here, `ALLOWED_MODELS` (`resolved-model.ts`), and `GEMINI_MODELS`
-  (`pi.ts`).
+  from here, `ALLOWED_MODELS` (`packages/ai/src/agent.ts`), and `GEMINI_MODELS`
+  (`attempts.ts`).
   The **baishui proxy** tail (`jam06452.uk`) is **commented out** — its `/models`
   endpoint answers but every completion fails ("upstream authentication failed" /
   "all provider keys rate-limited or in cooldown"), so it only wasted fallback
@@ -423,8 +502,7 @@ Run these automatically after each completed change, in order, **without asking*
   (This replaced the older cheapest-first-HackClub-retry approach — the
   pessimistic-limit "a cheap rung might still fit" recovery wasn't worth the
   wasted 429 attempts once the Gemini key exists as a clean, cheap escape.)
-- **Fetch interceptor** (`apps/bot/src/lib/agent/resolved-model.ts`, installed in
-  `index.ts`): Pi makes model calls through the process-global `fetch` (undici),
+- **Fetch interceptor** (now `packages/ai/src/agent.ts`, per-provider `fetch` — no global patching): Pi makes model calls through the process-global `fetch` (undici),
   so we patch it to tune the request and read the response:
   - **Tune the auto-router**: inject the `auto-router` plugin into the
     `openrouter/auto` request body with `cost_quality_tradeoff` (0 = best/dearest,
@@ -440,23 +518,23 @@ Run these automatically after each completed change, in order, **without asking*
     `gemini-3.5-flash` (re-added 2026-07-02 at the owner's request after
     previously being removed for returning an **empty response on 100% of
     observed attempts** — 22/22 direct via `geminiAttempts`/`GEMINI_MODELS` in
-    `pi.ts`, 10/10 via the auto-router's `google/gemini-3.5-flash` slug in
+    `attempts.ts`, 10/10 via the auto-router's `google/gemini-3.5-flash` slug in
     `LEADERBOARD_FALLBACK`). The owner's Google AI Studio dashboard showed
     **zero requests metered** against it despite these attempts, meaning the
     calls were rejected before reaching generation (likely not enabled for a
     free-tier key at the time), not that the model burned its output budget on
     thinking; it also only carries a 20 RPD free-tier quota vs.
     3.1-flash-lite's 500 RPD. Because of that dashboard signal,
-    `gemini-3.5-flash` was kept OUT of `GEMINI_MODELS` (`pi.ts`, the direct-key
+    `gemini-3.5-flash` was kept OUT of `GEMINI_MODELS` (`attempts.ts`, the direct-key
     path) when re-adding it here and to `LEADERBOARD_FALLBACK` — the
     HackClub-proxied call is a different request path and may not be
     tier-gated the same way. If the empty-response failure recurs, watch
     `[stream] tally` in the logs (0 textDeltas/reasoningParts despite tool
     activity) and re-remove from `ALLOWED_MODELS` (here) and
-    `LEADERBOARD_FALLBACK` (`pi.ts`). `gemini-3.1-pro-preview` was also
+    `LEADERBOARD_FALLBACK` (`attempts.ts`). `gemini-3.1-pro-preview` was also
     re-added at the same time, then dropped again 2026-07-06 (owner: too
     expensive) from all three of `ALLOWED_MODELS` (here), `LEADERBOARD_FALLBACK`
-    (`pi.ts`), and `GEMINI_MODELS` (`pi.ts`) — it's not known to have the
+    (`attempts.ts`), and `GEMINI_MODELS` (`attempts.ts`) — it's not known to have the
     dashboard/empty-response issue, this was purely a cost call. The
     interceptor strips a stale `Content-Length` when re-issuing the tuned
     (longer) body so the appended `plugins` isn't truncated. Verified honored
@@ -603,36 +681,15 @@ Run these automatically after each completed change, in order, **without asking*
   this doc. Don't assume anything on that branch is live; re-derive fixes
   directly on `main` instead of assuming a merge will happen.
 
-### DM threading (patched @chat-adapter/slack)
-- **Every DM reply is now threaded, mirroring channel behavior.** The upstream
-  `@chat-adapter/slack` (v4.30.0) special-cased DMs so a top-level DM message
-  (`channel_type: "im"`, no `thread_ts`) got an **empty** threadTs — unlike
-  channels, which fall back to the message's own `ts`. That empty threadTs broke
-  two things: (1) Slack's native streaming API (`StreamingPlan` -> `adapter
-  .stream`) throws `ValidationError: Slack streaming requires a valid thread
-  context` on an empty threadTs, so **every DM turn failed** ("oops, something
-  went wrong") until this was patched — the "thinking" task-card UI is exactly
-  what needs that native stream; (2) `buildPrompt`'s `slack.fetchMessages
-  (thread.id)` had no threadTs to scope to, so it silently fell back to fetching
-  the **whole DM history** as context on every turn.
-- Fixed via `bun patch` (`patches/@chat-adapter%2Fslack@4.30.0.patch`,
-  `package.json`'s `patchedDependencies`): removed the DM special-case in
-  `handleMessageEvent` so `threadTs = event.thread_ts || event.ts` unconditionally,
-  same as channels. Effects: a top-level DM message now starts (and kyto replies
-  within) its own thread, not the main DM timeline; a reply-in-thread from the
-  user continues that same thread (still dispatched to `onDirectMessage` per
-  chat-sdk's routing — DMs always go there over `onSubscribedMessage`, so no
-  `bot.ts` change was needed); and `buildPrompt` now scopes context to just that
-  thread, so **kyto has no memory of the rest of the DM by default** — the model
-  must use `searchSlack` (`in:@user`) to pull in earlier DM history on purpose.
-  This patch must survive `bun install`/lockfile updates (it's declared in
-  `package.json`), but re-verify it after any `@chat-adapter/slack` version bump
-  (`bun patch @chat-adapter/slack` again if the line shifts).
-- `apps/bot/src/lib/agent/index.ts`'s pre-`StreamingPlan` threadTs check (added
-  before this patch existed, to drain the turn without native streaming when
-  threadTs was empty) is kept as a defensive fallback for any other path that
-  might produce a threadId with no threadTs, but should no longer trigger in
-  practice for DMs.
+### DM threading (native in the custom harness)
+- **Every message threads, DMs included.** The custom harness assigns
+  `threadTs = event.thread_ts || event.ts` unconditionally (`buildMessage`,
+  `apps/bot/src/harness/harness.ts`) — the behavior the old adapter needed a
+  `bun patch` for is now just how the harness works (the patch and
+  `patchedDependencies` are gone). A top-level DM message starts (and kyto
+  replies within) its own thread; `buildPrompt` scopes context to just that
+  thread, so kyto has no memory of the rest of the DM by default — the model
+  uses `searchSlack` (`in:@user`) to pull earlier DM history on purpose.
 
 ### Sandbox / E2B — lazy + ephemeral, no persistence
 - Config in `packages/sandbox/src/config.ts`. **Nothing is stored between turns.**

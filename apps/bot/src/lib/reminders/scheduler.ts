@@ -3,7 +3,7 @@ import {
   getDueReminders,
   type Reminder,
 } from '@repo/db/queries';
-import type { Chat } from 'chat';
+import type { KytoBot as Chat } from '@/harness';
 import logger from '@/lib/logger';
 import { errorMessage } from '@/lib/utils/error';
 

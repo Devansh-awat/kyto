@@ -1,7 +1,7 @@
 import type { RequestHints } from '@repo/ai';
 import { getUserCustomization } from '@repo/db/queries';
-import type { Message, Thread } from 'chat';
 import { env } from '@/env';
+import type { Message, ThreadHandle as Thread } from '@/harness';
 import { slack } from '@/lib/chat';
 import { resolveChannelName, resolveWorkspaceName } from '@/lib/slack/names';
 

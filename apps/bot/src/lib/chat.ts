@@ -1,21 +1,17 @@
-import { createSlackAdapter } from '@chat-adapter/slack';
-import { createPostgresState } from '@chat-adapter/state-pg';
-import { Chat } from 'chat';
 import { env } from '@/env';
+import { KytoBot, SlackHarness } from '@/harness';
 import logger from '@/lib/logger';
-import { toChatLogger } from '@/lib/logger/chat';
 
-export const slack = createSlackAdapter({
-  mode: 'socket',
-  appToken: env.SLACK_APP_TOKEN,
+// kyto's custom Slack harness (replaces the chat-sdk + @chat-adapter/slack).
+// `slack` is the Web API facade; `bot` owns the Socket Mode connection and
+// event routing. Same export names as before so call-sites stay stable.
+export const slack = new SlackHarness({
   botToken: env.SLACK_BOT_TOKEN,
-  logger: toChatLogger(logger),
+  logger,
 });
 
-export const bot = new Chat({
-  userName: 'kyto',
-  adapters: { slack },
-  concurrency: 'concurrent',
-  state: createPostgresState({ url: env.DATABASE_URL }),
-  logger: toChatLogger(logger),
+export const bot = new KytoBot({
+  appToken: env.SLACK_APP_TOKEN,
+  harness: slack,
+  logger,
 });

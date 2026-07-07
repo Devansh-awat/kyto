@@ -42,6 +42,7 @@
         "channels:read",
         "channels:write.invites",
         "chat:write",
+        "chat:write.customize",
         "files:read",
         "files:write",
         "pins:read",
