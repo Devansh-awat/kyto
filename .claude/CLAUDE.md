@@ -659,6 +659,24 @@ Run these automatically after each completed change, in order, **without asking*
   `offerOptIn` (`lib/onboarding.ts`) — a **visible in-thread reply** (not
   ephemeral) with an "i accept" button, mirroring how gorkie surfaces its join
   gate. Membership of `OPT_IN_CHANNEL` is the allowlist (`lib/allowed-users.ts`).
+- **`##` messages are invisible to kyto.** A message with any line that begins
+  with `##` (after stripping leading @mentions) is a human-only side-channel:
+  `isHiddenFromBot` (`lib/utils/message.ts`) makes `shouldIgnore` (`bot.ts`) skip
+  it AND `buildPrompt` (`lib/agent/prompt.ts`) filter it out of the replayed
+  thread history — so kyto never triggers on it and never even sees it in
+  context. (Previously it was only non-triggering but still visible in history.)
+- **Channel-join greeting is gated on a human inviter.** The
+  `member_joined_channel` handler (`features/assistant/index.ts`) posts the
+  "hey, i'm hanging out here now" line **only when `event.inviter` is set**
+  (a real person added kyto). A programmatic self-join — e.g.
+  `conversations.join` to search or read a public channel/canvas — carries no
+  `inviter`, so kyto stays silent. This is a ban-safety fix: kyto once
+  auto-joined a **post-restricted** channel to search it and the greeting posted
+  where normal members can't, getting it banned. `inviter` was plumbed onto
+  `MemberJoinedEvent` (`harness/types.ts`) from the raw event (`harness/bot.ts`).
+  General rule this enforces: kyto only sends unsolicited messages where it was
+  intentionally invited — everywhere else it posts only in reply to being
+  invoked (where the invoker could post, so kyto can too).
 - **Kyto is closed-source.** `packages/ai/src/prompts/slack.ts` states plainly
   that Kyto's own code is private with no public repo link to share (it
   started as a private fork of the open-source gorkie project, but that's as
