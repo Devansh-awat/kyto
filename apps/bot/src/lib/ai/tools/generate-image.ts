@@ -25,9 +25,8 @@ export function generateImageTool({
         .default(1)
         .describe('How many images to generate.'),
       aspectRatio: z
-        .custom<`${number}:${number}`>(
-          (value) => typeof value === 'string' && /^\d+:\d+$/.test(value)
-        )
+        .string()
+        .regex(/^\d+:\d+$/)
         .optional()
         .describe('Optional aspect ratio like 16:9 or 1:1.'),
     }),
@@ -36,7 +35,9 @@ export function generateImageTool({
         model: provider.imageModel('image-model'),
         prompt,
         n,
-        ...(aspectRatio ? { aspectRatio } : {}),
+        ...(aspectRatio
+          ? { aspectRatio: aspectRatio as `${number}:${number}` }
+          : {}),
       });
       const total = result.images.length;
       for (const [index, image] of result.images.entries()) {

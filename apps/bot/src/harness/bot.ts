@@ -31,6 +31,8 @@ const ALLOWED_SUBTYPES = new Set(['file_share', 'thread_broadcast']);
 interface SocketEnvelope {
   ack: (response?: unknown) => Promise<void>;
   body: Record<string, unknown>;
+  /** Envelope type from the 'slack_event' catch-all. */
+  type?: string;
 }
 
 /**
@@ -177,21 +179,34 @@ export class KytoBot {
     });
     this.socket = socket;
 
-    socket.on('events_api', (envelope: SocketEnvelope) => {
-      this.handleEnvelope(envelope, () => this.dispatchEvent(envelope.body));
-    });
-    socket.on('interactive', (envelope: SocketEnvelope) => {
-      this.handleInteractive(envelope);
-    });
-    socket.on('slash_commands', (envelope: SocketEnvelope) => {
-      envelope
-        .ack({
-          response_type: 'ephemeral',
-          text: "hi, i'm kyto! just @mention me in a channel or DM me — no slash command needed.",
-        })
-        .catch((error: unknown) => {
-          this.slackLogger.warn({ err: error }, '[harness] slash ack failed');
-        });
+    // The client emits the INNER event type for events_api envelopes (never
+    // 'events_api' itself), so route everything off the 'slack_event'
+    // catch-all, which carries the envelope type alongside the payload.
+    socket.on('slack_event', (envelope: SocketEnvelope) => {
+      switch (envelope.type) {
+        case 'events_api':
+          this.handleEnvelope(envelope, () => this.dispatchEvent(envelope.body));
+          return;
+        case 'interactive':
+          this.handleInteractive(envelope);
+          return;
+        case 'slash_commands':
+          envelope
+            .ack({
+              response_type: 'ephemeral',
+              text: "hi, i'm kyto! just @mention me in a channel or DM me — no slash command needed.",
+            })
+            .catch((error: unknown) => {
+              this.slackLogger.warn(
+                { err: error },
+                '[harness] slash ack failed'
+              );
+            });
+          return;
+        default:
+          envelope.ack().catch(() => undefined);
+          return;
+      }
     });
 
     await socket.start();
