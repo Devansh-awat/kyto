@@ -315,7 +315,22 @@ Run these automatically after each completed change, in order, **without asking*
   advances `next_run_at` to the next occurrence (never deactivates — recurring
   means forever until explicitly cancelled). `listReminders`/`cancelReminder`
   let the model manage a user's own reminders (cancel is scoped by `user_id`,
-  so a user can only cancel their own). This durable state is a deliberate
+  so a user can only cancel their own).
+  - **Expanded (reminder configuration):** the `reminders` table gained
+    `channel_id` (fire into a channel vs DM the user), `max_runs` + `run_count`
+    (stop after N fires — `advanceReminder` increments the count and deactivates
+    on the cap; all additive migrations applied live). `scheduleRecurringReminder`
+    takes optional `channelId` (**owner-only**, same admin gate as cross-channel
+    posting; non-owners stay DM-only) and `maxRuns`. New
+    `pauseReminder`/`resumeReminder` tools (pause keeps the row but stops it
+    firing; resume snaps `next_run_at` to the future). An **App Home
+    "Reminders"** section lists each of a user's reminders with Pause/Resume +
+    Delete buttons (`home_pause_reminder`/`home_resume_reminder`/
+    `home_cancel_reminder`, `listUserReminders`). Reminder posts honor the
+    **reminder identity profile** (name+icon). A channel-targeted reminder
+    prefixes the text with `<@user>`. (Agent/bash-powered reminders — running a
+    prompt at fire time — are a deliberate NON-goal for now.)
+  This durable state is a deliberate
   exception to the "no persistence" policy elsewhere (turns/sandbox) — a
   reminder's entire purpose is to outlive the turn that created it, same
   precedent as site hosting and the opt-in allowlist.
@@ -400,6 +415,71 @@ Run these automatically after each completed change, in order, **without asking*
   node_module. Batching is still model-dependent (a weak model may not batch even
   when told). Faster batched reads also keep a turn under Slack's ~interaction
   timeout, avoiding the "invalid action" token expiry seen on slow serial turns.
+
+### Broadcast mentions (@channel/@here) rendering
+- Slack's newer `markdown` block renders `<@user>`/`<#channel>` links but NOT
+  control mentions — `<!channel>`/`<!here>`/`<!everyone>`/`<!subteam^…>` come out
+  as **plaintext** there. So `ThreadHandle.post` (`harness/thread.ts`) detects a
+  control-mention token (`CONTROL_MENTION` regex) and posts that message as a
+  `section`+`mrkdwn` block instead (which resolves them into real pings), losing
+  GFM niceties for that message only. The core prompt (`prompts/slack.ts`) tells
+  the model to ping people with `<@id>` and broadcast with the raw
+  `<!channel>`/`<!here>`/`<!everyone>` tokens (plaintext `@channel` never pings).
+
+### Focus mode (respond to / see only chosen users in a thread)
+- `focusMode` tool (`tools/focus.ts`, core) locks kyto onto specific user ids in
+  the current thread: it only replies to those users AND their messages are the
+  only ones it sees — non-focused messages are **filtered out of the prompt**
+  (`buildPrompt`, via `isFocusAllowed` in `lib/agent/focus.ts`), not just
+  ignored, so others can't distract/hijack it in a public thread. The **owner is
+  always allowed through** (never lock the owner out) and kyto's own messages
+  always stay in context. Gated in `bot.ts` (`onNewMention` +
+  `onSubscribedMessage`). Persisted on `thread_subscriptions.focus_user_ids`
+  (jsonb; additive migration). Call with `clear: true` to turn it off.
+
+### Slack read-only scripting (host-side proxy)
+- `slackScript` tool (`tools/slack-script.ts`, **deferred**, gated on
+  `SITES_ENABLED`) runs a bash script in the sandbox for **aggregate** Slack
+  questions ("who is in the most channels", "most active user") in one script
+  instead of N tool round-trips. A `slack <method> [json]` shell helper is
+  preloaded; it POSTs to a **host-side, secret-gated, READ-ONLY proxy** mounted
+  on the public sites server at `/_slackapi/<method>` (`lib/slack-proxy/`). A
+  per-turn secret is injected into the sandbox (`KYTO_SLACK_PROXY[_TOKEN]`, set
+  in `agent/index.ts`, revoked at turn end); the **bot token never enters the
+  sandbox**. The proxy attaches the real token and forwards ONLY the
+  `READ_ONLY_METHODS` allowlist (users.*, conversations.*, team.*, usergroups.*,
+  reactions/pins/bookmarks list, emoji.list) — posting/editing/deleting is
+  impossible through it. This is the safe answer to "read-only Slack scripts"
+  (our bot token is NOT itself read-only, so it can't just be handed to the
+  sandbox). NOTE: the subagent's own sandbox does NOT get the proxy env, so
+  `slackScript` inside a subagent 401s — extend if needed.
+
+### Subagent visibility (live plan card)
+- Subagents are no longer fully headless: a tool→plan side-channel
+  (`lib/agent/side-channel.ts` `ChunkChannel` + `mergeStream`) lets the subagent
+  stream its own collapsible task card into the parent turn's plan. `buildTools`
+  takes an `emitChunk` callback (bound per attempt to that attempt's channel in
+  `agent/index.ts`; `mergeStream` races the subagent's card updates with the
+  model's own stream, closing the channel at attempt end). The card
+  (`tools/subagent.ts` consumes the subagent's `fullStream`) shows the task, its
+  running thinking, the **tools it calls (names only — never their outputs, per
+  owner)**, and its final report. The card **title uses the subagent identity
+  name** (see below); a plan card can't carry a custom icon.
+
+### Identity profiles (per-message-type name suffix + icon, App Home)
+- `identity_profiles` table (`message_type` PK ∈ normal|subagent|reminder,
+  `name_suffix`, `icon`; additive migration). Owner-configured from an **App
+  Home "Identity"** section (owner-gated; `home_edit_identity` →
+  `buildIdentityModal` → `home_save_identity`). The base name is ALWAYS "kyto"
+  (a suffix is appended, e.g. "kyto subagent"); it can never be renamed.
+  `resolveIdentity(type)` (`lib/identity.ts`, 30s cache reset on save) returns
+  `{username?, iconEmoji?, iconUrl?}` — `icon` is a `:emoji:` code or an image
+  URL (unicode emoji can't be an icon_emoji, so only the `:name:` form passes).
+  Applied where kyto posts that kind of message: **reminder** DMs/channel posts
+  (name+icon), cross-channel **postMessage** (name+icon), and the **subagent**
+  card title (name only). Needs the `chat:write.customize` scope (already in the
+  manifest). The main streamed reply can't take per-message identity overrides
+  (Slack streaming API), so "normal" applies to postMessage, not the live reply.
 
 ### Canvases (read/list/create across channels, channel tab)
 - `canvasList` takes an optional `channelId` (raw `C0123`, `slack:` id, or
@@ -497,12 +577,30 @@ Run these automatically after each completed change, in order, **without asking*
   nothing; `systemctl restart kyto.service` re-establishes a clean connection.
 
 ### Models / LLM model router + fallback
-- **The main query runs on OpenRouter's own auto-router via HackClub**
-  (`ROUTER_MODEL = 'openrouter/auto'` in `packages/ai/src/providers/attempts.ts`). The
-  HackClub proxy is OpenRouter-compatible, so sending model id `openrouter/auto`
-  hands routing to OpenRouter, which picks the best underlying model per request
-  (e.g. it resolved to `openai/gpt-5.5` in testing). This replaced the old
-  per-request router-LLM hop (`pickModel`/`buildRoutingContext`, deleted) and the
+- **PRIMARY IS NOW PINNED SONNET 5, not `openrouter/auto`.** `ROUTER_MODEL =
+  'anthropic/claude-sonnet-5'` (`packages/ai/src/providers/attempts.ts`). The
+  auto-router was dropped (owner's call) because its per-request re-routing was
+  flaky — empty completions / wrong-model picks that triggered long fallback
+  cascades. `agent.ts` no longer injects the `auto-router` plugin
+  (`ALLOWED_MODELS`/`COST_QUALITY_TRADEOFF` are retained but UNUSED, kept for
+  reference). The fallback machinery is otherwise unchanged: sonnet-5 is
+  attempt 0; on failure the pinned-resolved-retry is skipped (sonnet-5 already
+  failed, dedup via `failedKeys`) and it walks `LEADERBOARD_FALLBACK` best→worst
+  (sonnet-5 isn't in that list, so `findIndex` = -1 → full leaderboard). NOTE:
+  switching primary does NOT help on a **HackClub daily-budget-exhausted** day —
+  sonnet-5 is a HackClub call and 429s too, flipping `hackclubBudgetExhausted`
+  to skip straight to the DigitalOcean BYOK tier then the owner's Gemini key
+  (that's what serves requests once the $3/day cap is hit; resets at UK
+  midnight). The old auto-router doc below (auto plugin, resolved-model capture)
+  is historical.
+- **Prompt cache is now 1-HOUR TTL** (`agent.ts` `CACHE_CONTROL = {ttl:'1h',
+  type:'ephemeral'}`), so the system+tools prefix stays cached across a thread's
+  sporadic turns, not just within one multi-step loop. Anthropic/OpenRouter
+  honor `ttl:'1h'`; other providers ignore it.
+- **[historical] auto-router era:** The main query used to run on OpenRouter's
+  own auto-router via HackClub (`openrouter/auto`); the HackClub proxy is
+  OpenRouter-compatible. This replaced the old per-request router-LLM hop
+  (`pickModel`/`buildRoutingContext`, deleted) and the
   `meta-llama/llama-3.3-70b-instruct` fast tier, which was unreliable for tool
   use (hallucinated tool names, wrong-bot/persona confusion, stray "battles").
 - **Fallback on failure** (`agent/index.ts`, `routeNextAttempt`): `openrouter/auto`
