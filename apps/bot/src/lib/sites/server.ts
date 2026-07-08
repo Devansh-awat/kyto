@@ -4,6 +4,7 @@ import nodePath from 'node:path';
 import { promisify } from 'node:util';
 import { env } from '@/env';
 import logger from '@/lib/logger';
+import { handleSlackProxy } from '@/lib/slack-proxy';
 import { isValidSiteName, resolveWithin, siteRoot, sitesRoot } from './paths';
 
 const execFileAsync = promisify(execFile);
@@ -114,6 +115,13 @@ export async function startSitesServer(): Promise<void> {
     Bun.serve({
       fetch: async (request) => {
         const { pathname } = new URL(request.url);
+
+        // Read-only Slack proxy (secret-gated) for sandbox scripts. Handled
+        // before the static GET-only path since it's a POST endpoint.
+        const proxied = await handleSlackProxy(request, pathname);
+        if (proxied) {
+          return proxied;
+        }
 
         if (request.method !== 'GET' && request.method !== 'HEAD') {
           return new Response('Method not allowed', {

@@ -28,6 +28,7 @@ import { runQueuedTurn } from '@/lib/ai/turn-queue';
 import { bot, slack } from '@/lib/chat';
 import { agentErrorMessage, BudgetExhaustedError } from '@/lib/errors';
 import logger from '@/lib/logger';
+import { registerProxyToken, revokeProxyToken } from '@/lib/slack-proxy';
 import { errorMessage } from '@/lib/utils/error';
 import { clamp } from '@/lib/utils/text';
 import type { ActiveTurn, AgentErrorStage } from '@/types/agent';
@@ -89,11 +90,23 @@ async function executeTurn(
   await startThinking({ thread });
   const hints = await requestHints({ thread, message });
 
+  // Per-turn read-only Slack proxy secret: injected into the sandbox so a
+  // script can query Slack (read-only) without the bot token, revoked at turn
+  // end. Only when the sites server (which hosts the proxy) is enabled.
+  const slackProxySecret = env.SITES_ENABLED ? registerProxyToken() : undefined;
+  const slackProxyEnv: Record<string, string> = slackProxySecret
+    ? {
+        KYTO_SLACK_PROXY: `https://${env.SITES_PUBLIC_HOST}/_slackapi`,
+        KYTO_SLACK_PROXY_TOKEN: slackProxySecret,
+      }
+    : {};
+
   // The lazy sandbox: creating this object is free — the real E2B sandbox
   // materializes only when a tool first touches it, and destroy() at turn end
   // kills it iff it materialized. Nothing persists between turns.
   const sandboxSession = new LazySandbox({
     apiKey: env.E2B_API_KEY,
+    env: slackProxyEnv,
     githubToken: env.GH_TOKEN,
     logger,
     sessionId: threadId,
@@ -113,6 +126,7 @@ async function executeTurn(
     | undefined;
 
   const cleanup = async (): Promise<void> => {
+    revokeProxyToken(slackProxySecret);
     await closeTools?.().catch(() => undefined);
     await sandboxSession.destroy().catch(() => undefined);
   };

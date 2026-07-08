@@ -58,6 +58,7 @@ import { searchSlackTool } from './tools/search-slack';
 import { searchWebTool } from './tools/search-web';
 import { editAsUserTool, sendAsUserTool } from './tools/send-as-user';
 import { skipTool } from './tools/skip';
+import { slackScriptTool } from './tools/slack-script';
 import { runSubagentTool } from './tools/subagent';
 import { summarizeThreadTool } from './tools/summarize-thread';
 import { textToSpeechTool } from './tools/text-to-speech';
@@ -244,6 +245,15 @@ export async function buildTools({
           gh: {
             summary: 'run a GitHub CLI (`gh`) command in the sandbox',
             tool: ghTool({ getSandboxContext }),
+          },
+        }
+      : {}),
+    ...(env.SITES_ENABLED
+      ? {
+          slackScript: {
+            summary:
+              'run a read-only bash script against the Slack API (aggregate queries)',
+            tool: slackScriptTool({ getSandboxContext }),
           },
         }
       : {}),
