@@ -71,28 +71,7 @@ bot.onAssistantContextChanged(async (event) => {
     });
 });
 
-bot.onMemberJoinedChannel(async (event) => {
-  if (event.userId !== slack.botUserId) {
-    return;
-  }
-
-  // Only greet when a human actually invited Kyto. A programmatic self-join
-  // (e.g. joining a public channel just to search or read a canvas) carries no
-  // `inviter`, and greeting there is both noise and a ban risk in channels
-  // where normal members aren't allowed to post.
-  if (!event.inviter) {
-    return;
-  }
-
-  await bot
-    .channel(event.channelId)
-    .post(
-      "hey! i'm hanging out in this channel now! just @ me whenever you need something :)"
-    )
-    .catch((error: unknown) => {
-      logger.warn(
-        { ...toLogError(error), channelId: event.channelId },
-        'Failed to post channel join greeting'
-      );
-    });
-});
+// No channel-join greeting. Per workspace admins, Kyto must NEVER post an
+// unsolicited message when it joins a channel (a greeting once landed in a
+// post-restricted channel and got the bot banned). It only ever speaks in
+// reply to being invoked. Do not re-add a member_joined_channel post here.

@@ -1,19 +1,58 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import type { KytoBot as Chat } from '@/harness';
+import { slack } from '@/lib/chat';
+import { toRawSlackChannelId } from '@/lib/slack/ids';
 
-export function postMessageTool({ bot }: { bot: Chat }) {
+// Cross-channel posting is gated: only the OWNER can make Kyto post outside the
+// channel it was invoked in. For everyone else Kyto may only post back into the
+// SAME channel/thread it was mentioned in — a workspace-admin requirement, so a
+// non-owner can't tell it (from a thread in #general) to post into
+// #announcements or DM a stranger.
+function rawChannelOf(threadIdOrChannel: string): string {
+  return toRawSlackChannelId(
+    threadIdOrChannel.startsWith('slack:')
+      ? slack.channelIdFromThreadId(threadIdOrChannel)
+      : threadIdOrChannel
+  );
+}
+
+export function postMessageTool({
+  bot,
+  currentThreadId,
+  isOwner,
+}: {
+  bot: Chat;
+  currentThreadId: string;
+  isOwner: boolean;
+}) {
+  const currentChannel = rawChannelOf(currentThreadId);
   return tool({
-    description:
-      'Post a markdown-formatted message to another target. Type must be thread, channel, or user.',
+    description: isOwner
+      ? 'Post a markdown-formatted message to another target. Type must be thread, channel, or user.'
+      : 'Post a markdown-formatted message. You may ONLY post into the current channel/thread (type thread or channel, the same channel you were mentioned in) — posting to a different channel or DMing another user is not allowed.',
     inputSchema: z.object({
+      id: z.string().min(1),
+      message: z.string().min(1).describe('Markdown message body.'),
       type: z
         .enum(['thread', 'channel', 'user'])
         .describe('Target kind: thread, channel, or user.'),
-      id: z.string().min(1),
-      message: z.string().min(1).describe('Markdown message body.'),
     }),
     execute: async ({ id, message, type }) => {
+      if (!isOwner) {
+        if (type === 'user') {
+          return {
+            error:
+              'Not allowed: you can only post into the current channel, not DM another user.',
+          };
+        }
+        if (rawChannelOf(id) !== currentChannel) {
+          return {
+            error:
+              'Not allowed: you can only post into the channel you were mentioned in, not a different channel.',
+          };
+        }
+      }
       if (type === 'thread') {
         const sent = await bot.thread(id).post({ markdown: message });
         return { messageId: sent.id, threadId: sent.threadId };

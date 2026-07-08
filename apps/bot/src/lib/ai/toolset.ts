@@ -104,7 +104,11 @@ export async function buildTools({
     react: reactTool({ bot }),
     unreact: unreactTool({ bot }),
     getUser: getUserTool(),
-    postMessage: postMessageTool({ bot }),
+    postMessage: postMessageTool({
+      bot,
+      currentThreadId: thread.id,
+      isOwner: authorUserId === env.OWNER_USER_ID,
+    }),
     getFile: getFileTool({ getSandboxContext }),
     joinThread: joinThreadTool({ thread }),
     leaveThread: leaveThreadTool({ thread }),
