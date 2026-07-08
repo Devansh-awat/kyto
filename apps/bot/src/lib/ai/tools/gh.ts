@@ -4,29 +4,26 @@ import { z } from 'zod';
 import { env } from '@/env';
 import { errorMessage } from '@/lib/utils/error';
 
-// Runs `gh` (and arbitrary shell around it, so piping/filtering works) in the
-// SAME sandbox the rest of the turn's tools already use — no dedicated
-// throwaway sandbox, per the owner's call. GH_TOKEN is injected only into
-// THIS ONE `session.run` call's env (not exported into the persistent shell
-// session), so no later bash/read call in the turn inherits it as an
-// environment variable. Two layers of defense on top of that scoping:
-//  1. Block commands that try to manage or print auth/credentials directly
-//     (gh auth, env, printenv, /proc/self/environ, etc.) — necessarily
-//     incomplete, since shell commands are infinitely obfuscatable.
-//  2. Scan the ACTUAL returned stdout/stderr for the real token value (or any
-//     long-enough contiguous substring of it) and redact matches — this
-//     catches a partial/obfuscated leak regardless of how the command tried
-//     to produce it, since it checks the real bytes against the real secret
-//     rather than guessing at intent.
-// Residual risk the owner accepted by not using a separate sandbox: a command
-// could still write the token to a FILE in the shared workspace, which would
-// then be readable by other tools later in the SAME turn (the sandbox itself
-// is destroyed at turn end, so this can't leak across turns, but it isn't
-// contained within one either).
+// Runs `gh` (GitHub CLI) in the turn's sandbox. The token is the whole security
+// concern here, so the design deliberately gives the model NO shell:
+//
+//  - The model supplies `args` as an ARRAY of arguments to `gh` — not a shell
+//    command line. We run `gh` with each arg single-quoted, so there is no
+//    command substitution, no piping, no `$GH_TOKEN` expansion, no `echo`/`env`.
+//    The model can only ever invoke `gh` itself with literal arguments.
+//  - GH_TOKEN is injected into ONLY this one call's process env (never exported
+//    into a persistent shell), and `gh auth …` is blocked so the token can't be
+//    printed back via `gh auth token` / `gh auth status --show-token`.
+//
+// This is what defeats the drip-exfiltration attack that a shell-based tool is
+// vulnerable to: with a shell you can run `echo ${GH_TOKEN:0:1}` a character at
+// a time across many calls and reassemble the token, which per-call substring
+// redaction can't stop. With no shell and no `gh auth`, there is no path for the
+// model to read the token at all. Output is still scanned and redacted as
+// defense-in-depth. To filter/shape output, use gh's own `--json`/`--jq`/
+// `--template` flags instead of shell pipes.
 const MAX_OUTPUT_CHARS = 8000;
 const MIN_REDACT_LEN = 8;
-const BLOCKED_PATTERN =
-  /\bgh\s+auth\b|\benv\b|\bprintenv\b|\/proc\/self\/environ|\bset\b\s*$/i;
 
 function truncate(text: string): string {
   return text.length > MAX_OUTPUT_CHARS
@@ -34,8 +31,13 @@ function truncate(text: string): string {
     : text;
 }
 
+/** Single-quote an argument so the shell treats it as one inert literal. */
+function shellQuote(arg: string): string {
+  return `'${arg.replaceAll("'", String.raw`'\''`)}'`;
+}
+
 /** Redact the real token, and any sufficiently long contiguous substring of
- * it, from returned output — catches partial leaks regardless of technique. */
+ * it, from returned output — defense-in-depth on top of the no-shell design. */
 function redactToken(text: string, token: string): string {
   let redacted = text.split(token).join('[REDACTED]');
   for (let len = token.length; len >= MIN_REDACT_LEN; len--) {
@@ -56,16 +58,16 @@ export function ghTool({
 }) {
   return tool({
     description:
-      "Run a `gh` (GitHub CLI) command in the sandbox — a real shell, so piping/filtering works (e.g. `gh pr list --repo owner/repo | grep foo`, `gh api repos/o/r/issues --jq '.[].title'`). The token is injected only for this one call and never persists as a sandbox environment variable. Commands that manage or print auth/credentials (gh auth, env, printenv, etc.) are blocked, and any leak of the token itself is redacted from output.",
+      'Run a GitHub CLI (`gh`) command in the sandbox. Pass the arguments to `gh` as an ARRAY, e.g. ["pr","list","--repo","owner/repo"] or ["api","repos/o/r/issues","--jq",".[].title"]. This runs `gh` directly with no shell, so there is no piping — use gh\'s own --json/--jq/--template flags to filter output. `gh auth` is not allowed.',
     inputSchema: z.object({
-      command: z
-        .string()
+      args: z
+        .array(z.string())
         .min(1)
         .describe(
-          'Shell command to run, using gh and/or piping to other commands.'
+          'Arguments passed to `gh` (no shell; each is a literal arg).'
         ),
     }),
-    execute: async ({ command }, { abortSignal }) => {
+    execute: async ({ args }, { abortSignal }) => {
       const token = env.GH_TOKEN;
       if (!token) {
         return {
@@ -73,15 +75,16 @@ export function ghTool({
           success: false,
         };
       }
-      if (BLOCKED_PATTERN.test(command)) {
+      if (args[0]?.toLowerCase() === 'auth') {
         return {
           error:
-            'Blocked: commands that manage or print auth/credentials (gh auth, env, printenv, etc.) are not allowed.',
+            'Blocked: `gh auth` is not allowed (it can print or manage the token).',
           success: false,
         };
       }
       try {
         const context = getSandboxContext();
+        const command = `gh ${args.map(shellQuote).join(' ')}`;
         const result = await context.session.run({
           abortSignal,
           command,
