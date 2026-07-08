@@ -2,7 +2,11 @@ import type { SandboxContext } from '@repo/ai';
 import { tool } from 'ai';
 import { z } from 'zod';
 import logger from '@/lib/logger';
-import { deploySiteFromSandbox, removeSite } from '@/lib/sites/deploy';
+import {
+  deploySiteFromSandbox,
+  listSites,
+  removeSite,
+} from '@/lib/sites/deploy';
 import { isValidPagePath, isValidSiteName, siteUrl } from '@/lib/sites/paths';
 import { errorMessage } from '@/lib/utils/error';
 
@@ -88,10 +92,33 @@ export function deploySiteTool({
   });
 }
 
+export function listSitesTool() {
+  return tool({
+    description:
+      'List the static sites currently published on the host (name and live URL).',
+    inputSchema: z.object({}),
+    execute: async () => {
+      try {
+        const sites = await listSites();
+        return {
+          count: sites.length,
+          sites,
+          success: true,
+          summary: sites.length
+            ? `${sites.length} site(s) published.`
+            : 'No sites are currently published.',
+        };
+      } catch (error) {
+        return { error: errorMessage(error), success: false };
+      }
+    },
+  });
+}
+
 export function removeSiteTool() {
   return tool({
     description:
-      'Take down a previously published static site so it is no longer served at /<name>/. Pass `page` to remove only a single page sub-path (e.g. "home") and leave the rest of the site up. Permanent — only use when explicitly asked.',
+      'Take down a previously published static site so it is no longer served at /<name>/. Pass `page` to remove only a single page sub-path (e.g. "home") and leave the rest of the site up. Permanent — only use when explicitly asked. Owner-only.',
     inputSchema: z.object({ name: siteNameSchema, page: pageSchema }),
     execute: async ({ name, page }) => {
       try {

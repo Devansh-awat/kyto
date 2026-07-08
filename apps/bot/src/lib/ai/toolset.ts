@@ -16,7 +16,11 @@ import {
   canvasWriteTool,
 } from './tools/canvas';
 import { createChannelTool, setChannelTopicTool } from './tools/channels';
-import { deploySiteTool, removeSiteTool } from './tools/deploy-site';
+import {
+  deploySiteTool,
+  listSitesTool,
+  removeSiteTool,
+} from './tools/deploy-site';
 import { checkInboxTool, replyEmailTool, sendEmailTool } from './tools/email';
 import { deleteFileTool, fileStatTool } from './tools/files';
 import { generateImageTool } from './tools/generate-image';
@@ -87,10 +91,9 @@ export async function buildTools({
   thread: ThreadHandle;
 }): Promise<BuiltTools> {
   const authorUserId = message.author.userId;
-  const canActAsOwner =
-    Boolean(env.SLACK_USER_TOKEN) &&
-    Boolean(env.OWNER_USER_ID) &&
-    authorUserId === env.OWNER_USER_ID;
+  const isOwner =
+    Boolean(env.OWNER_USER_ID) && authorUserId === env.OWNER_USER_ID;
+  const canActAsOwner = Boolean(env.SLACK_USER_TOKEN) && isOwner;
   const agentMailKey = env.AGENTMAIL_API_KEY;
 
   const core: ToolSet = {
@@ -107,7 +110,7 @@ export async function buildTools({
     postMessage: postMessageTool({
       bot,
       currentThreadId: thread.id,
-      isOwner: authorUserId === env.OWNER_USER_ID,
+      isOwner,
     }),
     getFile: getFileTool({ getSandboxContext }),
     joinThread: joinThreadTool({ thread }),
@@ -118,7 +121,8 @@ export async function buildTools({
     getPermalink: getPermalinkTool({ thread }),
     fetchUrl: fetchUrlTool(),
     deploySite: deploySiteTool({ getSandboxContext }),
-    removeSite: removeSiteTool(),
+    listSites: listSitesTool(),
+    // removeSite is destructive and owner-only (see the owner-gated block below).
     skip: skipTool({ threadId: thread.id }),
     listThreads: listThreadsTool({ currentThreadId: thread.id }),
     readConversationHistory: readConversationHistoryTool({
@@ -171,6 +175,11 @@ export async function buildTools({
       },
     }),
   };
+
+  // Taking a site down is destructive, so only the owner can trigger it.
+  if (isOwner) {
+    core.removeSite = removeSiteTool();
+  }
 
   // Background-process trio shares one in-turn handle map, so build it once.
   const background = backgroundProcessTools({ getSandboxContext });

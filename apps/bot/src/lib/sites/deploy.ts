@@ -1,8 +1,14 @@
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import nodePath from 'node:path';
 import type { SandboxContext } from '@repo/ai';
 import logger from '@/lib/logger';
-import { resolveWithin, siteRoot, sitesRoot } from './paths';
+import {
+  RESERVED_SITE_NAMES,
+  resolveWithin,
+  siteRoot,
+  sitesRoot,
+  siteUrl,
+} from './paths';
 
 // Limits keep a single deploy from exhausting host disk or hanging on a huge
 // build directory. Static sites are small; these are generous ceilings.
@@ -157,4 +163,26 @@ export async function removeSite(name: string, page?: string): Promise<void> {
   }
   await rm(target, { force: true, recursive: true });
   logger.info({ name, page }, '[sites] removed site');
+}
+
+export interface DeployedSite {
+  name: string;
+  url: string;
+}
+
+/** List the sites currently published on the host (top-level dirs under the
+ * sites root, excluding reserved/internal names). */
+export async function listSites(): Promise<DeployedSite[]> {
+  const entries = await readdir(sitesRoot(), { withFileTypes: true }).catch(
+    () => []
+  );
+  return entries
+    .filter(
+      (entry) =>
+        entry.isDirectory() &&
+        !entry.name.startsWith('.') &&
+        !RESERVED_SITE_NAMES.has(entry.name)
+    )
+    .map((entry) => ({ name: entry.name, url: siteUrl(entry.name) }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
