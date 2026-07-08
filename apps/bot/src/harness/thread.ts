@@ -17,6 +17,20 @@ import type {
 // this, but clamp defensively so an oversized post degrades instead of erroring.
 const MARKDOWN_BLOCK_MAX = 11_800;
 
+// Slack's newer `markdown` block renders user (`<@U…>`) and channel (`<#C…>`)
+// links, but NOT broadcast/control mentions — `<!channel>`, `<!here>`,
+// `<!everyone>`, or user-group `<!subteam^…>` all come out as plaintext there.
+// Only the legacy `mrkdwn` text object resolves them into real pings. So when a
+// message contains one, we render it as a `section`+`mrkdwn` block instead of a
+// `markdown` block (broadcast announcements are simple text, so losing GFM
+// niceties for them is an acceptable trade for the mention actually working).
+const CONTROL_MENTION =
+  /<!(?:channel|here|everyone)(?:\|[^>]*)?>|<!subteam\^[^>]+>/;
+
+function hasControlMention(text: string | undefined): boolean {
+  return text !== undefined && CONTROL_MENTION.test(text);
+}
+
 // Short-lived cache so chatty channels don't hit Postgres for every message
 // when deciding whether a thread is subscribed.
 const SUBSCRIPTION_CACHE_TTL_MS = 30_000;
@@ -69,7 +83,13 @@ export class ThreadHandle {
     const markdown = post.markdown?.slice(0, MARKDOWN_BLOCK_MAX);
     const blocks =
       post.blocks ??
-      (markdown ? [{ text: markdown, type: 'markdown' }] : undefined);
+      (markdown
+        ? [
+            hasControlMention(markdown)
+              ? { text: { text: markdown, type: 'mrkdwn' }, type: 'section' }
+              : { text: markdown, type: 'markdown' },
+          ]
+        : undefined);
     const args = {
       ...(blocks ? { blocks } : {}),
       channel,

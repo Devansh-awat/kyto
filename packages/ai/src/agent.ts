@@ -1,13 +1,10 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { stepCountIs, streamText, type ToolSet } from 'ai';
 import {
-  ALLOWED_MODELS,
-  COST_QUALITY_TRADEOFF,
   DIGITALOCEAN_ONLY,
   DIGITALOCEAN_PROVIDER,
   MAX_OUTPUT_TOKENS,
   type ModelAttempt,
-  ROUTER_MODEL,
 } from './providers/attempts';
 
 // Hard ceiling on agentic steps within one attempt (model → tools → model …).
@@ -23,7 +20,6 @@ export interface ResolvedModelHolder {
   model?: string;
 }
 
-const AUTO_ROUTER_PLUGIN_ID = 'auto-router';
 const MODEL_FIELD = /"model"\s*:\s*"([^"]+)"/;
 // The resolved slug appears in the first SSE chunk; don't scan forever.
 const MAX_SCAN_BYTES = 16_384;
@@ -32,11 +28,11 @@ const MAX_SCAN_BYTES = 16_384;
  * Stream one model attempt: the whole multi-step agentic loop on a single
  * OpenAI-compatible endpoint. The per-instance `fetch` (no global patching —
  * the old interceptor died with Pi) tunes the request:
- *  - `openrouter/auto` gets the auto-router plugin (cost_quality_tradeoff +
- *    exact-slug allowed_models allowlist);
- *  - HackClub requests get `reasoning: { effort: 'medium' }` (the old Pi
- *    thinking level) — max_tokens comes from maxOutputTokens below, which is
- *    what defuses OpenRouter's pessimistic daily-spend projection;
+ *  - HackClub/DigitalOcean requests get `reasoning: { effort: 'medium' }` (the
+ *    old Pi thinking level) — max_tokens comes from maxOutputTokens below,
+ *    which defuses OpenRouter's pessimistic daily-spend projection;
+ *  - DigitalOcean BYOK requests are pinned to the DigitalOcean provider;
+ *  - every request gets 1-hour prompt-cache breakpoints (see addCacheControl);
  * and captures the resolved model slug into `holder` from a response clone.
  */
 export function streamAttempt({
@@ -162,20 +158,6 @@ function tuneBody(
       return null;
     }
     let changed = false;
-    if (payload.model === ROUTER_MODEL) {
-      const plugins = Array.isArray(payload.plugins) ? payload.plugins : [];
-      payload.plugins = [
-        ...plugins.filter(
-          (plugin: { id?: string }) => plugin?.id !== AUTO_ROUTER_PLUGIN_ID
-        ),
-        {
-          allowed_models: ALLOWED_MODELS,
-          cost_quality_tradeoff: COST_QUALITY_TRADEOFF,
-          id: AUTO_ROUTER_PLUGIN_ID,
-        },
-      ];
-      changed = true;
-    }
     // DigitalOcean BYOK: the OpenRouter key has $0 credit, so force the
     // DigitalOcean provider — that's the free path billed to the owner's DO
     // account. Without this, OpenRouter tries a paid provider and 402s.
@@ -210,10 +192,17 @@ function tuneBody(
   }
 }
 
-// Attach an ephemeral cache breakpoint to a message's last text block,
-// converting a string body to the content-array form OpenRouter expects.
-// Leaves non-text/assistant/tool messages untouched (only called on system and
-// user messages, whose content the SDK sends as plain strings).
+// A 1-hour cache breakpoint. Anthropic (and OpenRouter's passthrough to it)
+// accept `ttl: '1h'` to extend the default 5-minute ephemeral cache to an hour,
+// so the big system+tools prefix stays cached across a thread's sporadic turns
+// (not just within one multi-step loop). Providers without extended TTL ignore
+// the field; a bare `{ type: 'ephemeral' }` would just fall back to 5 minutes.
+const CACHE_CONTROL = { ttl: '1h', type: 'ephemeral' } as const;
+
+// Attach the cache breakpoint to a message's last text block, converting a
+// string body to the content-array form OpenRouter expects. Leaves
+// non-text/assistant/tool messages untouched (only called on system and user
+// messages, whose content the SDK sends as plain strings).
 function markCacheBreakpoint(message: Record<string, unknown>): boolean {
   const content = message.content;
   if (typeof content === 'string') {
@@ -221,14 +210,14 @@ function markCacheBreakpoint(message: Record<string, unknown>): boolean {
       return false;
     }
     message.content = [
-      { cache_control: { type: 'ephemeral' }, text: content, type: 'text' },
+      { cache_control: CACHE_CONTROL, text: content, type: 'text' },
     ];
     return true;
   }
   if (Array.isArray(content) && content.length > 0) {
     const last = content.at(-1);
     if (last && typeof last === 'object') {
-      (last as Record<string, unknown>).cache_control = { type: 'ephemeral' };
+      (last as Record<string, unknown>).cache_control = CACHE_CONTROL;
       return true;
     }
   }

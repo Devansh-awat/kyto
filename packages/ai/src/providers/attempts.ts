@@ -27,13 +27,18 @@ export interface ModelAttempt {
 }
 
 /**
- * The primary model for the main query: OpenRouter's own auto-router, reached
- * through the OpenRouter-compatible HackClub proxy. OpenRouter picks the best
- * underlying model per request.
+ * The primary model for the main query: Claude Sonnet 5, pinned, reached through
+ * the HackClub proxy. This replaced `openrouter/auto` — the auto-router's
+ * per-request re-routing was flaky (empty completions / wrong-model picks that
+ * triggered long fallback cascades). A single strong pinned model is
+ * predictable and lets 1-hour prompt caching actually stick across a thread's
+ * turns. On failure the agent still walks LEADERBOARD_FALLBACK.
  */
-export const ROUTER_MODEL = 'openrouter/auto';
+export const ROUTER_MODEL = 'anthropic/claude-sonnet-5';
 
 // Auto-router cost/quality bias: 0 = pure quality, 7 = default, 10 = cheapest.
+// Retained for reference only — the auto-router path was removed (see
+// ROUTER_MODEL above); nothing injects this anymore.
 export const COST_QUALITY_TRADEOFF = 7;
 
 // Cap output tokens on HackClub requests. OpenRouter enforces the daily spend
