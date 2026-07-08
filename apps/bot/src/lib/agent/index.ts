@@ -311,13 +311,10 @@ async function executeTurn(
           return;
         }
         modelTaskDone = true;
-        const resolved =
-          holder.model && holder.model !== currentAttempt.model
-            ? ` → ${holder.model}`
-            : '';
+        // Deliberately no model name in the output: the thinking block shows
+        // only the "Thinking" status, never which model is running.
         return {
           id: modelTaskId,
-          output: `${currentAttempt.provider} · ${currentAttempt.model}${resolved}`,
           status: 'complete',
           title: modelTaskTitle,
           type: 'task_update',

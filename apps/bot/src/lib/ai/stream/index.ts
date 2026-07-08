@@ -108,7 +108,7 @@ export async function* renderStream({
         yield {
           id,
           status: 'in_progress',
-          title: 'Reasoning',
+          title: 'Thinking',
           type: 'task_update',
         };
         break;
@@ -130,7 +130,7 @@ export async function* renderStream({
           id,
           output: text ? clamp(text, REASONING_OUTPUT_MAX_LENGTH) : undefined,
           status: 'complete',
-          title: 'Reasoning',
+          title: 'Thinking',
           type: 'task_update',
         };
         reasoning.delete(id);
