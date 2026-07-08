@@ -2,14 +2,18 @@ import { personas } from '@repo/ai';
 import {
   addMcpServer,
   clearUserCustomization,
+  getIdentityProfiles,
   getUserCustomization,
   removeMcpServer,
+  setIdentityProfile,
   setUsageFooter,
   setUserCustomization,
 } from '@repo/db/queries';
+import { env } from '@/env';
 import type { ModalSubmitEvent, ModalSubmitResult } from '@/harness';
 import { mrkdwn, plainText } from '@/harness';
 import { bot, slack } from '@/lib/chat';
+import { IDENTITY_TYPES, resetIdentityCache } from '@/lib/identity';
 import logger from '@/lib/logger';
 import { toLogError } from '@/lib/utils/error';
 import {
@@ -19,7 +23,16 @@ import {
   slackActionViewSchema,
 } from './schema';
 import { publishHome } from './service';
-import { buildMcpModal, buildPresetModal, buildPromptModal } from './views';
+import {
+  buildIdentityModal,
+  buildMcpModal,
+  buildPresetModal,
+  buildPromptModal,
+} from './views';
+
+function isOwnerUser(userId: string): boolean {
+  return Boolean(env.OWNER_USER_ID) && userId === env.OWNER_USER_ID;
+}
 
 bot.onAppHomeOpened(async (event) => {
   await publishHome({ userId: event.userId }).catch((error: unknown) => {
@@ -289,6 +302,55 @@ bot.onModalSubmit(
       return {
         action: 'errors',
         errors: { mcp_url: 'Could not save this server. Try again.' },
+      };
+    }
+    await publishHome({ userId: event.user.userId }).catch(() => undefined);
+    return;
+  }
+);
+
+// ── Identity (owner-only, App Home) ─────────────────────────────────────────
+
+bot.onAction('home_edit_identity', async (event) => {
+  if (!(event.triggerId && isOwnerUser(event.user.userId))) {
+    return;
+  }
+  const profiles = await getIdentityProfiles().catch(() => []);
+  await slack.webClient.views
+    .open({
+      trigger_id: event.triggerId,
+      view: buildIdentityModal(profiles) as never,
+    })
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), userId: event.user.userId },
+        'Failed to open identity modal'
+      );
+    });
+});
+
+bot.onModalSubmit(
+  'home_save_identity',
+  async (event: ModalSubmitEvent): Promise<ModalSubmitResult> => {
+    if (!isOwnerUser(event.user.userId)) {
+      return;
+    }
+    try {
+      for (const type of IDENTITY_TYPES) {
+        await setIdentityProfile(type, {
+          icon: event.values[`identity_${type}_icon`]?.trim() || null,
+          nameSuffix: event.values[`identity_${type}_suffix`]?.trim() || null,
+        });
+      }
+      resetIdentityCache();
+    } catch (error) {
+      logger.warn(
+        { ...toLogError(error), userId: event.user.userId },
+        'Failed to save identity profiles'
+      );
+      return {
+        action: 'errors',
+        errors: { identity_normal_suffix: 'Could not save. Try again.' },
       };
     }
     await publishHome({ userId: event.user.userId }).catch(() => undefined);

@@ -11,6 +11,7 @@ import { z } from 'zod';
 import { env } from '@/env';
 import type { KytoBot, Message, StreamChunk, ThreadHandle } from '@/harness';
 import { requestHints } from '@/lib/ai/hints';
+import { resolveIdentity } from '@/lib/identity';
 import logger from '@/lib/logger';
 import { errorMessage } from '@/lib/utils/error';
 import { clamp } from '@/lib/utils/text';
@@ -126,7 +127,10 @@ export function runSubagentTool({
         let close: (() => Promise<void>) | undefined;
         // A single live card in the parent plan tracks this subagent's work.
         const cardId = `subagent-${crypto.randomUUID()}`;
-        const cardTitle = 'Subagent';
+        // The subagent's configured name (base "kyto" + suffix) titles its card;
+        // an icon can't render on a plan card, so only the name applies here.
+        const identity = await resolveIdentity('subagent');
+        const cardTitle = identity.username ?? 'Subagent';
         const toolsUsed: string[] = [];
         let thinking = '';
         let report = '';

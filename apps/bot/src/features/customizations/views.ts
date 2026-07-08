@@ -1,10 +1,17 @@
 import { personas } from '@repo/ai';
-import type { UserMcpServer } from '@repo/db/queries';
+import type { IdentityProfile, UserMcpServer } from '@repo/db/queries';
 import { mrkdwn, plainText } from '@/harness';
+import { IDENTITY_TYPES, type IdentityType } from '@/lib/identity';
 import type { SlackBlock, SlackHomeView, SlackModalView } from '@/types/views';
 
 const maxHomePromptLength = 600;
 const maxPromptLength = 3000;
+
+const IDENTITY_LABELS: Record<IdentityType, string> = {
+  normal: 'Cross-channel posts',
+  reminder: 'Reminder DMs',
+  subagent: 'Subagent block',
+};
 
 function escapeSlackText(text: string): string {
   return text
@@ -14,10 +21,14 @@ function escapeSlackText(text: string): string {
 }
 
 export function buildHomeView({
+  identityProfiles = [],
+  isOwner = false,
   mcpServers = [],
   prompt,
   showUsageFooter = true,
 }: {
+  identityProfiles?: IdentityProfile[];
+  isOwner?: boolean;
   mcpServers?: UserMcpServer[];
   prompt: string | null;
   showUsageFooter?: boolean;
@@ -122,7 +133,96 @@ export function buildHomeView({
     });
   }
 
+  // Owner-only: how kyto presents itself per message type (name suffix + icon).
+  if (isOwner) {
+    blocks.push(
+      { type: 'divider' },
+      {
+        accessory: {
+          action_id: 'home_edit_identity',
+          text: plainText('Edit'),
+          type: 'button',
+        },
+        text: mrkdwn(
+          "*Identity*\nAdd a name suffix and icon per message type. The base name is always “kyto”; you're only adding a suffix."
+        ),
+        type: 'section',
+      }
+    );
+    const byType = new Map(identityProfiles.map((p) => [p.messageType, p]));
+    for (const type of IDENTITY_TYPES) {
+      const profile = byType.get(type);
+      const suffix = profile?.nameSuffix?.trim();
+      const icon = profile?.icon?.trim();
+      const summary =
+        suffix || icon
+          ? [
+              suffix ? `name: kyto ${escapeSlackText(suffix)}` : null,
+              icon ? `icon: ${escapeSlackText(icon)}` : null,
+            ]
+              .filter(Boolean)
+              .join(' · ')
+          : '_default_';
+      blocks.push({
+        elements: [mrkdwn(`*${IDENTITY_LABELS[type]}* — ${summary}`)],
+        type: 'context',
+      });
+    }
+  }
+
   return { blocks, type: 'home' };
+}
+
+export function buildIdentityModal(
+  profiles: IdentityProfile[]
+): SlackModalView {
+  const byType = new Map(profiles.map((p) => [p.messageType, p]));
+  const blocks: SlackBlock[] = [];
+  for (const type of IDENTITY_TYPES) {
+    const profile = byType.get(type);
+    blocks.push(
+      { text: mrkdwn(`*${IDENTITY_LABELS[type]}*`), type: 'section' },
+      {
+        block_id: `identity_${type}_suffix`,
+        element: {
+          action_id: 'suffix',
+          ...(profile?.nameSuffix ? { initial_value: profile.nameSuffix } : {}),
+          max_length: 40,
+          placeholder: plainText('e.g. subagent'),
+          type: 'plain_text_input',
+        },
+        hint: plainText('Appended after “kyto ”. Leave blank for none.'),
+        label: plainText('Name suffix'),
+        optional: true,
+        type: 'input',
+      },
+      {
+        block_id: `identity_${type}_icon`,
+        element: {
+          action_id: 'icon',
+          ...(profile?.icon ? { initial_value: profile.icon } : {}),
+          max_length: 300,
+          placeholder: plainText(':robot_face: or https://…/pic.png'),
+          type: 'plain_text_input',
+        },
+        hint: plainText(
+          'A :emoji: code or an image URL. Leave blank for none.'
+        ),
+        label: plainText('Icon'),
+        optional: true,
+        type: 'input',
+      },
+      { type: 'divider' }
+    );
+  }
+  return {
+    blocks,
+    callback_id: 'home_save_identity',
+    close: plainText('Cancel'),
+    submit: plainText('Save'),
+    title: plainText('Kyto identity'),
+    type: 'modal',
+  };
 }
 
 export function buildMcpModal(): SlackModalView {

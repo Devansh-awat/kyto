@@ -1,7 +1,8 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import type { KytoBot as Chat } from '@/harness';
+import type { KytoBot as Chat, PostContent } from '@/harness';
 import { slack } from '@/lib/chat';
+import { resolveIdentity } from '@/lib/identity';
 import { toRawSlackChannelId } from '@/lib/slack/ids';
 
 // Cross-channel posting is gated: only the OWNER can make Kyto post outside the
@@ -53,16 +54,23 @@ export function postMessageTool({
           };
         }
       }
+      const identity = await resolveIdentity('normal');
+      const content: PostContent = {
+        iconEmoji: identity.iconEmoji,
+        iconUrl: identity.iconUrl,
+        markdown: message,
+        username: identity.username,
+      };
       if (type === 'thread') {
-        const sent = await bot.thread(id).post({ markdown: message });
+        const sent = await bot.thread(id).post(content);
         return { messageId: sent.id, threadId: sent.threadId };
       }
       if (type === 'channel') {
-        const sent = await bot.channel(id).post({ markdown: message });
+        const sent = await bot.channel(id).post(content);
         return { messageId: sent.id, threadId: sent.threadId };
       }
       const dm = await bot.openDM(id);
-      const sent = await dm.post({ markdown: message });
+      const sent = await dm.post(content);
       return { messageId: sent.id, threadId: sent.threadId };
     },
   });

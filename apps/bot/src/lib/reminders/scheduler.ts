@@ -4,6 +4,7 @@ import {
   type Reminder,
 } from '@repo/db/queries';
 import type { KytoBot as Chat } from '@/harness';
+import { resolveIdentity } from '@/lib/identity';
 import logger from '@/lib/logger';
 import { errorMessage } from '@/lib/utils/error';
 
@@ -18,8 +19,14 @@ const POLL_INTERVAL_MS = 30_000;
 
 async function fireReminder(bot: Chat, reminder: Reminder): Promise<void> {
   try {
+    const identity = await resolveIdentity('reminder');
     const dm = await bot.openDM(reminder.userId);
-    await dm.post({ markdown: reminder.text });
+    await dm.post({
+      iconEmoji: identity.iconEmoji,
+      iconUrl: identity.iconUrl,
+      markdown: reminder.text,
+      username: identity.username,
+    });
   } catch (error) {
     logger.warn(
       { err: errorMessage(error), reminderId: reminder.id },
