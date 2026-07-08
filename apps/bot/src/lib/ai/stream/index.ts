@@ -79,7 +79,7 @@ export async function* renderStream({
       }
     }
     if (part.type === 'error') {
-      const message = String((part as { error?: unknown }).error);
+      const message = errorPartText((part as { error?: unknown }).error);
       tally.errors.push(message.slice(0, 200));
       onError?.(message);
     }
@@ -276,6 +276,35 @@ const PLACEHOLDER_TEXT = /^\s*\(empty (response|completion):/i;
 
 function isPlaceholderText(text: string): boolean {
   return PLACEHOLDER_TEXT.test(text);
+}
+
+// A stream `error` part's payload is usually an APICallError whose distinctive
+// text (e.g. HackClub's "Daily spending limit of $3 reached") lives in
+// `responseBody`/`data`, NOT `.message` — so `String(error)` alone misses it and
+// the agent's spend-limit detector never fires. Fold those fields into one
+// string so the pattern matches.
+function errorPartText(error: unknown): string {
+  if (!error) {
+    return '';
+  }
+  if (typeof error === 'string') {
+    return error;
+  }
+  const pieces: string[] = [];
+  if (error instanceof Error) {
+    pieces.push(error.message);
+  }
+  const record = error as Record<string, unknown>;
+  for (const key of ['responseBody', 'data', 'statusCode']) {
+    const value = record[key];
+    if (value != null) {
+      pieces.push(typeof value === 'string' ? value : JSON.stringify(value));
+    }
+  }
+  if (pieces.length === 0) {
+    pieces.push(String(error));
+  }
+  return pieces.join(' ');
 }
 
 function showTask({

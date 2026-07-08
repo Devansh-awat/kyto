@@ -479,6 +479,16 @@ async function executeTurn(
         }
         attempts.push({ attempt: currentAttempt, error });
         failedKeys.add(`${currentAttempt.provider}:${currentAttempt.model}`);
+        // Also catch a spend-limit 429 that surfaced as a THROWN error (not a
+        // stream error part) — same effect as onError: skip the rest of the
+        // HackClub rungs and go straight to DigitalOcean/Gemini.
+        if (
+          currentAttempt.provider === 'hackclub' &&
+          SPEND_LIMIT_PATTERN.test(thrownErrorText(error))
+        ) {
+          hackclubBudgetExhausted = true;
+          spendLimitMessage ??= thrownErrorText(error);
+        }
         routeNextAttempt();
         const retryAttempt = attempt;
         // Only a turn that already streamed real reply text must not fall back
@@ -507,6 +517,29 @@ async function executeTurn(
       }
     }
   }
+}
+
+// Fold an error's message + provider responseBody/data into one string so the
+// spend-limit pattern can match text (e.g. "Daily spending limit of $3 reached")
+// that lives in responseBody rather than the error message.
+function thrownErrorText(error: unknown): string {
+  if (typeof error === 'string') {
+    return error;
+  }
+  const pieces: string[] = [];
+  if (error instanceof Error) {
+    pieces.push(error.message);
+  }
+  const record = error as Record<string, unknown> | null;
+  if (record) {
+    for (const key of ['responseBody', 'data']) {
+      const value = record[key];
+      if (value != null) {
+        pieces.push(typeof value === 'string' ? value : JSON.stringify(value));
+      }
+    }
+  }
+  return pieces.length > 0 ? pieces.join(' ') : String(error);
 }
 
 function attemptLog(attempt: ModelAttempt | undefined) {
