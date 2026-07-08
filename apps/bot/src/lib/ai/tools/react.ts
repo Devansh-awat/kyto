@@ -17,3 +17,19 @@ export function reactTool({ bot }: { bot: Chat }) {
     },
   });
 }
+
+export function unreactTool({ bot }: { bot: Chat }) {
+  return tool({
+    description: 'Remove an emoji reaction from a specific message.',
+    inputSchema: z.object({
+      emoji: z.string(),
+      messageId: z.string(),
+      threadId: z.string(),
+    }),
+    execute: async ({ emoji, messageId, threadId }) => {
+      const thread = bot.thread(threadId);
+      await thread.adapter.removeReaction(threadId, messageId, emoji);
+      return { emoji, messageId, removed: true, threadId };
+    },
+  });
+}

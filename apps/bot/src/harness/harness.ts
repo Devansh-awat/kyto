@@ -306,6 +306,19 @@ export class SlackHarness {
     });
   }
 
+  removeReaction(
+    threadId: string,
+    messageId: string,
+    name: string
+  ): Promise<unknown> {
+    const { channel } = this.decodeThreadId(threadId);
+    return this.webClient.reactions.remove({
+      channel,
+      name,
+      timestamp: messageId,
+    });
+  }
+
   // ── Assistant surface ───────────────────────────────────────────────────
 
   async setAssistantStatus(

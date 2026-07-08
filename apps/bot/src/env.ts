@@ -46,6 +46,13 @@ export const env = createEnv({
 
     E2B_API_KEY: z.string().min(1),
     AGENTMAIL_API_KEY: z.string().min(1).optional(),
+    // GitHub CLI token for the `gh` tool (injected per-call into the sandbox,
+    // never persisted as a shell env var). Tool is registered only when set.
+    GH_TOKEN: z.string().min(1).optional(),
+    // Replicate access via HackClub's proxy — a SEPARATE key from
+    // HACKCLUB_API_KEY (Replicate is gated per-key there). Preferred TTS
+    // backend; falls back to Gemini TTS when unset.
+    HACKCLUB_REPLICATE_API_KEY: z.string().min(1).optional(),
 
     LANGFUSE_BASEURL: z.url().optional(),
     LANGFUSE_PUBLIC_KEY: z.string().min(1).optional(),

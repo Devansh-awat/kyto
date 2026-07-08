@@ -7,6 +7,7 @@ import { env } from '@/env';
 import type { KytoBot, Message, ThreadHandle } from '@/harness';
 import { buildMcpTools } from '@/lib/ai/mcp';
 import logger from '@/lib/logger';
+import { backgroundProcessTools } from './tools/background';
 import { browseTool } from './tools/browse';
 import {
   canvasDeleteTool,
@@ -17,10 +18,12 @@ import {
 import { createChannelTool, setChannelTopicTool } from './tools/channels';
 import { deploySiteTool, removeSiteTool } from './tools/deploy-site';
 import { checkInboxTool, replyEmailTool, sendEmailTool } from './tools/email';
+import { deleteFileTool, fileStatTool } from './tools/files';
 import { generateImageTool } from './tools/generate-image';
 import { getChannelInfoTool } from './tools/get-channel-info';
 import { getFileTool } from './tools/get-file';
 import { getUserTool } from './tools/get-user';
+import { ghTool } from './tools/gh';
 import { joinThreadTool } from './tools/join-thread';
 import { leaveThreadTool } from './tools/leave-thread';
 import { listThreadsTool } from './tools/list-threads';
@@ -32,7 +35,7 @@ import {
 } from './tools/pins';
 import { pollTool } from './tools/poll';
 import { postMessageTool } from './tools/post-message';
-import { reactTool } from './tools/react';
+import { reactTool, unreactTool } from './tools/react';
 import { readConversationHistoryTool } from './tools/read-conversation-history';
 import {
   cancelReminderTool,
@@ -51,8 +54,10 @@ import { searchWebTool } from './tools/search-web';
 import { editAsUserTool, sendAsUserTool } from './tools/send-as-user';
 import { skipTool } from './tools/skip';
 import { summarizeThreadTool } from './tools/summarize-thread';
+import { textToSpeechTool } from './tools/text-to-speech';
 import { uploadFileTool } from './tools/upload-file';
 import { fetchUrlTool, getPermalinkTool } from './tools/url';
+import { waitTool } from './tools/wait';
 
 export interface BuiltTools {
   /** Live view of the tool names currently exposed to the model. */
@@ -92,7 +97,11 @@ export async function buildTools({
     readFile: readFileTool({ getSandboxContext }),
     writeFile: writeFileTool({ getSandboxContext }),
     editFile: editFileTool({ getSandboxContext }),
+    deleteFile: deleteFileTool({ getSandboxContext }),
+    fileStat: fileStatTool({ getSandboxContext }),
+    wait: waitTool(),
     react: reactTool({ bot }),
+    unreact: unreactTool({ bot }),
     getUser: getUserTool(),
     postMessage: postMessageTool({ bot }),
     getFile: getFileTool({ getSandboxContext }),
@@ -158,11 +167,29 @@ export async function buildTools({
     }),
   };
 
+  // Background-process trio shares one in-turn handle map, so build it once.
+  const background = backgroundProcessTools({ getSandboxContext });
+  const ttsAvailable = Boolean(
+    env.HACKCLUB_REPLICATE_API_KEY || env.GEMINI_API_KEY
+  );
+
   // Deferred: registered but hidden until loadTools names them.
   const deferred: Record<string, { summary: string; tool: Tool }> = {
     browse: {
       summary: 'drive a real Chromium browser (screenshots, clicks, scraping)',
       tool: browseTool({ getSandboxContext }),
+    },
+    runBackgroundProcess: {
+      summary: 'start a long-running shell command in the background',
+      tool: background.runBackgroundProcess,
+    },
+    getProcessOutput: {
+      summary: 'read output / status of a background process',
+      tool: background.getProcessOutput,
+    },
+    killProcess: {
+      summary: 'kill a background process',
+      tool: background.killProcess,
     },
     canvasDelete: {
       summary: 'delete a Slack canvas',
@@ -196,6 +223,29 @@ export async function buildTools({
       summary: 'render a mermaid diagram as an image',
       tool: mermaidTool({ thread }),
     },
+    ...(env.GH_TOKEN
+      ? {
+          gh: {
+            summary: 'run a GitHub CLI (`gh`) command in the sandbox',
+            tool: ghTool({ getSandboxContext }),
+          },
+        }
+      : {}),
+    ...(ttsAvailable
+      ? {
+          textToSpeech: {
+            summary: 'convert text to spoken audio and upload it to the thread',
+            tool: textToSpeechTool({
+              upload: async ({ data, filename }) => {
+                await thread.post({
+                  files: [{ data: new Uint8Array(data), filename }],
+                  markdown: 'Generated audio',
+                });
+              },
+            }),
+          },
+        }
+      : {}),
     ...(agentMailKey
       ? {
           sendEmail: {
