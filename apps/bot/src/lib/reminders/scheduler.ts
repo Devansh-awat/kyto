@@ -20,11 +20,15 @@ const POLL_INTERVAL_MS = 30_000;
 async function fireReminder(bot: Chat, reminder: Reminder): Promise<void> {
   try {
     const identity = await resolveIdentity('reminder');
-    const dm = await bot.openDM(reminder.userId);
-    await dm.post({
+    // A channel target posts into that channel; otherwise DM the owner.
+    const target = reminder.channelId
+      ? bot.channel(reminder.channelId)
+      : await bot.openDM(reminder.userId);
+    const mention = reminder.channelId ? `<@${reminder.userId}> ` : '';
+    await target.post({
       iconEmoji: identity.iconEmoji,
       iconUrl: identity.iconUrl,
-      markdown: reminder.text,
+      markdown: `${mention}${reminder.text}`,
       username: identity.username,
     });
   } catch (error) {

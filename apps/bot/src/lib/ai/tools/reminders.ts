@@ -2,12 +2,16 @@ import {
   cancelReminder as cancelReminderRow,
   createReminder,
   listActiveReminders,
+  pauseReminder as pauseReminderRow,
   type Reminder,
   type ReminderSchedule,
+  resumeReminder as resumeReminderRow,
 } from '@repo/db/queries';
 import { tool } from 'ai';
 import { z } from 'zod';
+import { env } from '@/env';
 import type { Message } from '@/harness';
+import { toRawSlackChannelId } from '@/lib/slack/ids';
 import { errorMessage } from '@/lib/utils/error';
 
 const WEEKDAY_NAMES = [
@@ -46,11 +50,25 @@ export function scheduleRecurringReminderTool({
 }: {
   message: Message;
 }) {
+  const isOwner =
+    Boolean(env.OWNER_USER_ID) && message.author.userId === env.OWNER_USER_ID;
   return tool({
     description:
-      "Schedule a RECURRING reminder DM to the user who sent the current message — kyto will repeatedly post the given text to that user's DMs on the given schedule until cancelled. For a one-time reminder, use scheduleReminder instead.",
+      'Schedule a RECURRING reminder for the user who sent the current message — kyto repeatedly posts the given text on the schedule until cancelled or its run cap is reached. By default it DMs that user; the owner may also target a channel. Optionally cap the number of times it fires. For a one-time reminder, use scheduleReminder instead.',
     inputSchema: z.object({
       text: z.string().min(1).max(3000).describe('The message to post.'),
+      channelId: z
+        .string()
+        .optional()
+        .describe(
+          'Owner only: post into this channel (id or #name) instead of DMing. Ignored for non-owners.'
+        ),
+      maxRuns: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe('Optional: stop after firing this many times.'),
       recurrence: z
         .enum(['interval', 'daily', 'weekly'])
         .describe(
@@ -86,6 +104,8 @@ export function scheduleRecurringReminderTool({
     }),
     execute: async ({
       text,
+      channelId,
+      maxRuns,
       recurrence,
       intervalSeconds,
       timeOfDayMinutes,
@@ -118,17 +138,26 @@ export function scheduleRecurringReminderTool({
         schedule = { recurrence: 'weekly', timeOfDayMinutes, weekday };
       }
 
+      // Only the owner may aim a reminder at a channel (same admin rule as
+      // cross-channel posting); non-owners always get a DM.
+      const targetChannel =
+        isOwner && channelId ? toRawSlackChannelId(channelId) : null;
+
       try {
         const reminder = await createReminder({
+          channelId: targetChannel,
+          maxRuns: maxRuns ?? null,
           schedule,
           text,
           userId: message.author.userId,
         });
+        const where = targetChannel ? `in <#${targetChannel}>` : 'via DM';
+        const cap = maxRuns ? `, up to ${maxRuns} time(s)` : '';
         return {
           id: reminder.id,
           nextRunAt: reminder.nextRunAt.toISOString(),
           success: true,
-          summary: `Scheduled a recurring (${recurrence}) reminder. Next fires ${reminder.nextRunAt.toISOString()}.`,
+          summary: `Scheduled a recurring (${recurrence}) reminder ${where}${cap}. Next fires ${reminder.nextRunAt.toISOString()}.`,
         };
       } catch (error) {
         return { error: errorMessage(error), success: false };
@@ -140,7 +169,7 @@ export function scheduleRecurringReminderTool({
 export function listRemindersTool({ message }: { message: Message }) {
   return tool({
     description:
-      "List the current user's active recurring reminders, including their id (needed to cancel one).",
+      "List the current user's active recurring reminders, including their id (needed to cancel, pause, or resume one).",
     inputSchema: z.object({}),
     execute: async () => {
       const rows = await listActiveReminders(message.author.userId);
@@ -149,11 +178,55 @@ export function listRemindersTool({ message }: { message: Message }) {
           id: row.id,
           nextRunAt: row.nextRunAt.toISOString(),
           recurrence: row.recurrence,
+          runs: row.maxRuns
+            ? `${row.runCount}/${row.maxRuns}`
+            : `${row.runCount}`,
           schedule: describeSchedule(row),
+          target: row.channelId ? `<#${row.channelId}>` : 'DM',
           text: row.text,
         })),
         success: true,
       };
+    },
+  });
+}
+
+export function pauseReminderTool({ message }: { message: Message }) {
+  return tool({
+    description:
+      "Pause one of the current user's recurring reminders by id — it stops firing but is kept, so it can be resumed later. Get the id from listReminders.",
+    inputSchema: z.object({ id: z.string().min(1) }),
+    execute: async ({ id }) => {
+      const paused = await pauseReminderRow({
+        id,
+        userId: message.author.userId,
+      });
+      return paused
+        ? { success: true, summary: 'Reminder paused.' }
+        : {
+            error: 'No matching reminder found for this user.',
+            success: false,
+          };
+    },
+  });
+}
+
+export function resumeReminderTool({ message }: { message: Message }) {
+  return tool({
+    description:
+      "Resume one of the current user's paused reminders by id. Get the id from listReminders.",
+    inputSchema: z.object({ id: z.string().min(1) }),
+    execute: async ({ id }) => {
+      const resumed = await resumeReminderRow({
+        id,
+        userId: message.author.userId,
+      });
+      return resumed
+        ? { success: true, summary: 'Reminder resumed.' }
+        : {
+            error: 'No matching reminder found for this user.',
+            success: false,
+          };
     },
   });
 }

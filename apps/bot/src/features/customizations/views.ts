@@ -1,17 +1,37 @@
 import { personas } from '@repo/ai';
-import type { IdentityProfile, UserMcpServer } from '@repo/db/queries';
+import type {
+  IdentityProfile,
+  Reminder,
+  UserMcpServer,
+} from '@repo/db/queries';
 import { mrkdwn, plainText } from '@/harness';
 import { IDENTITY_TYPES, type IdentityType } from '@/lib/identity';
 import type { SlackBlock, SlackHomeView, SlackModalView } from '@/types/views';
 
 const maxHomePromptLength = 600;
 const maxPromptLength = 3000;
+const REMINDER_TEXT_MAX = 120;
+const MINUTES_PER_HOUR = 60;
 
 const IDENTITY_LABELS: Record<IdentityType, string> = {
   normal: 'Cross-channel posts',
   reminder: 'Reminder DMs',
   subagent: 'Subagent block',
 };
+
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+function describeReminderSchedule(reminder: Reminder): string {
+  if (reminder.recurrence === 'interval') {
+    return `every ${reminder.intervalSeconds}s`;
+  }
+  const minutes = reminder.timeOfDayMinutes ?? 0;
+  const time = `${String(Math.floor(minutes / MINUTES_PER_HOUR)).padStart(2, '0')}:${String(minutes % MINUTES_PER_HOUR).padStart(2, '0')} UTC`;
+  if (reminder.recurrence === 'daily') {
+    return `daily at ${time}`;
+  }
+  return `${WEEKDAYS[reminder.weekday ?? 0]} at ${time}`;
+}
 
 function escapeSlackText(text: string): string {
   return text
@@ -25,12 +45,14 @@ export function buildHomeView({
   isOwner = false,
   mcpServers = [],
   prompt,
+  reminders = [],
   showUsageFooter = true,
 }: {
   identityProfiles?: IdentityProfile[];
   isOwner?: boolean;
   mcpServers?: UserMcpServer[];
   prompt: string | null;
+  reminders?: Reminder[];
   showUsageFooter?: boolean;
 }): SlackHomeView {
   const displayedPrompt = prompt
@@ -131,6 +153,65 @@ export function buildHomeView({
       ),
       type: 'section',
     });
+  }
+
+  // Recurring reminders: list + pause/resume/cancel (per user).
+  blocks.push(
+    { type: 'divider' },
+    {
+      text: mrkdwn(
+        '*Reminders*\nYour recurring reminders. Create them by asking Kyto; manage them here.'
+      ),
+      type: 'section',
+    }
+  );
+  if (reminders.length === 0) {
+    blocks.push({
+      elements: [mrkdwn('_No recurring reminders._')],
+      type: 'context',
+    });
+  }
+  for (const reminder of reminders) {
+    const text =
+      reminder.text.length > REMINDER_TEXT_MAX
+        ? `${reminder.text.slice(0, REMINDER_TEXT_MAX)}…`
+        : reminder.text;
+    const target = reminder.channelId ? `<#${reminder.channelId}>` : 'DM';
+    const state = reminder.active ? 'active' : 'paused';
+    blocks.push(
+      {
+        text: mrkdwn(
+          `“${escapeSlackText(text)}”\n${describeReminderSchedule(reminder)} · ${target} · *${state}*`
+        ),
+        type: 'section',
+      },
+      {
+        elements: [
+          {
+            action_id: reminder.active
+              ? 'home_pause_reminder'
+              : 'home_resume_reminder',
+            text: plainText(reminder.active ? 'Pause' : 'Resume'),
+            type: 'button',
+            value: reminder.id,
+          },
+          {
+            action_id: 'home_cancel_reminder',
+            confirm: {
+              confirm: plainText('Delete'),
+              deny: plainText('Keep'),
+              text: mrkdwn('This reminder will be deleted.'),
+              title: plainText('Delete reminder?'),
+            },
+            style: 'danger',
+            text: plainText('Delete'),
+            type: 'button',
+            value: reminder.id,
+          },
+        ],
+        type: 'actions',
+      }
+    );
   }
 
   // Owner-only: how kyto presents itself per message type (name suffix + icon).

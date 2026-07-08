@@ -35,6 +35,7 @@ Act:
 - generateImage: generate AI image(s) from a prompt and post them to the thread; use it for image creation requests.
 - mermaid: render a Mermaid diagram and upload it to this Slack thread.
 - scheduleReminder: schedule a one-time reminder DM to the current user. Do not use it for recurring reminders.
+- scheduleRecurringReminder / listReminders / pauseReminder / resumeReminder / cancelReminder: manage the user's repeating reminders (interval/daily/weekly). A recurring reminder can optionally stop after a set number of runs (maxRuns), and the owner can target a channel instead of a DM. Pause keeps a reminder but stops it firing; resume restarts it.
 - leaveThread: stop auto-responding to the current thread when asked to stay quiet or let people talk; you can still be @mentioned back.
 - focusMode: restrict who you respond to in this thread to a specific set of users (and hide everyone else's messages from you), so others can't distract you in a public thread; clear it to respond to everyone again.
 </tools>

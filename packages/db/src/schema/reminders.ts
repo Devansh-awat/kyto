@@ -24,6 +24,11 @@ export const reminders = pgTable(
       .$defaultFn(() => crypto.randomUUID()),
     userId: text('user_id').notNull(),
     text: text('text').notNull(),
+    // Where the reminder fires: a channel id (raw C…/G…) or null = DM the user.
+    channelId: text('channel_id'),
+    // Optional cap: stop (deactivate) after this many fires. Null = forever.
+    maxRuns: integer('max_runs'),
+    runCount: integer('run_count').notNull().default(0),
     recurrence: reminderRecurrence('recurrence').notNull(),
     // 'interval': how often to repeat, in seconds.
     intervalSeconds: integer('interval_seconds'),

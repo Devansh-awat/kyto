@@ -45,6 +45,8 @@ import { readConversationHistoryTool } from './tools/read-conversation-history';
 import {
   cancelReminderTool,
   listRemindersTool,
+  pauseReminderTool,
+  resumeReminderTool,
   scheduleRecurringReminderTool,
 } from './tools/reminders';
 import {
@@ -139,6 +141,8 @@ export async function buildTools({
     scheduleRecurringReminder: scheduleRecurringReminderTool({ message }),
     listReminders: listRemindersTool({ message }),
     cancelReminder: cancelReminderTool({ message }),
+    pauseReminder: pauseReminderTool({ message }),
+    resumeReminder: resumeReminderTool({ message }),
     searchSlack: searchSlackTool({ message }),
     searchWeb: searchWebTool({ apiKey: env.EXA_API_KEY }),
     summarizeThread: summarizeThreadTool({ bot, threadId: thread.id }),

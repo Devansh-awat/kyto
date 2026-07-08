@@ -1,10 +1,13 @@
 import { personas } from '@repo/ai';
 import {
   addMcpServer,
+  cancelReminder,
   clearUserCustomization,
   getIdentityProfiles,
   getUserCustomization,
+  pauseReminder,
   removeMcpServer,
+  resumeReminder,
   setIdentityProfile,
   setUsageFooter,
   setUserCustomization,
@@ -307,6 +310,37 @@ bot.onModalSubmit(
     await publishHome({ userId: event.user.userId }).catch(() => undefined);
     return;
   }
+);
+
+// ── Reminders (per-user, App Home) ──────────────────────────────────────────
+
+async function handleReminderAction(
+  event: { user: { userId: string }; value?: string },
+  op: (args: { id: string; userId: string }) => Promise<boolean>,
+  label: string
+): Promise<void> {
+  const id = event.value;
+  if (!id) {
+    return;
+  }
+  await op({ id, userId: event.user.userId })
+    .then(() => publishHome({ userId: event.user.userId }))
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), userId: event.user.userId },
+        `Failed to ${label} reminder`
+      );
+    });
+}
+
+bot.onAction('home_pause_reminder', (event) =>
+  handleReminderAction(event, pauseReminder, 'pause')
+);
+bot.onAction('home_resume_reminder', (event) =>
+  handleReminderAction(event, resumeReminder, 'resume')
+);
+bot.onAction('home_cancel_reminder', (event) =>
+  handleReminderAction(event, cancelReminder, 'cancel')
 );
 
 // ── Identity (owner-only, App Home) ─────────────────────────────────────────

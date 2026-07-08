@@ -45,11 +45,15 @@ export async function createReminder(input: {
   userId: string;
   text: string;
   schedule: ReminderSchedule;
+  channelId?: string | null;
+  maxRuns?: number | null;
 }): Promise<Reminder> {
   const nextRunAt = computeNextRun(input.schedule, new Date());
   const values: NewReminder = {
     userId: input.userId,
     text: input.text,
+    channelId: input.channelId ?? null,
+    maxRuns: input.maxRuns ?? null,
     recurrence: input.schedule.recurrence,
     nextRunAt,
     ...(input.schedule.recurrence === 'interval'
@@ -73,6 +77,11 @@ export async function listActiveReminders(userId: string): Promise<Reminder[]> {
     .where(and(eq(reminders.userId, userId), eq(reminders.active, true)));
 }
 
+/** All of a user's reminders, active and paused (for the management UI). */
+export async function listUserReminders(userId: string): Promise<Reminder[]> {
+  return await db.select().from(reminders).where(eq(reminders.userId, userId));
+}
+
 export async function cancelReminder({
   id,
   userId,
@@ -87,6 +96,48 @@ export async function cancelReminder({
   return deleted.length > 0;
 }
 
+/** Pause a reminder (keeps it, just stops it firing). Scoped to its owner. */
+export async function pauseReminder({
+  id,
+  userId,
+}: {
+  id: string;
+  userId: string;
+}): Promise<boolean> {
+  const updated = await db
+    .update(reminders)
+    .set({ active: false })
+    .where(and(eq(reminders.id, id), eq(reminders.userId, userId)))
+    .returning({ id: reminders.id });
+  return updated.length > 0;
+}
+
+/** Resume a paused reminder, snapping its next run to the future. */
+export async function resumeReminder({
+  id,
+  userId,
+}: {
+  id: string;
+  userId: string;
+}): Promise<boolean> {
+  const [row] = await db
+    .select()
+    .from(reminders)
+    .where(and(eq(reminders.id, id), eq(reminders.userId, userId)))
+    .limit(1);
+  if (!row) {
+    return false;
+  }
+  const now = new Date();
+  const nextRunAt =
+    row.nextRunAt > now ? row.nextRunAt : computeNextRun(scheduleOf(row), now);
+  await db
+    .update(reminders)
+    .set({ active: true, nextRunAt })
+    .where(eq(reminders.id, row.id));
+  return true;
+}
+
 export async function getDueReminders(now: Date): Promise<Reminder[]> {
   return await db
     .select()
@@ -94,13 +145,24 @@ export async function getDueReminders(now: Date): Promise<Reminder[]> {
     .where(and(eq(reminders.active, true), lte(reminders.nextRunAt, now)));
 }
 
-/** Advance a fired reminder to its next occurrence. */
+/**
+ * Advance a fired reminder to its next occurrence, incrementing its run count.
+ * When a run cap is set and reached, the reminder is deactivated instead.
+ */
 export async function advanceReminder(reminder: Reminder): Promise<void> {
-  const schedule = scheduleOf(reminder);
-  const nextRunAt = computeNextRun(schedule, reminder.nextRunAt);
+  const runCount = (reminder.runCount ?? 0) + 1;
+  const capReached = reminder.maxRuns !== null && runCount >= reminder.maxRuns;
+  if (capReached) {
+    await db
+      .update(reminders)
+      .set({ active: false, runCount })
+      .where(eq(reminders.id, reminder.id));
+    return;
+  }
+  const nextRunAt = computeNextRun(scheduleOf(reminder), reminder.nextRunAt);
   await db
     .update(reminders)
-    .set({ nextRunAt })
+    .set({ nextRunAt, runCount })
     .where(eq(reminders.id, reminder.id));
 }
 
