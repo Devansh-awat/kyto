@@ -255,6 +255,26 @@ Run these automatically after each completed change, in order, **without asking*
   `fetchUrl`, `deploySite`, `removeSite`, `skip`, `sendAsUser`, `editAsUser`,
   `browse`, `sendEmail`/`checkInbox`/`replyEmail`, `joinThread`,
   `scheduleRecurringReminder`/`listReminders`/`cancelReminder`.
+- **Ported from `rebuild-on-upstream`** (the owner's own Pi-era branch,
+  reimplemented on the custom harness — see the July rewrite note): `gh`
+  (GitHub CLI in the turn's sandbox with per-call `GH_TOKEN` injection + token
+  redaction — deferred, needs `GH_TOKEN`; more robust than the external AGPL
+  `techwithanirudh/gorkie`, which only ships a doc-only gh-cli Pi skill),
+  `runBackgroundProcess`/`getProcessOutput`/`killProcess` (nohup-based detached
+  processes tracked in-turn — deferred), `wait` (bounded, abort-aware mid-turn
+  pause — core), `deleteFile`/`fileStat` (workspace file ops — core),
+  `textToSpeech` (Replicate via HackClub's proxy `HACKCLUB_REPLICATE_API_KEY`,
+  else Gemini TTS; uploads audio to the thread — deferred), `unreact` (removes a
+  reaction; added `SlackHarness.removeReaction`), and `runSubagent` (see below).
+- **Subagent** (`tools/subagent.ts`): a headless copy of kyto — its own fresh
+  `LazySandbox`, the full toolset (can delegate further, depth-capped at 2 via
+  `AsyncLocalStorage`), run through `streamAttempt` (same multi-step loop as a
+  real turn) but NOT streamed to Slack; returns only its final text as a report.
+  Pinned to a cheap model via `subagentAttempt` (`packages/ai` — Gemini
+  `gemini-3.1-flash-lite` when `GEMINI_API_KEY` is set, else the best
+  DigitalOcean BYOK model). Deferred, registered only when a subagent model
+  exists. The parent-turn abort signal is forwarded so a stuck subagent is
+  killed with the turn.
 - **Recurring reminders** (`tools/reminders.ts`, `lib/reminders/scheduler.ts`,
   `@repo/db` schema/queries `reminders`): unlike the pre-existing one-time
   `scheduleReminder` (which uses Slack's native `chat.scheduleMessage` — a
@@ -490,15 +510,50 @@ Run these automatically after each completed change, in order, **without asking*
   captured during the auto attempt, so it pins/pivots even when auto failed. Each
   entry is tried at most once (tracked via `failedKeys`). `deepFallbackAttempts`
   is retained/exported for reference but no longer drives routing.
+- **DigitalOcean BYOK tier** (`digitaloceanAttempts`, provider `openrouter-do`,
+  `attempts.ts`): the owner's OpenRouter key (`OPENROUTER_API_KEY`) holds **$0
+  OpenRouter credit** but is configured with **BYOK to DigitalOcean**, so
+  DigitalOcean-served models run at **$0 OpenRouter cost** (billed to the owner's
+  DigitalOcean account — a quota SEPARATE from HackClub). Reached via
+  `OPENROUTER_BASE_URL` (default `https://openrouter.ai/api/v1` — NOT `/v1`,
+  which returns the marketing site). `agent.ts`'s `tuneBody` injects `provider:
+  { only: ['digitalocean'] }` on every `openrouter-do` request — **required**,
+  since with $0 credit OpenRouter would otherwise route to a paid provider and
+  402. Roster = the **verified tool-capable** DO models only (`DIGITALOCEAN_MODELS`,
+  best→worst: glm-5.2, deepseek-v4-pro, kimi-k2.6, qwen3.5-397b-a17b,
+  minimax-m2.5, glm-5, deepseek-v4-flash, llama-4-maverick, mimo-v2.5-pro).
+  **`gpt-oss-120b` and `kimi-k2.5` are excluded** — DigitalOcean's endpoints for
+  them reject tool use, useless for kyto's tool loop. These are short BYOK
+  aliases (OpenRouter resolves `glm-5.2` → `z-ai/glm-5.2-…`); the `-fast`/
+  `-normal` proxy aliases in the owner's raw list are NOT valid OpenRouter ids.
+  Appended to `LEADERBOARD_FALLBACK` **before** the Gemini last resort;
+  `maxOutputTokens` caps their (reasoning-model) output like HackClub's.
+- **Prompt caching** (`agent.ts` `addCacheControl`): `tuneBody` injects
+  `cache_control: {type:'ephemeral'}` breakpoints on the **system message**
+  (tools+system prefix — the big constant chunk) and the **last user message**
+  (the replayed thread history), so within a multi-step tool loop every step
+  reads the cached prefix instead of re-billing it. Verified through the HackClub
+  proxy: Anthropic honors it for a **~10x cheaper cached read** ($0.0206 write →
+  $0.0019 read on a 3.2k-token prefix); the HackClub proxy passes `cache_control`
+  straight through to OpenRouter. Providers without explicit caching (OpenAI,
+  DeepSeek, GLM, Kimi, …) **safely ignore** the field (confirmed no error on
+  glm-5.2/deepseek/auto→gpt-5.5) and auto-cache on their own; DigitalOcean
+  already returned `cached_tokens` on a plain call. Applied to every attempt —
+  harmless where unsupported. Anthropic allows ≤4 breakpoints; we use 2, both on
+  content the SDK sends as plain strings (system, user), leaving assistant/tool
+  messages untouched.
 - **HackClub spend-limit failover → straight to Gemini**: if a HackClub call
   returns the daily-spend 429 (`SPEND_LIMIT_PATTERN`, surfaced via
   `renderStream`'s `onError`), `routeNextAttempt` sets `hackclubBudgetExhausted`.
   The whole HackClub budget is **shared**, so once the first call 429s every other
   HackClub rung 429s the same way (they just burn attempts at ~4ms each). So the
-  flag flips `buildFallbackQueue` to **skip all HackClub rungs and go straight to
-  the owner's Gemini key** (`geminiAttempts`, separate quota, reliable, cheap),
-  then any other non-HackClub rung (baishui, if re-enabled). The pinned
-  resolved-model retry is also skipped on spend-limit (it's a HackClub call).
+  flag flips `buildFallbackQueue` to **skip all HackClub rungs and go to the
+  non-HackClub rungs**: the **DigitalOcean BYOK tier first** (separate quota,
+  strong tool-capable models), then the owner's Gemini key
+  (`geminiAttempts`, separate quota, cheap) as the final backstop. (Order is
+  `[...otherNonHackclub, ...gemini]` — DO before Gemini, since DO's models are
+  far better than the cheap Gemini rung.) The pinned resolved-model retry is also
+  skipped on spend-limit (it's a HackClub call).
   (This replaced the older cheapest-first-HackClub-retry approach — the
   pessimistic-limit "a cheap rung might still fit" recovery wasn't worth the
   wasted 429 attempts once the Gemini key exists as a clean, cheap escape.)
