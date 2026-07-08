@@ -4,11 +4,14 @@ export { type Persona, personas } from './prompts/presets';
 export {
   ALLOWED_MODELS,
   catalogAttempt,
+  digitaloceanAttempts,
   GEMINI_PROVIDER,
+  geminiAttempt,
   LEADERBOARD_FALLBACK,
   MAX_OUTPUT_TOKENS,
   type ModelAttempt,
   ROUTER_MODEL,
+  subagentAttempt,
 } from './providers/attempts';
 export { provider } from './providers/models';
 export type { SandboxContext } from './types';

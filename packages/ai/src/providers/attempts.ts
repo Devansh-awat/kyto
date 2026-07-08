@@ -125,6 +125,24 @@ export const digitaloceanAttempts: ModelAttempt[] = env.OPENROUTER_API_KEY
     }))
   : [];
 
+/** Build a single direct-Gemini attempt, or undefined if no key is set. */
+export function geminiAttempt(model: string): ModelAttempt | undefined {
+  return env.GEMINI_API_KEY
+    ? {
+        apiKey: env.GEMINI_API_KEY,
+        baseURL: GEMINI_BASE_URL,
+        model,
+        provider: GEMINI_PROVIDER,
+      }
+    : undefined;
+}
+
+// The model a subagent runs on: the cheap Gemini flash-lite tier when the
+// owner's key is set, else the best DigitalOcean BYOK model. Undefined only
+// when neither is configured (the subagent tool then isn't registered).
+export const subagentAttempt: ModelAttempt | undefined =
+  geminiAttempt('gemini-3.1-flash-lite') ?? digitaloceanAttempts[0];
+
 // The owner's arena leaderboard, best→worst, restricted to models reachable on
 // HackClub. Fable 5 (rank #1) is reachable (`anthropic/claude-fable-5`) but
 // deliberately excluded — ~2x opus-4.8's per-token cost, not worth it against

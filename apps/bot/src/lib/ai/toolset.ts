@@ -1,5 +1,5 @@
 import nodePath from 'node:path/posix';
-import type { SandboxContext } from '@repo/ai';
+import { type SandboxContext, subagentAttempt } from '@repo/ai';
 import { listMcpServers } from '@repo/db/queries';
 import { type Tool, type ToolSet, tool } from 'ai';
 import { z } from 'zod';
@@ -53,6 +53,7 @@ import { searchSlackTool } from './tools/search-slack';
 import { searchWebTool } from './tools/search-web';
 import { editAsUserTool, sendAsUserTool } from './tools/send-as-user';
 import { skipTool } from './tools/skip';
+import { runSubagentTool } from './tools/subagent';
 import { summarizeThreadTool } from './tools/summarize-thread';
 import { textToSpeechTool } from './tools/text-to-speech';
 import { uploadFileTool } from './tools/upload-file';
@@ -228,6 +229,15 @@ export async function buildTools({
           gh: {
             summary: 'run a GitHub CLI (`gh`) command in the sandbox',
             tool: ghTool({ getSandboxContext }),
+          },
+        }
+      : {}),
+    ...(subagentAttempt
+      ? {
+          runSubagent: {
+            summary:
+              'delegate a task to a headless subagent that returns a report',
+            tool: runSubagentTool({ bot, message, thread }),
           },
         }
       : {}),
