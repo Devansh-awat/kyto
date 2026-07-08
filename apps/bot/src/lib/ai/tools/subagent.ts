@@ -9,10 +9,11 @@ import { LazySandbox } from '@repo/sandbox';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { env } from '@/env';
-import type { KytoBot, Message, ThreadHandle } from '@/harness';
+import type { KytoBot, Message, StreamChunk, ThreadHandle } from '@/harness';
 import { requestHints } from '@/lib/ai/hints';
 import logger from '@/lib/logger';
 import { errorMessage } from '@/lib/utils/error';
+import { clamp } from '@/lib/utils/text';
 
 // A subagent is a headless copy of kyto: its own fresh lazy sandbox, the same
 // full toolset (including this very tool, so it can delegate further), running
@@ -29,12 +30,52 @@ const MAX_SUBAGENT_DEPTH = 2;
 
 const depthStore = new AsyncLocalStorage<number>();
 
+// Bounds on the live subagent card so a long run can't blow up the plan card.
+const CARD_THINKING_MAX = 2000;
+const CARD_REPORT_MAX = 2000;
+const CARD_TASK_MAX = 400;
+
+// Compose the expanded body of the "Subagent" plan card: the task it was given,
+// its running thoughts, which tools it has called (names only — never their
+// outputs, per the owner), and its report once finished.
+function renderCard({
+  report,
+  task,
+  thinking,
+  toolsUsed,
+}: {
+  report: string;
+  task: string;
+  thinking: string;
+  toolsUsed: string[];
+}): string {
+  const parts = [`Task: ${clamp(task, CARD_TASK_MAX) ?? task}`];
+  if (thinking.trim()) {
+    parts.push(
+      '',
+      `Thinking: ${clamp(thinking.trim(), CARD_THINKING_MAX) ?? thinking.trim()}`
+    );
+  }
+  if (toolsUsed.length > 0) {
+    parts.push('', `Tools used: ${toolsUsed.join(', ')}`);
+  }
+  if (report.trim()) {
+    parts.push(
+      '',
+      `Report: ${clamp(report.trim(), CARD_REPORT_MAX) ?? report.trim()}`
+    );
+  }
+  return parts.join('\n');
+}
+
 export function runSubagentTool({
   bot,
+  emitChunk,
   message,
   thread,
 }: {
   bot: KytoBot;
+  emitChunk?: (chunk: StreamChunk) => void;
   message: Message;
   thread: ThreadHandle;
 }) {
@@ -83,8 +124,24 @@ export function runSubagentTool({
         // full set (recursion is bounded by the depth cap above).
         const { buildTools } = await import('@/lib/ai/toolset');
         let close: (() => Promise<void>) | undefined;
+        // A single live card in the parent plan tracks this subagent's work.
+        const cardId = `subagent-${crypto.randomUUID()}`;
+        const cardTitle = 'Subagent';
+        const toolsUsed: string[] = [];
+        let thinking = '';
+        let report = '';
+        const pushCard = (status: 'complete' | 'error' | 'in_progress') => {
+          emitChunk?.({
+            id: cardId,
+            output: renderCard({ report, task, thinking, toolsUsed }),
+            status,
+            title: cardTitle,
+            type: 'task_update',
+          });
+        };
         try {
           const hints = await requestHints({ message, thread });
+          // The subagent must NOT spawn its own plan cards in the parent plan.
           const built = await buildTools({
             bot,
             getSandboxContext: () => sandboxContext,
@@ -92,6 +149,7 @@ export function runSubagentTool({
             thread,
           });
           close = built.close;
+          pushCard('in_progress');
           const result = streamAttempt({
             abortSignal,
             activeTools: built.activeTools,
@@ -101,22 +159,35 @@ export function runSubagentTool({
             system: systemPrompt({ hints }),
             tools: built.tools,
           });
-          const report = (await result.text).trim();
+          // Consume the subagent's own stream to surface its thinking + the
+          // tools it calls (names only) live, and to accumulate its report.
+          for await (const part of result.fullStream) {
+            if (part.type === 'reasoning-delta') {
+              thinking += part.text;
+            } else if (part.type === 'text-delta') {
+              report += part.text;
+            } else if (part.type === 'tool-call') {
+              toolsUsed.push(part.toolName);
+              pushCard('in_progress');
+            }
+          }
+          report = report.trim();
           if (report) {
+            pushCard('complete');
             return { report, success: true };
           }
-          const toolCalls = await result.toolCalls;
-          if (toolCalls.length > 0) {
-            return {
-              report: '(Completed actions with no additional message.)',
-              success: true,
-            };
+          if (toolsUsed.length > 0) {
+            report = '(Completed actions with no additional message.)';
+            pushCard('complete');
+            return { report, success: true };
           }
+          pushCard('error');
           return {
             error: 'Subagent produced an empty report.',
             success: false,
           };
         } catch (error) {
+          pushCard('error');
           return { error: errorMessage(error), success: false };
         } finally {
           await close?.().catch(() => undefined);

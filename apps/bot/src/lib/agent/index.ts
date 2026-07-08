@@ -13,6 +13,7 @@ import { env } from '@/env';
 import type { Message, StreamChunk, ThreadHandle } from '@/harness';
 import { buildPrompt } from '@/lib/agent/prompt';
 import { createReply } from '@/lib/agent/reply';
+import { ChunkChannel, mergeStream } from '@/lib/agent/side-channel';
 import {
   abortReasonOf,
   interruptTurn,
@@ -237,11 +238,15 @@ async function executeTurn(
     let hackclubBudgetExhausted = false;
     let spendLimitMessage: string | undefined;
     let attempt: ModelAttempt | undefined;
+    // Lets tools (the subagent) push their own live task cards into the plan.
+    // Rebound to the current attempt's channel each attempt; a no-op otherwise.
+    let emitToPlan: ((chunk: StreamChunk) => void) | undefined;
     // Built once: the toolset does not depend on the chosen model. Its keys let
     // renderStream hide hallucinated calls to non-existent tools; activeTools
     // drives deferred-tool visibility via prepareStep.
     const built = await buildTools({
       bot,
+      emitChunk: (chunk: StreamChunk) => emitToPlan?.(chunk),
       getSandboxContext: () => sandboxContext,
       message: turnMessage,
       thread: turnThread,
@@ -377,45 +382,52 @@ async function executeTurn(
           system: systemPrompt({ hints }),
           tools: built.tools,
         });
-        for await (const chunk of renderStream({
-          knownTools,
-          onSkip: () => {
-            // A skip is a deliberate, successful "no reply".
-            skipped = true;
-          },
-          onTextDelta: async (text) => {
-            producedText = true;
-            errorStage = 'after_text';
-            await reply?.append({ text, thread: turnThread });
-          },
-          onToolActivity: () => {
-            producedToolActivity = true;
-          },
-          onToolResult: (info) => {
-            const key = `${info.toolName}:${stableInput(info.input)}`;
-            if (gatheredKeys.has(key)) {
-              return;
-            }
-            gatheredKeys.add(key);
-            gatheredResults.push(info);
-          },
-          onFinish: (reason) => {
-            if (reason === 'stop') {
-              sawCleanStop = true;
-            }
-          },
-          onError: (msg) => {
-            // A HackClub daily-spend-limit 429 dooms every HackClub rung.
-            if (
-              currentAttempt.provider === 'hackclub' &&
-              SPEND_LIMIT_PATTERN.test(msg)
-            ) {
-              hackclubBudgetExhausted = true;
-              spendLimitMessage = msg;
-            }
-          },
-          stream: result.fullStream,
-        })) {
+        // Per-attempt plan side-channel so the subagent can stream its own live
+        // task card into this attempt's plan; closed in the finally below.
+        const planChannel = new ChunkChannel<string | StreamChunk>();
+        emitToPlan = (chunk: StreamChunk) => planChannel.push(chunk);
+        for await (const chunk of mergeStream(
+          renderStream({
+            knownTools,
+            onSkip: () => {
+              // A skip is a deliberate, successful "no reply".
+              skipped = true;
+            },
+            onTextDelta: async (text) => {
+              producedText = true;
+              errorStage = 'after_text';
+              await reply?.append({ text, thread: turnThread });
+            },
+            onToolActivity: () => {
+              producedToolActivity = true;
+            },
+            onToolResult: (info) => {
+              const key = `${info.toolName}:${stableInput(info.input)}`;
+              if (gatheredKeys.has(key)) {
+                return;
+              }
+              gatheredKeys.add(key);
+              gatheredResults.push(info);
+            },
+            onFinish: (reason) => {
+              if (reason === 'stop') {
+                sawCleanStop = true;
+              }
+            },
+            onError: (msg) => {
+              // A HackClub daily-spend-limit 429 dooms every HackClub rung.
+              if (
+                currentAttempt.provider === 'hackclub' &&
+                SPEND_LIMIT_PATTERN.test(msg)
+              ) {
+                hackclubBudgetExhausted = true;
+                spendLimitMessage = msg;
+              }
+            },
+            stream: result.fullStream,
+          }),
+          planChannel
+        )) {
           if (errorStage === 'before_output') {
             errorStage = 'after_progress';
           }
