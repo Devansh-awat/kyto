@@ -36,3 +36,26 @@ export async function deleteThreadSubscription(
     .delete(threadSubscriptions)
     .where(eq(threadSubscriptions.threadId, threadId));
 }
+
+// Set (or clear, with null) focus mode for a thread. Setting a focus also marks
+// the thread subscribed so kyto keeps following the focused users' messages
+// without needing a fresh mention each time.
+export async function setThreadFocus(
+  threadId: string,
+  focusUserIds: string[] | null
+): Promise<void> {
+  await db
+    .insert(threadSubscriptions)
+    .values({
+      focusUserIds: focusUserIds ?? null,
+      respondOnThreadMessages: focusUserIds !== null,
+      threadId,
+    })
+    .onConflictDoUpdate({
+      set: {
+        focusUserIds: focusUserIds ?? null,
+        ...(focusUserIds === null ? {} : { respondOnThreadMessages: true }),
+      },
+      target: threadSubscriptions.threadId,
+    });
+}

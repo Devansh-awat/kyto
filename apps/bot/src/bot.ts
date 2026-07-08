@@ -1,5 +1,6 @@
 import type { Message, ThreadHandle as Thread } from '@/harness';
 import { runTurn, stopTurn } from '@/lib/agent';
+import { isFocusAllowed } from '@/lib/agent/focus';
 import { isUserAllowed } from '@/lib/allowed-users';
 import { bot, slack } from '@/lib/chat';
 import { handleCommand } from '@/lib/commands';
@@ -15,6 +16,11 @@ export { bot } from '@/lib/chat';
 
 bot.onNewMention(async (thread, message) => {
   if (shouldIgnore(message)) {
+    return;
+  }
+  // Focus mode: in a focused thread, ignore mentions from non-focused users so
+  // they can't hijack kyto away from the people it was told to attend to.
+  if (!isFocusAllowed(await thread.state, message.author.userId)) {
     return;
   }
   if (!(await isUserAllowed(message.author.userId))) {
@@ -51,6 +57,7 @@ bot.onSubscribedMessage(async (thread, message) => {
   if (
     shouldIgnore(message) ||
     !(shouldRespondToThread || message.isMention) ||
+    !isFocusAllowed(state, message.author.userId) ||
     !(await isUserAllowed(message.author.userId))
   ) {
     return;

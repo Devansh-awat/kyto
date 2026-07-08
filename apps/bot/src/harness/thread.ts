@@ -1,6 +1,7 @@
 import {
   deleteThreadSubscription,
   getThreadSubscription,
+  setThreadFocus,
   setThreadSubscription,
 } from '@repo/db/queries';
 import type { Logger } from '@repo/logging/logger';
@@ -194,10 +195,19 @@ export class ThreadHandle {
       return null;
     });
     const state = row
-      ? { respondOnThreadMessages: row.respondOnThreadMessages }
+      ? {
+          focusUserIds: row.focusUserIds ?? null,
+          respondOnThreadMessages: row.respondOnThreadMessages,
+        }
       : null;
     cacheSubscription(this.id, state);
     return state;
+  }
+
+  /** Set (or clear, with null) which users kyto responds to in this thread. */
+  async setFocus(focusUserIds: string[] | null): Promise<void> {
+    await setThreadFocus(this.id, focusUserIds);
+    subscriptionCache.delete(this.id);
   }
 
   async setState(state: ThreadState): Promise<void> {

@@ -23,6 +23,7 @@ import {
 } from './tools/deploy-site';
 import { checkInboxTool, replyEmailTool, sendEmailTool } from './tools/email';
 import { deleteFileTool, fileStatTool } from './tools/files';
+import { focusModeTool } from './tools/focus';
 import { generateImageTool } from './tools/generate-image';
 import { getChannelInfoTool } from './tools/get-channel-info';
 import { getFileTool } from './tools/get-file';
@@ -115,6 +116,7 @@ export async function buildTools({
     getFile: getFileTool({ getSandboxContext }),
     joinThread: joinThreadTool({ thread }),
     leaveThread: leaveThreadTool({ thread }),
+    focusMode: focusModeTool({ thread }),
     canvasRead: canvasReadTool(),
     canvasWrite: canvasWriteTool({ thread }),
     canvasList: canvasListTool({ thread }),

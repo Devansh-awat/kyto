@@ -3,6 +3,7 @@ import {
   mrkdwnToMarkdown,
   type ThreadHandle as Thread,
 } from '@/harness';
+import { isFocusAllowed } from '@/lib/agent/focus';
 import { annotateMentions } from '@/lib/agent/mentions';
 import { slack } from '@/lib/chat';
 import { isHiddenFromBot, rawSlackText } from '@/lib/utils/message';
@@ -44,12 +45,20 @@ export async function buildPrompt(
 
   let history = '';
   if (thread) {
+    // Focus mode: drop messages from non-focused users so kyto genuinely never
+    // sees what other people said in a focused thread (not just declines to
+    // reply). Its own messages and the owner's are always kept.
+    const focusState = await thread.state.catch(() => null);
     const fetched = await slack
       .fetchMessages(thread.id, { limit: MAX_THREAD_MESSAGES })
       .catch(() => undefined);
     const prior = (fetched?.messages ?? []).filter(
       (entry): entry is Message =>
-        entry.id !== message.id && !isHiddenFromBot(entry)
+        entry.id !== message.id &&
+        !isHiddenFromBot(entry) &&
+        isFocusAllowed(focusState, entry.author.userId, {
+          isMe: entry.author.isMe === true,
+        })
     );
     if (prior.length > 0) {
       const rendered = await Promise.all(prior.map(renderMessage));

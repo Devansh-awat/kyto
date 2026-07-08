@@ -79,6 +79,11 @@ export interface SentMessage {
 }
 
 export interface ThreadState {
+  /**
+   * Focus mode: when set, kyto only responds to (and only sees) messages from
+   * these Slack user ids in this thread. Null/undefined = focus off.
+   */
+  focusUserIds?: string[] | null;
   respondOnThreadMessages?: boolean;
 }
 
