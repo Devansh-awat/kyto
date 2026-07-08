@@ -257,16 +257,20 @@ Run these automatically after each completed change, in order, **without asking*
   `scheduleRecurringReminder`/`listReminders`/`cancelReminder`.
 - **Ported from `rebuild-on-upstream`** (the owner's own Pi-era branch,
   reimplemented on the custom harness — see the July rewrite note): `gh`
-  (GitHub CLI in the turn's sandbox — takes gh args as an **array** and runs
-  `gh` with each arg single-quoted, i.e. **no model-controlled shell**: no
-  piping, no `$GH_TOKEN` expansion, no `echo`/`env`, and `gh auth` is blocked.
-  This defeats the char-at-a-time token-drip attack a shell-based tool allows
-  (`echo ${GH_TOKEN:0:1}` across many calls, which per-call substring redaction
-  can't stop); `GH_TOKEN` is injected into only that one call's env and output
-  is still redacted as defense-in-depth. Filtering uses gh's own
-  `--json`/`--jq`/`--template`. Deferred, needs `GH_TOKEN`. More robust than the
-  external AGPL `techwithanirudh/gorkie`, which only ships a doc-only gh-cli Pi
-  skill with no token protection),
+  (GitHub CLI in the turn's sandbox — the real GitHub token is **brokered via
+  E2B egress rules** so it is **never in the sandbox at all**: `LazySandbox`
+  (`packages/sandbox`) sets `network.rules` that inject the `Authorization`
+  header on outbound requests to `api.github.com`/`uploads.github.com` (Bearer)
+  and `github.com` (Basic) at the proxy layer, and the sandbox env holds only an
+  inert base64 placeholder. So `gh`/`git` are pre-authenticated inside the
+  sandbox but `echo $GH_TOKEN` reveals only the placeholder — the char-at-a-time
+  drip attack is fully moot, so the tool is back to a **full shell** (piping,
+  jq). This is exactly gorkie's technique; it needed the **e2b 2.21→2.31**
+  upgrade (`@e2b/code-interpreter` 2.4→2.6) for `SandboxNetworkOpts.rules`
+  (`allowOut` must include the exported `ALL_TRAFFIC` sentinel when set).
+  Deferred, needs `GH_TOKEN` on the host; brokering activates automatically for
+  every sandbox when `GH_TOKEN` is set. More robust than the external AGPL
+  `techwithanirudh/gorkie`, which ships a doc-only gh-cli Pi skill),
   `runBackgroundProcess`/`getProcessOutput`/`killProcess` (nohup-based detached
   processes tracked in-turn — deferred), `wait` (bounded, abort-aware mid-turn
   pause — core), `deleteFile`/`fileStat` (workspace file ops — core),
@@ -423,11 +427,23 @@ Run these automatically after each completed change, in order, **without asking*
   `OWNER_USER_ID`; requires the `chat:write` **user** scope.
 
 ### Static site hosting
-- `deploySite`/`removeSite` publish prebuilt static sites at the **host root**:
-  `https://<host>/<name>/` (default host `kyto.devansh.hackclub.app`). Code in
-  `apps/bot/src/lib/sites/`. The host NEVER executes site code — building/testing
-  happen in the E2B sandbox; only static output is copied out (`resolveWithin`
-  path containment). The on-disk store is still `SITES_ROOT` (`/var/kytosites`).
+- `deploySite`/`removeSite`/`listSites` publish/manage prebuilt static sites at
+  the **host root**: `https://<host>/<name>/` (default host
+  `kyto.devansh.hackclub.app`). Code in `apps/bot/src/lib/sites/`. The host NEVER
+  executes site code — building/testing happen in the E2B sandbox; only static
+  output is copied out (`resolveWithin` path containment). The on-disk store is
+  still `SITES_ROOT` (`/var/kytosites`). `listSites` (core) enumerates the
+  published sites (top-level dirs under the sites root). **`removeSite` is
+  owner-only** — registered only when the requester is `OWNER_USER_ID`, so a
+  non-owner can't take a site down.
+- **Image generation** (`tools/generate-image.ts`) calls HackClub's
+  OpenAI-compatible `/images/generations` endpoint **directly** (fetch, model
+  `google/gemini-3.1-flash-image`, billed to `HACKCLUB_API_KEY`), parsing
+  `data[].b64_json` and detecting the media type from magic bytes. The old path
+  went through the AI SDK's `generateImage` + `@openrouter/ai-sdk-provider`
+  `imageModel`, which never actually reached the endpoint (the "image gen not
+  working" bug). `provider.imageModel` in `packages/ai` is now unused by this
+  tool.
 - **Multi-page sites:** both tools take an optional `page` sub-path (e.g. `home`
   or `docs/intro`), served at `https://<host>/<name>/<page>/`. A page deploy
   atomically swaps only that sub-path and leaves the rest of the site intact, so
@@ -628,14 +644,15 @@ Run these automatically after each completed change, in order, **without asking*
   - **Capture the resolved model**: the stream only exposes the *requested* id, so
     we read the concrete model OpenRouter resolved to from the `model` field of a
     clone of the response and stash it per-turn (`AsyncLocalStorage`).
-- The model is surfaced as a **`Thinking` task in the thinking section** (title
-  `Thinking`, or `Thinking · fallback` on retries — renamed from `Model` so the
-  collapsed row reads as an activity status: the model is working). The concrete
-  model is shown **only on completion** as the task `output` (`provider · model
-  → <resolved>`); the `in_progress` emit carries **no `output`** — setting it on
-  both states made the finished row render the `provider · model` line **twice**
-  (the "model name shown twice" bug). Reasoning tokens the model streams render as
-  a **separate `Reasoning` task** (`stream/index.ts`) so the two don't collide.
+- The turn's work is surfaced as a **`Thinking` task in the thinking section**
+  (title `Thinking`, or `Thinking · fallback` on retries). The **model name is
+  deliberately NOT shown** (owner's call) — `completeModelTask` emits no `output`
+  at all (it previously appended `provider · model → <resolved>`). Reasoning
+  tokens the model streams also render under the title **`Thinking`**
+  (`stream/index.ts`, renamed from `Reasoning`) so the plan uses a single word
+  rather than both `Thinking` and `Reasoning`. (The model task and reasoning
+  task are still separate task ids, so a reasoning turn shows two `Thinking`
+  rows; merging into literally one card is a possible follow-up.)
   Emitted **`in_progress` while the attempt runs** (so the activity indicator reads
   as working, never a misleading "completed" before anything has happened) and
   marked **`complete` exactly once** via the `completeModelTask()` guard
