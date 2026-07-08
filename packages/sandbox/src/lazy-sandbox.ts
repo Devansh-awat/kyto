@@ -1,6 +1,42 @@
 import { CommandExitError, Sandbox } from '@e2b/code-interpreter';
 import type { Logger } from '@repo/logging/logger';
+import { ALL_TRAFFIC, type SandboxNetworkOpts } from 'e2b';
 import { sandboxConfig as config } from './config';
+
+// gh/git need SOME token value to act authenticated; the real one is injected
+// at the network egress layer (below), never placed in the sandbox. So the env
+// gets this inert placeholder — `echo $GH_TOKEN` inside the sandbox only ever
+// reveals this, not the secret.
+const GH_PLACEHOLDER = Buffer.from(
+  'kyto: real GitHub creds are injected at the network layer, not here',
+  'utf8'
+).toString('base64');
+
+// Broker the GitHub token via E2B egress rules (e2b >= 2.28): the proxy rewrites
+// the Authorization header on outbound requests to GitHub, so the sandbox can
+// use gh/git as the token's identity but can NEVER read the token itself (no
+// amount of `echo`/drip works — the secret is not in the sandbox at all). This
+// is the technique gorkie uses; implemented here against E2B's own API.
+function githubNetwork(token: string): SandboxNetworkOpts {
+  const bearer = [
+    { transform: { headers: { Authorization: `Bearer ${token}` } } },
+  ];
+  const basic = Buffer.from(`x-access-token:${token}`, 'utf8').toString(
+    'base64'
+  );
+  return {
+    // Keep full internet access (the API requires the ALL_TRAFFIC sentinel when
+    // allowOut is set at all); the rule hosts are covered by it.
+    allowOut: [ALL_TRAFFIC],
+    rules: {
+      'api.github.com': bearer,
+      'github.com': [
+        { transform: { headers: { Authorization: `Basic ${basic}` } } },
+      ],
+      'uploads.github.com': bearer,
+    },
+  };
+}
 
 export function isMissingSandboxError(error: unknown): boolean {
   const message = error instanceof Error ? error.message.toLowerCase() : '';
@@ -32,19 +68,28 @@ export class LazySandbox {
   private sandbox: Sandbox | null = null;
   private creating: Promise<Sandbox> | null = null;
 
+  private readonly githubToken: string | undefined;
+
   constructor({
     apiKey,
     env = {},
+    githubToken,
     logger,
     sessionId,
   }: {
     apiKey: string;
     env?: Record<string, string>;
+    /** Real GitHub token, brokered via egress rules (never enters the sandbox). */
+    githubToken?: string;
     logger: Logger;
     sessionId?: string;
   }) {
     this.apiKey = apiKey;
-    this.env = env;
+    this.githubToken = githubToken;
+    // gh/git see only the placeholder; auth happens at the network layer.
+    this.env = githubToken
+      ? { GH_TOKEN: GH_PLACEHOLDER, GITHUB_TOKEN: GH_PLACEHOLDER, ...env }
+      : env;
     this.logger = logger;
     this.sessionId = sessionId;
   }
@@ -66,6 +111,9 @@ export class LazySandbox {
           app: 'kyto',
           ...(this.sessionId ? { threadId: this.sessionId } : {}),
         },
+        ...(this.githubToken
+          ? { network: githubNetwork(this.githubToken) }
+          : {}),
         timeoutMs: config.timeoutMs,
       });
       await sandbox.files.makeDir(config.workdir).catch(() => undefined);

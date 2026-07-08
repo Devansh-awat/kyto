@@ -94,6 +94,7 @@ async function executeTurn(
   // kills it iff it materialized. Nothing persists between turns.
   const sandboxSession = new LazySandbox({
     apiKey: env.E2B_API_KEY,
+    githubToken: env.GH_TOKEN,
     logger,
     sessionId: threadId,
   });

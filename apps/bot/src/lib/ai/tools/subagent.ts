@@ -70,6 +70,7 @@ export function runSubagentTool({
         // if the subagent actually uses a sandbox tool, destroyed at the end.
         const sandboxSession = new LazySandbox({
           apiKey: env.E2B_API_KEY,
+          githubToken: env.GH_TOKEN,
           logger,
           sessionId: `${thread.id}-subagent-${crypto.randomUUID()}`,
         });
