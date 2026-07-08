@@ -231,11 +231,15 @@ async function executeTurn(
         const gemini = LEADERBOARD_FALLBACK.filter(
           (candidate) => candidate.provider === 'gemini'
         );
+        // Non-HackClub, non-Gemini rungs = the DigitalOcean BYOK models. Try
+        // them FIRST on a budget-exhaustion 429: they're a separate quota
+        // (billed to DigitalOcean, not HackClub) and much stronger than the
+        // cheap Gemini backstop, which stays last as the final safety net.
         const otherNonHackclub = LEADERBOARD_FALLBACK.filter(
           (candidate) =>
             candidate.provider !== 'hackclub' && candidate.provider !== 'gemini'
         );
-        return [...gemini, ...otherNonHackclub];
+        return [...otherNonHackclub, ...gemini];
       }
       const idx = pivotModel
         ? LEADERBOARD_FALLBACK.findIndex(

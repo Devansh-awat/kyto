@@ -3,6 +3,8 @@ import { stepCountIs, streamText, type ToolSet } from 'ai';
 import {
   ALLOWED_MODELS,
   COST_QUALITY_TRADEOFF,
+  DIGITALOCEAN_ONLY,
+  DIGITALOCEAN_PROVIDER,
   MAX_OUTPUT_TOKENS,
   type ModelAttempt,
   ROUTER_MODEL,
@@ -63,7 +65,11 @@ export function streamAttempt({
   });
   return streamText({
     abortSignal,
-    ...(attempt.provider === 'hackclub'
+    // Cap output on metered proxies (HackClub's pessimistic spend projection;
+    // DigitalOcean BYOK bills real tokens to the owner's account) — reasoning
+    // models otherwise burn unbounded thinking tokens.
+    ...(attempt.provider === 'hackclub' ||
+    attempt.provider === DIGITALOCEAN_PROVIDER
       ? { maxOutputTokens: MAX_OUTPUT_TOKENS }
       : {}),
     model: provider.chatModel(attempt.model),
@@ -170,14 +176,87 @@ function tuneBody(
       ];
       changed = true;
     }
-    if (attempt.provider === 'hackclub' && payload.reasoning === undefined) {
+    // DigitalOcean BYOK: the OpenRouter key has $0 credit, so force the
+    // DigitalOcean provider — that's the free path billed to the owner's DO
+    // account. Without this, OpenRouter tries a paid provider and 402s.
+    if (attempt.provider === DIGITALOCEAN_PROVIDER) {
+      const existing =
+        typeof payload.provider === 'object' && payload.provider
+          ? (payload.provider as Record<string, unknown>)
+          : {};
+      payload.provider = { ...existing, only: [DIGITALOCEAN_ONLY] };
+      changed = true;
+    }
+    if (
+      (attempt.provider === 'hackclub' ||
+        attempt.provider === DIGITALOCEAN_PROVIDER) &&
+      payload.reasoning === undefined
+    ) {
       payload.reasoning = { effort: 'medium' };
+      changed = true;
+    }
+    // Prompt caching: mark the large, stable prefix (system prompt + tool
+    // schemas) and the moving conversation tail with cache_control breakpoints.
+    // Anthropic/Gemini honor these for ~10x cheaper cached reads (verified
+    // through the HackClub proxy); providers that don't support explicit
+    // caching (OpenAI, DeepSeek, GLM, Kimi, …) safely ignore them and auto-cache
+    // on their own. Applied to every attempt — harmless where unsupported.
+    if (addCacheControl(payload)) {
       changed = true;
     }
     return changed ? JSON.stringify(payload) : null;
   } catch {
     return null;
   }
+}
+
+// Attach an ephemeral cache breakpoint to a message's last text block,
+// converting a string body to the content-array form OpenRouter expects.
+// Leaves non-text/assistant/tool messages untouched (only called on system and
+// user messages, whose content the SDK sends as plain strings).
+function markCacheBreakpoint(message: Record<string, unknown>): boolean {
+  const content = message.content;
+  if (typeof content === 'string') {
+    if (content.length === 0) {
+      return false;
+    }
+    message.content = [
+      { cache_control: { type: 'ephemeral' }, text: content, type: 'text' },
+    ];
+    return true;
+  }
+  if (Array.isArray(content) && content.length > 0) {
+    const last = content.at(-1);
+    if (last && typeof last === 'object') {
+      (last as Record<string, unknown>).cache_control = { type: 'ephemeral' };
+      return true;
+    }
+  }
+  return false;
+}
+
+// Two breakpoints, both on stable content: the last system message (caches the
+// tools + system prefix — the big constant chunk) and the last user message
+// (extends the cached prefix over the replayed thread history). Within a
+// multi-step tool loop these two stay fixed, so every step reads the cached
+// prefix instead of re-billing it. Anthropic allows up to 4 breakpoints; two is
+// safe. Providers without explicit caching ignore the field.
+function addCacheControl(payload: Record<string, unknown>): boolean {
+  const messages = payload.messages;
+  if (!Array.isArray(messages)) {
+    return false;
+  }
+  const reversed = [...messages].reverse() as Record<string, unknown>[];
+  let changed = false;
+  const lastSystem = reversed.find((m) => m.role === 'system');
+  if (lastSystem && markCacheBreakpoint(lastSystem)) {
+    changed = true;
+  }
+  const lastUser = reversed.find((m) => m.role === 'user');
+  if (lastUser && lastUser !== lastSystem && markCacheBreakpoint(lastUser)) {
+    changed = true;
+  }
+  return changed;
 }
 
 function requestUrl(input: string | URL | Request): string {

@@ -6,8 +6,17 @@ const HACKCLUB_BASE_URL = 'https://ai.hackclub.com/proxy/v1';
 const GEMINI_BASE_URL =
   env.GEMINI_BASE_URL ??
   'https://generativelanguage.googleapis.com/v1beta/openai/';
+const OPENROUTER_BASE_URL =
+  env.OPENROUTER_BASE_URL ?? 'https://openrouter.ai/api/v1';
 
 export const GEMINI_PROVIDER = 'gemini';
+// DigitalOcean models reached through OpenRouter BYOK (the owner's key). The
+// key holds $0 OpenRouter credit, so every attempt MUST force the DigitalOcean
+// provider (agent.ts injects `provider: { only: ['digitalocean'] }`) — that's
+// the free BYOK path, billed to the owner's DigitalOcean account on a separate
+// quota from HackClub. See DIGITALOCEAN_MODELS for the tool-capable roster.
+export const DIGITALOCEAN_PROVIDER = 'openrouter-do';
+export const DIGITALOCEAN_ONLY = 'digitalocean';
 
 /** One model attempt: an OpenAI-compatible endpoint + model slug. */
 export interface ModelAttempt {
@@ -89,6 +98,33 @@ const geminiAttempts: ModelAttempt[] = env.GEMINI_API_KEY
     }))
   : [];
 
+// DigitalOcean-served, TOOL-CAPABLE models (verified via OpenRouter BYOK with
+// `provider.only=digitalocean`), best→worst. gpt-oss-120b and kimi-k2.5 are
+// deliberately excluded — DigitalOcean's endpoints for them reject tool use,
+// which makes them useless for kyto's tool-driven loop. These are short BYOK
+// aliases (OpenRouter resolves `glm-5.2` → `z-ai/glm-5.2-…`); the `-fast`/
+// `-normal` proxy aliases in the owner's list are NOT valid OpenRouter ids.
+const DIGITALOCEAN_MODELS = [
+  'glm-5.2',
+  'deepseek-v4-pro',
+  'kimi-k2.6',
+  'qwen3.5-397b-a17b',
+  'minimax-m2.5',
+  'glm-5',
+  'deepseek-v4-flash',
+  'llama-4-maverick',
+  'mimo-v2.5-pro',
+] as const;
+
+export const digitaloceanAttempts: ModelAttempt[] = env.OPENROUTER_API_KEY
+  ? DIGITALOCEAN_MODELS.map((model) => ({
+      apiKey: env.OPENROUTER_API_KEY as string,
+      baseURL: OPENROUTER_BASE_URL,
+      model,
+      provider: DIGITALOCEAN_PROVIDER,
+    }))
+  : [];
+
 // The owner's arena leaderboard, best→worst, restricted to models reachable on
 // HackClub. Fable 5 (rank #1) is reachable (`anthropic/claude-fable-5`) but
 // deliberately excluded — ~2x opus-4.8's per-token cost, not worth it against
@@ -126,6 +162,13 @@ export const LEADERBOARD_FALLBACK: ModelAttempt[] = [
   catalogAttempt('google/gemini-3-flash-preview'),
   catalogAttempt('minimax/minimax-m2.7'),
   catalogAttempt('nvidia/nemotron-3-ultra-550b-a55b'),
+  // DigitalOcean via OpenRouter BYOK — strong, tool-capable models on a
+  // SEPARATE quota (billed to the owner's DigitalOcean account, not HackClub).
+  // Placed before the Gemini last resort: on a HackClub budget-exhaustion 429
+  // these are still reachable (buildFallbackQueue keeps non-HackClub rungs),
+  // and they're far better models than the cheap Gemini backstop. Empty if
+  // OPENROUTER_API_KEY is unset.
+  ...digitaloceanAttempts,
   // Last resort: the owner's OWN Gemini key — reached after the HackClub rungs
   // fail (and immediately on a HackClub budget-exhaustion 429). Empty if the
   // key is unset (then these rungs are simply skipped).
