@@ -257,9 +257,16 @@ Run these automatically after each completed change, in order, **without asking*
   `scheduleRecurringReminder`/`listReminders`/`cancelReminder`.
 - **Ported from `rebuild-on-upstream`** (the owner's own Pi-era branch,
   reimplemented on the custom harness — see the July rewrite note): `gh`
-  (GitHub CLI in the turn's sandbox with per-call `GH_TOKEN` injection + token
-  redaction — deferred, needs `GH_TOKEN`; more robust than the external AGPL
-  `techwithanirudh/gorkie`, which only ships a doc-only gh-cli Pi skill),
+  (GitHub CLI in the turn's sandbox — takes gh args as an **array** and runs
+  `gh` with each arg single-quoted, i.e. **no model-controlled shell**: no
+  piping, no `$GH_TOKEN` expansion, no `echo`/`env`, and `gh auth` is blocked.
+  This defeats the char-at-a-time token-drip attack a shell-based tool allows
+  (`echo ${GH_TOKEN:0:1}` across many calls, which per-call substring redaction
+  can't stop); `GH_TOKEN` is injected into only that one call's env and output
+  is still redacted as defense-in-depth. Filtering uses gh's own
+  `--json`/`--jq`/`--template`. Deferred, needs `GH_TOKEN`. More robust than the
+  external AGPL `techwithanirudh/gorkie`, which only ships a doc-only gh-cli Pi
+  skill with no token protection),
   `runBackgroundProcess`/`getProcessOutput`/`killProcess` (nohup-based detached
   processes tracked in-turn — deferred), `wait` (bounded, abort-aware mid-turn
   pause — core), `deleteFile`/`fileStat` (workspace file ops — core),
@@ -275,6 +282,16 @@ Run these automatically after each completed change, in order, **without asking*
   DigitalOcean BYOK model). Deferred, registered only when a subagent model
   exists. The parent-turn abort signal is forwarded so a stuck subagent is
   killed with the turn.
+- **Usage footer** (`agent/index.ts` `postUsageFooter`): after a reply, kyto
+  posts a muted Slack **context block** showing `<output tokens> tokens · <N>
+  tok/s`, captured from the successful attempt's `result.usage` + elapsed time.
+  Per-user opt-out via a new `show_usage_footer` boolean on `user_customizations`
+  (default true; additive migration applied to the live DB with a one-off
+  `ALTER TABLE … ADD COLUMN IF NOT EXISTS`), toggled from an **Enable/Disable
+  button on the App Home tab** (`home_toggle_footer` action, `setUsageFooter`
+  query). The finalizer skips the footer when the user set it false
+  (`hints.customization.showUsageFooter`). The resolved **model** is shown
+  separately in the `Thinking` task (not in this footer).
 - **Recurring reminders** (`tools/reminders.ts`, `lib/reminders/scheduler.ts`,
   `@repo/db` schema/queries `reminders`): unlike the pre-existing one-time
   `scheduleReminder` (which uses Slack's native `chat.scheduleMessage` — a
@@ -720,18 +737,20 @@ Run these automatically after each completed change, in order, **without asking*
   it AND `buildPrompt` (`lib/agent/prompt.ts`) filter it out of the replayed
   thread history — so kyto never triggers on it and never even sees it in
   context. (Previously it was only non-triggering but still visible in history.)
-- **Channel-join greeting is gated on a human inviter.** The
-  `member_joined_channel` handler (`features/assistant/index.ts`) posts the
-  "hey, i'm hanging out here now" line **only when `event.inviter` is set**
-  (a real person added kyto). A programmatic self-join — e.g.
-  `conversations.join` to search or read a public channel/canvas — carries no
-  `inviter`, so kyto stays silent. This is a ban-safety fix: kyto once
-  auto-joined a **post-restricted** channel to search it and the greeting posted
-  where normal members can't, getting it banned. `inviter` was plumbed onto
-  `MemberJoinedEvent` (`harness/types.ts`) from the raw event (`harness/bot.ts`).
-  General rule this enforces: kyto only sends unsolicited messages where it was
-  intentionally invited — everywhere else it posts only in reply to being
-  invoked (where the invoker could post, so kyto can too).
+- **No channel-join greeting at all.** The `member_joined_channel` handler
+  (`features/assistant/index.ts`) posts **nothing** — the welcome line was
+  removed entirely per workspace admins (an earlier inviter-gated version still
+  wasn't acceptable). Ban history: kyto once auto-joined a **post-restricted**
+  channel to search it and the greeting posted where normal members can't,
+  getting it banned. Do NOT re-add any `member_joined_channel` post. General
+  rule: kyto only ever speaks in **reply to being invoked**, never unsolicited.
+- **Cross-channel posting is owner-gated** (`tools/post-message.ts`). The
+  `postMessage` tool takes `currentThreadId` + `isOwner`; for a **non-owner** it
+  may only post back into the **same channel** kyto was mentioned in (a
+  different-channel target or a DM to another user is refused). The **owner** can
+  still direct it to post into any channel. This is the admin requirement that a
+  thread in #general can't be used (by anyone but the owner) to post into
+  #announcements. `sendAsUser`/`editAsUser` remain owner-only already.
 - **Kyto is closed-source.** `packages/ai/src/prompts/slack.ts` states plainly
   that Kyto's own code is private with no public repo link to share (it
   started as a private fork of the open-source gorkie project, but that's as
