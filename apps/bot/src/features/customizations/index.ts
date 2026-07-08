@@ -4,6 +4,7 @@ import {
   clearUserCustomization,
   getUserCustomization,
   removeMcpServer,
+  setUsageFooter,
   setUserCustomization,
 } from '@repo/db/queries';
 import type { ModalSubmitEvent, ModalSubmitResult } from '@/harness';
@@ -156,6 +157,22 @@ bot.onAction('home_clear_prompt', async (event) => {
       logger.warn(
         { ...toLogError(error), userId: event.user.userId },
         'Failed to clear custom instructions'
+      );
+    });
+});
+
+bot.onAction('home_toggle_footer', async (event) => {
+  // The button's value is the target state ('on'/'off'); fall back to reading
+  // the current value if it's ever missing.
+  const target = event.value
+    ? event.value === 'on'
+    : !(await getUserCustomization(event.user.userId))?.showUsageFooter;
+  await setUsageFooter(event.user.userId, target)
+    .then(() => publishHome({ userId: event.user.userId }))
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), userId: event.user.userId },
+        'Failed to toggle usage footer'
       );
     });
 });

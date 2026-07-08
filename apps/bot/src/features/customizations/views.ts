@@ -16,9 +16,11 @@ function escapeSlackText(text: string): string {
 export function buildHomeView({
   mcpServers = [],
   prompt,
+  showUsageFooter = true,
 }: {
   mcpServers?: UserMcpServer[];
   prompt: string | null;
+  showUsageFooter?: boolean;
 }): SlackHomeView {
   const displayedPrompt = prompt
     ? escapeSlackText(
@@ -67,6 +69,22 @@ export function buildHomeView({
       type: 'actions',
     });
   }
+
+  blocks.push(
+    { type: 'divider' },
+    {
+      accessory: {
+        action_id: 'home_toggle_footer',
+        text: plainText(showUsageFooter ? 'Disable' : 'Enable'),
+        type: 'button',
+        value: showUsageFooter ? 'off' : 'on',
+      },
+      text: mrkdwn(
+        `*Usage footer*\nShow a small token count · tokens/sec line under Kyto's replies. Currently *${showUsageFooter ? 'on' : 'off'}*.`
+      ),
+      type: 'section',
+    }
+  );
 
   blocks.push(
     { type: 'divider' },

@@ -105,6 +105,11 @@ async function executeTurn(
   let activeAttempt: ModelAttempt | undefined;
   let reply: ReturnType<typeof createReply> | undefined;
   let errorStage: AgentErrorStage = 'before_output';
+  // Filled by the successful attempt so the finalizer can render the usage
+  // footer (output tokens · tokens/sec) if the user hasn't disabled it.
+  let usageFooter:
+    | { outputTokens: number; tokensPerSecond: number }
+    | undefined;
 
   const cleanup = async (): Promise<void> => {
     await closeTools?.().catch(() => undefined);
@@ -127,6 +132,9 @@ async function executeTurn(
           markdown: "_kyto's responses are shaped by this user's instructions_",
         })
         .catch(() => undefined);
+    }
+    if (usageFooter && hints.customization?.showUsageFooter !== false) {
+      await postUsageFooter({ footer: usageFooter, thread });
     }
     await cleanup();
     logger.info(
@@ -336,6 +344,7 @@ async function executeTurn(
           title: modelTaskTitle,
           type: 'task_update',
         };
+        const attemptStart = Date.now();
         const result = streamAttempt({
           abortSignal: AbortSignal.any([
             controller.signal,
@@ -422,6 +431,20 @@ async function executeTurn(
               : `Model ${currentAttempt.model} returned an empty response.`
           );
         }
+        // Capture usage for the footer (best-effort; never fails the turn).
+        if (producedText) {
+          const usage = await Promise.resolve(result.usage).catch(
+            () => undefined
+          );
+          const outputTokens = usage?.outputTokens ?? usage?.totalTokens;
+          const elapsedSeconds = (Date.now() - attemptStart) / 1000;
+          if (outputTokens && elapsedSeconds > 0) {
+            usageFooter = {
+              outputTokens,
+              tokensPerSecond: outputTokens / elapsedSeconds,
+            };
+          }
+        }
         return;
       } catch (error) {
         {
@@ -466,6 +489,30 @@ function attemptLog(attempt: ModelAttempt | undefined) {
   return attempt
     ? { model: attempt.model, provider: attempt.provider }
     : undefined;
+}
+
+const TOK_PER_SEC_DECIMAL_BELOW = 10;
+
+// Post the per-turn usage footer as a muted Slack context block under the
+// reply. Best-effort — a failure here never affects the answer.
+async function postUsageFooter({
+  footer,
+  thread,
+}: {
+  footer: { outputTokens: number; tokensPerSecond: number };
+  thread: ThreadHandle;
+}): Promise<void> {
+  const rate =
+    footer.tokensPerSecond < TOK_PER_SEC_DECIMAL_BELOW
+      ? footer.tokensPerSecond.toFixed(1)
+      : Math.round(footer.tokensPerSecond).toString();
+  const text = `${footer.outputTokens.toLocaleString('en-US')} tokens · ${rate} tok/s`;
+  await thread
+    .post({
+      blocks: [{ elements: [{ text, type: 'mrkdwn' }], type: 'context' }],
+      fallbackText: text,
+    })
+    .catch(() => undefined);
 }
 
 interface GatheredResult {

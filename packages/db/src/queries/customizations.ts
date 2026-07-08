@@ -6,7 +6,10 @@ export async function getUserCustomization(
   userId: string
 ): Promise<UserCustomization | null> {
   const rows = await db
-    .select({ prompt: userCustomizations.prompt })
+    .select({
+      prompt: userCustomizations.prompt,
+      showUsageFooter: userCustomizations.showUsageFooter,
+    })
     .from(userCustomizations)
     .where(eq(userCustomizations.userId, userId))
     .limit(1);
@@ -14,16 +17,30 @@ export async function getUserCustomization(
   return rows[0] ?? null;
 }
 
-export async function setUserCustomization(
+/** Toggle the per-turn usage footer for a user (upserts a row if needed). */
+export async function setUsageFooter(
   userId: string,
-  customization: UserCustomization
+  showUsageFooter: boolean
 ): Promise<void> {
   await db
     .insert(userCustomizations)
-    .values({ userId, prompt: customization.prompt })
+    .values({ prompt: '', showUsageFooter, userId })
     .onConflictDoUpdate({
+      set: { showUsageFooter, updatedAt: new Date() },
       target: userCustomizations.userId,
+    });
+}
+
+export async function setUserCustomization(
+  userId: string,
+  customization: Pick<UserCustomization, 'prompt'>
+): Promise<void> {
+  await db
+    .insert(userCustomizations)
+    .values({ prompt: customization.prompt, userId })
+    .onConflictDoUpdate({
       set: { prompt: customization.prompt, updatedAt: new Date() },
+      target: userCustomizations.userId,
     });
 }
 

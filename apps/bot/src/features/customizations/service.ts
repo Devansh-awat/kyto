@@ -17,6 +17,7 @@ export async function publishHome({
     view: buildHomeView({
       mcpServers,
       prompt: customization?.prompt ?? null,
+      showUsageFooter: customization?.showUsageFooter ?? true,
     }) as never,
   });
 }

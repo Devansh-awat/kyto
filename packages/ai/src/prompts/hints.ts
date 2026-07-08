@@ -4,7 +4,7 @@ export interface RequestHints {
     id?: string;
     name?: string;
   };
-  customization?: { prompt: string } | null;
+  customization?: { prompt: string; showUsageFooter?: boolean } | null;
   messageId?: string;
   ownerUserId?: string;
   threadId: string;
