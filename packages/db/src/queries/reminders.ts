@@ -1,8 +1,13 @@
 import { and, eq, lte } from 'drizzle-orm';
 import { db } from '../client';
-import { type NewReminder, type Reminder, reminders } from '../schema';
+import {
+  type NewReminder,
+  type Reminder,
+  type ReminderKind,
+  reminders,
+} from '../schema';
 
-export type { Reminder, ReminderRecurrence } from '../schema';
+export type { Reminder, ReminderKind, ReminderRecurrence } from '../schema';
 
 const MINUTES_PER_DAY = 24 * 60;
 const DAYS_PER_WEEK = 7;
@@ -47,6 +52,10 @@ export async function createReminder(input: {
   schedule: ReminderSchedule;
   channelId?: string | null;
   maxRuns?: number | null;
+  kind?: ReminderKind;
+  command?: string | null;
+  url?: string | null;
+  threadId?: string | null;
 }): Promise<Reminder> {
   const nextRunAt = computeNextRun(input.schedule, new Date());
   const values: NewReminder = {
@@ -54,6 +63,10 @@ export async function createReminder(input: {
     text: input.text,
     channelId: input.channelId ?? null,
     maxRuns: input.maxRuns ?? null,
+    kind: input.kind ?? 'message',
+    command: input.command ?? null,
+    url: input.url ?? null,
+    threadId: input.threadId ?? null,
     recurrence: input.schedule.recurrence,
     nextRunAt,
     ...(input.schedule.recurrence === 'interval'
@@ -148,6 +161,12 @@ export async function getDueReminders(now: Date): Promise<Reminder[]> {
 /**
  * Advance a fired reminder to its next occurrence, incrementing its run count.
  * When a run cap is set and reached, the reminder is deactivated instead.
+ *
+ * The next run is computed from `nextRunAt` or from now, whichever is later. If
+ * the scheduler was down (or a fire took a long time), a schedule left in the
+ * past would otherwise fire again on every 30s poll until it caught up — a
+ * harmless repeat for a 'message' reminder, but a burst of sandbox boots or
+ * model calls for a 'bash'/'agent' one.
  */
 export async function advanceReminder(reminder: Reminder): Promise<void> {
   const runCount = (reminder.runCount ?? 0) + 1;
@@ -159,7 +178,9 @@ export async function advanceReminder(reminder: Reminder): Promise<void> {
       .where(eq(reminders.id, reminder.id));
     return;
   }
-  const nextRunAt = computeNextRun(scheduleOf(reminder), reminder.nextRunAt);
+  const now = new Date();
+  const base = reminder.nextRunAt > now ? reminder.nextRunAt : now;
+  const nextRunAt = computeNextRun(scheduleOf(reminder), base);
   await db
     .update(reminders)
     .set({ nextRunAt, runCount })

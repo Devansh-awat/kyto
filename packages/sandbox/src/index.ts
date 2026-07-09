@@ -1,2 +1,7 @@
 export { sandboxConfig } from './config';
-export { isMissingSandboxError, LazySandbox } from './lazy-sandbox';
+export {
+  isMissingSandboxError,
+  LazySandbox,
+  type SandboxStore,
+} from './lazy-sandbox';
+export { killSandbox, type RunOnceResult, runOnce } from './run-once';

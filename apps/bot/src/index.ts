@@ -4,6 +4,7 @@ import { buildAllowlist } from '@/lib/allowed-users';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
 import { startReminderScheduler } from '@/lib/reminders/scheduler';
+import { startSandboxReaper } from '@/lib/sandbox/store';
 import { startSitesServer } from '@/lib/sites/server';
 
 let shuttingDown = false;
@@ -26,6 +27,8 @@ try {
   await buildAllowlist();
   await startSitesServer();
   startReminderScheduler(bot);
+  // Paused thread sandboxes keep costing storage; collect the idle ones.
+  startSandboxReaper();
   const botProfile = slack.botUserId
     ? await slack.webClient.users
         .info({ user: slack.botUserId })

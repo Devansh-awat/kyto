@@ -38,6 +38,10 @@ function githubNetwork(token: string): SandboxNetworkOpts {
   };
 }
 
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export function isMissingSandboxError(error: unknown): boolean {
   const message = error instanceof Error ? error.message.toLowerCase() : '';
   return (
@@ -52,11 +56,31 @@ function commandTimeoutMs(): number {
 }
 
 /**
- * A truly lazy, ephemeral E2B sandbox: `Sandbox.create` happens on the first
- * operation that needs it (a chat-only turn costs zero E2B), and `destroy()`
- * kills it at turn end. Nothing is ever persisted, paused, or resumed — the
- * Slack thread is the only memory. With the custom agent loop there is no
- * framework bootstrap to fake anymore: no tool call, no sandbox.
+ * Where a thread's sandbox id is remembered between turns. Injected by the
+ * caller so this package stays free of a database dependency.
+ */
+export interface SandboxStore {
+  clear(threadId: string): Promise<void>;
+  /** The sandbox id last used by this thread, if any. */
+  load(threadId: string): Promise<string | null>;
+  save(threadId: string, sandboxId: string): Promise<void>;
+}
+
+/**
+ * A lazy E2B sandbox: `Sandbox.create` happens on the first operation that
+ * needs it, so a chat-only turn costs zero E2B.
+ *
+ * Lifetime depends on `store`. Without one the sandbox is ephemeral — killed at
+ * `destroy()`, nothing carries over. With one it is PERSISTENT PER THREAD: the
+ * sandbox id is remembered, `destroy()` pauses instead of killing, and the next
+ * turn in that thread reconnects to the same filesystem (`Sandbox.connect`
+ * auto-resumes a paused sandbox). A paused sandbox costs storage, not compute.
+ *
+ * Two things are fixed at CREATE time and therefore stale on a resumed sandbox:
+ * the `network` egress rules (which broker the real GitHub token) and the
+ * create-time `envs`. Rotating `GH_TOKEN` only takes effect on a thread's next
+ * fresh sandbox. Per-command env is re-sent on every `run()`, so short-lived
+ * secrets (the per-turn Slack proxy token) are always current.
  */
 export class LazySandbox {
   readonly workDir = config.workdir;
@@ -65,6 +89,7 @@ export class LazySandbox {
   private readonly env: Record<string, string>;
   private readonly logger: Logger;
   private readonly sessionId: string | undefined;
+  private readonly store: SandboxStore | undefined;
   private sandbox: Sandbox | null = null;
   private creating: Promise<Sandbox> | null = null;
 
@@ -76,6 +101,7 @@ export class LazySandbox {
     githubToken,
     logger,
     sessionId,
+    store,
   }: {
     apiKey: string;
     env?: Record<string, string>;
@@ -83,6 +109,8 @@ export class LazySandbox {
     githubToken?: string;
     logger: Logger;
     sessionId?: string;
+    /** Provide to make this thread's sandbox persist across turns. */
+    store?: SandboxStore;
   }) {
     this.apiKey = apiKey;
     this.githubToken = githubToken;
@@ -92,10 +120,72 @@ export class LazySandbox {
       : env;
     this.logger = logger;
     this.sessionId = sessionId;
+    this.store = store;
   }
 
   get materialized(): boolean {
     return this.sandbox !== null;
+  }
+
+  /** True when this sandbox is remembered across turns for its thread. */
+  private get persistent(): boolean {
+    return Boolean(this.store && this.sessionId);
+  }
+
+  /**
+   * Reconnect to the thread's remembered sandbox. Returns null when there is
+   * nothing to reconnect to, or when the remembered sandbox is gone (expired,
+   * killed out of band) — in which case the stale id is forgotten so the caller
+   * falls through to creating a fresh one.
+   */
+  private async reconnect(): Promise<Sandbox | null> {
+    if (!(this.store && this.sessionId)) {
+      return null;
+    }
+    const sandboxId = await this.store.load(this.sessionId).catch(() => null);
+    if (!sandboxId) {
+      return null;
+    }
+    try {
+      // Auto-resumes the sandbox when it is paused.
+      const sandbox = await Sandbox.connect(sandboxId, { apiKey: this.apiKey });
+      await sandbox.setTimeout(commandTimeoutMs());
+      return sandbox;
+    } catch (error) {
+      this.logger.info(
+        { err: errorText(error), sandboxId },
+        '[sandbox] remembered sandbox is gone; creating a fresh one'
+      );
+      await this.store.clear(this.sessionId).catch(() => undefined);
+      return null;
+    }
+  }
+
+  private async create(): Promise<Sandbox> {
+    const sandbox = await Sandbox.create(config.template, {
+      apiKey: this.apiKey,
+      envs: this.env,
+      metadata: {
+        app: 'kyto',
+        ...(this.sessionId ? { threadId: this.sessionId } : {}),
+      },
+      ...(this.githubToken ? { network: githubNetwork(this.githubToken) } : {}),
+      timeoutMs: config.timeoutMs,
+    });
+    await sandbox.files.makeDir(config.workdir).catch(() => undefined);
+    if (this.store && this.sessionId) {
+      await this.store
+        .save(this.sessionId, sandbox.sandboxId)
+        .catch((error: unknown) => {
+          // A sandbox we can't remember is still a usable sandbox for this
+          // turn; it just won't be found again next turn.
+          this.logger.warn(
+            { err: errorText(error), sandboxId: sandbox.sandboxId },
+            '[sandbox] failed to remember sandbox for thread'
+          );
+        });
+    }
+    return sandbox;
   }
 
   private ensure(): Promise<Sandbox> {
@@ -104,22 +194,15 @@ export class LazySandbox {
     }
     this.creating ??= (async () => {
       const started = Date.now();
-      const sandbox = await Sandbox.create(config.template, {
-        apiKey: this.apiKey,
-        envs: this.env,
-        metadata: {
-          app: 'kyto',
-          ...(this.sessionId ? { threadId: this.sessionId } : {}),
-        },
-        ...(this.githubToken
-          ? { network: githubNetwork(this.githubToken) }
-          : {}),
-        timeoutMs: config.timeoutMs,
-      });
-      await sandbox.files.makeDir(config.workdir).catch(() => undefined);
+      const resumed = await this.reconnect();
+      const sandbox = resumed ?? (await this.create());
       this.sandbox = sandbox;
       this.logger.info(
-        { ms: Date.now() - started, sandboxId: sandbox.sandboxId },
+        {
+          ms: Date.now() - started,
+          resumed: Boolean(resumed),
+          sandboxId: sandbox.sandboxId,
+        },
         '[sandbox] materialized'
       );
       return sandbox;
@@ -209,7 +292,12 @@ export class LazySandbox {
     });
   }
 
-  /** Kills the sandbox iff it was materialized; a chat-only turn is a no-op. */
+  /**
+   * Releases the sandbox iff it was materialized; a chat-only turn is a no-op.
+   * A persistent sandbox is PAUSED (its filesystem survives for the thread's
+   * next turn); an ephemeral one is killed outright. A pause that fails falls
+   * back to a kill, so a sandbox is never left running and billing.
+   */
   async destroy(): Promise<void> {
     const pending = this.creating;
     if (pending) {
@@ -220,9 +308,28 @@ export class LazySandbox {
     if (!sandbox) {
       return;
     }
+    if (this.persistent) {
+      // `pause()` resolves false when it was ALREADY paused — still persisted,
+      // still resumable. Only a thrown error means we failed to snapshot it.
+      const failure = await sandbox
+        .pause()
+        .then(() => undefined)
+        .catch((error: unknown) => error);
+      if (!failure) {
+        return;
+      }
+      this.logger.warn(
+        { err: errorText(failure), sandboxId: sandbox.sandboxId },
+        '[sandbox] pause failed; killing instead'
+      );
+      // Couldn't snapshot it, so the id we remembered is about to be useless.
+      if (this.sessionId) {
+        await this.store?.clear(this.sessionId).catch(() => undefined);
+      }
+    }
     await sandbox.kill().catch((error: unknown) => {
       this.logger.warn(
-        { err: error, sandboxId: sandbox.sandboxId },
+        { err: errorText(error), sandboxId: sandbox.sandboxId },
         '[sandbox] kill failed'
       );
     });

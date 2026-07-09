@@ -1,6 +1,10 @@
 export const sandboxPrompt = `\
 <sandbox>
-You have an isolated E2B Linux sandbox (Debian, Node.js, Python 3) with network access. Use the \`bash\`, \`readFile\`, \`writeFile\`, and \`editFile\` tools to work in it. The sandbox is EPHEMERAL: it starts empty each turn and is destroyed when the turn ends — nothing carries over between turns.
+You have an isolated E2B Linux sandbox (Debian, Node.js, Python 3) with network access. Use the \`bash\`, \`readFile\`, \`writeFile\`, and \`editFile\` tools to work in it.
+
+The sandbox PERSISTS FOR THIS THREAD: it is paused when a turn ends and resumed on the next turn, so files you wrote, packages you installed, and data you downloaded earlier in this thread are still there. Check before redoing work. It is not shared with any other thread, and it is discarded after the thread has been idle for a week.
+
+This is what makes a 'bash' recurring reminder useful: write and test a script here, then schedule \`bash\` to run it, and every fire executes it in this same sandbox.
 
 Use the sandbox to run code, do data work, process files, fetch public URLs, and verify your work before answering. Don't claim something works unless you actually ran it.
 You also have the ability to SSH into servers, feel free to use this ability!

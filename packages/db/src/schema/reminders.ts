@@ -16,6 +16,25 @@ export const reminderRecurrence = pgEnum('reminder_recurrence', [
 
 export type ReminderRecurrence = (typeof reminderRecurrence.enumValues)[number];
 
+// What a reminder actually does each time it fires:
+// 'message': posts `text` verbatim (the original, and still the default).
+// 'script':  fetches `url` and posts its content, optionally prefixed by `text`.
+// 'bash':    runs `command` in the sandbox of the thread it was created in
+//            (`thread_id`) and posts its exact stdout/stderr. Because thread
+//            sandboxes persist, this can use files the model wrote earlier.
+// 'agent':   runs a headless kyto with `text` as its instructions, on the cheap
+//            pinned model, and posts whatever it decides to say.
+// Label order matches the live `reminder_kind` type, which predates this code
+// (an earlier branch created it). Drizzle matches on label, not ordinal.
+export const reminderKind = pgEnum('reminder_kind', [
+  'message',
+  'script',
+  'agent',
+  'bash',
+]);
+
+export type ReminderKind = (typeof reminderKind.enumValues)[number];
+
 export const reminders = pgTable(
   'reminders',
   {
@@ -24,6 +43,15 @@ export const reminders = pgTable(
       .$defaultFn(() => crypto.randomUUID()),
     userId: text('user_id').notNull(),
     text: text('text').notNull(),
+    kind: reminderKind('kind').notNull().default('message'),
+    // 'bash': the shell command to run each fire.
+    command: text('command'),
+    // 'script': the URL to fetch each fire.
+    url: text('url'),
+    // 'bash'/'agent': the thread this reminder was created in. A bash reminder
+    // reuses that thread's persistent sandbox; an agent reminder posts into it
+    // when no channel is set.
+    threadId: text('thread_id'),
     // Where the reminder fires: a channel id (raw C…/G…) or null = DM the user.
     channelId: text('channel_id'),
     // Optional cap: stop (deactivate) after this many fires. Null = forever.

@@ -1,0 +1,66 @@
+import type { Reminder } from '@repo/db/queries';
+import { LazySandbox, runOnce } from '@repo/sandbox';
+import { env } from '@/env';
+import logger from '@/lib/logger';
+import { threadSandboxStore, withThreadSandbox } from '@/lib/sandbox/store';
+
+const MAX_OUTPUT_CHARS = 4000;
+
+function truncate(text: string): string {
+  return text.length > MAX_OUTPUT_CHARS
+    ? `${text.slice(0, MAX_OUTPUT_CHARS)}\n… (truncated)`
+    : text;
+}
+
+function format({
+  exitCode,
+  stderr,
+  stdout,
+}: {
+  exitCode: number;
+  stderr: string;
+  stdout: string;
+}): string {
+  const parts = [
+    truncate(stdout.trim()),
+    stderr.trim() ? `stderr:\n${truncate(stderr.trim())}` : '',
+  ].filter(Boolean);
+  const output = parts.join('\n\n') || '(no output)';
+  return exitCode === 0 ? output : `${output}\n\n(exit code ${exitCode})`;
+}
+
+/**
+ * Run a bash reminder's command and return its exact output.
+ *
+ * It runs in the PERSISTENT SANDBOX OF THE THREAD the reminder was created in,
+ * so the command can use scripts and data kyto wrote while setting the reminder
+ * up. The thread's sandbox lock is held for the duration — a live turn in that
+ * same thread must not pause the sandbox mid-command.
+ *
+ * A reminder created before thread sandboxes existed (no `threadId`) falls back
+ * to a throwaway sandbox, which starts empty every fire.
+ */
+export async function runReminderBash(reminder: Reminder): Promise<string> {
+  const command = reminder.command;
+  if (!command) {
+    throw new Error("Bash reminder is missing a 'command'.");
+  }
+  if (!reminder.threadId) {
+    return format(await runOnce(command, env.E2B_API_KEY));
+  }
+  return await withThreadSandbox(reminder.threadId, async () => {
+    const sandbox = new LazySandbox({
+      apiKey: env.E2B_API_KEY,
+      githubToken: env.GH_TOKEN,
+      logger,
+      sessionId: reminder.threadId ?? undefined,
+      store: threadSandboxStore,
+    });
+    try {
+      return format(await sandbox.run({ command }));
+    } finally {
+      // Pauses (not kills) the thread's sandbox — same as a turn does.
+      await sandbox.destroy().catch(() => undefined);
+    }
+  });
+}

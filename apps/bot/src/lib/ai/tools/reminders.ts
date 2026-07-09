@@ -4,6 +4,7 @@ import {
   listActiveReminders,
   pauseReminder as pauseReminderRow,
   type Reminder,
+  type ReminderKind,
   type ReminderSchedule,
   resumeReminder as resumeReminderRow,
 } from '@repo/db/queries';
@@ -27,6 +28,19 @@ const WEEKDAY_NAMES = [
 const MAX_INTERVAL_SECONDS = 180 * 24 * 60 * 60;
 const MINUTES_PER_HOUR = 60;
 const MINUTES_PER_DAY = 24 * MINUTES_PER_HOUR;
+
+// How often each kind may fire, floored by what a fire actually costs.
+// 'message'/'script' are a post and maybe an HTTP GET. 'bash' resumes a real
+// sandbox. 'agent' runs a whole tool loop against a model.
+const MIN_INTERVAL_SECONDS_DEFAULT = 60;
+const MIN_INTERVAL_SECONDS_BASH = 5 * 60;
+const MIN_INTERVAL_SECONDS_AGENT = 60 * 60;
+const MIN_INTERVAL_SECONDS_BY_KIND: Record<ReminderKind, number> = {
+  agent: MIN_INTERVAL_SECONDS_AGENT,
+  bash: MIN_INTERVAL_SECONDS_BASH,
+  message: MIN_INTERVAL_SECONDS_DEFAULT,
+  script: MIN_INTERVAL_SECONDS_DEFAULT,
+};
 
 function formatTimeOfDay(minutes: number): string {
   const hours = Math.floor(minutes / MINUTES_PER_HOUR);
@@ -53,10 +67,35 @@ export function scheduleRecurringReminderTool({
   const isOwner =
     Boolean(env.OWNER_USER_ID) && message.author.userId === env.OWNER_USER_ID;
   return tool({
-    description:
-      'Schedule a RECURRING reminder for the user who sent the current message — kyto repeatedly posts the given text on the schedule until cancelled or its run cap is reached. By default it DMs that user; the owner may also target a channel. Optionally cap the number of times it fires. For a one-time reminder, use scheduleReminder instead.',
+    description: `Schedule a RECURRING task for the user who sent the current message — kyto repeatedly posts on the schedule until cancelled or its run cap is reached. By default it DMs that user; the owner may also target a channel. For a one-time reminder, use scheduleReminder instead.
+
+Four kinds, each recomputing its message at fire time except 'message':
+- 'message' (default): posts \`text\` verbatim. Min interval 60s.
+- 'script': fetches \`url\` and posts its content, prefixed by \`text\`. Min interval 60s.
+- 'bash': runs \`command\` and posts its exact stdout/stderr, prefixed by \`text\`. It runs in THIS THREAD'S sandbox, which persists — so write a script to a file now, and the reminder can run it on every fire. Min interval 5 minutes.
+- 'agent': runs \`text\` as instructions for a headless kyto with the full toolset (it can search, read Slack history, run bash, and decide what to say), and posts whatever it replies. Use this when the message must be computed fresh each time. Min interval 1 hour, since each fire is a real model run.`,
     inputSchema: z.object({
-      text: z.string().min(1).max(3000).describe('The message to post.'),
+      text: z
+        .string()
+        .min(1)
+        .max(3000)
+        .describe(
+          "The message to post, or for kind 'agent' the instructions to follow."
+        ),
+      kind: z
+        .enum(['message', 'script', 'bash', 'agent'])
+        .optional()
+        .describe("What runs each fire. Defaults to 'message'."),
+      command: z
+        .string()
+        .min(1)
+        .optional()
+        .describe("Required when kind is 'bash'. The shell command to run."),
+      url: z
+        .string()
+        .url()
+        .optional()
+        .describe("Required when kind is 'script'. The URL to fetch."),
       channelId: z
         .string()
         .optional()
@@ -104,6 +143,9 @@ export function scheduleRecurringReminderTool({
     }),
     execute: async ({
       text,
+      kind = 'message',
+      command,
+      url,
       channelId,
       maxRuns,
       recurrence,
@@ -111,11 +153,27 @@ export function scheduleRecurringReminderTool({
       timeOfDayMinutes,
       weekday,
     }) => {
+      if (kind === 'bash' && !command) {
+        return { error: "kind 'bash' requires a command.", success: false };
+      }
+      if (kind === 'script' && !url) {
+        return { error: "kind 'script' requires a url.", success: false };
+      }
+
       let schedule: ReminderSchedule;
       if (recurrence === 'interval') {
         if (intervalSeconds === undefined) {
           return {
             error: "recurrence 'interval' requires intervalSeconds.",
+            success: false,
+          };
+        }
+        // Each fire of a bash/agent reminder costs a sandbox resume or a model
+        // run, so they are floored well above the 60s the schema allows.
+        const floor = MIN_INTERVAL_SECONDS_BY_KIND[kind];
+        if (intervalSeconds < floor) {
+          return {
+            error: `kind '${kind}' can fire at most every ${floor} seconds (got ${intervalSeconds}).`,
             success: false,
           };
         }
@@ -146,9 +204,16 @@ export function scheduleRecurringReminderTool({
       try {
         const reminder = await createReminder({
           channelId: targetChannel,
+          command: command ?? null,
+          kind,
           maxRuns: maxRuns ?? null,
           schedule,
           text,
+          // A 'bash' reminder reuses this thread's persistent sandbox, and an
+          // 'agent' reminder runs its tools against this thread.
+          threadId:
+            kind === 'bash' || kind === 'agent' ? message.threadId : null,
+          url: url ?? null,
           userId: message.author.userId,
         });
         const where = targetChannel ? `in <#${targetChannel}>` : 'via DM';
@@ -157,7 +222,7 @@ export function scheduleRecurringReminderTool({
           id: reminder.id,
           nextRunAt: reminder.nextRunAt.toISOString(),
           success: true,
-          summary: `Scheduled a recurring (${recurrence}) reminder ${where}${cap}. Next fires ${reminder.nextRunAt.toISOString()}.`,
+          summary: `Scheduled a recurring ${kind} (${recurrence}) reminder ${where}${cap}. Next fires ${reminder.nextRunAt.toISOString()}.`,
         };
       } catch (error) {
         return { error: errorMessage(error), success: false };
@@ -175,7 +240,9 @@ export function listRemindersTool({ message }: { message: Message }) {
       const rows = await listActiveReminders(message.author.userId);
       return {
         reminders: rows.map((row) => ({
+          command: row.command ?? undefined,
           id: row.id,
+          kind: row.kind,
           nextRunAt: row.nextRunAt.toISOString(),
           recurrence: row.recurrence,
           runs: row.maxRuns

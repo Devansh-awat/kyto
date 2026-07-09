@@ -69,6 +69,49 @@ export function getPermalinkTool({ thread }: { thread: Thread }) {
   });
 }
 
+/**
+ * Fetch a URL as readable text (HTML is stripped to its text content). Throws
+ * on a Slack link or a non-OK response. Shared by the `fetchUrl` tool and by
+ * 'script' reminders, which post a URL's content on a schedule.
+ */
+export async function fetchUrlText(url: string): Promise<{
+  content: string;
+  contentType: string;
+  truncated: boolean;
+}> {
+  // Slack message/file links aren't publicly fetchable (they 302 to a login
+  // wall), so callers get pointed at the Slack read tools instead of markup.
+  if (isSlackLink(url)) {
+    throw new Error(
+      "That's a Slack link, which isn't publicly fetchable. Use Slack tools instead: readConversationHistory for a message/thread (the URL path is /archives/<CHANNEL>/p<TS> — the ts is the digits with a dot before the last 6), or getFile for a file link."
+    );
+  }
+  const response = await fetch(url, {
+    headers: { 'User-Agent': 'kyto-slack-bot' },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) {
+    throw new Error(`Fetch failed: ${response.status}`);
+  }
+  const contentType = response.headers.get('content-type') ?? '';
+  const raw = await response.text();
+  // Strip tags for HTML so the reader gets readable text, not markup.
+  const text = contentType.includes('text/html')
+    ? raw
+        .replace(/<script[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[\s\S]*?<\/style>/gi, '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+    : raw;
+  const truncated = text.length > MAX_CONTENT_CHARS;
+  return {
+    content: truncated ? text.slice(0, MAX_CONTENT_CHARS) : text,
+    contentType,
+    truncated,
+  };
+}
+
 export function fetchUrlTool() {
   return tool({
     description:
@@ -78,41 +121,7 @@ export function fetchUrlTool() {
     }),
     execute: async ({ url }) => {
       try {
-        // Slack message/file links aren't publicly fetchable (they 302 to a
-        // login wall), so redirect the model to the Slack read tools instead of
-        // returning useless HTML.
-        if (isSlackLink(url)) {
-          return {
-            error:
-              "That's a Slack link, which isn't publicly fetchable. Use Slack tools instead: readConversationHistory for a message/thread (the URL path is /archives/<CHANNEL>/p<TS> — the ts is the digits with a dot before the last 6), or getFile for a file link.",
-            success: false,
-          };
-        }
-        const response = await fetch(url, {
-          headers: { 'User-Agent': 'kyto-slack-bot' },
-          signal: AbortSignal.timeout(15_000),
-        });
-        if (!response.ok) {
-          return { error: `Fetch failed: ${response.status}`, success: false };
-        }
-        const contentType = response.headers.get('content-type') ?? '';
-        const raw = await response.text();
-        // Strip tags for HTML so the model gets readable text, not markup.
-        const text = contentType.includes('text/html')
-          ? raw
-              .replace(/<script[\s\S]*?<\/script>/gi, '')
-              .replace(/<style[\s\S]*?<\/style>/gi, '')
-              .replace(/<[^>]+>/g, ' ')
-              .replace(/\s+/g, ' ')
-              .trim()
-          : raw;
-        const truncated = text.length > MAX_CONTENT_CHARS;
-        return {
-          content: truncated ? text.slice(0, MAX_CONTENT_CHARS) : text,
-          contentType,
-          success: true,
-          truncated,
-        };
+        return { ...(await fetchUrlText(url)), success: true };
       } catch (error) {
         logger.warn({ error: errorMessage(error) }, '[fetchUrl] failed');
         return { error: errorMessage(error), success: false };

@@ -328,12 +328,44 @@ Run these automatically after each completed change, in order, **without asking*
     Delete buttons (`home_pause_reminder`/`home_resume_reminder`/
     `home_cancel_reminder`, `listUserReminders`). Reminder posts honor the
     **reminder identity profile** (name+icon). A channel-targeted reminder
-    prefixes the text with `<@user>`. (Agent/bash-powered reminders — running a
-    prompt at fire time — are a deliberate NON-goal for now.)
-  This durable state is a deliberate
-  exception to the "no persistence" policy elsewhere (turns/sandbox) — a
-  reminder's entire purpose is to outlive the turn that created it, same
-  precedent as site hosting and the opt-in allowlist.
+    prefixes the text with `<@user>`.
+  - **Reminder kinds (July 2026).** `reminders.kind` ∈
+    `message | script | bash | agent` (the live `reminder_kind` enum already
+    existed — an earlier branch created it — with label order
+    `message, script, agent, bash`; Drizzle matches on label, not ordinal).
+    Ported from `rebuild-on-upstream` and **reimplemented on the custom
+    harness** (the branch's versions import `createAgent`/`openSession`/`Message`
+    from the deleted Pi/chat-sdk packages and cannot be cherry-picked):
+    - `message` (default): posts `text` verbatim. Unchanged behavior.
+    - `script`: fetches `url` each fire and posts its content.
+      `fetchUrlText` is now an exported helper in `tools/url.ts`, shared with
+      the `fetchUrl` tool.
+    - `bash` (`lib/reminders/bash.ts`): runs `command` and posts its exact
+      stdout/stderr, **in the persistent sandbox of the thread it was created
+      in** (`reminders.thread_id`), holding that thread's sandbox lock. So it
+      can run a script kyto wrote earlier. A row without `thread_id` falls back
+      to `runOnce` (a throwaway sandbox, empty every fire).
+    - `agent` (`lib/reminders/agent.ts`): runs a **headless kyto** — the same
+      `streamAttempt` multi-step tool loop as a real turn, full toolset, nothing
+      streamed to Slack — with `text` as its instructions, and posts its final
+      reply. Pinned to `subagentAttempt` (cheap Gemini flash-lite) so an
+      unattended job's cost is predictable. Reuses the thread's sandbox too.
+      `searchSlack` does NOT work here (its action token needs a live user
+      interaction); the system note says so.
+    - **Interval floors by kind** (`tools/reminders.ts`): `message`/`script` 60s,
+      `bash` 5 min (a sandbox resume), `agent` 1 hour (a real model run).
+    - The scheduler now fires due reminders **concurrently** (a slow `bash`/
+      `agent` fire must not delay everyone else's) and guards against
+      **overlapping fires** of the same reminder with an in-flight `Set` — a row
+      is only advanced *after* it fires, so every 30s poll during a multi-minute
+      run would otherwise start it again.
+    - `advanceReminder` now computes the next run from `max(nextRunAt, now)`. A
+      schedule left in the past (scheduler downtime) used to re-fire on every
+      poll until it caught up — harmless for `message`, a burst of sandbox boots
+      or model calls for `bash`/`agent`.
+  This durable state is deliberate — a reminder's entire purpose is to outlive
+  the turn that created it, same precedent as site hosting, the opt-in
+  allowlist, and (now) the per-thread sandbox.
 - **`joinThread`/`leaveThread`** (`tools/join-thread.ts`/`tools/leave-thread.ts`):
   let the model opt itself into (or out of) auto-responding to a thread's
   future messages **without** needing a fresh @mention each time. Both just
@@ -867,20 +899,23 @@ Run these automatically after each completed change, in order, **without asking*
   longer drive routing). `chatAttempts`/`attemptsFor`/`PREMIUM_MODEL` remain
   exported for reference.
 - Fallback advances on **any** error AND on an **un-handled completion**. A turn
-  counts as **handled** iff it produced reply text, a deliberate `skip`, OR tool
-  activity **that ended on a clean `stop`** finish. The clean-stop qualifier is
-  the fix for the **"stops mid-task" bug**: a turn could run tools (e.g. a few
-  web searches) and then the synthesis step came back **empty/truncated — no text
-  and no finish reason** (a spend-limit 429 or 504 swallowed into an empty
-  continuation), yet `producedToolActivity` alone marked it handled, so the turn
-  ended **silently with no answer**. Now `renderStream`'s `onFinish` reports each
-  finishReason; the agent tracks a per-attempt `sawCleanStop` (true only on
-  `stop`). Tool activity counts as handled ONLY with a clean stop (the model ran
-  tools then deliberately finished — the original anti-cascade case, just no
-  narration); tool activity that ends WITHOUT a clean stop falls back to another
-  model so the user actually gets an answer. A truly empty completion (no text,
-  skip, or tools) also falls back. Tracked via `onToolActivity` →
-  `producedToolActivity`, `onFinish` → `sawCleanStop`, `onSkip` → `skipped`. Any
+  counts as **handled** iff it produced reply text or a deliberate `skip`.
+- **"Ends its turn without responding" (fixed July 2026).** `handled` used to
+  also accept `producedToolActivity && sawCleanStop` — a model that ran its
+  tools and then finished with `finishReason: 'stop'` and **zero text** counted
+  as handled, so no fallback fired; and since the streamed reply is created
+  lazily on the first text delta, **nothing was posted at all**. The user saw
+  tool cards and then silence. (That clause was itself the fix for the opposite
+  "stops mid-task" bug — a cascade after the model deliberately finished — but
+  it was drawn too wide: the deliberate no-reply path is the `skip` tool, which
+  is tracked separately.) Now that case runs `synthesizeFinalAnswer`
+  (`agent/index.ts`): re-ask **the same model, once, with `tools: {}`**, feeding
+  it the task plus `renderCarryover(gatheredResults)` and "you already did the
+  work, write the final reply now". Tools are off, so no side effect can fire
+  twice, and it costs one cheap call. If the nudge is also empty the turn is
+  **unhandled** and falls back to the next model, which replays the same
+  gathered results. `sawCleanStop` (from `onFinish`) now only gates the nudge.
+  A truly empty completion (no text, skip, or tools) falls back as before. Any
   provider placeholder text like `(Empty response: ...)` is dropped before it
   reaches Slack (`agent/index.ts`, `ai/stream/index.ts`).
 - **Tool-result carryover across fallback**: so a fallback model doesn't re-run
@@ -985,6 +1020,17 @@ Run these automatically after each completed change, in order, **without asking*
   Replicate TTS) — it was never merged and is **not** the source of truth for
   this doc. Don't assume anything on that branch is live; re-derive fixes
   directly on `main` instead of assuming a merge will happen.
+- **Branch audit (2026-07-09): `main` is now a strict superset of
+  `rebuild-on-upstream`, feature-wise.** The last thing that branch had and
+  `main` didn't was the reminder kinds (`script`/`bash`/`agent`) + `run-once.ts`,
+  now ported. Everything else that looks "new" over there is *older* Pi/chat-sdk
+  infrastructure (`session.ts`, `skills.ts`, `provider.ts`, `providers/pi.ts`,
+  `resolved-model.ts`, `controls.ts`). `main` additionally has focus mode,
+  `slack-script.ts`, the sandbox tools, MCP, identity profiles, and the subagent
+  prompt — none of which exist on the branch. Nothing further to harvest; the
+  branch's `MAX_RECURRING_RUNS = 20` global auto-cancel was deliberately NOT
+  ported (it would silently kill existing "forever" reminders; `max_runs` is
+  already opt-in per reminder).
 
 ### DM threading (native in the custom harness)
 - **Every message threads, DMs included.** The custom harness assigns
@@ -996,29 +1042,55 @@ Run these automatically after each completed change, in order, **without asking*
   thread, so kyto has no memory of the rest of the DM by default — the model
   uses `searchSlack` (`in:@user`) to pull earlier DM history on purpose.
 
-### Sandbox / E2B — lazy + ephemeral, no persistence
-- Config in `packages/sandbox/src/config.ts`. **Nothing is stored between turns.**
-  Pi runs in-process on the host (no bridge); the E2B sandbox is only the
-  execution backend for Pi's builtin `bash`/file tools and the host tools that
-  opt into it (`browse`, `deploySite`, `getFile`, `uploadFile`).
-- **Memory = the Slack thread.** Each turn opens a **fresh** Pi session (no
-  resume) and `buildPrompt` (`lib/agent/prompt.ts`) feeds the **whole thread**
-  (`slack.fetchMessages`, capped) as context. No session is persisted: the DB
-  `sandbox_sessions` table and the in-sandbox `.pi-sessions` file are no longer
-  written. (`!compact` and the per-thread DB session were removed.)
-- **Lazy sandbox** (`packages/sandbox/src/lazy-session.ts`,
-  `LazyE2BNetworkSandboxSession`): `createSession` hands the harness a session
-  that defers the real `Sandbox.create` until a tool actually needs it, so
-  **chat-only turns cost zero E2B**. The harness/Pi run a tiny fixed bootstrap on
-  the sandbox at start (`mkdir -p <workdir>` + one workspace `find`; a `printf
-  $HOME` only with Pi skills — we load none); the lazy session **fakes** those
-  (the never-persisted workspace is always empty) and materializes on the first
-  real file/exec op, replaying the recorded `mkdir`s. **This couples to harness/
-  Pi bootstrap command shapes** — re-check on `@ai-sdk/harness*` upgrades; if a
-  faked command changes, it degrades to "sandbox every turn" (correct, not lazy).
-- **Ephemeral lifecycle:** the session is `destroy()`ed at turn end (kills the
-  sandbox iff it was materialized; chat turns never created one). Never paused,
-  never resumed, no DB row, no snapshot — so no paused-sandbox accumulation.
-- This makes kyto "live processing without storing message contents" for the
-  Slack Scraping policy. `langfuse` tracing is disabled for the same reason
-  (it would export message content); env keys remain but unused.
+### Sandbox / E2B — lazy, and PERSISTENT PER THREAD
+- Config in `packages/sandbox/src/config.ts`. The E2B sandbox is the execution
+  backend for the `bash`/file tools and the host tools that opt into it
+  (`browse`, `deploySite`, `getFile`, `uploadFile`).
+- **Lazy** (`packages/sandbox/src/lazy-sandbox.ts`, `LazySandbox`): the real
+  `Sandbox.create` is deferred until a tool actually touches it, so **chat-only
+  turns cost zero E2B**.
+- **Persistent per thread (July 2026).** `destroy()` now **pauses** rather than
+  kills, and the thread's `sandbox_id` is remembered in the new
+  **`thread_sandboxes`** table; the next turn in that thread calls
+  `Sandbox.connect(id)` (which auto-resumes a paused sandbox) and gets the same
+  filesystem back — files written, packages installed, data downloaded. Verified
+  end-to-end (write in turn 1 → read in turn 2, ~450ms resume; a different
+  thread cannot see it). This is what makes a **`bash` recurring reminder**
+  useful: kyto writes and tests a script in the thread, then schedules the
+  reminder to run it. `prompts/sandbox.ts` tells the model so.
+  - Persistence is opt-in via the injected **`SandboxStore`** (`load`/`save`/
+    `clear`) — `packages/sandbox` stays free of a DB dependency. The bot's
+    implementation is `lib/sandbox/store.ts` (`threadSandboxStore`). A
+    `LazySandbox` built WITHOUT a store is still ephemeral (killed on destroy) —
+    that's what the **subagent** uses.
+  - **NOTE: this was never a regression.** It is a NEW feature. The pre-rewrite
+    `lazy-session.ts` was also ephemeral ("we never persist a session, the
+    workspace is always empty at start"), and nothing ever wrote the old
+    `sandbox_sessions` table — that table is orphaned scaffolding from an
+    abandoned `feat(persistence)` attempt and is deliberately NOT reused.
+  - **A thread, not a "conversation."** Every message roots its own thread
+    (including a top-level DM), so a new top-level DM gets a **new** sandbox.
+    Persistence is within one Slack thread.
+  - **Two things are fixed at CREATE time and therefore stale on a resumed
+    sandbox**: the `network` egress rules (which broker the real `GH_TOKEN` —
+    see the `gh` note) and the create-time `envs`. Rotating `GH_TOKEN` only
+    takes effect on a thread's next fresh sandbox. Per-command env IS re-sent on
+    every `run()`, so the short-lived per-turn Slack proxy token stays current.
+  - **A thread's sandbox is one mutable machine**, and both a live turn and a
+    `bash`/`agent` reminder reach for it. `acquireThreadSandbox`/
+    `withThreadSandbox` (`lib/sandbox/store.ts`) serialize them, so a reminder
+    can't pause the sandbox out from under a running command. A turn holds the
+    lock for its whole duration (bounded by `AGENT_ATTEMPT_TIMEOUT_MS`).
+  - **A paused sandbox costs storage**, so `startSandboxReaper()` (hourly,
+    `index.ts`) kills anything untouched for **7 days** (`SANDBOX_TTL_MS`) and
+    forgets the row. `killSandbox()` is exported from `@repo/sandbox` for this.
+  - `runOnce(command, apiKey)` (`packages/sandbox/src/run-once.ts`) spins up a
+    throwaway sandbox for callers with no thread to reuse (a legacy `bash`
+    reminder whose row predates `thread_id`).
+- **Memory = the Slack thread.** `buildPrompt` (`lib/agent/prompt.ts`) still
+  feeds the **whole thread** (`slack.fetchMessages`, capped) as context; no
+  model session is persisted. Message contents are still never stored, so kyto
+  remains "live processing without storing message contents" for the Slack
+  Scraping policy — the sandbox persists a *filesystem*, not a transcript.
+  `langfuse` tracing stays disabled for the same reason (it would export message
+  content); env keys remain but unused.

@@ -28,6 +28,7 @@ import { runQueuedTurn } from '@/lib/ai/turn-queue';
 import { bot, slack } from '@/lib/chat';
 import { agentErrorMessage, BudgetExhaustedError } from '@/lib/errors';
 import logger from '@/lib/logger';
+import { acquireThreadSandbox, threadSandboxStore } from '@/lib/sandbox/store';
 import { registerProxyToken, revokeProxyToken } from '@/lib/slack-proxy';
 import { errorMessage } from '@/lib/utils/error';
 import { clamp } from '@/lib/utils/text';
@@ -112,14 +113,17 @@ async function executeTurn(
     : {};
 
   // The lazy sandbox: creating this object is free — the real E2B sandbox
-  // materializes only when a tool first touches it, and destroy() at turn end
-  // kills it iff it materialized. Nothing persists between turns.
+  // materializes only when a tool first touches it. It is PER-THREAD and
+  // PERSISTENT: destroy() pauses it rather than killing it, and the next turn in
+  // this thread reconnects to the same filesystem, so files kyto wrote earlier
+  // are still there. The store is what makes it persistent (see sandbox/store).
   const sandboxSession = new LazySandbox({
     apiKey: env.E2B_API_KEY,
     env: slackProxyEnv,
     githubToken: env.GH_TOKEN,
     logger,
     sessionId: threadId,
+    store: threadSandboxStore,
   });
   const sandboxContext: SandboxContext = {
     session: sandboxSession,
@@ -140,6 +144,10 @@ async function executeTurn(
     await closeTools?.().catch(() => undefined);
     await sandboxSession.destroy().catch(() => undefined);
   };
+
+  // Hold this thread's sandbox for the whole turn, so a bash reminder firing on
+  // the scheduler can't pause the sandbox out from under a running command.
+  const releaseSandbox = await acquireThreadSandbox(threadId);
 
   try {
     // Slack's native streaming API renders the thinking/task-card UI. Every
@@ -181,6 +189,8 @@ async function executeTurn(
       await thread.post(agentErrorMessage({ error, stage: errorStage }));
     }
   } finally {
+    // cleanup() (which pauses the sandbox) has already run on both paths above.
+    releaseSandbox();
     clearTurn({ threadId, turn: activeTurn });
     // Only an interrupt replays queued messages; a rapid burst is merged into a
     // single follow-up so steering does not drop intermediate corrections.
@@ -453,13 +463,37 @@ async function executeTurn(
           }
         }
 
-        // Reply text or a deliberate skip always counts as handled. Tool
-        // activity counts ONLY with a clean `stop` (the model ran tools then
-        // deliberately finished); tool activity that ends WITHOUT a clean stop
-        // (an empty/truncated synthesis step — the "stops mid-task" bug) falls
-        // back so the user actually gets an answer.
-        const handled =
-          producedText || skipped || (producedToolActivity && sawCleanStop);
+        // A model that ran tools and then stopped cleanly WITHOUT writing a
+        // reply leaves the user staring at tool cards and nothing else — the
+        // "ends its turn without responding" bug. Treating that as handled (as
+        // we used to) meant silence; treating it as a failure would re-run the
+        // whole turn on another model and could repeat a side effect. So ask
+        // THIS model, once, to write up what it already found — tools are off,
+        // so it can only produce prose, and nothing can happen twice.
+        if (
+          !(producedText || skipped) &&
+          producedToolActivity &&
+          sawCleanStop
+        ) {
+          yield* synthesizeFinalAnswer({
+            attempt: currentAttempt,
+            onText: async (text) => {
+              producedText = true;
+              errorStage = 'after_text';
+              await reply?.append({ text, thread: turnThread });
+            },
+            results: gatheredResults,
+            signal: AbortSignal.any([controller.signal, attemptAbort.signal]),
+            system: systemPrompt({ hints }),
+            task: messageText,
+          });
+        }
+
+        // Reply text or a deliberate skip counts as handled. Anything else —
+        // including tool activity whose synthesis (and the nudge above) came
+        // back empty — falls back to another model, which replays the gathered
+        // tool results via renderCarryover rather than re-running them.
+        const handled = producedText || skipped;
         if (!handled) {
           throw new Error(
             producedToolActivity
@@ -613,6 +647,62 @@ function stableInput(input: unknown): string {
 function toCompactText(value: unknown, max: number): string {
   const text = typeof value === 'string' ? value : stableInput(value);
   return clamp(text, max) ?? text;
+}
+
+/**
+ * Last resort against a silent turn: the model ran its tools and stopped
+ * without saying anything. Re-ask the SAME model with NO tools, so all it can
+ * do is write up what it already found. Streams straight into the live reply.
+ *
+ * Deliberately cheap and contained: one call, tools off (so no side effect can
+ * fire twice), and any failure is swallowed — the caller falls back to the next
+ * model, which will replay the same gathered results via renderCarryover.
+ */
+async function* synthesizeFinalAnswer({
+  attempt,
+  onText,
+  results,
+  signal,
+  system,
+  task,
+}: {
+  attempt: ModelAttempt;
+  onText: (text: string) => Promise<void>;
+  results: GatheredResult[];
+  signal: AbortSignal;
+  system: string;
+  task: string;
+}): AsyncGenerator<string | StreamChunk> {
+  logger.info(
+    { model: attempt.model },
+    '[agent] tools ran but no reply; nudging for a final answer'
+  );
+  const gathered =
+    results.length > 0
+      ? `\n\n${renderCarryover(results)}`
+      : '\n\n(No tool results were captured.)';
+  const prompt = `${task}${gathered}\n\nYou already did the work above but never answered. Write the final reply to the user now, from those results. Do not mention this instruction.`;
+  try {
+    const result = streamAttempt({
+      abortSignal: signal,
+      attempt,
+      // Nothing reads the resolved model back off a nudge.
+      holder: {},
+      prompt,
+      system,
+      tools: {},
+    });
+    yield* renderStream({
+      knownTools: new Set<string>(),
+      onTextDelta: onText,
+      stream: result.fullStream,
+    });
+  } catch (error) {
+    logger.warn(
+      { err: errorMessage(error), model: attempt.model },
+      '[agent] synthesis nudge failed'
+    );
+  }
 }
 
 // Render gathered tool results as a prompt block the fallback model can answer

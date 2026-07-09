@@ -4,23 +4,67 @@ import {
   type Reminder,
 } from '@repo/db/queries';
 import type { KytoBot as Chat } from '@/harness';
+import { fetchUrlText } from '@/lib/ai/tools/url';
 import { resolveIdentity } from '@/lib/identity';
 import logger from '@/lib/logger';
+import { runReminderAgent } from '@/lib/reminders/agent';
+import { runReminderBash } from '@/lib/reminders/bash';
 import { errorMessage } from '@/lib/utils/error';
 
-// Recurring reminders are Kyto's own durable side effect (unlike per-turn
-// agent/sandbox state, which is deliberately not persisted) — same precedent
-// as static site hosting and the opt-in allowlist. A single setInterval loop
-// on the always-on systemd process is sufficient; Slack's own
-// chat.scheduleMessage API (used by the one-time `scheduleReminder` tool)
-// only supports a single future timestamp, not recurrence, so recurring
-// reminders must be driven from here instead.
+// Recurring reminders are Kyto's own durable side effect — same precedent as
+// static site hosting and the opt-in allowlist. A single setInterval loop on
+// the always-on systemd process is sufficient; Slack's own chat.scheduleMessage
+// API (used by the one-time `scheduleReminder` tool) only supports a single
+// future timestamp, not recurrence, so recurring reminders are driven here.
 const POLL_INTERVAL_MS = 30_000;
 
+// A reminder is only advanced to its next run AFTER it fires, and a 'bash' or
+// 'agent' fire can take minutes (it may queue on its thread's sandbox lock, or
+// run a whole tool loop). Every 30s poll in that window would see the same row
+// still due and start it again. So a reminder already in flight is skipped.
+const inFlight = new Set<string>();
+
+/** What this reminder posts on this fire, by kind. */
+async function buildReminderMessage(reminder: Reminder): Promise<string> {
+  if (reminder.kind === 'script') {
+    if (!reminder.url) {
+      throw new Error("Script reminder is missing a 'url'.");
+    }
+    const { content } = await fetchUrlText(reminder.url);
+    return reminder.text ? `${reminder.text}\n\n${content}` : content;
+  }
+  if (reminder.kind === 'bash') {
+    const output = await runReminderBash(reminder);
+    const fenced = `\`\`\`\n${output}\n\`\`\``;
+    return reminder.text ? `${reminder.text}\n\n${fenced}` : fenced;
+  }
+  if (reminder.kind === 'agent') {
+    return await runReminderAgent(reminder);
+  }
+  return reminder.text;
+}
+
 async function fireReminder(bot: Chat, reminder: Reminder): Promise<void> {
+  let markdown: string;
+  try {
+    markdown = await buildReminderMessage(reminder);
+  } catch (error) {
+    // A failed run still posts, so a broken command/script/job is visible to
+    // its owner rather than silently doing nothing on every interval.
+    logger.warn(
+      {
+        err: errorMessage(error),
+        kind: reminder.kind,
+        reminderId: reminder.id,
+      },
+      '[reminders] failed to build reminder content'
+    );
+    markdown = `Reminder: ${reminder.text}\n\n_(Couldn't complete this run: ${errorMessage(error)})_`;
+  }
+
   try {
     const identity = await resolveIdentity('reminder');
-    // A channel target posts into that channel; otherwise DM the owner.
+    // A channel target posts into that channel; otherwise DM the user.
     const target = reminder.channelId
       ? bot.channel(reminder.channelId)
       : await bot.openDM(reminder.userId);
@@ -28,13 +72,13 @@ async function fireReminder(bot: Chat, reminder: Reminder): Promise<void> {
     await target.post({
       iconEmoji: identity.iconEmoji,
       iconUrl: identity.iconUrl,
-      markdown: `${mention}${reminder.text}`,
+      markdown: `${mention}${markdown}`,
       username: identity.username,
     });
   } catch (error) {
     logger.warn(
       { err: errorMessage(error), reminderId: reminder.id },
-      '[reminders] failed to post reminder DM'
+      '[reminders] failed to post reminder'
     );
   }
   await advanceReminder(reminder).catch((error: unknown) => {
@@ -47,9 +91,18 @@ async function fireReminder(bot: Chat, reminder: Reminder): Promise<void> {
 
 async function pollOnce(bot: Chat): Promise<void> {
   const due = await getDueReminders(new Date());
-  for (const reminder of due) {
-    await fireReminder(bot, reminder);
-  }
+  const ready = due.filter((reminder) => !inFlight.has(reminder.id));
+  // Fire concurrently: a slow 'bash'/'agent' reminder must not delay the rest.
+  await Promise.all(
+    ready.map(async (reminder) => {
+      inFlight.add(reminder.id);
+      try {
+        await fireReminder(bot, reminder);
+      } finally {
+        inFlight.delete(reminder.id);
+      }
+    })
+  );
 }
 
 export function startReminderScheduler(bot: Chat): void {

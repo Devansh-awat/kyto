@@ -3,4 +3,5 @@ export * from './identity';
 export * from './mcp';
 export * from './reminders';
 export * from './sandbox';
+export * from './thread-sandboxes';
 export * from './threads';
