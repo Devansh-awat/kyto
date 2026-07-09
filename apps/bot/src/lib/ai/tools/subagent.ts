@@ -34,9 +34,44 @@ const MAX_SUBAGENT_DEPTH = 2;
 
 const depthStore = new AsyncLocalStorage<number>();
 
-// Bounds on the live plan cards so a long run can't blow up the message.
+// Bounds on the single subagent card so a long run can't blow up the message.
 const CARD_TASK_MAX = 500;
-const TOOLS_MAX = 60;
+const CARD_THINKING_MAX = 2000;
+const CARD_REPORT_MAX = 2000;
+const CARD_TITLE_MAX = 80;
+
+// Compose the ONE collapsible card the subagent posts: its prompt, the tools it
+// called (names only), its thinking (as kyto shows thinking), and its response —
+// all inside the single expandable block, nothing in the message body.
+function renderCard({
+  report,
+  task,
+  thinking,
+  toolsUsed,
+}: {
+  report: string;
+  task: string;
+  thinking: string;
+  toolsUsed: string[];
+}): string {
+  const parts = [`Prompt: ${clamp(task, CARD_TASK_MAX) ?? task}`];
+  if (toolsUsed.length > 0) {
+    parts.push('', `Tools called: ${toolsUsed.join(', ')}`);
+  }
+  if (thinking.trim()) {
+    parts.push(
+      '',
+      `Thinking: ${clamp(thinking.trim(), CARD_THINKING_MAX) ?? thinking.trim()}`
+    );
+  }
+  if (report.trim()) {
+    parts.push(
+      '',
+      `Response: ${clamp(report.trim(), CARD_REPORT_MAX) ?? report.trim()}`
+    );
+  }
+  return parts.join('\n');
+}
 
 export function runSubagentTool({
   bot,
@@ -106,6 +141,7 @@ export function runSubagentTool({
         let close: (() => Promise<void>) | undefined;
         const toolsUsed: string[] = [];
         let report = '';
+        let thinking = '';
 
         try {
           const hints = await requestHints({ message, thread });
@@ -127,52 +163,35 @@ export function runSubagentTool({
             tools: built.tools,
           });
 
-          // Drive the subagent's stream into its OWN Slack message (a separate
-          // streamed collapsible plan + response, authored as "kyto subagent").
-          const taskCard = clamp(task, CARD_TASK_MAX) ?? task;
+          // Drive the subagent's stream into its OWN Slack message: ONE
+          // collapsible card (authored as "kyto subagent") whose expanded body
+          // holds the prompt, tools called, thinking, and response. Nothing goes
+          // in the message body. The card is updated in place (single id) on
+          // tool calls and at completion to bound update frequency; thinking and
+          // response accumulate silently in between.
+          const cardTitle = clamp(name ?? task, CARD_TITLE_MAX) ?? 'Subagent';
+          const card = (status: 'complete' | 'in_progress'): StreamChunk => ({
+            id: 'subagent',
+            output: renderCard({ report, task, thinking, toolsUsed }),
+            status,
+            title: cardTitle,
+            type: 'task_update',
+          });
           async function* subagentChunks(): AsyncGenerator<
             string | StreamChunk
           > {
-            yield {
-              id: 'task',
-              output: `Task: ${taskCard}`,
-              status: 'in_progress',
-              title: 'Task',
-              type: 'task_update',
-            };
+            yield card('in_progress');
             for await (const part of result.fullStream) {
               if (part.type === 'text-delta') {
                 report += part.text;
-                if (part.text) {
-                  yield { text: part.text, type: 'markdown_text' };
-                }
+              } else if (part.type === 'reasoning-delta') {
+                thinking += part.text;
               } else if (part.type === 'tool-call') {
                 toolsUsed.push(part.toolName);
-                yield {
-                  id: 'tools',
-                  output: clamp(toolsUsed.join(', '), TOOLS_MAX) ?? '',
-                  status: 'in_progress',
-                  title: 'Tools called',
-                  type: 'task_update',
-                };
+                yield card('in_progress');
               }
             }
-            yield {
-              id: 'task',
-              output: `Task: ${taskCard}`,
-              status: 'complete',
-              title: 'Task',
-              type: 'task_update',
-            };
-            if (toolsUsed.length > 0) {
-              yield {
-                id: 'tools',
-                output: toolsUsed.join(', '),
-                status: 'complete',
-                title: 'Tools called',
-                type: 'task_update',
-              };
-            }
+            yield card('complete');
           }
 
           await slack.stream(thread.id, subagentChunks(), {

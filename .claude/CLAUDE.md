@@ -505,13 +505,16 @@ Run these automatically after each completed change, in order, **without asking*
   chatStream, `task_display_mode: 'plan'`) authored as **"kyto subagent"** (base
   from `resolveIdentity('subagent')`, + optional `name` arg → "kyto subagent
   {name}") with that identity's icon — chatStream DOES support
-  `username`/`icon_emoji`/`icon_url` (needs `chat:write.customize`). Into that
-  message it streams a collapsible plan (a **Task** card = the prompt, a **Tools
-  called** card = tool names only) and the subagent's **response as the message
-  body** (markdown_text). The parent's own plan just shows the `runSubagent`
-  tool call (the "run subagent with <prompt>" indicator); the response is NOT
-  duplicated there. `runSubagentTool` still returns the report text to the
-  parent model so it can act on it.
+  `username`/`icon_emoji`/`icon_url` (needs `chat:write.customize`). The message
+  is **ONE collapsible card** (`renderCard`, single `id:'subagent'`) whose
+  expanded body holds, in order: **Prompt** (the task), **Tools called** (names
+  only), **Thinking** (accumulated reasoning, as kyto shows thinking), and
+  **Response** (the subagent's final text). NOTHING goes in the message body —
+  the response lives inside the card, not as loose markdown_text. The card
+  updates in place on tool calls + at completion (thinking/response accumulate
+  silently between). The parent's own plan just shows the `runSubagent` tool
+  call; the response is NOT duplicated there. `runSubagentTool` still returns the
+  report text to the parent model so it can act on it.
 - The old **tool→parent-plan side-channel is gone** (`lib/agent/side-channel.ts`
   deleted; `buildTools`' `emitChunk` param and the `ChunkChannel`/`mergeStream`
   wiring in `agent/index.ts` removed) — the subagent's separate message replaces
