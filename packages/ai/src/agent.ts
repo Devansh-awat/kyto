@@ -69,6 +69,11 @@ export function streamAttempt({
     attempt.provider === DIGITALOCEAN_PROVIDER
       ? { maxOutputTokens: MAX_OUTPUT_TOKENS }
       : {}),
+    // We run our own fallback chain across providers, so the SDK's default of 3
+    // internal tries per attempt just triples the wait before we can route
+    // away from a rate-limited or budget-exhausted proxy. One retry still
+    // absorbs a genuinely transient blip.
+    maxRetries: 1,
     model: provider.chatModel(attempt.model),
     ...(activeTools
       ? {

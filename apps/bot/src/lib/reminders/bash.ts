@@ -3,6 +3,12 @@ import { LazySandbox, runOnce } from '@repo/sandbox';
 import { env } from '@/env';
 import logger from '@/lib/logger';
 import { threadSandboxStore, withThreadSandbox } from '@/lib/sandbox/store';
+import {
+  registerProxyToken,
+  revokeProxyToken,
+  slackHelperInstall,
+  slackProxyEnv,
+} from '@/lib/slack-proxy';
 
 const MAX_OUTPUT_CHARS = 4000;
 
@@ -37,6 +43,11 @@ function format({
  * up. The thread's sandbox lock is held for the duration — a live turn in that
  * same thread must not pause the sandbox mid-command.
  *
+ * The command can also query Slack read-only via the `slack <method>` helper: a
+ * FRESH proxy token is minted for this fire and revoked immediately after, since
+ * the token from the turn that created the reminder was revoked when that turn
+ * ended. Without this a scheduled script could only ever 401.
+ *
  * A reminder created before thread sandboxes existed (no `threadId`) falls back
  * to a throwaway sandbox, which starts empty every fire.
  */
@@ -48,17 +59,22 @@ export async function runReminderBash(reminder: Reminder): Promise<string> {
   if (!reminder.threadId) {
     return format(await runOnce(command, env.E2B_API_KEY));
   }
-  return await withThreadSandbox(reminder.threadId, async () => {
+  const threadId = reminder.threadId;
+  return await withThreadSandbox(threadId, async () => {
+    const secret = env.SITES_ENABLED ? registerProxyToken() : undefined;
     const sandbox = new LazySandbox({
       apiKey: env.E2B_API_KEY,
+      bootstrapCommand: secret ? slackHelperInstall() : undefined,
+      env: secret ? slackProxyEnv(secret, env.SITES_PUBLIC_HOST) : {},
       githubToken: env.GH_TOKEN,
       logger,
-      sessionId: reminder.threadId ?? undefined,
+      sessionId: threadId,
       store: threadSandboxStore,
     });
     try {
       return format(await sandbox.run({ command }));
     } finally {
+      revokeProxyToken(secret);
       // Pauses (not kills) the thread's sandbox — same as a turn does.
       await sandbox.destroy().catch(() => undefined);
     }

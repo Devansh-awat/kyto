@@ -86,6 +86,7 @@ export class LazySandbox {
   readonly workDir = config.workdir;
 
   private readonly apiKey: string;
+  private readonly bootstrapCommand: string | undefined;
   private readonly env: Record<string, string>;
   private readonly logger: Logger;
   private readonly sessionId: string | undefined;
@@ -97,6 +98,7 @@ export class LazySandbox {
 
   constructor({
     apiKey,
+    bootstrapCommand,
     env = {},
     githubToken,
     logger,
@@ -104,6 +106,12 @@ export class LazySandbox {
     store,
   }: {
     apiKey: string;
+    /**
+     * Shell run once each time the sandbox materializes, before any tool touches
+     * it (on a fresh create AND on a resume, so it must be idempotent). For
+     * installing helper executables that every later command can rely on.
+     */
+    bootstrapCommand?: string;
     env?: Record<string, string>;
     /** Real GitHub token, brokered via egress rules (never enters the sandbox). */
     githubToken?: string;
@@ -113,6 +121,7 @@ export class LazySandbox {
     store?: SandboxStore;
   }) {
     this.apiKey = apiKey;
+    this.bootstrapCommand = bootstrapCommand;
     this.githubToken = githubToken;
     // gh/git see only the placeholder; auth happens at the network layer.
     this.env = githubToken
@@ -188,6 +197,27 @@ export class LazySandbox {
     return sandbox;
   }
 
+  /**
+   * Install helpers into a freshly materialized sandbox. Best effort: a failed
+   * bootstrap must not fail the tool call that triggered materialization — the
+   * helper it installs is simply absent, which the caller's command will report.
+   */
+  private async bootstrap(sandbox: Sandbox): Promise<void> {
+    if (!this.bootstrapCommand) {
+      return;
+    }
+    // Uses commands.run directly, NOT this.run — the latter calls ensure() and
+    // would recurse back into materialization.
+    await sandbox.commands
+      .run(this.bootstrapCommand, { cwd: this.workDir, timeoutMs: 30_000 })
+      .catch((error: unknown) => {
+        this.logger.warn(
+          { err: errorText(error), sandboxId: sandbox.sandboxId },
+          '[sandbox] bootstrap command failed'
+        );
+      });
+  }
+
   private ensure(): Promise<Sandbox> {
     if (this.sandbox) {
       return Promise.resolve(this.sandbox);
@@ -196,6 +226,7 @@ export class LazySandbox {
       const started = Date.now();
       const resumed = await this.reconnect();
       const sandbox = resumed ?? (await this.create());
+      await this.bootstrap(sandbox);
       this.sandbox = sandbox;
       this.logger.info(
         {

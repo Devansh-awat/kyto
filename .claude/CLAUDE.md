@@ -510,18 +510,39 @@ Run these automatically after each completed change, in order, **without asking*
 - `slackScript` tool (`tools/slack-script.ts`, **deferred**, gated on
   `SITES_ENABLED`) runs a bash script in the sandbox for **aggregate** Slack
   questions ("who is in the most channels", "most active user") in one script
-  instead of N tool round-trips. A `slack <method> [json]` shell helper is
-  preloaded; it POSTs to a **host-side, secret-gated, READ-ONLY proxy** mounted
-  on the public sites server at `/_slackapi/<method>` (`lib/slack-proxy/`). A
-  per-turn secret is injected into the sandbox (`KYTO_SLACK_PROXY[_TOKEN]`, set
-  in `agent/index.ts`, revoked at turn end); the **bot token never enters the
-  sandbox**. The proxy attaches the real token and forwards ONLY the
-  `READ_ONLY_METHODS` allowlist (users.*, conversations.*, team.*, usergroups.*,
-  reactions/pins/bookmarks list, emoji.list) — posting/editing/deleting is
-  impossible through it. This is the safe answer to "read-only Slack scripts"
-  (our bot token is NOT itself read-only, so it can't just be handed to the
-  sandbox). NOTE: the subagent's own sandbox does NOT get the proxy env, so
-  `slackScript` inside a subagent 401s — extend if needed.
+  instead of N tool round-trips. It POSTs to a **host-side, secret-gated,
+  READ-ONLY proxy** mounted on the public sites server at `/_slackapi/<method>`
+  (`lib/slack-proxy/`). The **bot token never enters the sandbox**. The proxy
+  attaches the real token and forwards ONLY the `READ_ONLY_METHODS` allowlist
+  (users.*, conversations.*, team.*, usergroups.*, reactions/pins/bookmarks list,
+  emoji.list) — posting/editing/deleting is impossible through it. This is the
+  safe answer to "read-only Slack scripts" (our bot token is NOT itself
+  read-only, so it can't just be handed to the sandbox).
+- **`slack` is a real executable on PATH now (July 2026)**, not a shell function
+  prepended to the `slackScript` tool's script. `slackHelperInstall()`
+  (`lib/slack-proxy/`) is passed as `LazySandbox`'s new **`bootstrapCommand`**,
+  which runs once each time a sandbox materializes (create AND resume, so it
+  must stay idempotent) and writes `/usr/local/bin/slack`. Consequence: the plain
+  **`bash` tool** and a recurring **`bash` reminder** can query Slack read-only,
+  not just `slackScript`. (The model previously probed `which slack`, found
+  nothing, and concluded a scheduled script could never read Slack.)
+  - The helper reads `KYTO_SLACK_PROXY[_TOKEN]` **from the environment at call
+    time**, and `LazySandbox.run()` re-sends env on every command. That is what
+    lets a *persistent* sandbox outlive any single turn's token: a **`bash`/
+    `agent` reminder mints a FRESH proxy token at fire time and revokes it after**
+    (`reminders/bash.ts`, `reminders/agent.ts`). Without that a scheduled script
+    could only ever 401, since the creating turn's token was revoked at turn end.
+  - With no proxy env the helper fails loudly (`slack proxy is not available in
+    this context`) rather than silently doing nothing.
+  - Verified end-to-end against the live proxy: `slack auth.test` → `kyto2`;
+    `slack chat.postMessage` → `method_not_allowed: chat.postMessage`; a script
+    written by one reminder fire runs on the next.
+  - **There is NO search method in the allowlist**, so "count a user's messages"
+    means paging `conversations.history` per channel — slow (this is what made a
+    real turn take ~14 min), not a bug. Add `search.messages` to
+    `READ_ONLY_METHODS` if that's ever wanted (it needs the `search:read` scope).
+  - NOTE: the subagent's own sandbox still does NOT get the proxy env, so
+    `slackScript` inside a subagent 401s — extend the same way if needed.
 
 ### Subagent prompt + its own streamed message
 - The subagent runs on a **slimmer system prompt** (`subagentSystemPrompt`,
@@ -792,13 +813,37 @@ Run these automatically after each completed change, in order, **without asking*
   harmless where unsupported. Anthropic allows ≤4 breakpoints; we use 2, both on
   content the SDK sends as plain strings (system, user), leaving assistant/tool
   messages untouched.
+- **One fallback, not two (July 2026).** Three things made a dead HackClub cost
+  several `Thinking · fallback` cards and minutes of latency:
+  1. **The AI SDK retries internally.** `streamText` defaulted to 3 tries per
+     attempt, so every rung waited out three 429s before our router saw it.
+     `streamAttempt` now sets **`maxRetries: 1`** (`packages/ai/src/agent.ts`) —
+     we run our own cross-provider fallback, so SDK-level retries just multiply
+     the wait. One retry still absorbs a transient blip.
+  2. **The budget 403 was invisible.** HackClub returns OpenRouter's
+     `403 {"error":{"message":"Key limit exceeded (daily limit)"}}` (and
+     sometimes a bare 429), but the SDK rethrows an **`AI_RetryError`** whose own
+     message is only "Failed after 3 attempts…" — `responseBody` hangs off the
+     *wrapped* errors. The old shallow readers missed it, so a budget-exhausted
+     day looked like a generic failure. **`deepErrorText`** (`lib/utils/error.ts`)
+     now recurses through `lastError`/`cause`/`errors` (depth-capped, so a cyclic
+     `cause` can't hang the router) and both call sites use it —
+     `thrownErrorText` (agent) and the stream `error` part (`ai/stream/index.ts`,
+     whose duplicate `errorPartText` was deleted). `SPEND_LIMIT_PATTERN` gained
+     `limit exceeded`.
+  3. **`HACKCLUB_OUTAGE_THRESHOLD` is now 1**, not 2. Every HackClub rung shares
+     one proxy and one budget, so a rung failing for a non-model reason means the
+     next fails identically; trying a second only bought another fallback card
+     before the same verdict. DigitalOcean BYOK is a genuinely separate quota.
+  Net: a HackClub outage or budget-exhaustion now reaches DigitalOcean in **one**
+  fallback.
 - **HackClub outage failover → skip the rest of HackClub** (`agent/index.ts`):
   distinct from the spend-limit case below. When HackClub itself is DOWN (5xx /
   connection errors, not budget), every HackClub rung would fail identically, so
   walking the whole HackClub-heavy leaderboard produced a long useless cascade
   (the "lots of Thinking · fallback, sometimes no reply" bug). Now a per-turn
   `hackclubFailures` counter (non-budget HackClub failures only) trips
-  `hackclubUnavailable` after `HACKCLUB_OUTAGE_THRESHOLD` (2) failures, which —
+  `hackclubUnavailable` after `HACKCLUB_OUTAGE_THRESHOLD` (1) failure, which —
   like `hackclubBudgetExhausted` — makes `buildFallbackQueue` and the
   attempt-selection `.find` **skip all remaining HackClub rungs** and jump to the
   DigitalOcean BYOK tier, then the owner's Gemini key. So a full HackClub outage

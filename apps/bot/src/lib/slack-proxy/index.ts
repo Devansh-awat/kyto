@@ -130,3 +130,43 @@ export async function handleSlackProxy(
 /** The allow-listed method names (for tool/prompt documentation). */
 export const readOnlySlackMethods = (): string[] =>
   [...READ_ONLY_METHODS].sort();
+
+/** Env that points a sandbox command at the proxy. Re-sent on every command, so
+ * a resumed sandbox never carries a stale (revoked) token from an older turn. */
+export function slackProxyEnv(
+  secret: string,
+  publicHost: string
+): Record<string, string> {
+  return {
+    KYTO_SLACK_PROXY: `https://${publicHost}/_slackapi`,
+    KYTO_SLACK_PROXY_TOKEN: secret,
+  };
+}
+
+/**
+ * Installs `slack <method> [jsonArgs]` as a real executable on PATH, so ANY
+ * command in the sandbox can query Slack read-only — the plain `bash` tool and a
+ * recurring `bash` reminder, not just the `slackScript` tool (which used to
+ * prepend the helper as a shell function, making it invisible everywhere else).
+ *
+ * It reads the proxy URL and token from the environment at call time, which is
+ * what lets a sandbox outlive any single turn's token: each command is handed a
+ * fresh one. Idempotent — this reruns on every materialization.
+ */
+export function slackHelperInstall(): string {
+  return `cat > /usr/local/bin/slack <<'KYTO_SLACK_HELPER'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ -z "\${KYTO_SLACK_PROXY:-}" ] || [ -z "\${KYTO_SLACK_PROXY_TOKEN:-}" ]; then
+  echo '{"ok":false,"error":"slack proxy is not available in this context"}' >&2
+  exit 1
+fi
+method="\${1:?usage: slack <method> [jsonArgs]}"
+body="\${2:-{}}"
+curl -sS -X POST "$KYTO_SLACK_PROXY/$method" \\
+  -H "Authorization: Bearer $KYTO_SLACK_PROXY_TOKEN" \\
+  -H 'Content-Type: application/json' \\
+  -d "$body"
+KYTO_SLACK_HELPER
+chmod +x /usr/local/bin/slack`;
+}

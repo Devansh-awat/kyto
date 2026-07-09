@@ -6,6 +6,8 @@ The sandbox PERSISTS FOR THIS THREAD: it is paused when a turn ends and resumed 
 
 This is what makes a 'bash' recurring reminder useful: write and test a script here, then schedule \`bash\` to run it, and every fire executes it in this same sandbox.
 
+A \`slack <method> [jsonArgs]\` command is on PATH in the sandbox. It queries the Slack Web API READ-ONLY through kyto's host-side proxy (the bot token never enters the sandbox, and posting/editing is impossible through it). It works from the \`bash\` tool, the \`slackScript\` tool, and from a scheduled \`bash\` reminder. So a recurring reminder CAN recompute a live Slack number on every fire.
+
 Use the sandbox to run code, do data work, process files, fetch public URLs, and verify your work before answering. Don't claim something works unless you actually ran it.
 You also have the ability to SSH into servers, feel free to use this ability!
 

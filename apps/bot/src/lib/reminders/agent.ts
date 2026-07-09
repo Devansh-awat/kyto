@@ -12,6 +12,12 @@ import { requestHints } from '@/lib/ai/hints';
 import { bot } from '@/lib/chat';
 import logger from '@/lib/logger';
 import { threadSandboxStore, withThreadSandbox } from '@/lib/sandbox/store';
+import {
+  registerProxyToken,
+  revokeProxyToken,
+  slackHelperInstall,
+  slackProxyEnv,
+} from '@/lib/slack-proxy';
 
 // An agent reminder runs the SAME multi-step tool loop as a real turn, but
 // headless: nothing is streamed to Slack, and its final text becomes the
@@ -69,8 +75,13 @@ async function runAgent(
     : await bot.openDM(reminder.userId);
   const message = syntheticMessage(reminder, thread.id);
 
+  // A fresh proxy token for this fire (the creating turn's was revoked long
+  // ago), so the job's bash/slackScript tools can read Slack.
+  const secret = env.SITES_ENABLED ? registerProxyToken() : undefined;
   const sandboxSession = new LazySandbox({
     apiKey: env.E2B_API_KEY,
+    bootstrapCommand: secret ? slackHelperInstall() : undefined,
+    env: secret ? slackProxyEnv(secret, env.SITES_PUBLIC_HOST) : {},
     githubToken: env.GH_TOKEN,
     logger,
     // Sharing the thread's sandbox is the whole point: the job can use what the
@@ -123,6 +134,7 @@ async function runAgent(
     }
     throw new Error('Agent reminder produced an empty response.');
   } finally {
+    revokeProxyToken(secret);
     await close?.().catch(() => undefined);
     await sandboxSession.destroy().catch(() => undefined);
   }

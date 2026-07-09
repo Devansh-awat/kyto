@@ -29,20 +29,33 @@ import { bot, slack } from '@/lib/chat';
 import { agentErrorMessage, BudgetExhaustedError } from '@/lib/errors';
 import logger from '@/lib/logger';
 import { acquireThreadSandbox, threadSandboxStore } from '@/lib/sandbox/store';
-import { registerProxyToken, revokeProxyToken } from '@/lib/slack-proxy';
-import { errorMessage } from '@/lib/utils/error';
+import {
+  registerProxyToken,
+  revokeProxyToken,
+  slackHelperInstall,
+  slackProxyEnv,
+} from '@/lib/slack-proxy';
+import { deepErrorText, errorMessage } from '@/lib/utils/error';
 import { clamp } from '@/lib/utils/text';
 import type { ActiveTurn, AgentErrorStage } from '@/types/agent';
 import type { AttemptFailure } from '@/types/attempts';
 
 // HackClub/OpenRouter daily-spend-limit rejection (also "insufficient credits").
 // Matched against stream error parts to fail over off HackClub for the turn.
-const SPEND_LIMIT_PATTERN = /spending limit|insufficient credits|daily limit/i;
+// HackClub's shared budget is exhausted. Matches both shapes it has returned:
+// a 429 "Daily spending limit of $3 reached", and OpenRouter's own 403
+// "Key limit exceeded (daily limit)". Both live in the response BODY, not the
+// error message — see deepErrorText.
+const SPEND_LIMIT_PATTERN =
+  /spending limit|insufficient credits|daily limit|limit exceeded/i;
 
 // How many non-budget HackClub failures in a turn before we treat HackClub as
-// down and skip its remaining rungs. Two is enough to tell "this one model
-// hiccuped" from "the whole proxy is unreachable" without a long cascade.
-const HACKCLUB_OUTAGE_THRESHOLD = 2;
+// down and skip its remaining rungs. ONE is enough: every HackClub rung shares
+// one proxy and one budget, so a rung that fails for a non-model reason (5xx,
+// connection error, rate limit) means the next rung fails identically. Trying a
+// second one only bought another "Thinking · fallback" card before the same
+// verdict. The DigitalOcean BYOK tier is a genuinely separate quota, so jump.
+const HACKCLUB_OUTAGE_THRESHOLD = 1;
 
 // Hard ceiling on a single model attempt (the whole multi-step agentic stream).
 // Without it, a stalled upstream SSE connection or a hung tool leaves the turn
@@ -105,11 +118,8 @@ async function executeTurn(
   // script can query Slack (read-only) without the bot token, revoked at turn
   // end. Only when the sites server (which hosts the proxy) is enabled.
   const slackProxySecret = env.SITES_ENABLED ? registerProxyToken() : undefined;
-  const slackProxyEnv: Record<string, string> = slackProxySecret
-    ? {
-        KYTO_SLACK_PROXY: `https://${env.SITES_PUBLIC_HOST}/_slackapi`,
-        KYTO_SLACK_PROXY_TOKEN: slackProxySecret,
-      }
+  const proxyEnv = slackProxySecret
+    ? slackProxyEnv(slackProxySecret, env.SITES_PUBLIC_HOST)
     : {};
 
   // The lazy sandbox: creating this object is free — the real E2B sandbox
@@ -119,7 +129,10 @@ async function executeTurn(
   // are still there. The store is what makes it persistent (see sandbox/store).
   const sandboxSession = new LazySandbox({
     apiKey: env.E2B_API_KEY,
-    env: slackProxyEnv,
+    // Puts `slack <method>` on PATH, so the plain `bash` tool can query Slack
+    // read-only too — not just the slackScript tool.
+    bootstrapCommand: slackProxySecret ? slackHelperInstall() : undefined,
+    env: proxyEnv,
     githubToken: env.GH_TOKEN,
     logger,
     sessionId: threadId,
@@ -574,25 +587,7 @@ async function executeTurn(
 // Fold an error's message + provider responseBody/data into one string so the
 // spend-limit pattern can match text (e.g. "Daily spending limit of $3 reached")
 // that lives in responseBody rather than the error message.
-function thrownErrorText(error: unknown): string {
-  if (typeof error === 'string') {
-    return error;
-  }
-  const pieces: string[] = [];
-  if (error instanceof Error) {
-    pieces.push(error.message);
-  }
-  const record = error as Record<string, unknown> | null;
-  if (record) {
-    for (const key of ['responseBody', 'data']) {
-      const value = record[key];
-      if (value != null) {
-        pieces.push(typeof value === 'string' ? value : JSON.stringify(value));
-      }
-    }
-  }
-  return pieces.length > 0 ? pieces.join(' ') : String(error);
-}
+const thrownErrorText = deepErrorText;
 
 function attemptLog(attempt: ModelAttempt | undefined) {
   return attempt
