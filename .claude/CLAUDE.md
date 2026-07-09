@@ -353,11 +353,14 @@ Run these automatically after each completed change, in order, **without asking*
   ts = digits with a dot before the last 6; getFile for a file). Also documented
   in `prompts/slack.ts`.
 - **Table blocks are extracted into message text** (`harness/harness.ts`,
-  `extractTables`/`richTextPlain`): Slack renders posted tables as `table`
-  blocks whose content is NOT in `event.text`, so kyto was blind to them.
-  `buildMessage` now renders any `table` blocks as markdown tables and appends
-  them to the message text (applies to live messages AND replayed history, since
-  both go through `buildMessage`).
+  `extractTables`/`collectBlocks`/`richTextPlain`): Slack renders a pasted table
+  as a `table` block, but it lives in **`message.attachments[].blocks[]`** (NOT
+  top-level `blocks`, and NOT in `event.text`) — verified by fetching a real
+  message with the bot token. `collectBlocks` gathers blocks from BOTH
+  `event.blocks` and every `attachments[].blocks`; `buildMessage` renders any
+  `table` block found as a markdown table and appends it to the message text
+  (applies to live messages AND replayed history). Table cells are `rich_text`
+  blocks, flattened by `richTextPlain`.
 - Slack scopes are declared in `slack-manifest.json` — update it when a tool
   needs a new scope.
 - **Email** (`sendEmail`/`checkInbox`/`replyEmail`, `tools/email.ts`) runs
@@ -448,6 +451,18 @@ Run these automatically after each completed change, in order, **without asking*
   the model to ping people with `<@id>` and broadcast with the raw
   `<!channel>`/`<!here>`/`<!everyone>` tokens (plaintext `@channel` never pings).
 
+### Response style (human tone + no step-by-step narration)
+- `prompts/personality.ts`: write like a human in Slack — natural sentence case,
+  no Title Case, no ALL CAPS for emphasis, no over-punctuation; casual lowercase
+  is fine, match the other person's register.
+- `prompts/core.ts` ("Don't narrate every step"): just DO the work then give ONE
+  final answer. The tools already show in the plan/thinking UI, so no "let me do
+  X / now I'll Y / next I'll Z" running commentary between tool calls, and no
+  preamble before them. A brief mid-task status line is allowed ONLY for a long
+  multi-phase job or when the user asks to be kept posted — one line per phase,
+  never per tool call. This targets chatty agentic models (glm-5.2 etc.) that
+  otherwise emit a play-by-play as their first output.
+
 ### Focus mode (respond to / see only chosen users in a thread)
 - `focusMode` tool (`tools/focus.ts`, core) locks kyto onto specific user ids in
   the current thread: it only replies to those users AND their messages are the
@@ -476,7 +491,7 @@ Run these automatically after each completed change, in order, **without asking*
   sandbox). NOTE: the subagent's own sandbox does NOT get the proxy env, so
   `slackScript` inside a subagent 401s — extend if needed.
 
-### Subagent prompt + card
+### Subagent prompt + its own streamed message
 - The subagent runs on a **slimmer system prompt** (`subagentSystemPrompt`,
   `packages/ai/src/prompts/subagent.ts`) — a lean `<subagent>` core + sandbox +
   context, **without** the personality/tone block, the custom-instruction
@@ -485,20 +500,22 @@ Run these automatically after each completed change, in order, **without asking*
   finish-the-job, parallel-tool, loadTools, private-auth, SFW, and report-back
   guidance. Cheaper on the pinned model. `systemPrompt` (the full one) is still
   used for real turns.
-- The live plan card defaults its title to **"kyto subagent"** when no subagent
-  identity profile is configured (was "Subagent").
-
-### Subagent visibility (live plan card)
-- Subagents are no longer fully headless: a tool→plan side-channel
-  (`lib/agent/side-channel.ts` `ChunkChannel` + `mergeStream`) lets the subagent
-  stream its own collapsible task card into the parent turn's plan. `buildTools`
-  takes an `emitChunk` callback (bound per attempt to that attempt's channel in
-  `agent/index.ts`; `mergeStream` races the subagent's card updates with the
-  model's own stream, closing the channel at attempt end). The card
-  (`tools/subagent.ts` consumes the subagent's `fullStream`) shows the task, its
-  running thinking, the **tools it calls (names only — never their outputs, per
-  owner)**, and its final report. The card **title uses the subagent identity
-  name** (see below); a plan card can't carry a custom icon.
+- **The subagent posts ITS OWN streamed Slack message** (`tools/subagent.ts`),
+  not a card in the parent's plan. It opens a second `slack.stream` (native
+  chatStream, `task_display_mode: 'plan'`) authored as **"kyto subagent"** (base
+  from `resolveIdentity('subagent')`, + optional `name` arg → "kyto subagent
+  {name}") with that identity's icon — chatStream DOES support
+  `username`/`icon_emoji`/`icon_url` (needs `chat:write.customize`). Into that
+  message it streams a collapsible plan (a **Task** card = the prompt, a **Tools
+  called** card = tool names only) and the subagent's **response as the message
+  body** (markdown_text). The parent's own plan just shows the `runSubagent`
+  tool call (the "run subagent with <prompt>" indicator); the response is NOT
+  duplicated there. `runSubagentTool` still returns the report text to the
+  parent model so it can act on it.
+- The old **tool→parent-plan side-channel is gone** (`lib/agent/side-channel.ts`
+  deleted; `buildTools`' `emitChunk` param and the `ChunkChannel`/`mergeStream`
+  wiring in `agent/index.ts` removed) — the subagent's separate message replaces
+  it.
 
 ### Identity profiles (per-message-type name suffix + icon, App Home)
 - `identity_profiles` table (`message_type` PK ∈ normal|subagent|reminder,
@@ -510,10 +527,13 @@ Run these automatically after each completed change, in order, **without asking*
   `{username?, iconEmoji?, iconUrl?}` — `icon` is a `:emoji:` code or an image
   URL (unicode emoji can't be an icon_emoji, so only the `:name:` form passes).
   Applied where kyto posts that kind of message: **reminder** DMs/channel posts
-  (name+icon), cross-channel **postMessage** (name+icon), and the **subagent**
-  card title (name only). Needs the `chat:write.customize` scope (already in the
-  manifest). The main streamed reply can't take per-message identity overrides
-  (Slack streaming API), so "normal" applies to postMessage, not the live reply.
+  (name+icon), cross-channel **postMessage** (name+icon), and the **subagent's
+  own streamed message** (name+icon, via chatStream's
+  `username`/`icon_emoji`/`icon_url`). Needs the `chat:write.customize` scope
+  (already in the manifest). NOTE: chatStream DOES accept per-message identity
+  overrides (the subagent uses this) — the **main turn's** streamed reply just
+  doesn't set them, so "normal" identity currently applies to postMessage, not
+  the live reply (could be wired into the main stream the same way if wanted).
 
 ### Canvases (read/list/create across channels, channel tab)
 - `canvasList` takes an optional `channelId` (raw `C0123`, `slack:` id, or

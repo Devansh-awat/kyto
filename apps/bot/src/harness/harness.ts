@@ -52,11 +52,31 @@ function richTextPlain(node: unknown): string {
   return '';
 }
 
+// Gather every block from a message: top-level `blocks` PLUS each attachment's
+// `blocks`. A pasted table arrives as a `table` block inside `attachments[]`,
+// not in the top-level `blocks`, so both must be scanned.
+function collectBlocks(event: RawSlackMessage): unknown[] {
+  const blocks: unknown[] = Array.isArray(event.blocks)
+    ? [...event.blocks]
+    : [];
+  const attachments = (event as { attachments?: unknown }).attachments;
+  if (Array.isArray(attachments)) {
+    for (const attachment of attachments) {
+      const nested = (attachment as { blocks?: unknown } | null)?.blocks;
+      if (Array.isArray(nested)) {
+        blocks.push(...nested);
+      }
+    }
+  }
+  return blocks;
+}
+
 // Render any Slack `table` blocks in a message as markdown tables. Table content
 // lives only in these blocks (never in `event.text`), so without this kyto is
 // blind to pasted/posted tables.
-function extractTables(blocks: unknown): string | undefined {
-  if (!Array.isArray(blocks)) {
+function extractTables(event: RawSlackMessage): string | undefined {
+  const blocks = collectBlocks(event);
+  if (blocks.length === 0) {
     return;
   }
   const tables: string[] = [];
@@ -146,7 +166,7 @@ export class SlackHarness {
     // Slack renders tables (and some rich content) as `table` blocks whose text
     // is NOT in `event.text`, so the model would otherwise be blind to them.
     // Extract any table blocks into markdown and append so kyto can read them.
-    const tables = extractTables(event.blocks);
+    const tables = extractTables(event);
     const body = tables
       ? `${mrkdwnToMarkdown(text)}\n\n${tables}`.trim()
       : mrkdwnToMarkdown(text);
@@ -424,6 +444,11 @@ export class SlackHarness {
       recipientTeamId: string;
       recipientUserId: string;
       taskDisplayMode?: 'plan';
+      // Per-message identity override (needs chat:write.customize). Used so a
+      // subagent's own streamed message posts as "kyto subagent" + its icon.
+      username?: string;
+      iconEmoji?: string;
+      iconUrl?: string;
     }
   ): Promise<void> {
     const { channel, threadTs } = this.decodeThreadId(threadId);
@@ -437,6 +462,9 @@ export class SlackHarness {
       ...(options.taskDisplayMode
         ? { task_display_mode: options.taskDisplayMode }
         : {}),
+      ...(options.username ? { username: options.username } : {}),
+      ...(options.iconEmoji ? { icon_emoji: options.iconEmoji } : {}),
+      ...(options.iconUrl ? { icon_url: options.iconUrl } : {}),
       thread_ts: threadTs,
     });
     let structuredSupported = true;

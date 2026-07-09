@@ -4,7 +4,7 @@ import { listMcpServers } from '@repo/db/queries';
 import { type Tool, type ToolSet, tool } from 'ai';
 import { z } from 'zod';
 import { env } from '@/env';
-import type { KytoBot, Message, StreamChunk, ThreadHandle } from '@/harness';
+import type { KytoBot, Message, ThreadHandle } from '@/harness';
 import { buildMcpTools } from '@/lib/ai/mcp';
 import logger from '@/lib/logger';
 import { backgroundProcessTools } from './tools/background';
@@ -85,14 +85,11 @@ export interface BuiltTools {
  */
 export async function buildTools({
   bot,
-  emitChunk,
   getSandboxContext,
   message,
   thread,
 }: {
   bot: KytoBot;
-  /** Push a live task card into the parent plan (subagent visibility). */
-  emitChunk?: (chunk: StreamChunk) => void;
   getSandboxContext: () => SandboxContext;
   message: Message;
   thread: ThreadHandle;
@@ -269,7 +266,7 @@ export async function buildTools({
           runSubagent: {
             summary:
               'delegate a task to a headless subagent that returns a report',
-            tool: runSubagentTool({ bot, emitChunk, message, thread }),
+            tool: runSubagentTool({ bot, message, thread }),
           },
         }
       : {}),
