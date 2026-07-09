@@ -27,14 +27,17 @@ export interface ModelAttempt {
 }
 
 /**
- * The primary model for the main query: Claude Sonnet 5, pinned, reached through
- * the HackClub proxy. This replaced `openrouter/auto` — the auto-router's
- * per-request re-routing was flaky (empty completions / wrong-model picks that
- * triggered long fallback cascades). A single strong pinned model is
- * predictable and lets 1-hour prompt caching actually stick across a thread's
- * turns. On failure the agent still walks LEADERBOARD_FALLBACK.
+ * The primary model for the main query: GLM 5.2, pinned, reached through the
+ * HackClub proxy. Chosen over Claude Sonnet 5 because it's markedly cheaper per
+ * token (Sonnet is $2/$10; GLM is a fraction of that), which stretches the daily
+ * HackClub spend cap much further. Still a single strong pinned model — this
+ * replaced `openrouter/auto`, whose per-request re-routing was flaky (empty
+ * completions / wrong-model picks that triggered long fallback cascades) — so
+ * 1-hour prompt caching sticks across a thread's turns. On failure the agent
+ * walks LEADERBOARD_FALLBACK (glm-5.2 is also a rung there, deduped via
+ * failedKeys so it isn't retried).
  */
-export const ROUTER_MODEL = 'anthropic/claude-sonnet-5';
+export const ROUTER_MODEL = 'z-ai/glm-5.2';
 
 // Auto-router cost/quality bias: 0 = pure quality, 7 = default, 10 = cheapest.
 // Retained for reference only — the auto-router path was removed (see

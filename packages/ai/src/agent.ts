@@ -3,6 +3,7 @@ import { stepCountIs, streamText, type ToolSet } from 'ai';
 import {
   DIGITALOCEAN_ONLY,
   DIGITALOCEAN_PROVIDER,
+  GEMINI_PROVIDER,
   MAX_OUTPUT_TOKENS,
   type ModelAttempt,
 } from './providers/attempts';
@@ -95,13 +96,25 @@ function tunedFetch({
   attempt: ModelAttempt;
   holder: ResolvedModelHolder;
 }): FetchLike {
+  // Gemini 3.x attaches an encrypted `thought_signature` to every function call
+  // and REQUIRES it echoed back on the next turn, or it 400s ("Function call is
+  // missing a thought_signature"). The OpenAI-compat SDK drops that field when
+  // it replays assistant tool calls, so we capture signatures off each response
+  // (keyed by tool-call id) and re-inject them into subsequent request bodies.
+  // Scoped to this attempt's closure so it persists across the attempt's steps.
+  const thoughtSignatures = new Map<string, string>();
+  const isGemini = attempt.provider === GEMINI_PROVIDER;
   return async (input, init) => {
     const url = requestUrl(input);
     let callInput = input;
     let callInit = init;
     if (url.includes('/chat/completions')) {
       holder.calls = (holder.calls ?? 0) + 1;
-      const tuned = tuneBody(await readRequestBody(input, init), attempt);
+      const tuned = tuneBody(
+        await readRequestBody(input, init),
+        attempt,
+        isGemini ? thoughtSignatures : undefined
+      );
       if (tuned) {
         const source =
           init?.headers ??
@@ -141,13 +154,22 @@ function tunedFetch({
         }
       });
     }
+    if (isGemini && response.body && url.includes('/chat/completions')) {
+      // Capture this response's thought signatures (background tee) so the next
+      // request can echo them back — see the closure comment above.
+      captureThoughtSignatures(
+        response.clone().body as ReadableStream<Uint8Array>,
+        thoughtSignatures
+      ).catch(() => undefined);
+    }
     return response;
   };
 }
 
 function tuneBody(
   raw: string | undefined,
-  attempt: ModelAttempt
+  attempt: ModelAttempt,
+  thoughtSignatures?: Map<string, string>
 ): string | null {
   if (raw === undefined) {
     return null;
@@ -158,6 +180,14 @@ function tuneBody(
       return null;
     }
     let changed = false;
+    // Gemini: re-attach captured thought signatures to assistant tool calls so
+    // the API accepts the replayed history (see tunedFetch's closure comment).
+    if (
+      thoughtSignatures &&
+      injectThoughtSignatures(payload, thoughtSignatures)
+    ) {
+      changed = true;
+    }
     // DigitalOcean BYOK: the OpenRouter key has $0 credit, so force the
     // DigitalOcean provider — that's the free path billed to the owner's DO
     // account. Without this, OpenRouter tries a paid provider and 402s.
@@ -273,6 +303,121 @@ async function readRequestBody(
       .catch(() => undefined);
   }
   return;
+}
+
+// Re-attach captured Gemini thought signatures to the assistant tool calls in a
+// request body, keyed by tool-call id. Google requires each replayed function
+// call to carry the signature it was originally issued with.
+function injectThoughtSignatures(
+  payload: Record<string, unknown>,
+  signatures: Map<string, string>
+): boolean {
+  if (signatures.size === 0 || !Array.isArray(payload.messages)) {
+    return false;
+  }
+  let changed = false;
+  for (const message of payload.messages as Record<string, unknown>[]) {
+    if (message.role !== 'assistant' || !Array.isArray(message.tool_calls)) {
+      continue;
+    }
+    for (const call of message.tool_calls as Record<string, unknown>[]) {
+      const id = typeof call.id === 'string' ? call.id : undefined;
+      const signature = id ? signatures.get(id) : undefined;
+      if (!signature) {
+        continue;
+      }
+      const existing =
+        typeof call.extra_content === 'object' && call.extra_content
+          ? (call.extra_content as Record<string, unknown>)
+          : {};
+      call.extra_content = {
+        ...existing,
+        google: { thought_signature: signature },
+      };
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+// Max bytes to scan of a Gemini response for thought signatures — they ride on
+// the tool-call delta, which is near the start, but text/reasoning can precede
+// it, so allow generous headroom without reading an unbounded stream.
+const MAX_SIGNATURE_SCAN_BYTES = 512 * 1024;
+
+// Tee of a Gemini streaming response: parse SSE `data:` lines and record each
+// tool call's `extra_content.google.thought_signature` by tool-call id.
+async function captureThoughtSignatures(
+  body: ReadableStream<Uint8Array>,
+  signatures: Map<string, string>
+): Promise<void> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let scanned = 0;
+  try {
+    while (scanned < MAX_SIGNATURE_SCAN_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      scanned += value.byteLength;
+      buffer += decoder.decode(value, { stream: true });
+      let newline = buffer.indexOf('\n');
+      while (newline !== -1) {
+        recordSignatureLine(buffer.slice(0, newline), signatures);
+        buffer = buffer.slice(newline + 1);
+        newline = buffer.indexOf('\n');
+      }
+    }
+  } catch {
+    // Best-effort: a missed signature just re-surfaces the original 400, which
+    // the fallback machinery already handles.
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+}
+
+function recordSignatureLine(
+  line: string,
+  signatures: Map<string, string>
+): void {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('data:')) {
+    return;
+  }
+  const data = trimmed.slice('data:'.length).trim();
+  if (!data || data === '[DONE]') {
+    return;
+  }
+  let chunk: unknown;
+  try {
+    chunk = JSON.parse(data);
+  } catch {
+    return;
+  }
+  const choices = (chunk as { choices?: unknown }).choices;
+  if (!Array.isArray(choices)) {
+    return;
+  }
+  for (const choice of choices) {
+    const toolCalls = (choice as { delta?: { tool_calls?: unknown } }).delta
+      ?.tool_calls;
+    if (!Array.isArray(toolCalls)) {
+      continue;
+    }
+    for (const call of toolCalls) {
+      const id = (call as { id?: unknown }).id;
+      const signature = (
+        call as {
+          extra_content?: { google?: { thought_signature?: unknown } };
+        }
+      ).extra_content?.google?.thought_signature;
+      if (typeof id === 'string' && typeof signature === 'string') {
+        signatures.set(id, signature);
+      }
+    }
+  }
 }
 
 async function readResolvedModel(

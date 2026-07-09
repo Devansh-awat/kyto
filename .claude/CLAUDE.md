@@ -611,8 +611,38 @@ Run these automatically after each completed change, in order, **without asking*
   nothing; `systemctl restart kyto.service` re-establishes a clean connection.
 
 ### Models / LLM model router + fallback
-- **PRIMARY IS NOW PINNED SONNET 5, not `openrouter/auto`.** `ROUTER_MODEL =
-  'anthropic/claude-sonnet-5'` (`packages/ai/src/providers/attempts.ts`). The
+- **PRIMARY IS NOW PINNED GLM 5.2, not Sonnet 5.** `ROUTER_MODEL = 'z-ai/glm-5.2'`
+  (`packages/ai/src/providers/attempts.ts`), reached through HackClub. Switched
+  from `anthropic/claude-sonnet-5` because GLM 5.2 is far cheaper per token
+  (Sonnet is $2/$10), which stretches the daily HackClub $3 cap much further.
+  glm-5.2 is also a rung in `LEADERBOARD_FALLBACK`, deduped via `failedKeys` so
+  it isn't retried on fallback. (When the HackClub budget is exhausted, the
+  primary 403s "daily limit" → `hackclubBudgetExhausted` → straight to the
+  DigitalOcean BYOK tier, which serves glm-5.2 too.)
+- **Gemini tool use fixed (thought_signature replay)** (`packages/ai/src/agent.ts`):
+  Gemini 3.x attaches an encrypted `thought_signature` to every function call
+  and REQUIRES it echoed back on the next turn, or Google 400s ("Function call
+  is missing a thought_signature"). The `@ai-sdk/openai-compatible` provider
+  drops that field when replaying assistant tool calls, which broke ALL
+  multi-step Gemini tool turns after the rewrite (worked pre-rewrite on the Pi
+  stack). Fixed in `tunedFetch`: for `provider === 'gemini'` it tees each
+  response, captures `extra_content.google.thought_signature` per tool-call id
+  (`captureThoughtSignatures`), and re-injects them into subsequent request
+  bodies' assistant tool calls (`injectThoughtSignatures`). Verified end-to-end
+  (2-step tool loop completes). A dummy/placeholder signature is rejected
+  ("Corrupted thought signature"), so real capture is mandatory.
+- **The DigitalOcean BYOK tier goes through openrouter.ai, NOT baishui.** The
+  `.env` had `OPENROUTER_BASE_URL=https://baishui.jam06452.uk/v1`, but baishui
+  rejects our OpenRouter key with "invalid API key" on every call (including
+  `/models`) — so the whole DO fallback tier was dead. The key itself is valid
+  on real openrouter.ai (`/api/v1/key` shows active BYOK: ~$2.95/day DO usage),
+  and DO completions succeed there with the code's existing model names
+  (`glm-5.2` → `z-ai/glm-5.2-…` on `provider: DigitalOcean`). Fixed by setting
+  `OPENROUTER_BASE_URL="https://openrouter.ai/api/v1"` in `.env`. Do NOT point it
+  back at baishui unless a real baishui key + its own model names
+  (`glm5.2-normal`, `dsv4-fast`, …) are wired up.
+- **[historical] PINNED SONNET 5 era:** `ROUTER_MODEL = 'anthropic/claude-sonnet-5'`.
+  The
   auto-router was dropped (owner's call) because its per-request re-routing was
   flaky — empty completions / wrong-model picks that triggered long fallback
   cascades. `agent.ts` no longer injects the `auto-router` plugin
