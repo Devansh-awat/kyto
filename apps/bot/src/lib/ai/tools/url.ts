@@ -7,6 +7,17 @@ import { errorMessage } from '@/lib/utils/error';
 
 const MAX_CONTENT_CHARS = 20_000;
 
+// Slack workspace/message/file URLs (e.g. foo.slack.com, files.slack.com) —
+// these require an authenticated session, so fetchUrl can't read them.
+function isSlackLink(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host === 'slack.com' || host.endsWith('.slack.com');
+  } catch {
+    return false;
+  }
+}
+
 const permalinkSchema = z.looseObject({
   error: z.string().optional(),
   ok: z.boolean(),
@@ -67,6 +78,16 @@ export function fetchUrlTool() {
     }),
     execute: async ({ url }) => {
       try {
+        // Slack message/file links aren't publicly fetchable (they 302 to a
+        // login wall), so redirect the model to the Slack read tools instead of
+        // returning useless HTML.
+        if (isSlackLink(url)) {
+          return {
+            error:
+              "That's a Slack link, which isn't publicly fetchable. Use Slack tools instead: readConversationHistory for a message/thread (the URL path is /archives/<CHANNEL>/p<TS> — the ts is the digits with a dot before the last 6), or getFile for a file link.",
+            success: false,
+          };
+        }
         const response = await fetch(url, {
           headers: { 'User-Agent': 'kyto-slack-bot' },
           signal: AbortSignal.timeout(15_000),

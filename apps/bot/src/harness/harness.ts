@@ -27,6 +27,62 @@ interface RawSlackFile {
 
 const USER_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
+// Recursively pull readable text out of a Slack rich-text node (table cells are
+// rich_text blocks). Collects `text`, link labels/urls, and recurses into
+// `elements`. Kept tolerant of unknown shapes since the payload is untyped.
+function richTextPlain(node: unknown): string {
+  if (typeof node === 'string') {
+    return node;
+  }
+  if (Array.isArray(node)) {
+    return node.map(richTextPlain).join('');
+  }
+  if (node && typeof node === 'object') {
+    const record = node as Record<string, unknown>;
+    if (Array.isArray(record.elements)) {
+      return record.elements.map(richTextPlain).join('');
+    }
+    if (typeof record.text === 'string') {
+      return record.text;
+    }
+    if (typeof record.url === 'string') {
+      return record.url;
+    }
+  }
+  return '';
+}
+
+// Render any Slack `table` blocks in a message as markdown tables. Table content
+// lives only in these blocks (never in `event.text`), so without this kyto is
+// blind to pasted/posted tables.
+function extractTables(blocks: unknown): string | undefined {
+  if (!Array.isArray(blocks)) {
+    return;
+  }
+  const tables: string[] = [];
+  for (const block of blocks) {
+    const record = block as Record<string, unknown> | null;
+    if (!(record && record.type === 'table' && Array.isArray(record.rows))) {
+      continue;
+    }
+    const rows = record.rows
+      .map((row) => {
+        const cells = Array.isArray(row) ? row : [];
+        return `| ${cells.map((cell) => richTextPlain(cell).replace(/\s+/g, ' ').trim() || ' ').join(' | ')} |`;
+      })
+      .filter((line) => line.replace(/[|\s]/g, '').length > 0);
+    if (rows.length === 0) {
+      continue;
+    }
+    // Insert a markdown header separator after the first row so it renders as a
+    // real table (Slack tables treat the first row as the header).
+    const columnCount = (rows[0]?.match(/\|/g)?.length ?? 2) - 1;
+    const separator = `| ${Array.from({ length: columnCount }, () => '---').join(' | ')} |`;
+    tables.push([rows[0], separator, ...rows.slice(1)].join('\n'));
+  }
+  return tables.length > 0 ? tables.join('\n\n') : undefined;
+}
+
 /**
  * Thin, fully-owned Slack Web API facade: thread id codec, message
  * construction, posting/fetching, reactions, assistant status, and native
@@ -87,6 +143,13 @@ export class SlackHarness {
     // the DM-threading behavior the old adapter needed a patch for).
     const threadTs = event.thread_ts || ts;
     const text = event.text ?? '';
+    // Slack renders tables (and some rich content) as `table` blocks whose text
+    // is NOT in `event.text`, so the model would otherwise be blind to them.
+    // Extract any table blocks into markdown and append so kyto can read them.
+    const tables = extractTables(event.blocks);
+    const body = tables
+      ? `${mrkdwnToMarkdown(text)}\n\n${tables}`.trim()
+      : mrkdwnToMarkdown(text);
     return {
       attachments: this.buildAttachments(event.files ?? []),
       author,
@@ -97,7 +160,7 @@ export class SlackHarness {
         edited: Boolean(event.edited),
       },
       raw: event as Record<string, unknown>,
-      text: mrkdwnToMarkdown(text),
+      text: body,
       threadId: this.encodeThreadId({ channel, threadTs }),
     };
   }

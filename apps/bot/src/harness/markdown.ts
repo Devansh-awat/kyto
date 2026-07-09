@@ -63,6 +63,25 @@ export function mrkdwnToMarkdown(text: string): string {
   return out.join('\n');
 }
 
+// Broadcast/control-mention tokens (`<!channel>`, `<!here>`, `<!everyone>`) and
+// user-group pings (`<!subteam^ID|name>`). Anyone but the owner is not allowed
+// to make kyto ping the whole channel, so we downgrade these to inert plaintext
+// (`@channel`, or the group's own name) that renders but never notifies.
+const BROADCAST_TOKEN = /<!(channel|here|everyone)(?:\|[^<>]*)?>/g;
+const SUBTEAM_TOKEN = /<!subteam\^[^<>|]+(?:\|([^<>]*))?>/g;
+
+/**
+ * Strip broadcast pings from text so it can no longer notify a whole channel or
+ * user group. Used to gate `@channel`/`@here`/`@everyone` to the owner only.
+ */
+export function neutralizeBroadcast(text: string): string {
+  return text
+    .replace(BROADCAST_TOKEN, (_whole, kind: string) => `@${kind}`)
+    .replace(SUBTEAM_TOKEN, (_whole, label?: string) =>
+      label ? `@${label}` : 'the group'
+    );
+}
+
 /**
  * Close any dangling markdown a mid-stream cut left open (unbalanced code
  * fence, inline code, bold or strikethrough) so a posted chunk renders clean.

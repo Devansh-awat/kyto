@@ -1,5 +1,9 @@
 export { type ResolvedModelHolder, streamAttempt } from './agent';
-export { type RequestHints, systemPrompt } from './prompts';
+export {
+  type RequestHints,
+  subagentSystemPrompt,
+  systemPrompt,
+} from './prompts';
 export { type Persona, personas } from './prompts/presets';
 export {
   ALLOWED_MODELS,

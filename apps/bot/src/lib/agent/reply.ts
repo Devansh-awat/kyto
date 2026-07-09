@@ -1,4 +1,8 @@
-import { healMarkdown, type ThreadHandle as Thread } from '@/harness';
+import {
+  healMarkdown,
+  neutralizeBroadcast,
+  type ThreadHandle as Thread,
+} from '@/harness';
 import logger from '@/lib/logger';
 
 // Slack rejects oversized messages (`msg_blocks_too_long`), so streamed prose is
@@ -16,7 +20,15 @@ const IDLE_MS = 1500;
 const FENCE_REOPEN_PADDING = 3;
 const TABLE_SEPARATOR = /^\|?[\s:|-]*-{2,}[\s:|-]*$/;
 
-export function createReply({ threadId }: { threadId: string }) {
+export function createReply({
+  allowBroadcast = false,
+  threadId,
+}: {
+  // Only the owner may make kyto ping @channel/@here/@everyone; for everyone
+  // else broadcast tokens are downgraded to inert plaintext before posting.
+  allowBroadcast?: boolean;
+  threadId: string;
+}) {
   let buffer = '';
   let lastPostAt = Date.now();
 
@@ -99,7 +111,7 @@ export function createReply({ threadId }: { threadId: string }) {
       rest = rest ? `\`\`\`${fence}\n${rest}` : '';
     }
     buffer = rest;
-    return heal(chunk);
+    return heal(allowBroadcast ? chunk : neutralizeBroadcast(chunk));
   }
 
   return {

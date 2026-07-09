@@ -39,6 +39,11 @@ import type { AttemptFailure } from '@/types/attempts';
 // Matched against stream error parts to fail over off HackClub for the turn.
 const SPEND_LIMIT_PATTERN = /spending limit|insufficient credits|daily limit/i;
 
+// How many non-budget HackClub failures in a turn before we treat HackClub as
+// down and skip its remaining rungs. Two is enough to tell "this one model
+// hiccuped" from "the whole proxy is unreachable" without a long cascade.
+const HACKCLUB_OUTAGE_THRESHOLD = 2;
+
 // Hard ceiling on a single model attempt (the whole multi-step agentic stream).
 // Without it, a stalled upstream SSE connection or a hung tool leaves the turn
 // awaiting forever. On expiry we abort only THIS attempt's signal (not the
@@ -82,6 +87,11 @@ async function executeTurn(
   controller: AbortController
 ): Promise<void> {
   const threadId = thread.id;
+  // Only the owner may make kyto broadcast (@channel/@here/@everyone). For
+  // everyone else those tokens are neutralized in the streamed reply and the
+  // postMessage tool, so a non-owner can't get it to ping the whole channel.
+  const isOwner =
+    Boolean(env.OWNER_USER_ID) && message.author.userId === env.OWNER_USER_ID;
   logger.info({ text: message.text, threadId }, '[agent] turn started');
   const activeTurn: ActiveTurn = {
     controller,
@@ -237,6 +247,13 @@ async function executeTurn(
     // key (separate quota) instead of burning attempts.
     let hackclubBudgetExhausted = false;
     let spendLimitMessage: string | undefined;
+    // Set when HackClub itself looks DOWN (repeated non-budget failures, e.g.
+    // 5xx/connection errors), as opposed to just over budget. Every HackClub
+    // rung would fail the same way, so once tripped we skip the rest of the
+    // HackClub leaderboard and go straight to DigitalOcean/Gemini instead of
+    // burning a dozen doomed attempts (the "lots of Thinking · fallback" bug).
+    let hackclubFailures = 0;
+    let hackclubUnavailable = false;
     let attempt: ModelAttempt | undefined;
     // Lets tools (the subagent) push their own live task cards into the plan.
     // Rebound to the current attempt's channel each attempt; a no-op otherwise.
@@ -255,7 +272,7 @@ async function executeTurn(
     const knownTools = new Set(Object.keys(built.tools));
 
     const buildFallbackQueue = (pivotModel?: string): ModelAttempt[] => {
-      if (hackclubBudgetExhausted) {
+      if (hackclubBudgetExhausted || hackclubUnavailable) {
         const gemini = LEADERBOARD_FALLBACK.filter(
           (candidate) => candidate.provider === 'gemini'
         );
@@ -288,14 +305,15 @@ async function executeTurn(
         return;
       }
       const resolved = autoHolder?.model;
+      const skipHackclub = hackclubBudgetExhausted || hackclubUnavailable;
       if (!triedResolved) {
         triedResolved = true;
         fallbackQueue = buildFallbackQueue(resolved);
         // Retry the exact model auto resolved to (auto's failure may be
-        // transient), unless HackClub's budget is exhausted (that retry is a
+        // transient), unless HackClub is out of budget or down (that retry is a
         // HackClub call too).
         if (
-          !hackclubBudgetExhausted &&
+          !skipHackclub &&
           resolved &&
           !failedKeys.has(`hackclub:${resolved}`)
         ) {
@@ -303,9 +321,15 @@ async function executeTurn(
           return;
         }
       }
+      // If HackClub went down mid-walk, the queue built earlier may still list
+      // its rungs; skip any HackClub candidate at selection time too so we don't
+      // keep retrying a dead proxy.
       attempt = fallbackQueue?.find(
         (candidate) =>
-          !failedKeys.has(`${candidate.provider}:${candidate.model}`)
+          !(
+            failedKeys.has(`${candidate.provider}:${candidate.model}`) ||
+            (skipHackclub && candidate.provider === 'hackclub')
+          )
       );
     };
     routeNextAttempt();
@@ -352,7 +376,7 @@ async function executeTurn(
         if (currentAttempt.model === ROUTER_MODEL) {
           autoHolder = holder;
         }
-        reply ??= createReply({ threadId });
+        reply ??= createReply({ allowBroadcast: isOwner, threadId });
         // Surface the model in the thinking section: `in_progress` while this
         // attempt runs, completed exactly once with the resolved model.
         yield {
@@ -482,12 +506,18 @@ async function executeTurn(
         // Also catch a spend-limit 429 that surfaced as a THROWN error (not a
         // stream error part) — same effect as onError: skip the rest of the
         // HackClub rungs and go straight to DigitalOcean/Gemini.
-        if (
-          currentAttempt.provider === 'hackclub' &&
-          SPEND_LIMIT_PATTERN.test(thrownErrorText(error))
-        ) {
-          hackclubBudgetExhausted = true;
-          spendLimitMessage ??= thrownErrorText(error);
+        if (currentAttempt.provider === 'hackclub') {
+          if (SPEND_LIMIT_PATTERN.test(thrownErrorText(error))) {
+            hackclubBudgetExhausted = true;
+            spendLimitMessage ??= thrownErrorText(error);
+          } else {
+            // A non-budget HackClub failure. Enough of these means the proxy is
+            // down, not just this one model, so bail off HackClub entirely.
+            hackclubFailures += 1;
+            if (hackclubFailures >= HACKCLUB_OUTAGE_THRESHOLD) {
+              hackclubUnavailable = true;
+            }
+          }
         }
         routeNextAttempt();
         const retryAttempt = attempt;

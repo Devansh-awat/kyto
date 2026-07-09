@@ -346,6 +346,18 @@ Run these automatically after each completed change, in order, **without asking*
   auto-sets `respondOnThreadMessages: true` (`bot.ts`, `onNewMention`); this
   tool is for the model to join **proactively** (e.g. asked to "keep following
   this thread") without waiting for that implicit trigger.
+- **`fetchUrl` rejects Slack links** (`tools/url.ts`, `isSlackLink`): a
+  `*.slack.com` URL (message archive/file link) isn't publicly fetchable (302 to
+  a login wall), so the tool refuses and points the model at the Slack read tools
+  (readConversationHistory for a message — path is `/archives/<CHANNEL>/p<TS>`,
+  ts = digits with a dot before the last 6; getFile for a file). Also documented
+  in `prompts/slack.ts`.
+- **Table blocks are extracted into message text** (`harness/harness.ts`,
+  `extractTables`/`richTextPlain`): Slack renders posted tables as `table`
+  blocks whose content is NOT in `event.text`, so kyto was blind to them.
+  `buildMessage` now renders any `table` blocks as markdown tables and appends
+  them to the message text (applies to live messages AND replayed history, since
+  both go through `buildMessage`).
 - Slack scopes are declared in `slack-manifest.json` — update it when a tool
   needs a new scope.
 - **Email** (`sendEmail`/`checkInbox`/`replyEmail`, `tools/email.ts`) runs
@@ -416,6 +428,16 @@ Run these automatically after each completed change, in order, **without asking*
   when told). Faster batched reads also keep a turn under Slack's ~interaction
   timeout, avoiding the "invalid action" token expiry seen on slow serial turns.
 
+### Broadcast mentions (@channel/@here) are owner-gated
+- Only the **owner** may make kyto ping the whole channel. `neutralizeBroadcast`
+  (`harness/markdown.ts`) downgrades `<!channel>`/`<!here>`/`<!everyone>` (and
+  `<!subteam^…>`) to inert plaintext (`@channel`, or the group's name). It's
+  applied to the **streamed reply** (`createReply({allowBroadcast})` in
+  `agent/reply.ts` — `allowBroadcast = isOwner`, computed in `agent/index.ts`)
+  and the **postMessage** tool (`tools/post-message.ts`, non-owner path). The
+  core Slack prompt (`prompts/slack.ts`) tells the model broadcasting is
+  owner-only. So a non-owner asking "@channel everyone" gets plain text, no ping.
+
 ### Broadcast mentions (@channel/@here) rendering
 - Slack's newer `markdown` block renders `<@user>`/`<#channel>` links but NOT
   control mentions — `<!channel>`/`<!here>`/`<!everyone>`/`<!subteam^…>` come out
@@ -453,6 +475,18 @@ Run these automatically after each completed change, in order, **without asking*
   (our bot token is NOT itself read-only, so it can't just be handed to the
   sandbox). NOTE: the subagent's own sandbox does NOT get the proxy env, so
   `slackScript` inside a subagent 401s — extend if needed.
+
+### Subagent prompt + card
+- The subagent runs on a **slimmer system prompt** (`subagentSystemPrompt`,
+  `packages/ai/src/prompts/subagent.ts`) — a lean `<subagent>` core + sandbox +
+  context, **without** the personality/tone block, the custom-instruction
+  hierarchy, the broadcast/mention etiquette, or the media/copyright framing
+  (all irrelevant to a headless worker that returns a report). It keeps
+  finish-the-job, parallel-tool, loadTools, private-auth, SFW, and report-back
+  guidance. Cheaper on the pinned model. `systemPrompt` (the full one) is still
+  used for real turns.
+- The live plan card defaults its title to **"kyto subagent"** when no subagent
+  identity profile is configured (was "Subagent").
 
 ### Subagent visibility (live plan card)
 - Subagents are no longer fully headless: a tool→plan side-channel
@@ -673,6 +707,17 @@ Run these automatically after each completed change, in order, **without asking*
   harmless where unsupported. Anthropic allows ≤4 breakpoints; we use 2, both on
   content the SDK sends as plain strings (system, user), leaving assistant/tool
   messages untouched.
+- **HackClub outage failover → skip the rest of HackClub** (`agent/index.ts`):
+  distinct from the spend-limit case below. When HackClub itself is DOWN (5xx /
+  connection errors, not budget), every HackClub rung would fail identically, so
+  walking the whole HackClub-heavy leaderboard produced a long useless cascade
+  (the "lots of Thinking · fallback, sometimes no reply" bug). Now a per-turn
+  `hackclubFailures` counter (non-budget HackClub failures only) trips
+  `hackclubUnavailable` after `HACKCLUB_OUTAGE_THRESHOLD` (2) failures, which —
+  like `hackclubBudgetExhausted` — makes `buildFallbackQueue` and the
+  attempt-selection `.find` **skip all remaining HackClub rungs** and jump to the
+  DigitalOcean BYOK tier, then the owner's Gemini key. So a full HackClub outage
+  reaches a working model in ~3 attempts instead of ~15.
 - **HackClub spend-limit failover → straight to Gemini**: if a HackClub call
   returns the daily-spend 429 (`SPEND_LIMIT_PATTERN`, surfaced via
   `renderStream`'s `onError`), `routeNextAttempt` sets `hackclubBudgetExhausted`.

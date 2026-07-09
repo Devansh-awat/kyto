@@ -1,6 +1,11 @@
 export { KytoBot } from './bot';
 export { SlackHarness } from './harness';
-export { healMarkdown, mrkdwnToMarkdown, openFenceLanguage } from './markdown';
+export {
+  healMarkdown,
+  mrkdwnToMarkdown,
+  neutralizeBroadcast,
+  openFenceLanguage,
+} from './markdown';
 export { ThreadHandle } from './thread';
 export type {
   ActionEvent,

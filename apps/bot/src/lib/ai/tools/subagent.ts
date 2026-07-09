@@ -3,7 +3,7 @@ import {
   type SandboxContext,
   streamAttempt,
   subagentAttempt,
-  systemPrompt,
+  subagentSystemPrompt,
 } from '@repo/ai';
 import { LazySandbox } from '@repo/sandbox';
 import { tool } from 'ai';
@@ -130,7 +130,7 @@ export function runSubagentTool({
         // The subagent's configured name (base "kyto" + suffix) titles its card;
         // an icon can't render on a plan card, so only the name applies here.
         const identity = await resolveIdentity('subagent');
-        const cardTitle = identity.username ?? 'Subagent';
+        const cardTitle = identity.username ?? 'kyto subagent';
         const toolsUsed: string[] = [];
         let thinking = '';
         let report = '';
@@ -160,7 +160,7 @@ export function runSubagentTool({
             attempt,
             holder: {},
             prompt: task,
-            system: systemPrompt({ hints }),
+            system: subagentSystemPrompt({ hints }),
             tools: built.tools,
           });
           // Consume the subagent's own stream to surface its thinking + the

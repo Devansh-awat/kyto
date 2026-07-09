@@ -1,6 +1,10 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import type { KytoBot as Chat, PostContent } from '@/harness';
+import {
+  type KytoBot as Chat,
+  neutralizeBroadcast,
+  type PostContent,
+} from '@/harness';
 import { slack } from '@/lib/chat';
 import { resolveIdentity } from '@/lib/identity';
 import { toRawSlackChannelId } from '@/lib/slack/ids';
@@ -54,11 +58,14 @@ export function postMessageTool({
           };
         }
       }
+      // Broadcast pings (@channel/@here/@everyone) are owner-only, same as the
+      // streamed reply; downgrade them to inert plaintext for everyone else.
+      const body = isOwner ? message : neutralizeBroadcast(message);
       const identity = await resolveIdentity('normal');
       const content: PostContent = {
         iconEmoji: identity.iconEmoji,
         iconUrl: identity.iconUrl,
-        markdown: message,
+        markdown: body,
         username: identity.username,
       };
       if (type === 'thread') {

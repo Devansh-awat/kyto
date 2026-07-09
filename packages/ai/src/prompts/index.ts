@@ -6,6 +6,7 @@ import { sandboxPrompt } from './sandbox';
 import { slackPrompt } from './slack';
 
 export type { RequestHints } from './hints';
+export { subagentSystemPrompt } from './subagent';
 
 export function systemPrompt({ hints }: { hints: RequestHints }): string {
   return [
