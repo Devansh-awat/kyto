@@ -16,7 +16,6 @@ import { slack } from '@/lib/chat';
 import { resolveIdentity } from '@/lib/identity';
 import logger from '@/lib/logger';
 import { errorMessage } from '@/lib/utils/error';
-import { clamp } from '@/lib/utils/text';
 
 // A subagent is a headless copy of kyto: its own fresh lazy sandbox, the same
 // full toolset (including this very tool, so it can delegate further), pinned to
@@ -37,9 +36,6 @@ import { clamp } from '@/lib/utils/text';
 const MAX_SUBAGENT_DEPTH = 1;
 
 const depthStore = new AsyncLocalStorage<number>();
-
-// Clamp the Prompt card so a huge task doesn't blow up the message.
-const CARD_TASK_MAX = 500;
 
 export function runSubagentTool({
   bot,
@@ -131,38 +127,38 @@ export function runSubagentTool({
           });
 
           // Drive the subagent's stream into its OWN Slack message, authored as
-          // "kyto subagent". It renders like a real turn: a Prompt card and a
-          // Model card up top, then the SAME interleaved thinking/tool cards a
-          // normal turn shows (via the shared renderStream, in stream order), and
-          // the response streamed into the message body (emitText). No "Working…"
-          // placeholder — each card carries its own real detail/output.
-          const promptCard = (
-            status: 'complete' | 'in_progress'
+          // "kyto subagent". EVERYTHING lives inside the ONE collapsible plan —
+          // nothing in the message body. It renders like a real turn: a Prompt
+          // card (FULL task, unclamped), a Model card, then the SAME interleaved
+          // thinking/tool cards a normal turn shows (shared renderStream, in
+          // stream order), then a Response card holding the subagent's FULL final
+          // reply. No "Working…" placeholder — each card carries its own output.
+          const card = (
+            id: string,
+            title: string,
+            status: 'complete' | 'in_progress',
+            output?: string
           ): StreamChunk => ({
-            id: 'prompt',
-            output: status === 'complete' ? clamp(task, CARD_TASK_MAX) : '',
+            id,
+            output: status === 'complete' ? (output ?? '') : '',
             status,
-            title: 'Prompt',
+            title,
             type: 'task_update',
           });
-          const modelCard = (
-            status: 'complete' | 'in_progress'
-          ): StreamChunk => ({
-            id: 'model',
-            output: status === 'complete' ? attempt.model : '',
-            status,
-            title: 'Model',
-            type: 'task_update',
-          });
+          // Captured here where `attempt` is narrowed non-null; the nested
+          // generator below loses that narrowing.
+          const modelName = attempt.model;
           async function* subagentChunks(): AsyncGenerator<
             string | StreamChunk
           > {
-            yield promptCard('in_progress');
-            yield promptCard('complete');
-            yield modelCard('in_progress');
-            yield modelCard('complete');
+            yield card('prompt', 'Prompt', 'in_progress');
+            yield card('prompt', 'Prompt', 'complete', task);
+            yield card('model', 'Model', 'in_progress');
+            yield card('model', 'Model', 'complete', modelName);
+            // No emitText: the response is NOT streamed to the body; it's
+            // captured here and shown as the Response card below, so the whole
+            // run stays inside the single collapsible block.
             yield* renderStream({
-              emitText: true,
               knownTools: new Set(Object.keys(built.tools)),
               onTextDelta: (text) => {
                 report += text;
@@ -172,6 +168,16 @@ export function runSubagentTool({
               },
               stream: result.fullStream,
             });
+            const finalReport = report.trim();
+            if (finalReport || ranTools) {
+              yield card('response', 'Response', 'in_progress');
+              yield card(
+                'response',
+                'Response',
+                'complete',
+                finalReport || '(Completed actions with no additional message.)'
+              );
+            }
           }
 
           await slack.stream(thread.id, subagentChunks(), {

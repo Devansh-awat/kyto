@@ -165,12 +165,10 @@ async function executeTurn(
   try {
     // Slack's native streaming API renders the thinking/task-card UI. Every
     // message threads (a top-level message roots its own thread), so a valid
-    // threadTs always exists.
-    await slack.stream(threadId, renderTurn({ message, thread }), {
-      recipientTeamId: slack.teamId ?? '',
-      recipientUserId: message.author.userId,
-      taskDisplayMode: 'plan',
-    });
+    // threadTs always exists. The turn is driven as a SEQUENCE of plan messages
+    // (see streamSegmented) so that reply text splits the plan into separate
+    // collapsible blocks: [plan] text [plan] text.
+    await streamSegmented({ message, thread });
     await reply?.flush({ thread });
     if (hints.customization?.prompt && !slack.isDM(thread.id)) {
       await thread
@@ -429,15 +427,18 @@ async function executeTurn(
           tools: built.tools,
         });
         for await (const chunk of renderStream({
+          // Reply text is yielded as strings (the message body) so streamSegmented
+          // can split the plan on text→tool boundaries; onTextDelta only tracks
+          // flags now — the actual posting happens in streamSegmented.
+          emitText: true,
           knownTools,
           onSkip: () => {
             // A skip is a deliberate, successful "no reply".
             skipped = true;
           },
-          onTextDelta: async (text) => {
+          onTextDelta: () => {
             producedText = true;
             errorStage = 'after_text';
-            await reply?.append({ text, thread: turnThread });
           },
           onToolActivity: () => {
             producedToolActivity = true;
@@ -467,7 +468,17 @@ async function executeTurn(
           },
           stream: result.fullStream,
         })) {
-          if (errorStage === 'before_output') {
+          if (typeof chunk === 'string') {
+            // First reply text of this attempt: complete its Thinking card NOW,
+            // in the current plan block, before streamSegmented splits off a new
+            // block for any tools that run after the text. Otherwise the model
+            // card would try to complete in a later block where its id doesn't
+            // exist and the plan would show a perpetually spinning Thinking.
+            const done = completeModelTask();
+            if (done) {
+              yield done;
+            }
+          } else if (errorStage === 'before_output') {
             errorStage = 'after_progress';
           }
           yield chunk;
@@ -494,10 +505,9 @@ async function executeTurn(
         ) {
           yield* synthesizeFinalAnswer({
             attempt: currentAttempt,
-            onText: async (text) => {
+            onText: () => {
               producedText = true;
               errorStage = 'after_text';
-              await reply?.append({ text, thread: turnThread });
             },
             results: gatheredResults,
             signal: AbortSignal.any([controller.signal, attemptAbort.signal]),
@@ -586,6 +596,63 @@ async function executeTurn(
       }
     }
   }
+
+  // Drive the turn as a SEQUENCE of streamed plan messages instead of one. A
+  // "segment" is one collapsible plan block (its task cards) followed by any
+  // reply text; the FIRST task card that arrives AFTER text has streamed opens a
+  // NEW plan block below that text. So a turn that writes some text, runs more
+  // tools, then writes more renders as [plan] text [plan] text — the model can
+  // post an in-between update and keep working in a fresh block, instead of
+  // every tool of the whole turn piling into one plan pinned above all the text.
+  async function streamSegmented({
+    message: turnMessage,
+    thread: turnThread,
+  }: {
+    message: Message;
+    thread: ThreadHandle;
+  }): Promise<void> {
+    const source = renderTurn({
+      message: turnMessage,
+      thread: turnThread,
+    })[Symbol.asyncIterator]();
+    let pending = await source.next();
+    while (!pending.done) {
+      // Reply text before any plan block of this segment (a pure-text turn, or
+      // text trailing the previous block) is just posted — no empty plan.
+      if (typeof pending.value === 'string') {
+        await reply?.append({ text: pending.value, thread: turnThread });
+        pending = await source.next();
+        continue;
+      }
+      let sawText = false;
+      // One plan block: task cards until reply text streams, then the next task
+      // card ends this block (left on `pending` for the next iteration).
+      const segment = async function* (): AsyncGenerator<StreamChunk> {
+        while (!pending.done) {
+          const value = pending.value;
+          if (typeof value === 'string') {
+            sawText = true;
+            await reply?.append({ text: value, thread: turnThread });
+            pending = await source.next();
+            continue;
+          }
+          if (sawText) {
+            return;
+          }
+          yield value;
+          pending = await source.next();
+        }
+      };
+      await slack.stream(threadId, segment(), {
+        recipientTeamId: slack.teamId ?? '',
+        recipientUserId: turnMessage.author.userId,
+        taskDisplayMode: 'plan',
+      });
+      // Post any buffered text before the next plan block is created, so the
+      // ordering (plan → text → plan) holds.
+      await reply?.flush({ thread: turnThread });
+    }
+  }
 }
 
 // Fold an error's message + provider responseBody/data into one string so the
@@ -666,7 +733,7 @@ async function* synthesizeFinalAnswer({
   task,
 }: {
   attempt: ModelAttempt;
-  onText: (text: string) => Promise<void>;
+  onText: () => void;
   results: GatheredResult[];
   signal: AbortSignal;
   system: string;
@@ -692,6 +759,7 @@ async function* synthesizeFinalAnswer({
       tools: {},
     });
     yield* renderStream({
+      emitText: true,
       knownTools: new Set<string>(),
       onTextDelta: onText,
       stream: result.fullStream,

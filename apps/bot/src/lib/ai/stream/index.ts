@@ -62,6 +62,16 @@ export async function* renderStream({
   // so the matching tool-result/tool-error is dropped too.
   const phantomToolCallIds = new Set<string>();
   const reasoning = new Map<string, string>();
+  // Each reasoning block gets its OWN unique task id. Providers reuse the same
+  // `part.id` (often "0") for the reasoning of every step, so keying the task on
+  // it collapsed all thinking into ONE row that stayed pinned wherever it first
+  // appeared — which is why the plan looked like "all thinking, then all tools"
+  // even when the model genuinely thinks between tool calls. A per-block counter
+  // gives each stretch of reasoning a distinct row that lands in stream order,
+  // so the plan reads thinking → tool → thinking → tool. `openReasoning` maps the
+  // provider's (possibly reused) part id to the unique task id while it's open.
+  let reasoningCounter = 0;
+  const openReasoning = new Map<string, string>();
   const visibleTaskIds = new Set<string>();
   let hiddenTaskCount = 0;
   let skipped = false;
@@ -108,7 +118,10 @@ export async function* renderStream({
       }
       case 'reasoning-start': {
         tally.reasoningParts += 1;
-        const id = reasoningTaskId(part.id);
+        // A fresh unique row per reasoning block, so consecutive stretches of
+        // thinking don't collapse onto one another (providers reuse part.id).
+        const id = `reasoning-${reasoningCounter++}`;
+        openReasoning.set(part.id, id);
         if (!showTask({ id, visibleTaskIds })) {
           hiddenTaskCount += 1;
           yield hiddenTaskUpdate({ count: hiddenTaskCount, done: false });
@@ -124,15 +137,16 @@ export async function* renderStream({
         break;
       }
       case 'reasoning-delta': {
-        const id = reasoningTaskId(part.id);
-        if (visibleTaskIds.has(id)) {
+        const id = openReasoning.get(part.id);
+        if (id && visibleTaskIds.has(id)) {
           reasoning.set(id, (reasoning.get(id) ?? '') + part.text);
         }
         break;
       }
       case 'reasoning-end': {
-        const id = reasoningTaskId(part.id);
-        if (!visibleTaskIds.has(id)) {
+        const id = openReasoning.get(part.id);
+        openReasoning.delete(part.id);
+        if (!(id && visibleTaskIds.has(id))) {
           break;
         }
         const text = reasoning.get(id)?.trim();
@@ -303,10 +317,6 @@ function showTask({
     return true;
   }
   return false;
-}
-
-function reasoningTaskId(id: string): string {
-  return `reasoning-${id}`;
 }
 
 function hiddenTaskUpdate({
