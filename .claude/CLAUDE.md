@@ -135,6 +135,16 @@ Most formatting and common issues are automatically fixed by Biome. Run `bun x u
 > asking for permission. Treat these notes as living documentation — stale notes
 > are worse than none.
 
+> **Build features FULLY, not minimally.** When asked to add a tool or feature,
+> don't ship the happy-path minimum — think through its whole lifecycle and the
+> obvious follow-on capabilities a user will expect, and build them in (or at
+> least raise them). Example: site deployment isn't just "publish" — it needs
+> "can it be edited? removed? by whom? who owns it? multiple pages?" (all of
+> which the `deploySite`/`sites` feature grew). Same reflex for any new agent
+> capability: creation, editing, removal, listing, ownership/permission gating,
+> persistence across restarts, and how the model manages it. If a dimension
+> genuinely shouldn't exist, say why; don't just silently omit it.
+
 ### After every change (auto workflow — this is a private repo)
 Run these automatically after each completed change, in order, **without asking**:
 1. **Auto-commit.** Commit the change locally with a clear conventional-commit
@@ -288,6 +298,15 @@ Run these automatically after each completed change, in order, **without asking*
   1`): a subagent may NOT spawn a further subagent — the `runSubagent` call
   inside a subagent returns the nesting-limit error. (Was 2; dropped at the
   owner's request — a second level is cost/time risk for no real use.)
+  - **Background subagents (`background: true`).** `depthStore.run` starts the
+    job and returns its promise; foreground (default) awaits it and returns the
+    report, background does NOT await — it fires the job off (own sandbox, own
+    streamed message) and returns immediately with a "running in the background"
+    note so the parent model gets control back and can keep working in parallel.
+    The job is still tied to the parent turn's abort signal (a user interrupt
+    stops it) but normal parent completion leaves it running to post its own
+    message. Use background only when the parent doesn't need the report. The
+    core prompt's parallel section points the model at it.
 - **Usage footer** (`agent/index.ts` `postUsageFooter`): after a reply, kyto
   posts a muted Slack **context block** showing `<output tokens> tokens · <N>
   tok/s`, captured from the successful attempt's `result.usage` + elapsed time.
@@ -1025,11 +1044,14 @@ Run these automatically after each completed change, in order, **without asking*
 - The turn's work is surfaced as a **`Thinking` task in the thinking section**
   (title `Thinking`, or `Thinking · fallback` on retries). The **model name IS
   now shown (July 2026, owner reversed the earlier hide)**: the `in_progress`
-  card carries `details: currentAttempt.model` (the model it's about to run —
-  won't stack, since the model task is yielded once in_progress + once complete),
-  and `completeModelTask` sets `output: holder.model ?? currentAttempt.model`
-  (the slug it actually resolved to; auto can pick per step). So on a fallback
-  cascade each rung's `Thinking · fallback` card names its own model. Reasoning
+  card carries `details: currentAttempt.model` (the model it's about to run),
+  shown ONCE. `completeModelTask` deliberately sends **no `output`** — Slack keeps
+  the `details` line through the complete update, so also sending the model as
+  `output` rendered it TWICE (the "shows model name twice in same card" bug). So
+  on a fallback cascade each rung's `Thinking · fallback` card names its own model
+  once, via `details`. (Primary is pinned glm-5.2, not `openrouter/auto`, so
+  requested == resolved anyway; the resolved-model holder still feeds fallback
+  pivoting, just not this card.) Reasoning
   tokens the model streams also render under the title **`Thinking`**
   (`stream/index.ts`, renamed from `Reasoning`) so the plan uses a single word
   rather than both `Thinking` and `Reasoning`. (The model task and reasoning

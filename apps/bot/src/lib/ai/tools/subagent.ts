@@ -48,7 +48,7 @@ export function runSubagentTool({
 }) {
   return tool({
     description:
-      'Delegate a task to a subagent — a headless copy of kyto (its own sandbox, same tools, can even delegate further) that runs on a cheaper pinned model and posts its own "kyto subagent" message with its findings, then returns a written report to you. Use it for open-ended investigation or self-contained work that would otherwise clutter your own context. It has NO access to this conversation beyond what you put in the task.',
+      'Delegate a task to a subagent — a headless copy of kyto (its own sandbox, same tools) that runs on a cheaper pinned model and posts its own "kyto subagent" message with its findings, then returns a written report to you. Use it for open-ended investigation or self-contained work that would otherwise clutter your own context. It has NO access to this conversation beyond what you put in the task. By default it runs FOREGROUND (you wait for its report, then use it). Set background:true to fire it off and keep working immediately — you get no report back (it posts its own message when done), so only use background when you do NOT need its result to continue.',
     inputSchema: z.object({
       task: z
         .string()
@@ -62,8 +62,14 @@ export function runSubagentTool({
         .describe(
           'Optional short name for this subagent (e.g. "researcher"), shown in its message as "kyto subagent {name}".'
         ),
+      background: z
+        .boolean()
+        .optional()
+        .describe(
+          'If true, spawn the subagent and return IMMEDIATELY without waiting — it runs independently and posts its own message. You get no report back. Use it to run a side-task in parallel while you continue your own work. Default false (wait for and receive the report).'
+        ),
     }),
-    execute: async ({ task, name }, { abortSignal }) => {
+    execute: async ({ task, name, background }, { abortSignal }) => {
       const attempt = subagentAttempt;
       if (!attempt) {
         return {
@@ -79,7 +85,13 @@ export function runSubagentTool({
           success: false,
         };
       }
-      return await depthStore.run(depth + 1, async () => {
+      // depthStore.run STARTS the job and returns its promise. Foreground: await
+      // it and hand the report back. Background: don't await — the subagent runs
+      // on independently (its own sandbox, its own streamed message), so the
+      // parent model gets control back this step and can do other work while it
+      // runs. It's tied to the parent turn's abort signal, so a user interrupt
+      // still stops it, but normal parent completion leaves it running.
+      const job = depthStore.run(depth + 1, async () => {
         // A fresh lazy sandbox, distinct from the caller's — materializes only
         // if the subagent actually uses a sandbox tool, destroyed at the end.
         const sandboxSession = new LazySandbox({
@@ -210,6 +222,24 @@ export function runSubagentTool({
           await sandboxSession.destroy().catch(() => undefined);
         }
       });
+
+      if (background) {
+        // Detached: log any failure (there's no caller awaiting it), and hand
+        // control straight back to the parent model.
+        job.catch((error: unknown) => {
+          logger.error(
+            { err: error, thread: thread.id },
+            '[subagent] background run failed'
+          );
+        });
+        const label = name ? `"${name}"` : 'it';
+        return {
+          background: true,
+          note: `Subagent ${label} is running in the background and will post its own "kyto subagent" message when done. You won't get a report back — carry on with your other work now.`,
+          success: true,
+        };
+      }
+      return await job;
     },
   });
 }

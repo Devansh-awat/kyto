@@ -370,11 +370,11 @@ async function executeTurn(
           return;
         }
         modelTaskDone = true;
-        // Show which model actually ran: the slug it resolved to (auto can pick
-        // per step), falling back to the requested model.
+        // The model name is already shown as the in_progress `details` (below);
+        // Slack keeps that line, so DON'T also send it as `output` here or the
+        // card renders the model twice. Just mark the task complete.
         return {
           id: modelTaskId,
-          output: holder.model ?? currentAttempt.model,
           status: 'complete',
           title: modelTaskTitle,
           type: 'task_update',
