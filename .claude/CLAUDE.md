@@ -278,14 +278,16 @@ Run these automatically after each completed change, in order, **without asking*
   else Gemini TTS; uploads audio to the thread — deferred), `unreact` (removes a
   reaction; added `SlackHarness.removeReaction`), and `runSubagent` (see below).
 - **Subagent** (`tools/subagent.ts`): a headless copy of kyto — its own fresh
-  `LazySandbox`, the full toolset (can delegate further, depth-capped at 2 via
-  `AsyncLocalStorage`), run through `streamAttempt` (same multi-step loop as a
+  `LazySandbox`, the full toolset, run through `streamAttempt` (same multi-step loop as a
   real turn) but NOT streamed to Slack; returns only its final text as a report.
   Pinned to a cheap model via `subagentAttempt` (`packages/ai` — Gemini
   `gemini-3.1-flash-lite` when `GEMINI_API_KEY` is set, else the best
   DigitalOcean BYOK model). Deferred, registered only when a subagent model
   exists. The parent-turn abort signal is forwarded so a stuck subagent is
-  killed with the turn.
+  killed with the turn. **Nesting is now ONE level only** (`MAX_SUBAGENT_DEPTH =
+  1`): a subagent may NOT spawn a further subagent — the `runSubagent` call
+  inside a subagent returns the nesting-limit error. (Was 2; dropped at the
+  owner's request — a second level is cost/time risk for no real use.)
 - **Usage footer** (`agent/index.ts` `postUsageFooter`): after a reply, kyto
   posts a muted Slack **context block** showing `<output tokens> tokens · <N>
   tok/s`, captured from the successful attempt's `result.usage` + elapsed time.
@@ -541,17 +543,21 @@ Run these automatically after each completed change, in order, **without asking*
   the model to ping people with `<@id>` and broadcast with the raw
   `<!channel>`/`<!here>`/`<!everyone>` tokens (plaintext `@channel` never pings).
 
-### Response style (human tone + no step-by-step narration)
+### Response style (human tone)
 - `prompts/personality.ts`: write like a human in Slack — natural sentence case,
   no Title Case, no ALL CAPS for emphasis, no over-punctuation; casual lowercase
   is fine, match the other person's register.
-- `prompts/core.ts` ("Don't narrate every step"): just DO the work then give ONE
-  final answer. The tools already show in the plan/thinking UI, so no "let me do
-  X / now I'll Y / next I'll Z" running commentary between tool calls, and no
-  preamble before them. A brief mid-task status line is allowed ONLY for a long
-  multi-phase job or when the user asks to be kept posted — one line per phase,
-  never per tool call. This targets chatty agentic models (glm-5.2 etc.) that
-  otherwise emit a play-by-play as their first output.
+- **The "Don't narrate every step" block was REMOVED from `prompts/core.ts`
+  (July 2026, owner's call).** It used to forbid any preamble or between-tool
+  commentary. The owner now WANTS kyto free to post in-between status updates
+  (e.g. write some text, then run more tools), so the anti-narration guidance is
+  gone. NOTE: with the current reply plumbing, mid-turn text posts as separate
+  `thread.post` messages while later tool cards keep appending to the ONE plan
+  card of the streamed message — i.e. text and tools don't yet split into a fresh
+  collapsible block per text→tool transition. Making each in-between update a
+  brand-new collapsible block would need `createReply`/the turn stream to
+  finalize the current streamed message and start a new one on that transition
+  (a multi-message-reply feature, not yet built).
 
 ### Focus mode (respond to / see only chosen users in a thread)
 - `focusMode` tool (`tools/focus.ts`, core) locks kyto onto specific user ids in
@@ -616,31 +622,22 @@ Run these automatically after each completed change, in order, **without asking*
   chatStream, `task_display_mode: 'plan'`) authored as **"kyto subagent"** (base
   from `resolveIdentity('subagent')`, + optional `name` arg → "kyto subagent
   {name}") with that identity's icon — chatStream DOES support
-  `username`/`icon_emoji`/`icon_url` (needs `chat:write.customize`). The message
-  is **ONE collapsible card** (`renderCard`, single `id:'subagent'`) whose
-  expanded body holds the **Prompt** (the task), then the run as a
-  **chronological timeline** (`Thinking:` → `Tool:` → `Thinking:` → `Tool:` …,
-  built from a `SubagentStep[]` — reasoning deltas buffer until a tool call or
-  the end of the run flushes them into a step), then the **Response**. NOTHING
-  goes in the message body — the response lives inside the card, not as loose
-  markdown_text. Old runs are trimmed from the FRONT (`CARD_MAX_STEPS`), keeping
-  the tail that led to the response. The parent's own plan just shows the
-  `runSubagent` tool call; the response is NOT duplicated there. `runSubagentTool`
-  still returns the report text to the parent model so it can act on it.
-  - **Two Slack `task_update` facts, both learned the hard way (July 2026).**
-    The card is yielded exactly TWICE: `in_progress` to open it, `complete` to
-    fill it.
-    1. **`output` is taken ONCE, on the update that COMPLETES the task.** The
-       original code sent `output` on the first `in_progress` chunk, when only
-       the prompt existed; Slack froze the card there and ignored every later
-       update — so the card expanded to *just the prompt*. Never put `output` on
-       an `in_progress` chunk.
-    2. **`details` APPENDS on every update, it does not replace.** Re-sending a
-       progress line per tool call stacked up literally as
-       `Working…Working… 1 tool call(s): searchWeb Working… 2 tool call(s): …`.
-       So the card sends `details` once, on the opening chunk.
-    Both match how `ai/stream/index.ts` already drives ordinary plan tasks
-    (`details` on the single in_progress yield, `output` at completion).
+  `username`/`icon_emoji`/`icon_url` (needs `chat:write.customize`).
+- **It renders EXACTLY like a real turn (July 2026 rewrite).** The old
+  single-`renderCard` collapsible (with its `SubagentStep[]` timeline,
+  `CARD_MAX_STEPS`, and the two hard-won `task_update` quirks) is **gone**. The
+  subagent now drives its own message through the **shared `renderStream`**
+  (`ai/stream/index.ts`) — the same interleaved `Thinking`/tool cards, in stream
+  order, with each tool's real request/response detail — so it looks identical to
+  the main plan. On top it yields a **Prompt** card and a **Model** card
+  (`attempt.model`) up front, and streams the **response into the message body**
+  via `renderStream`'s new **`emitText: true`** option (text-deltas are yielded
+  as plain strings → `markdown_text`, in addition to going through `onTextDelta`,
+  which the subagent uses to accumulate the returned report). No "Working…"
+  placeholder anywhere. The parent's own plan still just shows the `runSubagent`
+  tool call; `runSubagentTool` still returns the report text to the parent model.
+  `ranTools` (set from `onToolActivity`) drives the "(Completed actions with no
+  additional message.)" fallback report.
 - The old **tool→parent-plan side-channel is gone** (`lib/agent/side-channel.ts`
   deleted; `buildTools`' `emitChunk` param and the `ChunkChannel`/`mergeStream`
   wiring in `agent/index.ts` removed) — the subagent's separate message replaces
@@ -999,9 +996,13 @@ Run these automatically after each completed change, in order, **without asking*
     we read the concrete model OpenRouter resolved to from the `model` field of a
     clone of the response and stash it per-turn (`AsyncLocalStorage`).
 - The turn's work is surfaced as a **`Thinking` task in the thinking section**
-  (title `Thinking`, or `Thinking · fallback` on retries). The **model name is
-  deliberately NOT shown** (owner's call) — `completeModelTask` emits no `output`
-  at all (it previously appended `provider · model → <resolved>`). Reasoning
+  (title `Thinking`, or `Thinking · fallback` on retries). The **model name IS
+  now shown (July 2026, owner reversed the earlier hide)**: the `in_progress`
+  card carries `details: currentAttempt.model` (the model it's about to run —
+  won't stack, since the model task is yielded once in_progress + once complete),
+  and `completeModelTask` sets `output: holder.model ?? currentAttempt.model`
+  (the slug it actually resolved to; auto can pick per step). So on a fallback
+  cascade each rung's `Thinking · fallback` card names its own model. Reasoning
   tokens the model streams also render under the title **`Thinking`**
   (`stream/index.ts`, renamed from `Reasoning`) so the plan uses a single word
   rather than both `Thinking` and `Reasoning`. (The model task and reasoning

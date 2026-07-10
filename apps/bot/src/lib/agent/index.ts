@@ -372,10 +372,11 @@ async function executeTurn(
           return;
         }
         modelTaskDone = true;
-        // Deliberately no model name in the output: the thinking block shows
-        // only the "Thinking" status, never which model is running.
+        // Show which model actually ran: the slug it resolved to (auto can pick
+        // per step), falling back to the requested model.
         return {
           id: modelTaskId,
+          output: holder.model ?? currentAttempt.model,
           status: 'complete',
           title: modelTaskTitle,
           type: 'task_update',
@@ -396,8 +397,11 @@ async function executeTurn(
         }
         reply ??= createReply({ allowBroadcast: isOwner, threadId });
         // Surface the model in the thinking section: `in_progress` while this
-        // attempt runs, completed exactly once with the resolved model.
+        // attempt runs (showing the model it's about to run), completed exactly
+        // once with the slug it actually resolved to. Yielded once in_progress
+        // and once complete, so `details` never stacks.
         yield {
+          details: currentAttempt.model,
           id: modelTaskId,
           status: 'in_progress',
           title: modelTaskTitle,

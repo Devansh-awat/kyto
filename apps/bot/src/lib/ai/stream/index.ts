@@ -9,6 +9,7 @@ const MAX_VISIBLE_TASKS = 45;
 const REASONING_OUTPUT_MAX_LENGTH = 2800;
 
 export async function* renderStream({
+  emitText = false,
   knownTools,
   onTextDelta,
   onSkip,
@@ -18,6 +19,11 @@ export async function* renderStream({
   onFinish,
   stream,
 }: {
+  // When true, reply text is ALSO yielded as plain strings (the message body),
+  // not only routed through onTextDelta. The main turn keeps this off (its text
+  // is posted as separate messages via createReply); the subagent turns it on so
+  // its streamed message shows the response in-body, alongside the plan cards.
+  emitText?: boolean;
   knownTools?: ReadonlySet<string>;
   onTextDelta?: (text: string) => PromiseLike<void> | void;
   onSkip?: () => void;
@@ -92,6 +98,9 @@ export async function* renderStream({
         if (part.text && !skipped && !isPlaceholderText(part.text)) {
           tally.textDeltas += 1;
           await onTextDelta?.(part.text);
+          if (emitText) {
+            yield part.text;
+          }
         } else if (part.text) {
           tally.droppedTextDeltas += 1;
         }
