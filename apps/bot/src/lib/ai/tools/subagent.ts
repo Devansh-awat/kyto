@@ -43,6 +43,12 @@ const CARD_TITLE_MAX = 80;
 // Compose the ONE collapsible card the subagent posts: its prompt, the tools it
 // called (names only), its thinking (as kyto shows thinking), and its response —
 // all inside the single expandable block, nothing in the message body.
+//
+// Slack takes a task's `output` ONCE, on the update that completes it: sending
+// it on an in_progress update froze the card at whatever it held then (just the
+// prompt, since nothing else had happened yet) and every later update was
+// ignored. So progress goes in `details` and the full body is only ever sent on
+// the completing update — the same shape every other task in the plan uses.
 function renderCard({
   report,
   task,
@@ -166,21 +172,29 @@ export function runSubagentTool({
           // Drive the subagent's stream into its OWN Slack message: ONE
           // collapsible card (authored as "kyto subagent") whose expanded body
           // holds the prompt, tools called, thinking, and response. Nothing goes
-          // in the message body. The card is updated in place (single id) on
-          // tool calls and at completion to bound update frequency; thinking and
-          // response accumulate silently in between.
+          // in the message body. While it runs, the card shows a progress line;
+          // the full body arrives with the completing update.
           const cardTitle = clamp(name ?? task, CARD_TITLE_MAX) ?? 'Subagent';
-          const card = (status: 'complete' | 'in_progress'): StreamChunk => ({
+          const progress = (): StreamChunk => ({
+            details: toolsUsed.length
+              ? `Working… ${toolsUsed.length} tool call(s): ${toolsUsed.join(', ')}`
+              : 'Working…',
+            id: 'subagent',
+            status: 'in_progress',
+            title: cardTitle,
+            type: 'task_update',
+          });
+          const done = (): StreamChunk => ({
             id: 'subagent',
             output: renderCard({ report, task, thinking, toolsUsed }),
-            status,
+            status: 'complete',
             title: cardTitle,
             type: 'task_update',
           });
           async function* subagentChunks(): AsyncGenerator<
             string | StreamChunk
           > {
-            yield card('in_progress');
+            yield progress();
             for await (const part of result.fullStream) {
               if (part.type === 'text-delta') {
                 report += part.text;
@@ -188,10 +202,10 @@ export function runSubagentTool({
                 thinking += part.text;
               } else if (part.type === 'tool-call') {
                 toolsUsed.push(part.toolName);
-                yield card('in_progress');
+                yield progress();
               }
             }
-            yield card('complete');
+            yield done();
           }
 
           await slack.stream(thread.id, subagentChunks(), {

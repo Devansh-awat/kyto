@@ -7,6 +7,27 @@ const RAW_SLACK_CHANNEL_ID = /^[CGD][A-Z0-9]+$/;
 // that, or a bare `#C123ABC`, when they mean a channel.
 const SLACK_CHANNEL_MENTION = /^<#([CGD][A-Z0-9]+)(?:\|[^>]*)?>$/;
 
+// Slack renders a user mention as `<@U123ABC>`; models and users paste that, a
+// bare `@U123ABC`, or the raw id when naming someone.
+const SLACK_USER_MENTION = /^<@([UW][A-Z0-9]+)(?:\|[^>]*)?>$/;
+const RAW_SLACK_USER_ID = /^[UW][A-Z0-9]+$/;
+
+/**
+ * Normalize the shapes a user reference arrives in into a raw Slack user id.
+ * Returns null for anything that cannot be one (a display name, say) so callers
+ * can reject it rather than silently storing a permission entry that never
+ * matches.
+ */
+export function toRawSlackUserId(user: string): string | null {
+  const trimmed = user.trim();
+  const mention = trimmed.match(SLACK_USER_MENTION);
+  if (mention?.[1]) {
+    return mention[1];
+  }
+  const raw = trimmed.startsWith('@') ? trimmed.slice(1) : trimmed;
+  return RAW_SLACK_USER_ID.test(raw) ? raw : null;
+}
+
 export function toRawSlackChannelId(id: string): string {
   return id.startsWith('slack:') ? (id.split(':')[1] ?? id) : id;
 }

@@ -31,6 +31,7 @@ export async function publishHome({
       prompt: customization?.prompt ?? null,
       reminders,
       showUsageFooter: customization?.showUsageFooter ?? true,
+      userId,
     }) as never,
   });
 }

@@ -2,6 +2,7 @@ import {
   boolean,
   index,
   integer,
+  jsonb,
   pgEnum,
   pgTable,
   text,
@@ -42,6 +43,9 @@ export const reminders = pgTable(
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
     userId: text('user_id').notNull(),
+    // Slack user ids allowed to edit/pause/cancel this reminder alongside its
+    // creator. Empty = creator only. The bot owner may always edit anything.
+    editorUserIds: jsonb('editor_user_ids').$type<string[]>(),
     text: text('text').notNull(),
     kind: reminderKind('kind').notNull().default('message'),
     // 'bash': the shell command to run each fire.

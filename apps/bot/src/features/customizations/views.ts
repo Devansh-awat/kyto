@@ -47,6 +47,7 @@ export function buildHomeView({
   prompt,
   reminders = [],
   showUsageFooter = true,
+  userId,
 }: {
   identityProfiles?: IdentityProfile[];
   isOwner?: boolean;
@@ -54,6 +55,8 @@ export function buildHomeView({
   prompt: string | null;
   reminders?: Reminder[];
   showUsageFooter?: boolean;
+  /** The person viewing the tab, to mark reminders someone else shared here. */
+  userId: string;
 }): SlackHomeView {
   const displayedPrompt = prompt
     ? escapeSlackText(
@@ -160,7 +163,7 @@ export function buildHomeView({
     { type: 'divider' },
     {
       text: mrkdwn(
-        '*Reminders*\nYour recurring reminders. Create them by asking Kyto; manage them here.'
+        '*Reminders*\nRecurring reminders you created, plus any you were named an editor of. Create them by asking Kyto; manage them here.'
       ),
       type: 'section',
     }
@@ -178,10 +181,12 @@ export function buildHomeView({
         : reminder.text;
     const target = reminder.channelId ? `<#${reminder.channelId}>` : 'DM';
     const state = reminder.active ? 'active' : 'paused';
+    const creator =
+      reminder.userId === userId ? '' : ` · by <@${reminder.userId}>`;
     blocks.push(
       {
         text: mrkdwn(
-          `“${escapeSlackText(text)}”\n${describeReminderSchedule(reminder)} · ${target} · *${state}*`
+          `“${escapeSlackText(text)}”\n${reminder.kind} · ${describeReminderSchedule(reminder)} · ${target} · *${state}*${creator}`
         ),
         type: 'section',
       },

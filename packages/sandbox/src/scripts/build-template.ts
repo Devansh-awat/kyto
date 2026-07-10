@@ -72,6 +72,9 @@ async function main(): Promise<void> {
           'unzip',
           'jq',
           'sudo',
+          // A real display for the stealth browser: some anti-bot checks flag
+          // headless Chromium even with CloakBrowser's fingerprint patches.
+          'xvfb',
         ],
         { noInstallRecommends: true }
       )
@@ -88,6 +91,11 @@ async function main(): Promise<void> {
         'python3 -m pip install --no-cache-dir --break-system-packages --no-user pillow matplotlib numpy pandas requests',
         'npm install -g agent-browser',
         'bash -lc "yes | agent-browser install --with-deps"',
+        // The browser tool drives agent-browser against CloakBrowser's stealth
+        // Chromium over CDP. Cache the ~200MB binary under the sandbox user's
+        // HOME at build time so the first browse of a thread isn't a download.
+        'npm install -g cloakbrowser',
+        'bash -lc "HOME=/home/user cloakbrowser install"',
         'chown -R user:user /home/user',
       ])
       .setUser('user')

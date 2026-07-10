@@ -8,7 +8,7 @@ import type { KytoBot, Message, ThreadHandle } from '@/harness';
 import { buildMcpTools } from '@/lib/ai/mcp';
 import logger from '@/lib/logger';
 import { backgroundProcessTools } from './tools/background';
-import { browseTool } from './tools/browse';
+import { browserTool } from './tools/browser';
 import {
   canvasDeleteTool,
   canvasListTool,
@@ -44,6 +44,7 @@ import { reactTool, unreactTool } from './tools/react';
 import { readConversationHistoryTool } from './tools/read-conversation-history';
 import {
   cancelReminderTool,
+  editReminderTool,
   listRemindersTool,
   pauseReminderTool,
   resumeReminderTool,
@@ -125,9 +126,13 @@ export async function buildTools({
     canvasList: canvasListTool({ thread }),
     getPermalink: getPermalinkTool({ thread }),
     fetchUrl: fetchUrlTool(),
-    deploySite: deploySiteTool({ getSandboxContext }),
+    deploySite: deploySiteTool({
+      getSandboxContext,
+      isOwner,
+      userId: authorUserId,
+    }),
     listSites: listSitesTool(),
-    // removeSite is destructive and owner-only (see the owner-gated block below).
+    removeSite: removeSiteTool({ isOwner, userId: authorUserId }),
     skip: skipTool({ threadId: thread.id }),
     listThreads: listThreadsTool({ currentThreadId: thread.id }),
     readConversationHistory: readConversationHistoryTool({
@@ -137,6 +142,7 @@ export async function buildTools({
     scheduleReminder: scheduleReminderTool({ message }),
     scheduleRecurringReminder: scheduleRecurringReminderTool({ message }),
     listReminders: listRemindersTool({ message }),
+    editReminder: editReminderTool({ message }),
     cancelReminder: cancelReminderTool({ message }),
     pauseReminder: pauseReminderTool({ message }),
     resumeReminder: resumeReminderTool({ message }),
@@ -183,11 +189,6 @@ export async function buildTools({
     }),
   };
 
-  // Taking a site down is destructive, so only the owner can trigger it.
-  if (isOwner) {
-    core.removeSite = removeSiteTool();
-  }
-
   // Background-process trio shares one in-turn handle map, so build it once.
   const background = backgroundProcessTools({ getSandboxContext });
   const ttsAvailable = Boolean(
@@ -196,9 +197,9 @@ export async function buildTools({
 
   // Deferred: registered but hidden until loadTools names them.
   const deferred: Record<string, { summary: string; tool: Tool }> = {
-    browse: {
+    browser: {
       summary: 'drive a real Chromium browser (screenshots, clicks, scraping)',
-      tool: browseTool({ getSandboxContext }),
+      tool: browserTool({ getSandboxContext }),
     },
     runBackgroundProcess: {
       summary: 'start a long-running shell command in the background',

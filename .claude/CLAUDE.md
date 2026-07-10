@@ -216,7 +216,7 @@ Run these automatically after each completed change, in order, **without asking*
     the FIRST tool call that needs it (chat-only turns cost zero E2B), killed
     at turn end. The old harness-bootstrap command-faking (`lazy-session.ts`)
     is gone — nothing to fake when we own the loop. Pi skills are gone too.
-  - **Deferred tools**: uncommon tools (browse, email trio, canvasDelete,
+  - **Deferred tools**: uncommon tools (browser, email trio, canvasDelete,
     createChannel, setChannelTopic, bookmarkLink, pins, poll, mermaid,
     sendAsUser/editAsUser, and all MCP tools) are registered but hidden from
     the model until it calls the **`loadTools`** meta-tool (whose description
@@ -253,7 +253,7 @@ Run these automatically after each completed change, in order, **without asking*
 - Fork-added tools: `canvasRead/Write/List/Delete`, `pinMessage`, `unpinMessage`,
   `bookmarkLink`, `createChannel`, `setChannelTopic`, `poll`, `getPermalink`,
   `fetchUrl`, `deploySite`, `removeSite`, `skip`, `sendAsUser`, `editAsUser`,
-  `browse`, `sendEmail`/`checkInbox`/`replyEmail`, `joinThread`,
+  `browser`, `sendEmail`/`checkInbox`/`replyEmail`, `joinThread`,
   `scheduleRecurringReminder`/`listReminders`/`cancelReminder`.
 - **Ported from `rebuild-on-upstream`** (the owner's own Pi-era branch,
   reimplemented on the custom harness — see the July rewrite note): `gh`
@@ -324,9 +324,10 @@ Run these automatically after each completed change, in order, **without asking*
     posting; non-owners stay DM-only) and `maxRuns`. New
     `pauseReminder`/`resumeReminder` tools (pause keeps the row but stops it
     firing; resume snaps `next_run_at` to the future). An **App Home
-    "Reminders"** section lists each of a user's reminders with Pause/Resume +
-    Delete buttons (`home_pause_reminder`/`home_resume_reminder`/
-    `home_cancel_reminder`, `listUserReminders`). Reminder posts honor the
+    "Reminders"** section lists each reminder a user may act on with Pause/Resume
+    + Delete buttons (`home_pause_reminder`/`home_resume_reminder`/
+    `home_cancel_reminder`, `listUserReminders`), tagged with its kind and, when
+    someone else created it, `by <@them>`. Reminder posts honor the
     **reminder identity profile** (name+icon). A channel-targeted reminder
     prefixes the text with `<@user>`.
   - **Reminder kinds (July 2026).** `reminders.kind` ∈
@@ -352,6 +353,13 @@ Run these automatically after each completed change, in order, **without asking*
       unattended job's cost is predictable. Reuses the thread's sandbox too.
       `searchSlack` does NOT work here (its action token needs a live user
       interaction); the system note says so.
+    - **`editReminder`** (July 2026) changes an existing row in place: its
+      `text`, `kind`, `command`/`url`, schedule, `maxRuns`, or `editors`. Only
+      the fields passed are touched; a new schedule takes effect from **now**
+      (`updateReminder` recomputes `next_run_at`), and a bare `intervalSeconds`
+      on an interval reminder is re-floored against the (possibly new) kind, so
+      an `agent` reminder can't be retuned down to 60s. Gated by the same
+      creator/editor/owner rule as pause/resume/cancel.
     - **Interval floors by kind** (`tools/reminders.ts`): `message`/`script` 60s,
       `bash` 5 min (a sandbox resume), `agent` 1 hour (a real model run).
     - The scheduler now fires due reminders **concurrently** (a slow `bash`/
@@ -399,12 +407,38 @@ Run these automatically after each completed change, in order, **without asking*
   **host-side** via the AgentMail JS SDK (`agentmail` npm) using
   `AGENTMAIL_API_KEY`. Registered only when that key is set (toolset.ts). It is
   NOT in the sandbox anymore (the key is no longer injected there).
-- **Browser** (`browse`, `tools/browse.ts`) runs the preinstalled
-  `agent-browser` CLI **inside the sandbox** (Chromium stays isolated off the
-  host). It's a thin wrapper: pass agent-browser args in `command` (run
-  `skills get core` first). Using it materializes the lazy sandbox. The old
-  `agentmail`/`agent-browser` **Pi skills were removed** — kyto now loads **zero
-  Pi skills** (any skill would force per-turn sandbox creation; see Sandbox/E2B).
+- **Browser** (`browser`, `tools/browser.ts` — renamed from `browse`/`browse.ts`,
+  July 2026) runs the preinstalled `agent-browser` CLI **inside the sandbox**
+  (Chromium stays isolated off the host). It's a thin wrapper: pass agent-browser
+  args in `command` (run `skills get core` first). Using it materializes the lazy
+  sandbox. The old `agentmail`/`agent-browser` **Pi skills were removed** — kyto
+  now loads **zero Pi skills** (any skill would force per-turn sandbox creation;
+  see Sandbox/E2B).
+  - **It drives CloakBrowser, not agent-browser's own Chrome**
+    (`lib/browser/cloak.ts`, `ensureCloakBrowser`). CloakBrowser is a Chromium
+    with ~66 **source-level C++ fingerprint patches** (canvas, WebGL, audio,
+    fonts, GPU, WebRTC, automation signals), so anti-bot systems score it as an
+    ordinary browser and **most sites never serve a challenge at all**. It does
+    NOT solve captchas — it prevents them. Every `browser` call first runs an
+    idempotent ensure script that (1) exits immediately if the CDP endpoint on
+    :9222 already answers, else (2) installs `cloakbrowser` if missing,
+    (3) launches the stealth binary **headful under Xvfb** (some checks flag
+    headless even with the patches; falls back to `--headless=new` if Xvfb
+    can't be installed) with `--fingerprint-platform=windows`, and (4) runs
+    `agent-browser connect 9222` so the CLI drives THAT browser over CDP.
+    Re-running matters: a sandbox **pause kills the Chromium process** but keeps
+    the ~200MB cached binary, so a resumed thread relaunches in seconds.
+    Verified live in a real sandbox: `/json/version` shows the cloak binary,
+    `ps` shows it under `xvfb-run`, and in-page `navigator.webdriver === false`
+    with a `Win32` platform.
+  - `cloakbrowser` + `xvfb` are now baked into the **E2B template**
+    (`packages/sandbox/src/scripts/build-template.ts`, binary cached under
+    `/home/user` at build time) so the first browse of a thread isn't a ~25s
+    install. Until the template is rebuilt the ensure script installs them on
+    demand (that path is what was tested).
+  - The tool description and the core prompt tell the model: if a captcha DOES
+    appear, snapshot the page and **click the checkbox/challenge like a person
+    would** — never claim it can't get past one before actually trying.
 - **Web search** (the `searchWeb` task) uses Exa via `EXA_API_KEY`. A placeholder
   key (`exa-placeholder-no-websearch`) makes every search return
   `ExaError: Invalid API key` — set a real key to enable web search.
@@ -462,6 +496,30 @@ Run these automatically after each completed change, in order, **without asking*
   node_module. Batching is still model-dependent (a weak model may not batch even
   when told). Faster batched reads also keep a turn under Slack's ~interaction
   timeout, avoiding the "invalid action" token expiry seen on slow serial turns.
+
+### Ownership & edit permission (reminders + sites)
+- Things kyto creates **on someone's behalf and can later change** — recurring
+  reminders and published static sites — carry an access list, so a bystander in
+  a public thread can't ask kyto to rewrite someone's reminder or take down
+  their site. The rule, shared by both:
+  **the creator, anyone the creator named as an editor, and the bot owner.**
+- Set at creation via an optional **`editors`** parameter on
+  `scheduleRecurringReminder` and `deploySite` (Slack user ids or `<@U123>`
+  mentions; `parseEditors` in `tools/editors.ts` rejects anything that isn't a
+  user id, so a display name can't be stored as a permission entry that never
+  matches). Omitted = creator only.
+- Enforced **at execute time against `message.author.userId`** — i.e. against the
+  person actually talking to kyto in this turn, not against whoever the model
+  claims to be acting for. Reminders: `isReminderEditableBy` (in-memory) plus
+  `editableBy` (the SQL form, a jsonb `@>` containment check) scoping every
+  `list`/`pause`/`resume`/`cancel` query; the bot owner gets no WHERE restriction
+  at all. Sites: `checkSiteAccess` + `canEdit` (`tools/editors.ts`).
+- Storage: `reminders.editor_user_ids` (jsonb, additive) and the new `sites`
+  table. Both applied to the live DB with a one-off SQL script
+  (`ALTER TABLE … ADD COLUMN IF NOT EXISTS` / `CREATE TABLE IF NOT EXISTS`),
+  since `drizzle-kit push` is interactive in a non-TTY shell.
+- The core prompt tells the model the rule and that a refusal is not something to
+  work around — just say who owns the thing.
 
 ### Broadcast mentions (@channel/@here) are owner-gated
 - Only the **owner** may make kyto ping the whole channel. `neutralizeBroadcast`
@@ -563,11 +621,19 @@ Run these automatically after each completed change, in order, **without asking*
   expanded body holds, in order: **Prompt** (the task), **Tools called** (names
   only), **Thinking** (accumulated reasoning, as kyto shows thinking), and
   **Response** (the subagent's final text). NOTHING goes in the message body —
-  the response lives inside the card, not as loose markdown_text. The card
-  updates in place on tool calls + at completion (thinking/response accumulate
-  silently between). The parent's own plan just shows the `runSubagent` tool
-  call; the response is NOT duplicated there. `runSubagentTool` still returns the
-  report text to the parent model so it can act on it.
+  the response lives inside the card, not as loose markdown_text. The parent's
+  own plan just shows the `runSubagent` tool call; the response is NOT duplicated
+  there. `runSubagentTool` still returns the report text to the parent model so
+  it can act on it.
+  - **Slack takes a task's `output` ONCE, on the update that completes it**
+    (fixed July 2026 — the card used to expand to *only* the prompt). The old
+    code sent `output` on the FIRST `in_progress` chunk, when nothing but the
+    prompt existed yet; Slack froze the card there and ignored every later
+    update, including the completing one carrying tools/thinking/response. Now
+    progress goes in `details` (`Working… N tool call(s): …`) and the full body
+    is only ever sent on the `complete` chunk — the same shape every other task
+    in the plan already used (see `ai/stream/index.ts`: `details` while running,
+    `output` at completion). Do NOT put `output` on an `in_progress` chunk.
 - The old **tool→parent-plan side-channel is gone** (`lib/agent/side-channel.ts`
   deleted; `buildTools`' `emitChunk` param and the `ChunkChannel`/`mergeStream`
   wiring in `agent/index.ts` removed) — the subagent's separate message replaces
@@ -623,9 +689,17 @@ Run these automatically after each completed change, in order, **without asking*
   executes site code — building/testing happen in the E2B sandbox; only static
   output is copied out (`resolveWithin` path containment). The on-disk store is
   still `SITES_ROOT` (`/var/kytosites`). `listSites` (core) enumerates the
-  published sites (top-level dirs under the sites root). **`removeSite` is
-  owner-only** — registered only when the requester is `OWNER_USER_ID`, so a
-  non-owner can't take a site down.
+  published sites (top-level dirs under the sites root).
+- **Sites are owned, and `removeSite` is no longer owner-only** (July 2026). A
+  new **`sites`** table (`name` PK, `owner_user_id`, `editor_user_ids` jsonb)
+  records who published each name. `deploySite`/`removeSite` are registered for
+  everyone and gated at execute time by `checkSiteAccess` (see the
+  Ownership/edit-permission note): the first deploy of a name **claims** it for
+  the requester; later deploys or a removal require creator/editor/owner. A
+  whole-site `removeSite` releases the name (`deleteSite`); removing one `page`
+  does not. Sites published **before** the table existed have no row: they exist
+  on disk, so `siteExistsOnDisk` makes them **bot-owner-only** rather than free
+  for the next person to claim (otherwise anyone could redeploy over them).
 - **Image generation** (`tools/generate-image.ts`) calls HackClub's
   OpenAI-compatible `/images/generations` endpoint **directly** (fetch, model
   `google/gemini-3.1-flash-image`, billed to `HACKCLUB_API_KEY`), parsing
@@ -1004,7 +1078,7 @@ Run these automatically after each completed change, in order, **without asking*
   for a user interrupt — it routes through the normal recovery path (fall back to
   the next model if no reply text streamed yet, else surface an error). The
   combined signal also reaches tool execution: sandbox tools that forward it
-  (`browse` passes `abortSignal` into `session.run`) get their hung command
+  (`browser` passes `abortSignal` into `session.run`) get their hung command
   killed, unblocking Pi. Without this a turn could hang forever (observed: a
   website-build turn froze after an "On it…" preamble + a browser open that never
   returned). Other sandbox tools (`deploySite`, `getFile`, `uploadFile`) do not
@@ -1090,7 +1164,7 @@ Run these automatically after each completed change, in order, **without asking*
 ### Sandbox / E2B — lazy, and PERSISTENT PER THREAD
 - Config in `packages/sandbox/src/config.ts`. The E2B sandbox is the execution
   backend for the `bash`/file tools and the host tools that opt into it
-  (`browse`, `deploySite`, `getFile`, `uploadFile`).
+  (`browser`, `deploySite`, `getFile`, `uploadFile`).
 - **Lazy** (`packages/sandbox/src/lazy-sandbox.ts`, `LazySandbox`): the real
   `Sandbox.create` is deferred until a tool actually touches it, so **chat-only
   turns cost zero E2B**.

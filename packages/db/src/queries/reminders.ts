@@ -1,4 +1,4 @@
-import { and, eq, lte } from 'drizzle-orm';
+import { and, eq, lte, or, sql } from 'drizzle-orm';
 import { db } from '../client';
 import {
   type NewReminder,
@@ -51,6 +51,7 @@ export async function createReminder(input: {
   text: string;
   schedule: ReminderSchedule;
   channelId?: string | null;
+  editorUserIds?: string[] | null;
   maxRuns?: number | null;
   kind?: ReminderKind;
   command?: string | null;
@@ -60,6 +61,7 @@ export async function createReminder(input: {
   const nextRunAt = computeNextRun(input.schedule, new Date());
   const values: NewReminder = {
     userId: input.userId,
+    editorUserIds: input.editorUserIds ?? null,
     text: input.text,
     channelId: input.channelId ?? null,
     maxRuns: input.maxRuns ?? null,
@@ -83,44 +85,123 @@ export async function createReminder(input: {
   return row;
 }
 
-export async function listActiveReminders(userId: string): Promise<Reminder[]> {
+/** Who a reminder is editable by: its creator, its listed editors, the owner. */
+export function isReminderEditableBy(
+  reminder: Reminder,
+  userId: string,
+  isOwner = false
+): boolean {
+  return (
+    isOwner ||
+    reminder.userId === userId ||
+    (reminder.editorUserIds ?? []).includes(userId)
+  );
+}
+
+/**
+ * SQL form of `isReminderEditableBy`, for scoping a query. The owner may act on
+ * anything, so they get no restriction at all.
+ */
+function editableBy(userId: string, isOwner: boolean) {
+  if (isOwner) {
+    return;
+  }
+  return or(
+    eq(reminders.userId, userId),
+    sql`${reminders.editorUserIds} @> ${JSON.stringify([userId])}::jsonb`
+  );
+}
+
+export async function getReminder(id: string): Promise<Reminder | null> {
+  const [row] = await db
+    .select()
+    .from(reminders)
+    .where(eq(reminders.id, id))
+    .limit(1);
+  return row ?? null;
+}
+
+/** The active reminders a user may act on: their own, plus ones they can edit. */
+export async function listActiveReminders(
+  userId: string,
+  isOwner = false
+): Promise<Reminder[]> {
   return await db
     .select()
     .from(reminders)
-    .where(and(eq(reminders.userId, userId), eq(reminders.active, true)));
+    .where(and(eq(reminders.active, true), editableBy(userId, isOwner)));
 }
 
-/** All of a user's reminders, active and paused (for the management UI). */
-export async function listUserReminders(userId: string): Promise<Reminder[]> {
-  return await db.select().from(reminders).where(eq(reminders.userId, userId));
+/** Every reminder a user may act on, active and paused (for the management UI). */
+export async function listUserReminders(
+  userId: string,
+  isOwner = false
+): Promise<Reminder[]> {
+  return await db.select().from(reminders).where(editableBy(userId, isOwner));
+}
+
+/** Change a reminder in place. Only the given fields are touched. */
+export async function updateReminder(input: {
+  id: string;
+  text?: string;
+  kind?: ReminderKind;
+  command?: string | null;
+  url?: string | null;
+  channelId?: string | null;
+  editorUserIds?: string[] | null;
+  maxRuns?: number | null;
+  schedule?: ReminderSchedule;
+}): Promise<Reminder | null> {
+  const { id, schedule, ...rest } = input;
+  const patch: Partial<NewReminder> = { ...rest };
+  if (schedule) {
+    patch.recurrence = schedule.recurrence;
+    patch.intervalSeconds =
+      schedule.recurrence === 'interval' ? schedule.intervalSeconds : null;
+    patch.timeOfDayMinutes =
+      schedule.recurrence === 'interval' ? null : schedule.timeOfDayMinutes;
+    patch.weekday = schedule.recurrence === 'weekly' ? schedule.weekday : null;
+    // A new schedule takes effect from now, not from the old next-run instant.
+    patch.nextRunAt = computeNextRun(schedule, new Date());
+  }
+  const [row] = await db
+    .update(reminders)
+    .set(patch)
+    .where(eq(reminders.id, id))
+    .returning();
+  return row ?? null;
 }
 
 export async function cancelReminder({
   id,
+  isOwner = false,
   userId,
 }: {
   id: string;
+  isOwner?: boolean;
   userId: string;
 }): Promise<boolean> {
   const deleted = await db
     .delete(reminders)
-    .where(and(eq(reminders.id, id), eq(reminders.userId, userId)))
+    .where(and(eq(reminders.id, id), editableBy(userId, isOwner)))
     .returning({ id: reminders.id });
   return deleted.length > 0;
 }
 
-/** Pause a reminder (keeps it, just stops it firing). Scoped to its owner. */
+/** Pause a reminder (keeps it, just stops it firing). */
 export async function pauseReminder({
   id,
+  isOwner = false,
   userId,
 }: {
   id: string;
+  isOwner?: boolean;
   userId: string;
 }): Promise<boolean> {
   const updated = await db
     .update(reminders)
     .set({ active: false })
-    .where(and(eq(reminders.id, id), eq(reminders.userId, userId)))
+    .where(and(eq(reminders.id, id), editableBy(userId, isOwner)))
     .returning({ id: reminders.id });
   return updated.length > 0;
 }
@@ -128,15 +209,17 @@ export async function pauseReminder({
 /** Resume a paused reminder, snapping its next run to the future. */
 export async function resumeReminder({
   id,
+  isOwner = false,
   userId,
 }: {
   id: string;
+  isOwner?: boolean;
   userId: string;
 }): Promise<boolean> {
   const [row] = await db
     .select()
     .from(reminders)
-    .where(and(eq(reminders.id, id), eq(reminders.userId, userId)))
+    .where(and(eq(reminders.id, id), editableBy(userId, isOwner)))
     .limit(1);
   if (!row) {
     return false;
