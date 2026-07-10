@@ -441,6 +441,20 @@ Run these automatically after each completed change, in order, **without asking*
   - The tool description and the core prompt tell the model: if a captcha DOES
     appear, snapshot the page and **click the checkbox/challenge like a person
     would** — never claim it can't get past one before actually trying.
+  - **Scripting cloakbrowser directly (July 2026).** The **sandbox prompt**
+    (`prompts/sandbox.ts`) now tells the model that `cloakbrowser` is a real
+    preinstalled **npm package** (a stealth Chromium, drop-in Playwright/Puppeteer
+    replacement — the SAME browser the `browser` tool drives), so for a LOOP or a
+    scheduled/repetitive job it should write a Node script against it instead of
+    calling the `browser` tool per action (faster, survives as a `bash` reminder).
+    This was added because the model, not knowing what "cloak browser" was, wasted
+    a turn guessing ("maybe puppeteer-extra… maybe a package called cloak") and
+    web-searching. **The prompt also states the headful rule**: the stealth
+    patches only defeat anti-bot/Turnstile when the browser runs HEADFUL, so a
+    scripted job must launch non-headless under `xvfb-run -a node script.js` with
+    `fingerprintPlatform: 'windows'` — a bare headless `launch()` still gets
+    flagged, which is exactly why a hand-written script "can't" clear a captcha
+    the `browser` tool clears (the tool always launches headful under Xvfb).
 - **Web search** (the `searchWeb` task) uses Exa via `EXA_API_KEY`. A placeholder
   key (`exa-placeholder-no-websearch`) makes every search return
   `ExaError: Invalid API key` — set a real key to enable web search.
@@ -550,14 +564,25 @@ Run these automatically after each completed change, in order, **without asking*
 - **The "Don't narrate every step" block was REMOVED from `prompts/core.ts`
   (July 2026, owner's call).** It used to forbid any preamble or between-tool
   commentary. The owner now WANTS kyto free to post in-between status updates
-  (e.g. write some text, then run more tools), so the anti-narration guidance is
-  gone. NOTE: with the current reply plumbing, mid-turn text posts as separate
-  `thread.post` messages while later tool cards keep appending to the ONE plan
-  card of the streamed message — i.e. text and tools don't yet split into a fresh
-  collapsible block per text→tool transition. Making each in-between update a
-  brand-new collapsible block would need `createReply`/the turn stream to
-  finalize the current streamed message and start a new one on that transition
-  (a multi-message-reply feature, not yet built).
+  (e.g. write some text, then run more tools), and the plan now splits to match —
+  see the streamSegmented note below.
+- **Multi-block turns — `streamSegmented` (`agent/index.ts`).** A turn is driven
+  as a SEQUENCE of streamed plan messages, not one. `renderStream` now takes
+  **`emitText: true`** (yields reply text as plain strings alongside the task
+  StreamChunks, in true stream order); `streamSegmented` consumes that combined
+  stream and cuts a new plan message whenever a task card arrives AFTER reply text
+  has streamed in the current block. So a turn that writes text, runs more tools,
+  then writes more renders as `[plan] text [plan] text` — the model can post an
+  in-between update and keep working in a fresh collapsible block, instead of
+  every tool piling into one plan pinned above all the text. Reply text is still
+  posted by `createReply` (`thread.post`, with its length-splitting/healing) —
+  `streamSegmented` just controls WHEN each plan message opens/closes around it,
+  and flushes buffered text before the next plan so ordering holds. The attempt's
+  **Thinking (model) card is completed at first reply text** so it finishes inside
+  its own block, not in a later one where its task id doesn't exist (which would
+  leave a perpetually spinning Thinking). Fallback attempts all run before any
+  text, so their model cards stay in the first block. A pure-text turn still opens
+  one block (the model card) then the text below it.
 
 ### Focus mode (respond to / see only chosen users in a thread)
 - `focusMode` tool (`tools/focus.ts`, core) locks kyto onto specific user ids in
@@ -629,15 +654,17 @@ Run these automatically after each completed change, in order, **without asking*
   subagent now drives its own message through the **shared `renderStream`**
   (`ai/stream/index.ts`) — the same interleaved `Thinking`/tool cards, in stream
   order, with each tool's real request/response detail — so it looks identical to
-  the main plan. On top it yields a **Prompt** card and a **Model** card
-  (`attempt.model`) up front, and streams the **response into the message body**
-  via `renderStream`'s new **`emitText: true`** option (text-deltas are yielded
-  as plain strings → `markdown_text`, in addition to going through `onTextDelta`,
-  which the subagent uses to accumulate the returned report). No "Working…"
-  placeholder anywhere. The parent's own plan still just shows the `runSubagent`
-  tool call; `runSubagentTool` still returns the report text to the parent model.
-  `ranTools` (set from `onToolActivity`) drives the "(Completed actions with no
-  additional message.)" fallback report.
+  the main plan. **EVERYTHING lives inside the ONE collapsible plan; nothing goes
+  in the message body.** It yields a **Prompt** card (the FULL task, unclamped)
+  and a **Model** card (`attempt.model`) up front, then the interleaved
+  thinking/tool cards, then a **Response** card holding the subagent's FULL final
+  reply. The response is captured via `onTextDelta` (NO `emitText` — it must NOT
+  stream to the body; it belongs in the Response card so the whole run stays in
+  one block). No "Working…" placeholder anywhere. The parent's own plan still just
+  shows the `runSubagent` tool call; `runSubagentTool` still returns the report
+  text to the parent model. `ranTools` (set from `onToolActivity`) is the empty-
+  report fallback signal. (`emitText` exists for the MAIN turn's streamSegmented —
+  see the Response-style section — not the subagent.)
 - The old **tool→parent-plan side-channel is gone** (`lib/agent/side-channel.ts`
   deleted; `buildTools`' `emitChunk` param and the `ChunkChannel`/`mergeStream`
   wiring in `agent/index.ts` removed) — the subagent's separate message replaces
@@ -1008,6 +1035,16 @@ Run these automatically after each completed change, in order, **without asking*
   rather than both `Thinking` and `Reasoning`. (The model task and reasoning
   task are still separate task ids, so a reasoning turn shows two `Thinking`
   rows; merging into literally one card is a possible follow-up.)
+  - **Each reasoning block gets a UNIQUE task id (July 2026).** Providers reuse
+    the same `part.id` (often `"0"`) for every step's reasoning, so keying the
+    task on `reasoning-${part.id}` collapsed ALL thinking into one row that
+    stayed pinned wherever it first appeared — which is why the plan looked like
+    "all thinking, then all tools" even though the model genuinely thinks between
+    tool calls. `renderStream` now mints `reasoning-${reasoningCounter++}` per
+    `reasoning-start` and maps the provider's (reused) id → that unique id in
+    `openReasoning` for the block's deltas/end. Result: each stretch of reasoning
+    is its own row landing in stream order, so the plan reads thinking → tool →
+    thinking → tool.
   Emitted **`in_progress` while the attempt runs** (so the activity indicator reads
   as working, never a misleading "completed" before anything has happened) and
   marked **`complete` exactly once** via the `completeModelTask()` guard
