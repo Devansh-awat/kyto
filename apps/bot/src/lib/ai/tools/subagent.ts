@@ -36,38 +36,51 @@ const depthStore = new AsyncLocalStorage<number>();
 
 // Bounds on the single subagent card so a long run can't blow up the message.
 const CARD_TASK_MAX = 500;
-const CARD_THINKING_MAX = 2000;
+const CARD_THINKING_MAX = 700;
 const CARD_REPORT_MAX = 2000;
 const CARD_TITLE_MAX = 80;
+const CARD_MAX_STEPS = 24;
 
-// Compose the ONE collapsible card the subagent posts: its prompt, the tools it
-// called (names only), its thinking (as kyto shows thinking), and its response —
-// all inside the single expandable block, nothing in the message body.
+// One step of the subagent's run, in the order it happened: a stretch of
+// reasoning, or a tool call.
+export type SubagentStep =
+  | { text: string; type: 'thinking' }
+  | { toolName: string; type: 'tool' };
+
+// Compose the ONE collapsible card the subagent posts: its prompt, then its run
+// as a CHRONOLOGICAL timeline (thinking → tool → more thinking → tool …), then
+// its response — all inside the single expandable block, nothing in the message
+// body. Reading it back should tell you what the subagent did, in order; a
+// thinking blob followed by a bare list of tool names does not.
 //
 // Slack takes a task's `output` ONCE, on the update that completes it: sending
 // it on an in_progress update froze the card at whatever it held then (just the
 // prompt, since nothing else had happened yet) and every later update was
-// ignored. So progress goes in `details` and the full body is only ever sent on
-// the completing update — the same shape every other task in the plan uses.
+// ignored. So the full body is only ever sent on the completing update — the
+// same shape every other task in the plan uses.
 function renderCard({
   report,
+  steps,
   task,
-  thinking,
-  toolsUsed,
 }: {
   report: string;
+  steps: SubagentStep[];
   task: string;
-  thinking: string;
-  toolsUsed: string[];
 }): string {
   const parts = [`Prompt: ${clamp(task, CARD_TASK_MAX) ?? task}`];
-  if (toolsUsed.length > 0) {
-    parts.push('', `Tools called: ${toolsUsed.join(', ')}`);
+  // Keep the most RECENT steps when a long run overflows: the tail is what led
+  // to the response, and the prompt above already says where it started.
+  const shown = steps.slice(-CARD_MAX_STEPS);
+  const dropped = steps.length - shown.length;
+  if (dropped > 0) {
+    parts.push('', `…${dropped} earlier step(s) omitted`);
   }
-  if (thinking.trim()) {
+  for (const step of shown) {
     parts.push(
       '',
-      `Thinking: ${clamp(thinking.trim(), CARD_THINKING_MAX) ?? thinking.trim()}`
+      step.type === 'tool'
+        ? `Tool: ${step.toolName}`
+        : `Thinking: ${clamp(step.text, CARD_THINKING_MAX) ?? step.text}`
     );
   }
   if (report.trim()) {
@@ -146,8 +159,19 @@ export function runSubagentTool({
 
         let close: (() => Promise<void>) | undefined;
         const toolsUsed: string[] = [];
+        // The run as it happened, so the card can replay it in order.
+        const steps: SubagentStep[] = [];
         let report = '';
+        // Reasoning arrives as deltas; buffer them until something else (a tool
+        // call, or the end of the run) closes off that stretch of thinking.
         let thinking = '';
+        const flushThinking = () => {
+          const text = thinking.trim();
+          thinking = '';
+          if (text) {
+            steps.push({ text, type: 'thinking' });
+          }
+        };
 
         try {
           const hints = await requestHints({ message, thread });
@@ -171,14 +195,16 @@ export function runSubagentTool({
 
           // Drive the subagent's stream into its OWN Slack message: ONE
           // collapsible card (authored as "kyto subagent") whose expanded body
-          // holds the prompt, tools called, thinking, and response. Nothing goes
-          // in the message body. While it runs, the card shows a progress line;
-          // the full body arrives with the completing update.
+          // holds the prompt, the run in order, and the response. Nothing goes
+          // in the message body.
+          //
+          // The card is yielded exactly TWICE: once to open it, once to complete
+          // it. Slack APPENDS a task's `details` on every update rather than
+          // replacing it, so re-sending a progress line per tool call stacked up
+          // as "Working…Working… 1 tool call(s)…Working… 2 tool call(s)…".
           const cardTitle = clamp(name ?? task, CARD_TITLE_MAX) ?? 'Subagent';
-          const progress = (): StreamChunk => ({
-            details: toolsUsed.length
-              ? `Working… ${toolsUsed.length} tool call(s): ${toolsUsed.join(', ')}`
-              : 'Working…',
+          const opening = (): StreamChunk => ({
+            details: 'Working…',
             id: 'subagent',
             status: 'in_progress',
             title: cardTitle,
@@ -186,7 +212,7 @@ export function runSubagentTool({
           });
           const done = (): StreamChunk => ({
             id: 'subagent',
-            output: renderCard({ report, task, thinking, toolsUsed }),
+            output: renderCard({ report, steps, task }),
             status: 'complete',
             title: cardTitle,
             type: 'task_update',
@@ -194,17 +220,21 @@ export function runSubagentTool({
           async function* subagentChunks(): AsyncGenerator<
             string | StreamChunk
           > {
-            yield progress();
+            yield opening();
             for await (const part of result.fullStream) {
               if (part.type === 'text-delta') {
                 report += part.text;
               } else if (part.type === 'reasoning-delta') {
                 thinking += part.text;
               } else if (part.type === 'tool-call') {
+                // Close off the thinking that led to this call, so the card
+                // reads thinking → tool → thinking → tool, in order.
+                flushThinking();
                 toolsUsed.push(part.toolName);
-                yield progress();
+                steps.push({ toolName: part.toolName, type: 'tool' });
               }
             }
+            flushThinking();
             yield done();
           }
 

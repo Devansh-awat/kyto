@@ -618,22 +618,29 @@ Run these automatically after each completed change, in order, **without asking*
   {name}") with that identity's icon — chatStream DOES support
   `username`/`icon_emoji`/`icon_url` (needs `chat:write.customize`). The message
   is **ONE collapsible card** (`renderCard`, single `id:'subagent'`) whose
-  expanded body holds, in order: **Prompt** (the task), **Tools called** (names
-  only), **Thinking** (accumulated reasoning, as kyto shows thinking), and
-  **Response** (the subagent's final text). NOTHING goes in the message body —
-  the response lives inside the card, not as loose markdown_text. The parent's
-  own plan just shows the `runSubagent` tool call; the response is NOT duplicated
-  there. `runSubagentTool` still returns the report text to the parent model so
-  it can act on it.
-  - **Slack takes a task's `output` ONCE, on the update that completes it**
-    (fixed July 2026 — the card used to expand to *only* the prompt). The old
-    code sent `output` on the FIRST `in_progress` chunk, when nothing but the
-    prompt existed yet; Slack froze the card there and ignored every later
-    update, including the completing one carrying tools/thinking/response. Now
-    progress goes in `details` (`Working… N tool call(s): …`) and the full body
-    is only ever sent on the `complete` chunk — the same shape every other task
-    in the plan already used (see `ai/stream/index.ts`: `details` while running,
-    `output` at completion). Do NOT put `output` on an `in_progress` chunk.
+  expanded body holds the **Prompt** (the task), then the run as a
+  **chronological timeline** (`Thinking:` → `Tool:` → `Thinking:` → `Tool:` …,
+  built from a `SubagentStep[]` — reasoning deltas buffer until a tool call or
+  the end of the run flushes them into a step), then the **Response**. NOTHING
+  goes in the message body — the response lives inside the card, not as loose
+  markdown_text. Old runs are trimmed from the FRONT (`CARD_MAX_STEPS`), keeping
+  the tail that led to the response. The parent's own plan just shows the
+  `runSubagent` tool call; the response is NOT duplicated there. `runSubagentTool`
+  still returns the report text to the parent model so it can act on it.
+  - **Two Slack `task_update` facts, both learned the hard way (July 2026).**
+    The card is yielded exactly TWICE: `in_progress` to open it, `complete` to
+    fill it.
+    1. **`output` is taken ONCE, on the update that COMPLETES the task.** The
+       original code sent `output` on the first `in_progress` chunk, when only
+       the prompt existed; Slack froze the card there and ignored every later
+       update — so the card expanded to *just the prompt*. Never put `output` on
+       an `in_progress` chunk.
+    2. **`details` APPENDS on every update, it does not replace.** Re-sending a
+       progress line per tool call stacked up literally as
+       `Working…Working… 1 tool call(s): searchWeb Working… 2 tool call(s): …`.
+       So the card sends `details` once, on the opening chunk.
+    Both match how `ai/stream/index.ts` already drives ordinary plan tasks
+    (`details` on the single in_progress yield, `output` at completion).
 - The old **tool→parent-plan side-channel is gone** (`lib/agent/side-channel.ts`
   deleted; `buildTools`' `emitChunk` param and the `ChunkChannel`/`mergeStream`
   wiring in `agent/index.ts` removed) — the subagent's separate message replaces
