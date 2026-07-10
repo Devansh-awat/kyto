@@ -5,10 +5,8 @@ import {
   subagentAttempt,
   subagentSystemPrompt,
 } from '@repo/ai';
-import { LazySandbox } from '@repo/sandbox';
 import { tool } from 'ai';
 import { z } from 'zod';
-import { env } from '@/env';
 import type { KytoBot, Message, StreamChunk, ThreadHandle } from '@/harness';
 import { requestHints } from '@/lib/ai/hints';
 import { renderStream } from '@/lib/ai/stream';
@@ -17,11 +15,11 @@ import { resolveIdentity } from '@/lib/identity';
 import logger from '@/lib/logger';
 import { errorMessage } from '@/lib/utils/error';
 
-// A subagent is a headless copy of kyto: its own fresh lazy sandbox, the same
-// full toolset (including this very tool, so it can delegate further), pinned to
-// a cheap model (Gemini flash-lite, else the best DigitalOcean BYOK model). It
-// runs the same multi-step tool loop as a normal turn (streamAttempt drives it)
-// and returns its final text as a report to the parent.
+// A subagent is a headless copy of kyto: it shares the PARENT THREAD's sandbox
+// (so it sees the files/state the parent set up, and vice versa), the same full
+// toolset, pinned to a cheap model (Gemini flash-lite, else the best DigitalOcean
+// BYOK model). It runs the same multi-step tool loop as a normal turn
+// (streamAttempt drives it) and returns its final text as a report to the parent.
 //
 // Its work is surfaced as ITS OWN streamed Slack message, posted under kyto's
 // bot but with the display name "kyto subagent" (+ optional name). It renders
@@ -39,10 +37,14 @@ const depthStore = new AsyncLocalStorage<number>();
 
 export function runSubagentTool({
   bot,
+  getSandboxContext,
   message,
   thread,
 }: {
   bot: KytoBot;
+  // The PARENT turn's sandbox context — the subagent runs in the SAME sandbox,
+  // so it shares the parent's files/workspace rather than booting its own.
+  getSandboxContext: () => SandboxContext;
   message: Message;
   thread: ThreadHandle;
 }) {
@@ -85,25 +87,23 @@ export function runSubagentTool({
           success: false,
         };
       }
-      // depthStore.run STARTS the job and returns its promise. Foreground: await
-      // it and hand the report back. Background: don't await — the subagent runs
-      // on independently (its own sandbox, its own streamed message), so the
-      // parent model gets control back this step and can do other work while it
-      // runs. It's tied to the parent turn's abort signal, so a user interrupt
-      // still stops it, but normal parent completion leaves it running.
+      // depthStore.run STARTS the job and returns its promise. Foreground
+      // (default): await it and hand the report back to the parent model as this
+      // tool call's RESULT — the next step sees the report and answers from it.
+      // Background: don't await — the parent model gets control back this step and
+      // keeps working while the subagent runs and posts its own message. It's
+      // tied to the parent turn's abort signal (a user interrupt stops it).
+      // Because the subagent shares the PARENT's sandbox, a foreground subagent is
+      // always safe (the parent is paused mid-tool-call, still holding the sandbox
+      // lock); a background one is best for quick side-tasks — if it runs long
+      // after the parent turn ends, the sandbox is paused and its next sandbox
+      // command transparently resumes it.
       const job = depthStore.run(depth + 1, async () => {
-        // A fresh lazy sandbox, distinct from the caller's — materializes only
-        // if the subagent actually uses a sandbox tool, destroyed at the end.
-        const sandboxSession = new LazySandbox({
-          apiKey: env.E2B_API_KEY,
-          githubToken: env.GH_TOKEN,
-          logger,
-          sessionId: `${thread.id}-subagent-${crypto.randomUUID()}`,
-        });
-        const sandboxContext: SandboxContext = {
-          session: sandboxSession,
-          sessionWorkDir: sandboxSession.workDir,
-        };
+        // Share the PARENT turn's sandbox — the subagent works in the same
+        // filesystem the parent set up (and leaves its own work there for the
+        // parent to pick up). The parent owns this sandbox's lifecycle (it pauses
+        // it at turn end), so the subagent must NOT create or destroy it.
+        const sandboxContext = getSandboxContext();
         // Lazy import breaks the cycle: toolset.ts registers this tool, and
         // this tool needs toolset.ts's buildTools to give the subagent its own
         // full set (recursion is bounded by the depth cap above).
@@ -218,8 +218,9 @@ export function runSubagentTool({
         } catch (error) {
           return { error: errorMessage(error), success: false };
         } finally {
+          // Only tear down the per-turn MCP/tool connections. The sandbox is the
+          // parent's — the parent pauses it at turn end, so don't destroy it here.
           await close?.().catch(() => undefined);
-          await sandboxSession.destroy().catch(() => undefined);
         }
       });
 

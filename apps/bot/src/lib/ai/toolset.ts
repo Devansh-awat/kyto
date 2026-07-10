@@ -267,7 +267,12 @@ export async function buildTools({
           runSubagent: {
             summary:
               'delegate a task to a headless subagent that returns a report',
-            tool: runSubagentTool({ bot, message, thread }),
+            tool: runSubagentTool({
+              getSandboxContext,
+              bot,
+              message,
+              thread,
+            }),
           },
         }
       : {}),

@@ -287,8 +287,11 @@ Run these automatically after each completed change, in order, **without asking*
   `textToSpeech` (Replicate via HackClub's proxy `HACKCLUB_REPLICATE_API_KEY`,
   else Gemini TTS; uploads audio to the thread — deferred), `unreact` (removes a
   reaction; added `SlackHarness.removeReaction`), and `runSubagent` (see below).
-- **Subagent** (`tools/subagent.ts`): a headless copy of kyto — its own fresh
-  `LazySandbox`, the full toolset, run through `streamAttempt` (same multi-step loop as a
+- **Subagent** (`tools/subagent.ts`): a headless copy of kyto — it **shares the
+  parent turn's sandbox** (`getSandboxContext` is threaded in from `toolset.ts`,
+  July 2026; was its own fresh `LazySandbox`) so it works in the same filesystem
+  the parent set up and leaves its output there for the parent, the full toolset,
+  run through `streamAttempt` (same multi-step loop as a
   real turn) but NOT streamed to Slack; returns only its final text as a report.
   Pinned to a cheap model via `subagentAttempt` (`packages/ai` — Gemini
   `gemini-3.1-flash-lite` when `GEMINI_API_KEY` is set, else the best
@@ -298,14 +301,27 @@ Run these automatically after each completed change, in order, **without asking*
   1`): a subagent may NOT spawn a further subagent — the `runSubagent` call
   inside a subagent returns the nesting-limit error. (Was 2; dropped at the
   owner's request — a second level is cost/time risk for no real use.)
+  - **Shared sandbox (July 2026).** The subagent no longer boots its own E2B
+    sandbox — `runSubagentTool` takes the parent's `getSandboxContext` and uses
+    it, so parent and subagent share ONE filesystem. The subagent must NOT
+    create or destroy it (its `finally` only closes per-turn tool/MCP
+    connections); the parent owns the lifecycle and pauses it at turn end.
+  - **How the report gets back to the parent:** the foreground path does
+    `return await job`, and `job` resolves to `{ report, success: true }`. That
+    object is this tool call's RESULT, which the AI SDK feeds back into the loop
+    as a `tool` message; on the parent's NEXT step the model reads the report
+    text and answers from it. (Empty run → `ranTools` gives a "(Completed
+    actions…)" report; a thrown error → `{ error, success:false }`.)
   - **Background subagents (`background: true`).** `depthStore.run` starts the
     job and returns its promise; foreground (default) awaits it and returns the
-    report, background does NOT await — it fires the job off (own sandbox, own
-    streamed message) and returns immediately with a "running in the background"
-    note so the parent model gets control back and can keep working in parallel.
-    The job is still tied to the parent turn's abort signal (a user interrupt
-    stops it) but normal parent completion leaves it running to post its own
-    message. Use background only when the parent doesn't need the report. The
+    report, background does NOT await — it fires the job off (shares the sandbox,
+    posts its own streamed message) and returns immediately with a "running in
+    the background" note (NO report), so the parent model gets control back and
+    keeps working in parallel. Tied to the parent turn's abort signal (a user
+    interrupt stops it); normal parent completion leaves it running. Since it
+    shares the parent sandbox, background is best for quick side-tasks — a long
+    one that outlives the turn hits a paused sandbox that its next command
+    resumes. Use background only when the parent doesn't need the report. The
     core prompt's parallel section points the model at it.
 - **Usage footer** (`agent/index.ts` `postUsageFooter`): after a reply, kyto
   posts a muted Slack **context block** showing `<output tokens> tokens · <N>
