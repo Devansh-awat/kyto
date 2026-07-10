@@ -286,7 +286,8 @@ Run these automatically after each completed change, in order, **without asking*
   pause — core), `deleteFile`/`fileStat` (workspace file ops — core),
   `textToSpeech` (Replicate via HackClub's proxy `HACKCLUB_REPLICATE_API_KEY`,
   else Gemini TTS; uploads audio to the thread — deferred), `unreact` (removes a
-  reaction; added `SlackHarness.removeReaction`), and `runSubagent` (see below).
+  reaction; added `SlackHarness.removeReaction`), and
+  `runSubagent`/`checkSubagent` (see below).
 - **Subagent** (`tools/subagent.ts`): a headless copy of kyto — it **shares the
   parent turn's sandbox** (`getSandboxContext` is threaded in from `toolset.ts`,
   July 2026; was its own fresh `LazySandbox`) so it works in the same filesystem
@@ -312,17 +313,25 @@ Run these automatically after each completed change, in order, **without asking*
     as a `tool` message; on the parent's NEXT step the model reads the report
     text and answers from it. (Empty run → `ranTools` gives a "(Completed
     actions…)" report; a thrown error → `{ error, success:false }`.)
-  - **Background subagents (`background: true`).** `depthStore.run` starts the
-    job and returns its promise; foreground (default) awaits it and returns the
-    report, background does NOT await — it fires the job off (shares the sandbox,
-    posts its own streamed message) and returns immediately with a "running in
-    the background" note (NO report), so the parent model gets control back and
-    keeps working in parallel. Tied to the parent turn's abort signal (a user
-    interrupt stops it); normal parent completion leaves it running. Since it
-    shares the parent sandbox, background is best for quick side-tasks — a long
-    one that outlives the turn hits a paused sandbox that its next command
-    resumes. Use background only when the parent doesn't need the report. The
-    core prompt's parallel section points the model at it.
+  - **Background subagents + `checkSubagent` (`background: true`).**
+    `depthStore.run` starts the job and returns its promise; foreground (default)
+    awaits it and returns the report. Background does NOT await — it registers the
+    job in an **in-turn registry** (`jobs` Map keyed `sub-1`, `sub-2`… — same
+    lifetime model as the bash background-process trio) under a **job id**, fires
+    it off (shares the sandbox, posts its own streamed message), and returns
+    immediately with that id + a note. The parent model keeps working, then calls
+    **`checkSubagent`** to collect it: no id → lists every background subagent and
+    its status (`running`/`done`/`failed`); with an `id` → returns status and, if
+    finished, the full report; `wait: true` blocks until it finishes then returns
+    the report. `runSubagentTool` now returns `{ runSubagent, checkSubagent }` and
+    both are deferred (registered together in `toolset.ts` via an IIFE sharing the
+    registry). A `job.then` keeps each record's `status`/`result` current. Tied to
+    the parent turn's abort signal (a user interrupt resolves the wait). The
+    registry is per-turn, so background+collect works WITHIN a turn (cross-turn
+    checking isn't supported — same as bash background processes). This is the
+    join mechanism that lets the parent both parallelize AND get the output back
+    (the reason `background` returns an id, not the report). Core prompt's
+    parallel section points the model at `background`/`checkSubagent`.
 - **Usage footer** (`agent/index.ts` `postUsageFooter`): after a reply, kyto
   posts a muted Slack **context block** showing `<output tokens> tokens · <N>
   tok/s`, captured from the successful attempt's `result.usage` + elapsed time.

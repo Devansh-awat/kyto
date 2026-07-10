@@ -263,18 +263,26 @@ export async function buildTools({
         }
       : {}),
     ...(subagentAttempt
-      ? {
-          runSubagent: {
-            summary:
-              'delegate a task to a headless subagent that returns a report',
-            tool: runSubagentTool({
-              getSandboxContext,
-              bot,
-              message,
-              thread,
-            }),
-          },
-        }
+      ? (() => {
+          const subagent = runSubagentTool({
+            getSandboxContext,
+            bot,
+            message,
+            thread,
+          });
+          return {
+            runSubagent: {
+              summary:
+                'delegate a task to a headless subagent that returns a report',
+              tool: subagent.runSubagent,
+            },
+            checkSubagent: {
+              summary:
+                'check / collect a background subagent started with runSubagent',
+              tool: subagent.checkSubagent,
+            },
+          };
+        })()
       : {}),
     ...(ttsAvailable
       ? {
