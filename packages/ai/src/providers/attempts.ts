@@ -145,11 +145,18 @@ export function geminiAttempt(model: string): ModelAttempt | undefined {
     : undefined;
 }
 
-// The model a subagent runs on: the cheap Gemini flash-lite tier when the
-// owner's key is set, else the best DigitalOcean BYOK model. Undefined only
-// when neither is configured (the subagent tool then isn't registered).
-export const subagentAttempt: ModelAttempt | undefined =
-  geminiAttempt('gemini-3.1-flash-lite') ?? digitaloceanAttempts[0];
+// The models a subagent runs on, best-value first: the cheap Gemini flash-lite
+// tier when the owner's key is set, then the DigitalOcean BYOK roster. A
+// subagent walks this list on failure OR on an empty report — the cheap tier
+// returns an empty completion often enough that a single pinned model made a
+// "herd" of subagents mostly report nothing back.
+export const subagentAttempts: ModelAttempt[] = [
+  geminiAttempt('gemini-3.1-flash-lite'),
+  ...digitaloceanAttempts,
+].filter((attempt): attempt is ModelAttempt => attempt !== undefined);
+
+/** The subagent's primary model; undefined = no subagent model configured. */
+export const subagentAttempt: ModelAttempt | undefined = subagentAttempts[0];
 
 // The owner's arena leaderboard, best→worst, restricted to models reachable on
 // HackClub. Fable 5 (rank #1) is reachable (`anthropic/claude-fable-5`) but

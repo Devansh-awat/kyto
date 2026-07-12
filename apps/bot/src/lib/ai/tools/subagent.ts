@@ -1,8 +1,9 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import {
+  type ModelAttempt,
   type SandboxContext,
   streamAttempt,
-  subagentAttempt,
+  subagentAttempts,
   subagentSystemPrompt,
 } from '@repo/ai';
 import { tool } from 'ai';
@@ -94,8 +95,7 @@ export function runSubagentTool({
         ),
     }),
     execute: async ({ task, name, background }, { abortSignal }) => {
-      const attempt = subagentAttempt;
-      if (!attempt) {
+      if (subagentAttempts.length === 0) {
         return {
           error:
             'No subagent model is configured (needs GEMINI_API_KEY or OPENROUTER_API_KEY).',
@@ -141,9 +141,11 @@ export function runSubagentTool({
           let close: (() => Promise<void>) | undefined;
           let ranTools = false;
           let report = '';
+          let lastError: unknown;
 
           try {
             const hints = await requestHints({ message, thread });
+            const system = subagentSystemPrompt({ hints });
             const built = await buildTools({
               bot,
               getSandboxContext: () => sandboxContext,
@@ -151,59 +153,99 @@ export function runSubagentTool({
               thread,
             });
             close = built.close;
-
-            const result = streamAttempt({
-              abortSignal,
-              activeTools: built.activeTools,
-              attempt,
-              holder: {},
-              prompt: task,
-              system: subagentSystemPrompt({ hints }),
-              tools: built.tools,
-            });
+            const knownTools = new Set(Object.keys(built.tools));
 
             // Drive the subagent's stream into its OWN Slack message, authored as
             // "kyto subagent". EVERYTHING lives inside the ONE collapsible plan —
             // nothing in the message body. It renders like a real turn: a Prompt
-            // card (FULL task, unclamped), a Model card, then the SAME interleaved
-            // thinking/tool cards a normal turn shows (shared renderStream, in
-            // stream order), then a Response card holding the subagent's FULL final
-            // reply. No "Working…" placeholder — each card carries its own output.
+            // card (FULL task, unclamped), a Model card per attempt, then the SAME
+            // interleaved thinking/tool cards a normal turn shows (shared
+            // renderStream, in stream order), then a Response card holding the
+            // subagent's FULL final reply.
             const card = (
               id: string,
               title: string,
-              status: 'complete' | 'in_progress',
+              status: 'complete' | 'error' | 'in_progress',
               output?: string
             ): StreamChunk => ({
               id,
-              output: status === 'complete' ? (output ?? '') : '',
+              output: status === 'in_progress' ? '' : (output ?? ''),
               status,
               title,
               type: 'task_update',
             });
-            // Captured here where `attempt` is narrowed non-null; the nested
-            // generator below loses that narrowing.
-            const modelName = attempt.model;
+
             async function* subagentChunks(): AsyncGenerator<
               string | StreamChunk
             > {
               yield card('prompt', 'Prompt', 'in_progress');
               yield card('prompt', 'Prompt', 'complete', task);
-              yield card('model', 'Model', 'in_progress');
-              yield card('model', 'Model', 'complete', modelName);
-              // No emitText: the response is NOT streamed to the body; it's
-              // captured here and shown as the Response card below, so the whole
-              // run stays inside the single collapsible block.
-              yield* renderStream({
-                knownTools: new Set(Object.keys(built.tools)),
-                onTextDelta: (text) => {
-                  report += text;
-                },
-                onToolActivity: () => {
-                  ranTools = true;
-                },
-                stream: result.fullStream,
-              });
+              // Walk the subagent roster. The cheap pinned tier returns an empty
+              // completion often enough that a single model left a whole "herd"
+              // of subagents reporting nothing back, so an attempt that produces
+              // NO report (empty stream, or a thrown provider error) falls through
+              // to the next model instead of failing the delegation.
+              for (const [index, attempt] of subagentAttempts.entries()) {
+                const modelTaskId = `model-${index}`;
+                const modelTitle = index > 0 ? 'Model · fallback' : 'Model';
+                yield card(modelTaskId, modelTitle, 'in_progress');
+                try {
+                  const result = streamAttempt({
+                    abortSignal,
+                    activeTools: built.activeTools,
+                    attempt,
+                    holder: {},
+                    prompt: task,
+                    system,
+                    tools: built.tools,
+                  });
+                  // No emitText: the response is NOT streamed to the body; it's
+                  // captured here and shown as the Response card below, so the
+                  // whole run stays inside the single collapsible block.
+                  yield* renderStream({
+                    knownTools,
+                    onTextDelta: (text) => {
+                      report += text;
+                    },
+                    onToolActivity: () => {
+                      ranTools = true;
+                    },
+                    stream: result.fullStream,
+                  });
+                  yield card(
+                    modelTaskId,
+                    modelTitle,
+                    'complete',
+                    attempt.model
+                  );
+                } catch (error) {
+                  lastError = error;
+                  yield card(
+                    modelTaskId,
+                    modelTitle,
+                    'error',
+                    errorMessage(error)
+                  );
+                }
+                // A model that ran tools but wrote nothing leaves the parent with
+                // "(Completed actions…)" — technically a success, useless as a
+                // report. Ask THIS model to write it up, with tools OFF so no side
+                // effect can fire twice. Same nudge the main turn uses.
+                if (!report.trim() && ranTools) {
+                  report = await synthesizeReport({
+                    abortSignal,
+                    attempt,
+                    system,
+                    task,
+                  }).catch(() => '');
+                }
+                if (report.trim()) {
+                  break;
+                }
+                if (abortSignal?.aborted) {
+                  break;
+                }
+              }
               const finalReport = report.trim();
               if (finalReport || ranTools) {
                 yield card('response', 'Response', 'in_progress');
@@ -237,7 +279,9 @@ export function runSubagentTool({
               };
             }
             return {
-              error: 'Subagent produced an empty report.',
+              error: lastError
+                ? `Subagent failed on every model. Last error: ${errorMessage(lastError)}`
+                : 'Subagent produced an empty report.',
               success: false,
             };
           } catch (error) {
@@ -351,4 +395,34 @@ export function runSubagentTool({
   });
 
   return { checkSubagent, runSubagent };
+}
+
+// A subagent that ran its tools and then stopped without writing anything gives
+// the parent nothing to work with. Re-ask the SAME model, once, with tools OFF:
+// it can only produce prose, so no side effect can happen twice, and the parent
+// gets the findings instead of "(Completed actions…)".
+async function synthesizeReport({
+  abortSignal,
+  attempt,
+  system,
+  task,
+}: {
+  abortSignal?: AbortSignal;
+  attempt: ModelAttempt;
+  system: string;
+  task: string;
+}): Promise<string> {
+  const result = streamAttempt({
+    abortSignal,
+    attempt,
+    holder: {},
+    prompt: `${task}\n\nYou already did the work above. Write your final report now — the findings, in full. Do not call any tools.`,
+    system,
+    tools: {},
+  });
+  let text = '';
+  for await (const delta of result.textStream) {
+    text += delta;
+  }
+  return text.trim();
 }

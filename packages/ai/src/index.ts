@@ -16,6 +16,7 @@ export {
   type ModelAttempt,
   ROUTER_MODEL,
   subagentAttempt,
+  subagentAttempts,
 } from './providers/attempts';
 export { provider } from './providers/models';
 export type { SandboxContext } from './types';

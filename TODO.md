@@ -6,6 +6,10 @@ lives in `plans/rewrite.md`.
 
 ## Slack Context And History
 
+### Reasoning Trace Context
+
+- [ ] Persist and pass previous turns' reasoning/thinking traces into the reconstructed thread history, so Kyto has access to its past internal thoughts and calculations (e.g. number guessing values) instead of only reconstructing from plain user/assistant Slack text.
+
 ### Summaries
 
 - [ ] Revisit `summarizeThread` subagent design after there is an ephemeral
@@ -124,6 +128,12 @@ lives in `plans/rewrite.md`.
   `qwen3.7-max` via `opencode-go` returned a Cloudflare 524
   `origin_response_timeout` from `dashscope-us.aliyuncs.com` with
   `retryable: true` and `retry_after: 120`.
+
+### Sandbox Wait & Logging
+
+- [ ] Wait tool should work up to 1 hour (currently only works up to 240 seconds).
+- [ ] Add an optional parameter to the wait tool to pause the sandbox during the wait period to save E2B compute costs.
+- [ ] Improve logging across the agent turn lifecycle to catch more silent or transient errors.
 
 ## Models, BYOK, And Providers
 

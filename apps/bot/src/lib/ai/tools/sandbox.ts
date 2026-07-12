@@ -27,7 +27,7 @@ export function bashTool({
 }) {
   return tool({
     description:
-      'Run a bash command in your isolated Linux sandbox (network access, common CLIs, bun/node/python preinstalled). The workspace is ephemeral — it starts empty each turn and is destroyed at turn end.',
+      'Run a bash command in your isolated Linux sandbox (network access, common CLIs, bun/node/python preinstalled). The workspace PERSISTS across turns in this thread — files you write and packages you install are still there next time.',
     inputSchema: z.object({
       command: z.string().describe('The bash command to run.'),
       workingDirectory: z
@@ -93,19 +93,36 @@ export function writeFileTool({
 }) {
   return tool({
     description:
-      'Write a text file in the sandbox workspace (creates parent directories, overwrites existing content).',
+      'Write a text file in the sandbox workspace (creates parent directories, overwrites existing content). Your reply — including this tool call — is capped at a few thousand tokens, so a single call CANNOT carry a very large file: content over roughly 400 lines gets cut off mid-argument. Write a big file in successive chunks instead — the first call with append:false, each following call with append:true.',
     inputSchema: z.object({
+      append: z
+        .boolean()
+        .optional()
+        .describe(
+          'Append to the file instead of overwriting it. Use this to build a large file across several calls.'
+        ),
       content: z.string(),
       path: z.string(),
     }),
-    execute: async ({ content, path }) => {
+    execute: async ({ append, content, path }) => {
       const context = getSandboxContext();
       const resolved = resolvePath(context, path);
+      const existing = append
+        ? await context.session.readBinaryFile({ path: resolved })
+        : null;
+      const next = existing
+        ? `${new TextDecoder().decode(existing)}${content}`
+        : content;
       await context.session.writeBinaryFile({
-        content: new TextEncoder().encode(content),
+        content: new TextEncoder().encode(next),
         path: resolved,
       });
-      return { bytes: content.length, path: resolved, written: true };
+      return {
+        appended: Boolean(append),
+        bytes: next.length,
+        path: resolved,
+        written: true,
+      };
     },
   });
 }

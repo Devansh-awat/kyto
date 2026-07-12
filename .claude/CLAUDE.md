@@ -1,1307 +1,218 @@
-# Ultracite Code Standards
+# Code standards
 
-This project uses **Ultracite**, a zero-config preset that enforces strict code quality standards through automated formatting and linting.
+**Ultracite** (a Biome preset) enforces formatting and lint. Run `bun x ultracite fix` before committing; `bun x ultracite check` to lint. It auto-fixes most style issues, so spend your own attention on business-logic correctness, naming, architecture, edge cases, and UX instead.
 
-## Quick Reference
-
-- **Format code**: `bun x ultracite fix`
-- **Check for issues**: `bun x ultracite check`
-- **Diagnose setup**: `bun x ultracite doctor`
-
-Biome (the underlying engine) provides robust linting and formatting. Most issues are automatically fixable.
+House style beyond what Biome catches: explicit types where they aid clarity and `unknown` over `any`; `const` by default; `for...of` over `.forEach()`; early returns over nesting; named constants over magic numbers; `Error` objects with real messages; no `console.log`/`debugger` in production; no barrel files; validate input.
 
 ---
 
-## Core Principles
+# Project Notes (Kyto Slack bot)
 
-Write code that is **accessible, performant, type-safe, and maintainable**. Focus on clarity and explicit intent over brevity.
+> **Keep this file current.** When you add, remove, or change a feature (an agent
+> tool, a scope, a config flag, a gating rule), update the relevant note in the
+> SAME change, proactively. Stale notes are worse than none.
+>
+> **This file has a 40k character budget.** It has blown past it before. When you
+> add a note, keep it to the durable *what and why* — delete the post-mortem
+> narrative and any "[historical]" detail that no longer describes live code.
 
-### Type Safety & Explicitness
-
-- Use explicit types for function parameters and return values when they enhance clarity
-- Prefer `unknown` over `any` when the type is genuinely unknown
-- Use const assertions (`as const`) for immutable values and literal types
-- Leverage TypeScript's type narrowing instead of type assertions
-- Use meaningful variable names instead of magic numbers - extract constants with descriptive names
-
-### Modern JavaScript/TypeScript
-
-- Use arrow functions for callbacks and short functions
-- Prefer `for...of` loops over `.forEach()` and indexed `for` loops
-- Use optional chaining (`?.`) and nullish coalescing (`??`) for safer property access
-- Prefer template literals over string concatenation
-- Use destructuring for object and array assignments
-- Use `const` by default, `let` only when reassignment is needed, never `var`
-
-### Async & Promises
-
-- Always `await` promises in async functions - don't forget to use the return value
-- Use `async/await` syntax instead of promise chains for better readability
-- Handle errors appropriately in async code with try-catch blocks
-- Don't use async functions as Promise executors
-
-### React & JSX
-
-- Use function components over class components
-- Call hooks at the top level only, never conditionally
-- Specify all dependencies in hook dependency arrays correctly
-- Use the `key` prop for elements in iterables (prefer unique IDs over array indices)
-- Nest children between opening and closing tags instead of passing as props
-- Don't define components inside other components
-- Use semantic HTML and ARIA attributes for accessibility:
-  - Provide meaningful alt text for images
-  - Use proper heading hierarchy
-  - Add labels for form inputs
-  - Include keyboard event handlers alongside mouse events
-  - Use semantic elements (`<button>`, `<nav>`, etc.) instead of divs with roles
-
-### Error Handling & Debugging
-
-- Remove `console.log`, `debugger`, and `alert` statements from production code
-- Throw `Error` objects with descriptive messages, not strings or other values
-- Use `try-catch` blocks meaningfully - don't catch errors just to rethrow them
-- Prefer early returns over nested conditionals for error cases
-
-### Code Organization
-
-- Keep functions focused and under reasonable cognitive complexity limits
-- Extract complex conditions into well-named boolean variables
-- Use early returns to reduce nesting
-- Prefer simple conditionals over nested ternary operators
-- Group related code together and separate concerns
-
-### Security
-
-- Add `rel="noopener"` when using `target="_blank"` on links
-- Avoid `dangerouslySetInnerHTML` unless absolutely necessary
-- Don't use `eval()` or assign directly to `document.cookie`
-- Validate and sanitize user input
-
-### Performance
-
-- Avoid spread syntax in accumulators within loops
-- Use top-level regex literals instead of creating them in loops
-- Prefer specific imports over namespace imports
-- Avoid barrel files (index files that re-export everything)
-- Use proper image components (e.g., Next.js `<Image>`) over `<img>` tags
-
-### Framework-Specific Guidance
-
-**Next.js:**
-
-- Use Next.js `<Image>` component for images
-- Use `next/head` or App Router metadata API for head elements
-- Use Server Components for async data fetching instead of async Client Components
-
-**React 19+:**
-
-- Use ref as a prop instead of `React.forwardRef`
-
-**Solid/Svelte/Vue/Qwik:**
-
-- Use `class` and `for` attributes (not `className` or `htmlFor`)
-
----
-
-## Testing
-
-- Write assertions inside `it()` or `test()` blocks
-- Avoid done callbacks in async tests - use async/await instead
-- Don't use `.only` or `.skip` in committed code
-- Keep test suites reasonably flat - avoid excessive `describe` nesting
-
-## When Biome Can't Help
-
-Biome's linter will catch most issues automatically. Focus your attention on:
-
-1. **Business logic correctness** - Biome can't validate your algorithms
-2. **Meaningful naming** - Use descriptive names for functions, variables, and types
-3. **Architecture decisions** - Component structure, data flow, and API design
-4. **Edge cases** - Handle boundary conditions and error states
-5. **User experience** - Accessibility, performance, and usability considerations
-6. **Documentation** - Add comments for complex logic, but prefer self-documenting code
-
----
-
-Most formatting and common issues are automatically fixed by Biome. Run `bun x ultracite fix` before committing to ensure compliance.
-
----
-
-## Project Notes (Kyto Slack bot)
-
-> **Keep this section current.** Whenever you add, remove, or change a feature
-> (a new agent tool, a changed scope, a config flag, gating rules, etc.), update
-> the relevant note below in the same change — do this proactively, without
-> asking for permission. Treat these notes as living documentation — stale notes
-> are worse than none.
-
-> **Build features FULLY, not minimally.** When asked to add a tool or feature,
-> don't ship the happy-path minimum — think through its whole lifecycle and the
-> obvious follow-on capabilities a user will expect, and build them in (or at
-> least raise them). Example: site deployment isn't just "publish" — it needs
-> "can it be edited? removed? by whom? who owns it? multiple pages?" (all of
-> which the `deploySite`/`sites` feature grew). Same reflex for any new agent
-> capability: creation, editing, removal, listing, ownership/permission gating,
+> **Build features FULLY, not minimally.** A new tool isn't just its happy path —
+> think through creation, editing, removal, listing, ownership/permission gating,
 > persistence across restarts, and how the model manages it. If a dimension
-> genuinely shouldn't exist, say why; don't just silently omit it.
+> genuinely shouldn't exist, say why; don't silently omit it.
 
-### After every change (auto workflow — this is a private repo)
-Run these automatically after each completed change, in order, **without asking**:
-1. **Auto-commit.** Commit the change locally with a clear conventional-commit
-   message, keeping these doc notes updated in the same commit. One logical
-   change = one commit.
-2. **Sync the Slack manifest if it changed.** If the change touched
-   `slack-manifest.json` (new tool/scope, command, display text, etc.), run
-   `bun run sync:manifest` from `apps/bot` to push it to the Slack app config.
-   (Needs the app config token env vars — see the Manifest sync note. Scope
-   changes still require reinstalling the app.)
-3. **Restart the bot** so the running process picks up the change. The bot runs
-   under **systemd** as `kyto.service` (unit tracked in-repo at
-   `deploy/kyto.service`; `WorkingDirectory=/root/kyto/apps/bot`,
-   `ExecStart=/root/.bun/bin/bun run src/index.ts`, `Restart=always`, enabled on
-   boot). Restart with `systemctl restart kyto.service`; check it with
-   `systemctl status kyto.service` and `journalctl -u kyto.service -n 30 -o cat`
-   (look for `kyto (…) is online`). Do NOT hand-launch `bun run start:bot` — a
-   manual process becomes a **second Socket Mode connection** that competes with
-   the service for events (Slack delivers each event to only ONE connection). If
-   the unit file itself changed, `sudo systemctl daemon-reload` first.
-4. **Push to the private repo** (`origin` →
-   `github.com/Devansh-awat/kyto.git`). After committing, `git push origin` the
-   current branch automatically, **without asking**. This is the owner's private
-   repo, so pushing is pre-authorized.
+## After every change (auto workflow — private repo, all pre-authorized)
 
-- **NEVER push to `upstream`** (`github.com/imdevarsh/gorkie-slack.git`, the
-  fork source). Auto-push is `origin` only.
-- **Opening a PR still asks first.** Auto-commit/restart/sync/push-to-origin are
-  pre-authorized; `gh pr create` (or any cross-repo publish) requires explicit
-  user confirmation.
+Run these automatically after each completed change, **without asking**:
 
-### Architecture — fully custom harness (July 2026 rewrite)
-- **The Vercel Chat SDK (`chat`/`@chat-adapter/slack`/`state-pg`), the Pi agent
-  framework, and `@ai-sdk/harness*` were completely removed** in a ground-up
-  rewrite. Kyto now runs on:
-  - **Custom Slack harness** (`apps/bot/src/harness/`): `@slack/socket-mode` +
-    `@slack/web-api` directly. `SlackHarness` (`harness.ts`) is the Web API
-    facade (thread-id codec `slack:CHANNEL[:TS]`, message building,
-    fetch/history/listThreads, reactions, assistant status/prompts, native
-    streaming via `webClient.chatStream` — task cards use the same
-    `task_update` chunk shape as before, `task_display_mode: 'plan'`).
-    `KytoBot` (`bot.ts`) owns the Socket Mode connection and event routing
-    (`onNewMention`/`onDirectMessage`/`onSubscribedMessage`/`onAction`/
-    `onModalSubmit`/`onAppHomeOpened`/assistant events/`onMemberJoinedChannel`
-    — same handler names as the old chat-sdk, so call-sites barely changed).
-    `ThreadHandle` (`thread.ts`) is the thread surface: `post` (Block Kit
-    native `markdown` blocks; files via `filesUploadV2`; **per-message profile
-    overrides** via `username`/`iconUrl`/`iconEmoji` — needs the
-    `chat:write.customize` scope, added to the manifest), `postEphemeral`,
-    `schedule`, `subscribe`/`setState` (thread subscriptions now live in our
-    own `thread_subscriptions` Postgres table + 30s in-memory cache — the
-    chat-sdk state-pg tables are orphaned), `fetchMetadata`. `app_mention`
-    events are deliberately ignored — everything routes off `message` events
-    (mention = text contains the bot id), which is what kills the old
-    dupe/dedupe problem. Slash command `/kyto` is acked with a help line in
-    the router. Every message threads (top-level DM/channel message roots its
-    own thread) — the old DM-threading `bun patch` is gone with the adapter.
-  - **Custom agent loop** on `ai` `streamText` (`packages/ai/src/agent.ts`
-    `streamAttempt` + `apps/bot/src/lib/agent/index.ts`): multi-step tool loop
-    (`stopWhen: stepCountIs(60)`), per-attempt `@ai-sdk/openai-compatible`
-    provider. The old **global fetch interceptor is gone** — a per-provider
-    `fetch` in `streamAttempt` injects the `auto-router` plugin
-    (`ALLOWED_MODELS`/`COST_QUALITY_TRADEOFF`, now in
-    `packages/ai/src/providers/attempts.ts`), adds `reasoning: {effort:
-    'medium'}` on HackClub, and captures the resolved model into a per-attempt
-    `ResolvedModelHolder` (no AsyncLocalStorage). `max_tokens` capping is now
-    just `maxOutputTokens: MAX_OUTPUT_TOKENS` (8000) on HackClub attempts.
-    The fallback state machine (auto → pinned resolved retry → leaderboard
-    up/down walk, spend-limit-429 → straight to Gemini, carryover of gathered
-    tool results, per-attempt watchdog, clean-stop handled check) ported
-    unchanged. `renderStream` consumes `result.fullStream` (same
-    `TextStreamPart` shapes). System prompt goes directly to `streamText` —
-    the SYSTEM.md tmp-file hack died with Pi. Old `attempts.ts` → `attempts.ts`
-    (`PiAttempt` → `ModelAttempt {provider, model, baseURL, apiKey}`); the
-    dead catalog/attemptsFor/deepFallback exports were deleted.
-  - **Sandbox tools are ours** (`apps/bot/src/lib/ai/tools/sandbox.ts`):
-    `bash`, `readFile`, `writeFile`, `editFile` run against `LazySandbox`
-    (`packages/sandbox/src/lazy-sandbox.ts`) — E2B `Sandbox.create` happens on
-    the FIRST tool call that needs it (chat-only turns cost zero E2B), killed
-    at turn end. The old harness-bootstrap command-faking (`lazy-session.ts`)
-    is gone — nothing to fake when we own the loop. Pi skills are gone too.
-  - **Deferred tools**: uncommon tools (browser, email trio, canvasDelete,
-    createChannel, setChannelTopic, bookmarkLink, pins, poll, mermaid,
-    sendAsUser/editAsUser, and all MCP tools) are registered but hidden from
-    the model until it calls the **`loadTools`** meta-tool (whose description
-    lists them). Visibility is enforced per step via `streamText`'s
-    `prepareStep`/`activeTools` (`buildTools` returns `{tools, activeTools,
-    close}` — `close` tears down per-turn MCP connections).
-  - **Per-user MCP servers** (`apps/bot/src/lib/ai/mcp.ts`, `user_mcp_servers`
-    table): users add remote Streamable-HTTP MCP servers from kyto's **App
-    Home tab** (Add/Remove UI in `features/customizations`, modal callback
-    `home_add_mcp_server`; optional Authorization header stored as-is). A
-    hand-rolled ~200-line JSON-RPC client (initialize / tools/list /
-    tools/call; SSE-response parsing; NO legacy SSE-only transport) connects
-    lazily per turn; tool listings are cached 10 min per URL; tools are
-    namespaced `mcp_<server>_<tool>` and deferred behind `loadTools`. A dead
-    server degrades that turn's toolset only. Local (user-machine) MCP servers
-    are impossible over Slack by design.
-  - **Chat-sdk state replacement**: `bot.getState()` is now an in-memory TTL
-    KV (`harness/kv.ts`) — fine because everything stored there (allowlist,
-    name caches) is rebuilt at startup or on demand. Markdown conversion is
-    ours (`harness/markdown.ts`): inbound mrkdwn→markdown for prompts,
-    `healMarkdown` closes dangling fences/markers in chunked replies
-    (replaces StreamingMarkdownRenderer). Modals/App Home go through
-    `webClient.views.*` directly.
-- **Env**: `SLACK_APP_TOKEN` is now required (socket mode is the only mode).
-- New tables were pushed with a one-off SQL script (drizzle-kit push is
-  interactive in non-TTY): `thread_subscriptions`, `user_mcp_servers` (NOTE:
-  `authorization` is a reserved word — quoted in DDL).
+1. **Commit** locally, conventional-commit message, docs updated in the same commit. One logical change = one commit.
+2. **Sync the Slack manifest** if `slack-manifest.json` changed: `bun run sync:manifest` from `apps/bot`. (Scope changes still need an app reinstall.)
+3. **Restart the bot**: `systemctl restart kyto.service`. Check with `systemctl status kyto.service` / `journalctl -u kyto.service -n 30 -o cat` (look for `kyto (…) is online`). **Never hand-launch `bun run start:bot`** — a second process opens a second Socket Mode connection and silently steals ~half the events. If `deploy/kyto.service` itself changed, `systemctl daemon-reload` first.
+4. **Push to `origin`** (`github.com/Devansh-awat/kyto.git`).
 
-### AI tools
-- Agent tools live in `apps/bot/src/lib/ai/tools/` and are registered in
-  `apps/bot/src/lib/ai/toolset.ts`. Raw Slack Web API access is via
-  `slack.webClient.apiCall(method, args)` from `@/lib/chat`; error helpers are
-  `errorMessage()`/`toLogError()` from `@/lib/utils/error`.
-- Fork-added tools: `canvasRead/Write/List/Delete`, `pinMessage`, `unpinMessage`,
-  `bookmarkLink`, `createChannel`, `setChannelTopic`, `poll`, `getPermalink`,
-  `fetchUrl`, `deploySite`, `removeSite`, `skip`, `sendAsUser`, `editAsUser`,
-  `browser`, `sendEmail`/`checkInbox`/`replyEmail`, `joinThread`,
-  `scheduleRecurringReminder`/`listReminders`/`cancelReminder`.
-- **Ported from `rebuild-on-upstream`** (the owner's own Pi-era branch,
-  reimplemented on the custom harness — see the July rewrite note): `gh`
-  (GitHub CLI in the turn's sandbox — the real GitHub token is **brokered via
-  E2B egress rules** so it is **never in the sandbox at all**: `LazySandbox`
-  (`packages/sandbox`) sets `network.rules` that inject the `Authorization`
-  header on outbound requests to `api.github.com`/`uploads.github.com` (Bearer)
-  and `github.com` (Basic) at the proxy layer, and the sandbox env holds only an
-  inert base64 placeholder. So `gh`/`git` are pre-authenticated inside the
-  sandbox but `echo $GH_TOKEN` reveals only the placeholder — the char-at-a-time
-  drip attack is fully moot, so the tool is back to a **full shell** (piping,
-  jq). This is exactly gorkie's technique; it needed the **e2b 2.21→2.31**
-  upgrade (`@e2b/code-interpreter` 2.4→2.6) for `SandboxNetworkOpts.rules`
-  (`allowOut` must include the exported `ALL_TRAFFIC` sentinel when set).
-  Deferred, needs `GH_TOKEN` on the host; brokering activates automatically for
-  every sandbox when `GH_TOKEN` is set. More robust than the external AGPL
-  `techwithanirudh/gorkie`, which ships a doc-only gh-cli Pi skill),
-  `runBackgroundProcess`/`getProcessOutput`/`killProcess` (nohup-based detached
-  processes tracked in-turn — deferred), `wait` (bounded, abort-aware mid-turn
-  pause — core), `deleteFile`/`fileStat` (workspace file ops — core),
-  `textToSpeech` (Replicate via HackClub's proxy `HACKCLUB_REPLICATE_API_KEY`,
-  else Gemini TTS; uploads audio to the thread — deferred), `unreact` (removes a
-  reaction; added `SlackHarness.removeReaction`), and
-  `runSubagent`/`checkSubagent` (see below).
-- **Subagent** (`tools/subagent.ts`): a headless copy of kyto — it **shares the
-  parent turn's sandbox** (`getSandboxContext` is threaded in from `toolset.ts`,
-  July 2026; was its own fresh `LazySandbox`) so it works in the same filesystem
-  the parent set up and leaves its output there for the parent, the full toolset,
-  run through `streamAttempt` (same multi-step loop as a
-  real turn) but NOT streamed to Slack; returns only its final text as a report.
-  Pinned to a cheap model via `subagentAttempt` (`packages/ai` — Gemini
-  `gemini-3.1-flash-lite` when `GEMINI_API_KEY` is set, else the best
-  DigitalOcean BYOK model). Deferred, registered only when a subagent model
-  exists. The parent-turn abort signal is forwarded so a stuck subagent is
-  killed with the turn. **Nesting is now ONE level only** (`MAX_SUBAGENT_DEPTH =
-  1`): a subagent may NOT spawn a further subagent — the `runSubagent` call
-  inside a subagent returns the nesting-limit error. (Was 2; dropped at the
-  owner's request — a second level is cost/time risk for no real use.)
-  - **Shared sandbox (July 2026).** The subagent no longer boots its own E2B
-    sandbox — `runSubagentTool` takes the parent's `getSandboxContext` and uses
-    it, so parent and subagent share ONE filesystem. The subagent must NOT
-    create or destroy it (its `finally` only closes per-turn tool/MCP
-    connections); the parent owns the lifecycle and pauses it at turn end.
-  - **How the report gets back to the parent:** the foreground path does
-    `return await job`, and `job` resolves to `{ report, success: true }`. That
-    object is this tool call's RESULT, which the AI SDK feeds back into the loop
-    as a `tool` message; on the parent's NEXT step the model reads the report
-    text and answers from it. (Empty run → `ranTools` gives a "(Completed
-    actions…)" report; a thrown error → `{ error, success:false }`.)
-  - **Background subagents + `checkSubagent` (`background: true`).**
-    `depthStore.run` starts the job and returns its promise; foreground (default)
-    awaits it and returns the report. Background does NOT await — it registers the
-    job in an **in-turn registry** (`jobs` Map keyed `sub-1`, `sub-2`… — same
-    lifetime model as the bash background-process trio) under a **job id**, fires
-    it off (shares the sandbox, posts its own streamed message), and returns
-    immediately with that id + a note. The parent model keeps working, then calls
-    **`checkSubagent`** to collect it: no id → lists every background subagent and
-    its status (`running`/`done`/`failed`); with an `id` → returns status and, if
-    finished, the full report; `wait: true` blocks until it finishes then returns
-    the report. `runSubagentTool` now returns `{ runSubagent, checkSubagent }` and
-    both are deferred (registered together in `toolset.ts` via an IIFE sharing the
-    registry). A `job.then` keeps each record's `status`/`result` current. Tied to
-    the parent turn's abort signal (a user interrupt resolves the wait). The
-    registry is per-turn, so background+collect works WITHIN a turn (cross-turn
-    checking isn't supported — same as bash background processes). This is the
-    join mechanism that lets the parent both parallelize AND get the output back
-    (the reason `background` returns an id, not the report). Core prompt's
-    parallel section points the model at `background`/`checkSubagent`.
-- **Usage footer** (`agent/index.ts` `postUsageFooter`): after a reply, kyto
-  posts a muted Slack **context block** showing `<output tokens> tokens · <N>
-  tok/s`, captured from the successful attempt's `result.usage` + elapsed time.
-  Per-user opt-out via a new `show_usage_footer` boolean on `user_customizations`
-  (default true; additive migration applied to the live DB with a one-off
-  `ALTER TABLE … ADD COLUMN IF NOT EXISTS`), toggled from an **Enable/Disable
-  button on the App Home tab** (`home_toggle_footer` action, `setUsageFooter`
-  query). The finalizer skips the footer when the user set it false
-  (`hints.customization.showUsageFooter`). The resolved **model** is shown
-  separately in the `Thinking` task (not in this footer).
-- **Recurring reminders** (`tools/reminders.ts`, `lib/reminders/scheduler.ts`,
-  `@repo/db` schema/queries `reminders`): unlike the pre-existing one-time
-  `scheduleReminder` (which uses Slack's native `chat.scheduleMessage` — a
-  single future timestamp, no repeat support), recurring reminders are driven
-  entirely by kyto's own process since Slack has no recurring-schedule API.
-  `scheduleRecurringReminderTool` persists a row (`user_id`, `text`,
-  `recurrence: 'interval'|'daily'|'weekly'`, plus the relevant
-  `interval_seconds`/`time_of_day_minutes`/`weekday`, and `next_run_at`) to
-  Postgres via Drizzle (`packages/db/src/schema/reminders.ts` — a new
-  `patchedDependencies`-free table pushed directly with a one-off script since
-  `drizzle-kit push` prompted for an interactive rename decision against the
-  pre-existing `user_customizations`/`sandbox_sessions` tables in a non-TTY
-  shell; `db:generate`/`db:push` should work normally as a human running the
-  CLI). `startReminderScheduler` (`index.ts`) runs a `setInterval` (30s) on the
-  always-on systemd process that polls `reminders WHERE active AND
-  next_run_at <= now()`, posts each via `bot.openDM(userId).post(...)`, then
-  advances `next_run_at` to the next occurrence (never deactivates — recurring
-  means forever until explicitly cancelled). `listReminders`/`cancelReminder`
-  let the model manage a user's own reminders (cancel is scoped by `user_id`,
-  so a user can only cancel their own).
-  - **Expanded (reminder configuration):** the `reminders` table gained
-    `channel_id` (fire into a channel vs DM the user), `max_runs` + `run_count`
-    (stop after N fires — `advanceReminder` increments the count and deactivates
-    on the cap; all additive migrations applied live). `scheduleRecurringReminder`
-    takes optional `channelId` (**owner-only**, same admin gate as cross-channel
-    posting; non-owners stay DM-only) and `maxRuns`. New
-    `pauseReminder`/`resumeReminder` tools (pause keeps the row but stops it
-    firing; resume snaps `next_run_at` to the future). An **App Home
-    "Reminders"** section lists each reminder a user may act on with Pause/Resume
-    + Delete buttons (`home_pause_reminder`/`home_resume_reminder`/
-    `home_cancel_reminder`, `listUserReminders`), tagged with its kind and, when
-    someone else created it, `by <@them>`. Reminder posts honor the
-    **reminder identity profile** (name+icon). A channel-targeted reminder
-    prefixes the text with `<@user>`.
-  - **Reminder kinds (July 2026).** `reminders.kind` ∈
-    `message | script | bash | agent` (the live `reminder_kind` enum already
-    existed — an earlier branch created it — with label order
-    `message, script, agent, bash`; Drizzle matches on label, not ordinal).
-    Ported from `rebuild-on-upstream` and **reimplemented on the custom
-    harness** (the branch's versions import `createAgent`/`openSession`/`Message`
-    from the deleted Pi/chat-sdk packages and cannot be cherry-picked):
-    - `message` (default): posts `text` verbatim. Unchanged behavior.
-    - `script`: fetches `url` each fire and posts its content.
-      `fetchUrlText` is now an exported helper in `tools/url.ts`, shared with
-      the `fetchUrl` tool.
-    - `bash` (`lib/reminders/bash.ts`): runs `command` and posts its exact
-      stdout/stderr, **in the persistent sandbox of the thread it was created
-      in** (`reminders.thread_id`), holding that thread's sandbox lock. So it
-      can run a script kyto wrote earlier. A row without `thread_id` falls back
-      to `runOnce` (a throwaway sandbox, empty every fire).
-    - `agent` (`lib/reminders/agent.ts`): runs a **headless kyto** — the same
-      `streamAttempt` multi-step tool loop as a real turn, full toolset, nothing
-      streamed to Slack — with `text` as its instructions, and posts its final
-      reply. Pinned to `subagentAttempt` (cheap Gemini flash-lite) so an
-      unattended job's cost is predictable. Reuses the thread's sandbox too.
-      `searchSlack` does NOT work here (its action token needs a live user
-      interaction); the system note says so.
-    - **`editReminder`** (July 2026) changes an existing row in place: its
-      `text`, `kind`, `command`/`url`, schedule, `maxRuns`, or `editors`. Only
-      the fields passed are touched; a new schedule takes effect from **now**
-      (`updateReminder` recomputes `next_run_at`), and a bare `intervalSeconds`
-      on an interval reminder is re-floored against the (possibly new) kind, so
-      an `agent` reminder can't be retuned down to 60s. Gated by the same
-      creator/editor/owner rule as pause/resume/cancel.
-    - **Interval floors by kind** (`tools/reminders.ts`): `message`/`script` 60s,
-      `bash` 5 min (a sandbox resume), `agent` 1 hour (a real model run).
-    - The scheduler now fires due reminders **concurrently** (a slow `bash`/
-      `agent` fire must not delay everyone else's) and guards against
-      **overlapping fires** of the same reminder with an in-flight `Set` — a row
-      is only advanced *after* it fires, so every 30s poll during a multi-minute
-      run would otherwise start it again.
-    - `advanceReminder` now computes the next run from `max(nextRunAt, now)`. A
-      schedule left in the past (scheduler downtime) used to re-fire on every
-      poll until it caught up — harmless for `message`, a burst of sandbox boots
-      or model calls for `bash`/`agent`.
-  This durable state is deliberate — a reminder's entire purpose is to outlive
-  the turn that created it, same precedent as site hosting, the opt-in
-  allowlist, and (now) the per-thread sandbox.
-- **`joinThread`/`leaveThread`** (`tools/join-thread.ts`/`tools/leave-thread.ts`):
-  let the model opt itself into (or out of) auto-responding to a thread's
-  future messages **without** needing a fresh @mention each time. Both just
-  toggle the chat-sdk's built-in per-thread state (`respondOnThreadMessages`)
-  and `thread.subscribe()`/`unsubscribe()`; `bot.onSubscribedMessage`
-  (`apps/bot/src/bot.ts`) is the gate that actually acts on it (responds if
-  `respondOnThreadMessages` is true OR the message is a mention). This state
-  is durable across restarts (`createPostgresState`, `lib/chat.ts`) — no new
-  persistence was added. Note: a mention **inside** an existing thread already
-  auto-sets `respondOnThreadMessages: true` (`bot.ts`, `onNewMention`); this
-  tool is for the model to join **proactively** (e.g. asked to "keep following
-  this thread") without waiting for that implicit trigger.
-- **`fetchUrl` rejects Slack links** (`tools/url.ts`, `isSlackLink`): a
-  `*.slack.com` URL (message archive/file link) isn't publicly fetchable (302 to
-  a login wall), so the tool refuses and points the model at the Slack read tools
-  (readConversationHistory for a message — path is `/archives/<CHANNEL>/p<TS>`,
-  ts = digits with a dot before the last 6; getFile for a file). Also documented
-  in `prompts/slack.ts`.
-- **Table blocks are extracted into message text** (`harness/harness.ts`,
-  `extractTables`/`collectBlocks`/`richTextPlain`): Slack renders a pasted table
-  as a `table` block, but it lives in **`message.attachments[].blocks[]`** (NOT
-  top-level `blocks`, and NOT in `event.text`) — verified by fetching a real
-  message with the bot token. `collectBlocks` gathers blocks from BOTH
-  `event.blocks` and every `attachments[].blocks`; `buildMessage` renders any
-  `table` block found as a markdown table and appends it to the message text
-  (applies to live messages AND replayed history). Table cells are `rich_text`
-  blocks, flattened by `richTextPlain`.
-- Slack scopes are declared in `slack-manifest.json` — update it when a tool
-  needs a new scope.
-- **Email** (`sendEmail`/`checkInbox`/`replyEmail`, `tools/email.ts`) runs
-  **host-side** via the AgentMail JS SDK (`agentmail` npm) using
-  `AGENTMAIL_API_KEY`. Registered only when that key is set (toolset.ts). It is
-  NOT in the sandbox anymore (the key is no longer injected there).
-- **Browser** (`browser`, `tools/browser.ts` — renamed from `browse`/`browse.ts`,
-  July 2026) runs the preinstalled `agent-browser` CLI **inside the sandbox**
-  (Chromium stays isolated off the host). It's a thin wrapper: pass agent-browser
-  args in `command` (run `skills get core` first). Using it materializes the lazy
-  sandbox. The old `agentmail`/`agent-browser` **Pi skills were removed** — kyto
-  now loads **zero Pi skills** (any skill would force per-turn sandbox creation;
-  see Sandbox/E2B).
-  - **It drives CloakBrowser, not agent-browser's own Chrome**
-    (`lib/browser/cloak.ts`, `ensureCloakBrowser`). CloakBrowser is a Chromium
-    with ~66 **source-level C++ fingerprint patches** (canvas, WebGL, audio,
-    fonts, GPU, WebRTC, automation signals), so anti-bot systems score it as an
-    ordinary browser and **most sites never serve a challenge at all**. It does
-    NOT solve captchas — it prevents them. Every `browser` call first runs an
-    idempotent ensure script that (1) exits immediately if the CDP endpoint on
-    :9222 already answers, else (2) installs `cloakbrowser` if missing,
-    (3) launches the stealth binary **headful under Xvfb** (some checks flag
-    headless even with the patches; falls back to `--headless=new` if Xvfb
-    can't be installed) with `--fingerprint-platform=windows`, and (4) runs
-    `agent-browser connect 9222` so the CLI drives THAT browser over CDP.
-    Re-running matters: a sandbox **pause kills the Chromium process** but keeps
-    the ~200MB cached binary, so a resumed thread relaunches in seconds.
-    Verified live in a real sandbox: `/json/version` shows the cloak binary,
-    `ps` shows it under `xvfb-run`, and in-page `navigator.webdriver === false`
-    with a `Win32` platform.
-  - `cloakbrowser` + `xvfb` are now baked into the **E2B template**
-    (`packages/sandbox/src/scripts/build-template.ts`, binary cached under
-    `/home/user` at build time) so the first browse of a thread isn't a ~25s
-    install. Until the template is rebuilt the ensure script installs them on
-    demand (that path is what was tested).
-  - The tool description and the core prompt tell the model: if a captcha DOES
-    appear, snapshot the page and **click the checkbox/challenge like a person
-    would** — never claim it can't get past one before actually trying.
-  - **Scripting cloakbrowser directly (July 2026).** The **sandbox prompt**
-    (`prompts/sandbox.ts`) now tells the model that `cloakbrowser` is a real
-    preinstalled **npm package** (a stealth Chromium, drop-in Playwright/Puppeteer
-    replacement — the SAME browser the `browser` tool drives), so for a LOOP or a
-    scheduled/repetitive job it should write a Node script against it instead of
-    calling the `browser` tool per action (faster, survives as a `bash` reminder).
-    This was added because the model, not knowing what "cloak browser" was, wasted
-    a turn guessing ("maybe puppeteer-extra… maybe a package called cloak") and
-    web-searching. **The prompt also states the headful rule**: the stealth
-    patches only defeat anti-bot/Turnstile when the browser runs HEADFUL, so a
-    scripted job must launch non-headless under `xvfb-run -a node script.js` with
-    `fingerprintPlatform: 'windows'` — a bare headless `launch()` still gets
-    flagged, which is exactly why a hand-written script "can't" clear a captcha
-    the `browser` tool clears (the tool always launches headful under Xvfb).
-- **Web search** (the `searchWeb` task) uses Exa via `EXA_API_KEY`. A placeholder
-  key (`exa-placeholder-no-websearch`) makes every search return
-  `ExaError: Invalid API key` — set a real key to enable web search.
-- **Slack search cost** (`tools/search-slack.ts`): `assistant.search.context`
-  returns `limit: 10` matches with `include_context_messages: true` (~5 before/5
-  after each). The context messages are the **dominant input-token driver** —
-  they ride along in every subsequent agentic step, so a few searches balloon a
-  turn to 100k–270k input tokens (× premium model pricing = the cost blowup). We
-  trim each match's context to the **2 nearest before + 2 nearest after** in the
-  result transform (`.slice(-2)` / `.slice(0, 2)`), keeping the relevant
-  surrounding thread while slashing prompt size. Drop `limit` or trim bodies
-  further if cost climbs again.
-- **Slack search modifiers**: `assistant.search.context`'s `query` supports the
-  full set of modifiers from Slack's own search bar, all combinable:
-  `from:@user`/`from:me`, `to:@user`, `in:#channel`/`in:@user` (DM), `on:`,
-  `before:`, `after:`, `during:` (`YYYY-MM-DD` or `YYYY-MM`), `has:link`,
-  `has:star`, `has:pin`, `has::emoji_name:` (reaction), `is:thread`, `is:dm`,
-  `is:external`, `filename:`, `ext:`. Documented in the tool description and the
-  core prompt (`packages/ai/src/prompts/core.ts`) so the model uses them to
-  narrow queries instead of filtering broad results itself.
-- **Slack search scope**: `assistant.search.context` runs with the *requesting
-  user's* own Slack access (not the bot's), so it naturally reaches private
-  channels and DMs that user is a member of — but only once the corresponding
-  granular OAuth scopes are granted. `search:read.public`/`.files`/`.users` were
-  present but `search:read.private`, `.im`, `.mpim` were missing (added to
-  `slack-manifest.json`), which silently limited every search to public
-  channels only. Needs `bun run sync:manifest` + a reinstall to actually take
-  effect (see Manifest sync note).
-- **Slack search action-token urgency**: the `action_token` backing
-  `assistant.search.context` expires roughly 2 minutes after the turn starts.
-  The core prompt now tells the model to run all `searchSlack` calls early in
-  the turn (batched with other read-only lookups per the parallel-tool-call
-  guidance below), since a search attempted late in a long turn can fail purely
-  from token expiry.
-- **Parallel tool calls**: Pi **already executes a batch of tool calls
-  concurrently by default** — no fork needed. `pi-agent-core`'s
-  `executeToolCalls` runs the batch in parallel (`Promise.all`) unless
-  `config.toolExecution === 'sequential'` **or** some tool in the batch has
-  `executionMode: 'sequential'`; the default `toolExecution` is `"parallel"`, and
-  `harness-pi` sets neither, so every kyto tool defaults to parallel. The
-  `openai-completions` provider (the HackClub path) also does **not** send
-  `parallel_tool_calls: false` (it omits the field → OpenAI-compat default
-  `true`), so the model is free to emit several tool calls in one assistant
-  message. The **only** lever we have is behavioral: getting the model to actually
-  batch calls into a single step. That's driven by the core prompt
-  (`packages/ai/src/prompts/core.ts`, "Working in parallel"), which now tells it
-  to batch **read-only / side-effect-free** lookups (file reads, Slack/web
-  searches, URL fetches, list/get calls) together in one step, and to issue
-  **side-effecting** tools (send/edit message, deploy/remove site, canvas
-  write/delete, create channel, pin, email, state-changing commands) **one at a
-  time**. Per-tool `executionMode` is NOT reachable through harness-pi (the
-  `HarnessV1ToolSpec` kyto registers doesn't carry it), so the read-only-only
-  restriction is enforced at the **prompt level**, not by tool metadata — marking
-  individual writes `sequential` would require patching the `harness-pi`
-  node_module. Batching is still model-dependent (a weak model may not batch even
-  when told). Faster batched reads also keep a turn under Slack's ~interaction
-  timeout, avoiding the "invalid action" token expiry seen on slow serial turns.
+- **NEVER push to `upstream`** (`imdevarsh/gorkie-slack`, the fork source).
+- **Opening a PR still asks first.** Commit/restart/sync/push-to-origin do not.
 
-### Ownership & edit permission (reminders + sites)
-- Things kyto creates **on someone's behalf and can later change** — recurring
-  reminders and published static sites — carry an access list, so a bystander in
-  a public thread can't ask kyto to rewrite someone's reminder or take down
-  their site. The rule, shared by both:
-  **the creator, anyone the creator named as an editor, and the bot owner.**
-- Set at creation via an optional **`editors`** parameter on
-  `scheduleRecurringReminder` and `deploySite` (Slack user ids or `<@U123>`
-  mentions; `parseEditors` in `tools/editors.ts` rejects anything that isn't a
-  user id, so a display name can't be stored as a permission entry that never
-  matches). Omitted = creator only.
-- Enforced **at execute time against `message.author.userId`** — i.e. against the
-  person actually talking to kyto in this turn, not against whoever the model
-  claims to be acting for. Reminders: `isReminderEditableBy` (in-memory) plus
-  `editableBy` (the SQL form, a jsonb `@>` containment check) scoping every
-  `list`/`pause`/`resume`/`cancel` query; the bot owner gets no WHERE restriction
-  at all. Sites: `checkSiteAccess` + `canEdit` (`tools/editors.ts`).
-- Storage: `reminders.editor_user_ids` (jsonb, additive) and the new `sites`
-  table. Both applied to the live DB with a one-off SQL script
-  (`ALTER TABLE … ADD COLUMN IF NOT EXISTS` / `CREATE TABLE IF NOT EXISTS`),
-  since `drizzle-kit push` is interactive in a non-TTY shell.
-- The core prompt tells the model the rule and that a refusal is not something to
-  work around — just say who owns the thing.
+## Architecture — fully custom harness
 
-### Broadcast mentions (@channel/@here) are owner-gated
-- Only the **owner** may make kyto ping the whole channel. `neutralizeBroadcast`
-  (`harness/markdown.ts`) downgrades `<!channel>`/`<!here>`/`<!everyone>` (and
-  `<!subteam^…>`) to inert plaintext (`@channel`, or the group's name). It's
-  applied to the **streamed reply** (`createReply({allowBroadcast})` in
-  `agent/reply.ts` — `allowBroadcast = isOwner`, computed in `agent/index.ts`)
-  and the **postMessage** tool (`tools/post-message.ts`, non-owner path). The
-  core Slack prompt (`prompts/slack.ts`) tells the model broadcasting is
-  owner-only. So a non-owner asking "@channel everyone" gets plain text, no ping.
+The Vercel Chat SDK, the Pi agent framework, and `@ai-sdk/harness*` were removed in a ground-up rewrite. Kyto now runs on:
 
-### Broadcast mentions (@channel/@here) rendering
-- Slack's newer `markdown` block renders `<@user>`/`<#channel>` links but NOT
-  control mentions — `<!channel>`/`<!here>`/`<!everyone>`/`<!subteam^…>` come out
-  as **plaintext** there. So `ThreadHandle.post` (`harness/thread.ts`) detects a
-  control-mention token (`CONTROL_MENTION` regex) and posts that message as a
-  `section`+`mrkdwn` block instead (which resolves them into real pings), losing
-  GFM niceties for that message only. The core prompt (`prompts/slack.ts`) tells
-  the model to ping people with `<@id>` and broadcast with the raw
-  `<!channel>`/`<!here>`/`<!everyone>` tokens (plaintext `@channel` never pings).
+- **Custom Slack harness** (`apps/bot/src/harness/`) — `@slack/socket-mode` + `@slack/web-api` directly. `SLACK_APP_TOKEN` is required (Socket Mode is the only mode).
+  - `SlackHarness` (`harness.ts`): Web API facade. Thread-id codec `slack:CHANNEL[:TS]`, message building, fetch/history/listThreads, reactions, assistant status, native streaming via `webClient.chatStream` (task cards use `task_update` chunks, `task_display_mode: 'plan'`).
+  - `KytoBot` (`bot.ts`): owns the Socket Mode connection and event routing (`onNewMention`/`onDirectMessage`/`onSubscribedMessage`/`onAction`/`onModalSubmit`/`onAppHomeOpened`/`onMemberJoinedChannel`). `app_mention` events are deliberately **ignored** — everything routes off `message` events (mention = text contains the bot id), which is what killed the old dedupe problem.
+  - `ThreadHandle` (`thread.ts`): `post` (Block Kit `markdown` blocks; files via `filesUploadV2`; per-message profile overrides via `username`/`iconUrl`/`iconEmoji`, needs `chat:write.customize`), `postEphemeral`, `schedule`, `subscribe`/`setState` (own `thread_subscriptions` table + 30s cache), `fetchMetadata`.
+  - **Every message threads** — a top-level DM/channel message roots its own thread (`threadTs = event.thread_ts || event.ts`). `buildPrompt` scopes context to that thread only, so kyto has no memory of the rest of a DM by default; it uses `searchSlack` (`in:@user`) to pull earlier history on purpose.
+  - Markdown conversion is ours (`harness/markdown.ts`): inbound mrkdwn→markdown, `healMarkdown` closes dangling fences in chunked replies. `bot.getState()` is an in-memory TTL KV (`harness/kv.ts`) — fine, since everything in it is rebuilt at startup.
 
-### Response style (human tone)
-- `prompts/personality.ts`: write like a human in Slack — natural sentence case,
-  no Title Case, no ALL CAPS for emphasis, no over-punctuation; casual lowercase
-  is fine, match the other person's register.
-- **The "Don't narrate every step" block was REMOVED from `prompts/core.ts`
-  (July 2026, owner's call).** It used to forbid any preamble or between-tool
-  commentary. The owner now WANTS kyto free to post in-between status updates
-  (e.g. write some text, then run more tools), and the plan now splits to match —
-  see the streamSegmented note below.
-- **Multi-block turns — `streamSegmented` (`agent/index.ts`).** A turn is driven
-  as a SEQUENCE of streamed plan messages, not one. `renderStream` now takes
-  **`emitText: true`** (yields reply text as plain strings alongside the task
-  StreamChunks, in true stream order); `streamSegmented` consumes that combined
-  stream and cuts a new plan message whenever a task card arrives AFTER reply text
-  has streamed in the current block. So a turn that writes text, runs more tools,
-  then writes more renders as `[plan] text [plan] text` — the model can post an
-  in-between update and keep working in a fresh collapsible block, instead of
-  every tool piling into one plan pinned above all the text. Reply text is still
-  posted by `createReply` (`thread.post`, with its length-splitting/healing) —
-  `streamSegmented` just controls WHEN each plan message opens/closes around it,
-  and flushes buffered text before the next plan so ordering holds. The attempt's
-  **Thinking (model) card is completed at first reply text** so it finishes inside
-  its own block, not in a later one where its task id doesn't exist (which would
-  leave a perpetually spinning Thinking). Fallback attempts all run before any
-  text, so their model cards stay in the first block. A pure-text turn still opens
-  one block (the model card) then the text below it.
+- **Custom agent loop** on `ai`'s `streamText` (`packages/ai/src/agent.ts` `streamAttempt` + `apps/bot/src/lib/agent/index.ts`): multi-step tool loop (`stopWhen: stepCountIs(60)`), per-attempt `@ai-sdk/openai-compatible` provider. A per-provider `fetch` in `streamAttempt` tunes each request (see Models). `renderStream` (`lib/ai/stream/`) consumes `result.fullStream` and renders the plan.
 
-### Focus mode (respond to / see only chosen users in a thread)
-- `focusMode` tool (`tools/focus.ts`, core) locks kyto onto specific user ids in
-  the current thread: it only replies to those users AND their messages are the
-  only ones it sees — non-focused messages are **filtered out of the prompt**
-  (`buildPrompt`, via `isFocusAllowed` in `lib/agent/focus.ts`), not just
-  ignored, so others can't distract/hijack it in a public thread. The **owner is
-  always allowed through** (never lock the owner out) and kyto's own messages
-  always stay in context. Gated in `bot.ts` (`onNewMention` +
-  `onSubscribedMessage`). Persisted on `thread_subscriptions.focus_user_ids`
-  (jsonb; additive migration). Call with `clear: true` to turn it off.
+- **Sandbox tools are ours** (`lib/ai/tools/sandbox.ts`): `bash`, `readFile`, `writeFile`, `editFile` run against `LazySandbox` — E2B `Sandbox.create` happens on the FIRST tool call that needs it, so chat-only turns cost zero E2B.
+
+- **Deferred tools**: uncommon tools (browser, email trio, canvasDelete, createChannel, setChannelTopic, bookmarkLink, pins, poll, mermaid, sendAsUser/editAsUser, gh, TTS, subagent, and all MCP tools) are registered but hidden from the model until it calls the **`loadTools`** meta-tool. Enforced per step via `streamText`'s `prepareStep`/`activeTools` (`buildTools` returns `{tools, activeTools, close}`).
+
+- **Per-user MCP servers** (`lib/ai/mcp.ts`, `user_mcp_servers`): users add remote Streamable-HTTP MCP servers from the **App Home** tab. A hand-rolled JSON-RPC client (initialize / tools/list / tools/call; SSE parsing; no legacy SSE-only transport) connects lazily per turn; listings cached 10 min per URL; tools namespaced `mcp_<server>_<tool>` and deferred behind `loadTools`. A dead server degrades only that turn's toolset. Local (user-machine) MCP servers are impossible over Slack by design.
+
+## AI tools
+
+Tools live in `apps/bot/src/lib/ai/tools/`, registered in `lib/ai/toolset.ts`. Raw Slack API: `slack.webClient.apiCall(method, args)`; error helpers `errorMessage()`/`toLogError()` from `@/lib/utils/error`.
+
+Fork-added: `canvasRead/Write/List/Delete`, `pinMessage`/`unpinMessage`, `bookmarkLink`, `createChannel`, `setChannelTopic`, `poll`, `getPermalink`, `fetchUrl`, `deploySite`/`removeSite`/`listSites`, `skip`, `sendAsUser`/`editAsUser`, `browser`, `sendEmail`/`checkInbox`/`replyEmail`, `joinThread`/`leaveThread`, `focusMode`, `slackScript`, the reminder set, `gh`, `runBackgroundProcess`/`getProcessOutput`/`killProcess`, `wait`, `deleteFile`/`fileStat`, `textToSpeech`, `unreact`, `runSubagent`/`checkSubagent`.
+
+- **`gh`** (deferred, needs `GH_TOKEN` on the host): GitHub CLI in the turn's sandbox. The real token is **brokered via E2B egress rules** and is **never in the sandbox** — `LazySandbox` sets `network.rules` that inject the `Authorization` header on outbound requests to `api.github.com`/`uploads.github.com` (Bearer) and `github.com` (Basic) at the proxy layer; the sandbox env holds only an inert placeholder. So `gh`/`git` are pre-authenticated but `echo $GH_TOKEN` reveals nothing, which is why the tool can safely be a full shell. Needs e2b ≥2.31 for `SandboxNetworkOpts.rules`.
+- **`wait`** (core): a bounded, abort-aware mid-turn pause — up to **1 hour** per call. It calls `extendAttemptDeadline` (threaded from `agent/index.ts` through `buildTools`) so the attempt watchdog treats a long deliberate pause as work, not a stall. `pauseSandbox: true` suspends the sandbox for the duration (`session.destroy()` pauses a persistent sandbox; the next sandbox command auto-resumes it) — ignored under 120s, and it suspends any background process too.
+- **`writeFile`** takes `append`. A tool call's arguments ride inside the model's own token budget, so one call cannot carry a very large file — the description tells the model to chunk a big write (first call `append:false`, rest `append:true`). See the truncation note under Models.
+- **`fetchUrl` rejects Slack links** (`isSlackLink`): a `*.slack.com` URL 302s to a login wall, so the tool refuses and points the model at the Slack read tools (readConversationHistory for a message — path `/archives/<CHANNEL>/p<TS>`; getFile for a file).
+- **Email** (`tools/email.ts`) runs **host-side** via the AgentMail SDK using `AGENTMAIL_API_KEY`; registered only when that key is set. Not in the sandbox.
+- **Image generation** (`tools/generate-image.ts`) calls HackClub's `/images/generations` directly (model `google/gemini-3.1-flash-image`), parsing `data[].b64_json`. The AI SDK `generateImage` path never reached the endpoint — don't go back to it.
+- **Web search** (`searchWeb`) uses Exa via `EXA_API_KEY`. The placeholder key (`exa-placeholder-no-websearch`) makes every search return `ExaError: Invalid API key`.
+
+### Browser
+
+`browser` (`tools/browser.ts`, deferred) runs the preinstalled `agent-browser` CLI **inside the sandbox**. Pass CLI args in `command` (run `skills get core` first).
+
+It drives **CloakBrowser**, not agent-browser's own Chrome (`lib/browser/cloak.ts`, `ensureCloakBrowser`). CloakBrowser is a Chromium with ~66 source-level C++ fingerprint patches (canvas, WebGL, audio, fonts, GPU, WebRTC, automation signals), so anti-bot systems score it as ordinary and **most sites never serve a challenge at all**. It does NOT solve captchas — it prevents them. Every `browser` call first runs an idempotent ensure script: exit if CDP on :9222 answers, else install `cloakbrowser`, launch it **headful under Xvfb** (headless still gets flagged; falls back to `--headless=new` if Xvfb won't install) with `--fingerprint-platform=windows`, then `agent-browser connect 9222`. A sandbox pause kills the Chromium process but keeps the cached binary, so a resumed thread relaunches in seconds. `cloakbrowser` + `xvfb` are baked into the E2B template.
+
+If a captcha DOES appear, the tool description and core prompt tell the model to snapshot the page and **click the checkbox like a person would** — never to claim it can't get past one before trying.
+
+**Scripting it directly**: the sandbox prompt tells the model `cloakbrowser` is a real npm package (a stealth Chromium, drop-in Playwright/Puppeteer replacement — the same browser the tool drives), so for a loop or a scheduled job it should write a Node script against it instead of one `browser` call per action. The **headful rule** applies there too: a scripted job must run under `xvfb-run -a node script.js` with `fingerprintPlatform: 'windows'`, or it gets flagged — which is why a hand-written script "can't" clear a captcha the `browser` tool clears.
+
+### Subagent
+
+`tools/subagent.ts` — a headless copy of kyto: **shares the parent turn's sandbox** (`getSandboxContext` threaded in from `toolset.ts`, so it works in the same filesystem the parent set up and leaves its output there), the full toolset, driven by the same `streamAttempt` loop, returning its final text as a report. Deferred; registered only when a subagent model exists.
+
+- **Nesting is ONE level** (`MAX_SUBAGENT_DEPTH = 1`): a subagent may not spawn another. A second level is cost/time risk for no real use.
+- **It must NOT create or destroy the sandbox** — the parent owns the lifecycle and pauses it at turn end. The subagent's `finally` only closes per-turn tool/MCP connections.
+- **Model roster + report fallback** (`subagentAttempts`, `providers/attempts.ts`): cheap Gemini `gemini-3.1-flash-lite` first, then the DigitalOcean BYOK models. The subagent **walks this list** when an attempt throws OR comes back with an empty report — pinning one cheap model meant a whole "herd" of subagents frequently reported nothing back. If a model ran tools but wrote no prose, `synthesizeReport` re-asks THAT model once with **tools off** to write up what it found, so the parent gets findings instead of "(Completed actions…)".
+- **How the report reaches the parent**: the foreground path returns `{report, success:true}` as the tool call's RESULT; the AI SDK feeds it back as a `tool` message and the parent answers from it on its next step.
+- **Background + `checkSubagent`** (`background: true`): registers the job in an **in-turn registry** (ids `sub-1`, `sub-2`…) and returns the id immediately. The parent keeps working, then calls **`checkSubagent`**: no id → lists every background subagent and its status; with an `id` → status and, once finished, the full report; `wait: true` blocks until it finishes. Tied to the parent turn's abort signal. The registry is per-turn, so background+collect works WITHIN a turn (same as bash background processes).
+- **It posts its OWN streamed message** — a second `slack.stream`, authored "kyto subagent" (+ optional `name`) with that identity's icon. It renders exactly like a real turn (shared `renderStream`: interleaved Thinking/tool cards in stream order), with a **Prompt** card (full task), a **Model** card per attempt, and a **Response** card holding its full final reply. **Everything lives inside the one collapsible plan; nothing in the message body** — the response is captured via `onTextDelta` (no `emitText`).
+- It runs on a slimmer system prompt (`subagentSystemPrompt`): a lean `<subagent>` core + sandbox + context, without personality/tone, the custom-instruction hierarchy, broadcast etiquette, or the media/copyright framing. Keeps finish-the-job, parallel-tool, loadTools, private-auth, SFW, and report-back guidance.
+
+### Recurring reminders
+
+`tools/reminders.ts`, `lib/reminders/scheduler.ts`, `@repo/db` `reminders`. Unlike the one-time `scheduleReminder` (Slack's native `chat.scheduleMessage`), recurring reminders are driven entirely by kyto's own always-on process — Slack has no recurring-schedule API.
+
+A row holds `user_id`, `text`, `recurrence` (`interval`|`daily`|`weekly`) plus the relevant `interval_seconds`/`time_of_day_minutes`/`weekday`, `next_run_at`, `channel_id` (fire into a channel vs DM — **owner-only**, same admin gate as cross-channel posting), `max_runs`/`run_count`, `thread_id`, `kind`, `editor_user_ids`. `startReminderScheduler` polls every 30s and posts each due reminder, then advances `next_run_at`. Posts honor the reminder identity profile; a channel-targeted reminder prefixes the text with `<@user>`.
+
+**Kinds** (`reminders.kind`), with their interval floors:
+- `message` (default, 60s): posts `text` verbatim.
+- `script` (60s): fetches `url` each fire and posts its content (`fetchUrlText`, shared with `fetchUrl`).
+- `bash` (5 min — a sandbox resume; `lib/reminders/bash.ts`): runs `command`, posts its exact stdout/stderr, **in the persistent sandbox of the thread it was created in** — so it can run a script kyto wrote earlier. A row without `thread_id` falls back to `runOnce` (throwaway sandbox, empty every fire).
+- `agent` (1 hour — a real model run; `lib/reminders/agent.ts`): runs a **headless kyto** (same `streamAttempt` loop, full toolset, nothing streamed) with `text` as instructions and posts its final reply. Pinned to the cheap subagent model so an unattended job's cost is predictable. Reuses the thread's sandbox. `searchSlack` does NOT work here (its action token needs a live user interaction) — the system note says so.
+
+Tools: `scheduleRecurringReminder`, `listReminders`, `pauseReminder`, `resumeReminder`, `cancelReminder`, `editReminder` (changes text/kind/command/url/schedule/maxRuns/editors in place; only the fields passed are touched; a new schedule takes effect from now and a bare `intervalSeconds` is re-floored against the kind). An **App Home "Reminders"** section lists each reminder a user may act on with Pause/Resume/Delete buttons.
+
+The scheduler fires due reminders **concurrently** (a slow `bash`/`agent` fire must not delay everyone else) and guards **overlapping fires** with an in-flight `Set` — a row is only advanced *after* it fires, so a multi-minute run would otherwise restart on every 30s poll. `advanceReminder` computes the next run from `max(nextRunAt, now)`, so a schedule left in the past (scheduler downtime) doesn't re-fire on every poll until it catches up.
+
+### Slack search
+
+`assistant.search.context` runs with the **requesting user's** own Slack access, so it reaches private channels and DMs that user is in — but only with the granular scopes granted (`search:read.public`/`.files`/`.users`/`.private`/`.im`/`.mpim`; the last three were missing once and silently limited every search to public channels).
+
+- **Cost**: it returns `limit: 10` matches with `include_context_messages: true` (~5 before/after each). Those context messages are the dominant input-token driver — they ride along in every subsequent step, ballooning a turn to 100k–270k input tokens. We trim each match to the **2 nearest before + 2 after**. Drop `limit` or trim bodies further if cost climbs again.
+- **Modifiers**: the `query` supports Slack's full search-bar set, combinable — `from:`, `to:`, `in:` (`#channel` or `@user` for a DM), `on:`/`before:`/`after:`/`during:`, `has:link`/`star`/`pin`/`:emoji:`, `is:thread`/`dm`/`external`, `filename:`, `ext:`. In the tool description and core prompt, so the model narrows queries instead of filtering broad results itself.
+- **Action-token urgency**: the `action_token` expires ~2 min after the turn starts, so the core prompt tells the model to run all `searchSlack` calls early — a search late in a long turn can fail purely from token expiry.
 
 ### Slack read-only scripting (host-side proxy)
-- `slackScript` tool (`tools/slack-script.ts`, **deferred**, gated on
-  `SITES_ENABLED`) runs a bash script in the sandbox for **aggregate** Slack
-  questions ("who is in the most channels", "most active user") in one script
-  instead of N tool round-trips. It POSTs to a **host-side, secret-gated,
-  READ-ONLY proxy** mounted on the public sites server at `/_slackapi/<method>`
-  (`lib/slack-proxy/`). The **bot token never enters the sandbox**. The proxy
-  attaches the real token and forwards ONLY the `READ_ONLY_METHODS` allowlist
-  (users.*, conversations.*, team.*, usergroups.*, reactions/pins/bookmarks list,
-  emoji.list) — posting/editing/deleting is impossible through it. This is the
-  safe answer to "read-only Slack scripts" (our bot token is NOT itself
-  read-only, so it can't just be handed to the sandbox).
-- **`slack` is a real executable on PATH now (July 2026)**, not a shell function
-  prepended to the `slackScript` tool's script. `slackHelperInstall()`
-  (`lib/slack-proxy/`) is passed as `LazySandbox`'s new **`bootstrapCommand`**,
-  which runs once each time a sandbox materializes (create AND resume, so it
-  must stay idempotent) and writes `/usr/local/bin/slack`. Consequence: the plain
-  **`bash` tool** and a recurring **`bash` reminder** can query Slack read-only,
-  not just `slackScript`. (The model previously probed `which slack`, found
-  nothing, and concluded a scheduled script could never read Slack.)
-  - The helper reads `KYTO_SLACK_PROXY[_TOKEN]` **from the environment at call
-    time**, and `LazySandbox.run()` re-sends env on every command. That is what
-    lets a *persistent* sandbox outlive any single turn's token: a **`bash`/
-    `agent` reminder mints a FRESH proxy token at fire time and revokes it after**
-    (`reminders/bash.ts`, `reminders/agent.ts`). Without that a scheduled script
-    could only ever 401, since the creating turn's token was revoked at turn end.
-  - With no proxy env the helper fails loudly (`slack proxy is not available in
-    this context`) rather than silently doing nothing.
-  - Verified end-to-end against the live proxy: `slack auth.test` → `kyto2`;
-    `slack chat.postMessage` → `method_not_allowed: chat.postMessage`; a script
-    written by one reminder fire runs on the next.
-  - **There is NO search method in the allowlist**, so "count a user's messages"
-    means paging `conversations.history` per channel — slow (this is what made a
-    real turn take ~14 min), not a bug. Add `search.messages` to
-    `READ_ONLY_METHODS` if that's ever wanted (it needs the `search:read` scope).
-  - NOTE: the subagent's own sandbox still does NOT get the proxy env, so
-    `slackScript` inside a subagent 401s — extend the same way if needed.
 
-### Subagent prompt + its own streamed message
-- The subagent runs on a **slimmer system prompt** (`subagentSystemPrompt`,
-  `packages/ai/src/prompts/subagent.ts`) — a lean `<subagent>` core + sandbox +
-  context, **without** the personality/tone block, the custom-instruction
-  hierarchy, the broadcast/mention etiquette, or the media/copyright framing
-  (all irrelevant to a headless worker that returns a report). It keeps
-  finish-the-job, parallel-tool, loadTools, private-auth, SFW, and report-back
-  guidance. Cheaper on the pinned model. `systemPrompt` (the full one) is still
-  used for real turns.
-- **The subagent posts ITS OWN streamed Slack message** (`tools/subagent.ts`),
-  not a card in the parent's plan. It opens a second `slack.stream` (native
-  chatStream, `task_display_mode: 'plan'`) authored as **"kyto subagent"** (base
-  from `resolveIdentity('subagent')`, + optional `name` arg → "kyto subagent
-  {name}") with that identity's icon — chatStream DOES support
-  `username`/`icon_emoji`/`icon_url` (needs `chat:write.customize`).
-- **It renders EXACTLY like a real turn (July 2026 rewrite).** The old
-  single-`renderCard` collapsible (with its `SubagentStep[]` timeline,
-  `CARD_MAX_STEPS`, and the two hard-won `task_update` quirks) is **gone**. The
-  subagent now drives its own message through the **shared `renderStream`**
-  (`ai/stream/index.ts`) — the same interleaved `Thinking`/tool cards, in stream
-  order, with each tool's real request/response detail — so it looks identical to
-  the main plan. **EVERYTHING lives inside the ONE collapsible plan; nothing goes
-  in the message body.** It yields a **Prompt** card (the FULL task, unclamped)
-  and a **Model** card (`attempt.model`) up front, then the interleaved
-  thinking/tool cards, then a **Response** card holding the subagent's FULL final
-  reply. The response is captured via `onTextDelta` (NO `emitText` — it must NOT
-  stream to the body; it belongs in the Response card so the whole run stays in
-  one block). No "Working…" placeholder anywhere. The parent's own plan still just
-  shows the `runSubagent` tool call; `runSubagentTool` still returns the report
-  text to the parent model. `ranTools` (set from `onToolActivity`) is the empty-
-  report fallback signal. (`emitText` exists for the MAIN turn's streamSegmented —
-  see the Response-style section — not the subagent.)
-- The old **tool→parent-plan side-channel is gone** (`lib/agent/side-channel.ts`
-  deleted; `buildTools`' `emitChunk` param and the `ChunkChannel`/`mergeStream`
-  wiring in `agent/index.ts` removed) — the subagent's separate message replaces
-  it.
+`slackScript` (deferred, gated on `SITES_ENABLED`) runs a bash script for **aggregate** Slack questions ("who is in the most channels") in one script instead of N tool round-trips. It POSTs to a **host-side, secret-gated, READ-ONLY proxy** on the sites server at `/_slackapi/<method>` (`lib/slack-proxy/`). The **bot token never enters the sandbox**: the proxy attaches the real token and forwards ONLY the `READ_ONLY_METHODS` allowlist (users.*, conversations.*, team.*, usergroups.*, reactions/pins/bookmarks list, emoji.list) — posting/editing/deleting is impossible through it. (Our bot token is not itself read-only, which is why it can't just be handed to the sandbox.)
 
-### Identity profiles (per-message-type name suffix + icon, App Home)
-- `identity_profiles` table (`message_type` PK ∈ normal|subagent|reminder,
-  `name_suffix`, `icon`; additive migration). Owner-configured from an **App
-  Home "Identity"** section (owner-gated; `home_edit_identity` →
-  `buildIdentityModal` → `home_save_identity`). The base name is ALWAYS "kyto"
-  (a suffix is appended, e.g. "kyto subagent"); it can never be renamed.
-  `resolveIdentity(type)` (`lib/identity.ts`, 30s cache reset on save) returns
-  `{username?, iconEmoji?, iconUrl?}` — `icon` is a `:emoji:` code or an image
-  URL (unicode emoji can't be an icon_emoji, so only the `:name:` form passes).
-  Applied where kyto posts that kind of message: **reminder** DMs/channel posts
-  (name+icon), cross-channel **postMessage** (name+icon), and the **subagent's
-  own streamed message** (name+icon, via chatStream's
-  `username`/`icon_emoji`/`icon_url`). Needs the `chat:write.customize` scope
-  (already in the manifest). NOTE: chatStream DOES accept per-message identity
-  overrides (the subagent uses this) — the **main turn's** streamed reply just
-  doesn't set them, so "normal" identity currently applies to postMessage, not
-  the live reply (could be wired into the main stream the same way if wanted).
+**`slack` is a real executable on PATH**, not a shell function prepended to the tool's script: `slackHelperInstall()` is `LazySandbox`'s `bootstrapCommand`, run each time a sandbox materializes (create AND resume — so it must stay idempotent). So the plain `bash` tool and a `bash` reminder can query Slack read-only too. The helper reads `KYTO_SLACK_PROXY[_TOKEN]` **from the environment at call time** and `run()` re-sends env on every command — that's what lets a *persistent* sandbox outlive any single turn's token, and why a **`bash`/`agent` reminder mints a fresh proxy token at fire time and revokes it after** (without that, a scheduled script could only ever 401). With no proxy env the helper fails loudly rather than silently doing nothing.
 
-### Canvases (read/list/create across channels, channel tab)
-- `canvasList` takes an optional `channelId` (raw `C0123`, `slack:` id, or
-  `#channel` mention) to inspect another channel; on `not_in_channel` it joins
-  the public channel **silently** and retries (no announcement message).
-- `canvasWrite` create modes accept `title` (used for both create-standalone and
-  create-channel — without it a channel canvas shows as "Untitled").
-  `create-channel` then best-effort **adds the canvas as a channel tab** by
-  bookmarking its permalink (`addCanvasTab`), since
-  `conversations.canvases.create` alone doesn't always surface a header tab. The
-  summary says whether the tab was added. Needs `bookmarks:write` + `files:read`.
+There is **no search method in the allowlist**, so "count a user's messages" means paging `conversations.history` per channel — slow, not a bug. Add `search.messages` (needs `search:read`) if that's ever wanted. NOTE: the subagent's sandbox does not get the proxy env, so `slackScript` inside a subagent 401s.
 
-### Pins (pin in any channel, as bot or owner)
-- `pinMessage`/`unpinMessage` take an optional `channelId` (defaults to the
-  current channel) and an optional `as: 'bot' | 'user'`. As the bot, a
-  `not_in_channel` error triggers one `conversations.join` + retry (public
-  channels). `as: 'user'` pins as the owner via `SLACK_USER_TOKEN` and is
-  owner-gated (re-checked in-tool). Needs bot `pins:write` and, for `as:'user'`,
-  the `pins:write` **user** scope.
+### Focus mode
 
-### Send/edit-as-owner
-- `sendAsUser`/`editAsUser` act AS the owner via `SLACK_USER_TOKEN` (xoxp). Only
-  **registered** when `message.author.userId === OWNER_USER_ID` (toolset.ts) and
-  each re-checks the author at execute time. Config: `SLACK_USER_TOKEN`,
-  `OWNER_USER_ID`; requires the `chat:write` **user** scope.
+`focusMode` (core) locks kyto onto specific user ids in the current thread: it only replies to those users AND their messages are the only ones it **sees** — non-focused messages are filtered out of the prompt (`isFocusAllowed`, `lib/agent/focus.ts`), not just ignored, so others can't hijack it in a public thread. The **owner is always allowed through** and kyto's own messages always stay in context. Gated in `bot.ts`; persisted on `thread_subscriptions.focus_user_ids`. Call with `clear: true` to turn it off.
+
+### Canvases and pins
+
+- `canvasList` takes an optional `channelId`; on `not_in_channel` it joins the public channel **silently** and retries.
+- `canvasWrite` create modes accept `title`. `create-channel` best-effort **adds the canvas as a channel tab** by bookmarking its permalink (`addCanvasTab`), since `conversations.canvases.create` alone doesn't always surface a header tab. Needs `bookmarks:write` + `files:read`.
+- `pinMessage`/`unpinMessage` take an optional `channelId` and `as: 'bot' | 'user'`. As the bot, `not_in_channel` triggers one `conversations.join` + retry. `as: 'user'` pins as the owner via `SLACK_USER_TOKEN` and is owner-gated. Needs bot `pins:write` and, for `as:'user'`, the user-scope `pins:write`.
 
 ### Static site hosting
-- `deploySite`/`removeSite`/`listSites` publish/manage prebuilt static sites at
-  the **host root**: `https://<host>/<name>/` (default host
-  `kyto.devansh.hackclub.app`). Code in `apps/bot/src/lib/sites/`. The host NEVER
-  executes site code — building/testing happen in the E2B sandbox; only static
-  output is copied out (`resolveWithin` path containment). The on-disk store is
-  still `SITES_ROOT` (`/var/kytosites`). `listSites` (core) enumerates the
-  published sites (top-level dirs under the sites root).
-- **Sites are owned, and `removeSite` is no longer owner-only** (July 2026). A
-  new **`sites`** table (`name` PK, `owner_user_id`, `editor_user_ids` jsonb)
-  records who published each name. `deploySite`/`removeSite` are registered for
-  everyone and gated at execute time by `checkSiteAccess` (see the
-  Ownership/edit-permission note): the first deploy of a name **claims** it for
-  the requester; later deploys or a removal require creator/editor/owner. A
-  whole-site `removeSite` releases the name (`deleteSite`); removing one `page`
-  does not. Sites published **before** the table existed have no row: they exist
-  on disk, so `siteExistsOnDisk` makes them **bot-owner-only** rather than free
-  for the next person to claim (otherwise anyone could redeploy over them).
-- **Image generation** (`tools/generate-image.ts`) calls HackClub's
-  OpenAI-compatible `/images/generations` endpoint **directly** (fetch, model
-  `google/gemini-3.1-flash-image`, billed to `HACKCLUB_API_KEY`), parsing
-  `data[].b64_json` and detecting the media type from magic bytes. The old path
-  went through the AI SDK's `generateImage` + `@openrouter/ai-sdk-provider`
-  `imageModel`, which never actually reached the endpoint (the "image gen not
-  working" bug). `provider.imageModel` in `packages/ai` is now unused by this
-  tool.
-- **Multi-page sites:** both tools take an optional `page` sub-path (e.g. `home`
-  or `docs/intro`), served at `https://<host>/<name>/<page>/`. A page deploy
-  atomically swaps only that sub-path and leaves the rest of the site intact, so
-  a site's pages can be published/removed one at a time; omit `page` to
-  publish/replace (or remove) the whole site at the root. Page paths are
-  validated by `isValidPagePath` (lowercase slug segments split on `/`) on top of
-  `resolveWithin` containment.
-- Server starts from `apps/bot/src/index.ts` (`startSitesServer`), binds
-  `SITES_PORT` (default **8080**). Serves **plain HTTP by default** because it
-  sits behind Nest's TLS-terminating proxy (serving HTTPS there → 502). Set
-  `SITES_TLS=true` for a self-signed HTTPS cert (standalone/local).
-  `SITES_PUBLIC_HOST` (default `kyto.devansh.hackclub.app`) builds the public URL
-  (always `https://`). Config: `SITES_ENABLED`, `SITES_PORT`, `SITES_TLS`,
-  `SITES_ROOT`, `SITES_PUBLIC_HOST`.
 
-### Manifest sync
-- `bun run sync:manifest` (apps/bot) pushes `slack-manifest.json` to the Slack
-  app config via `apps.manifest.update`. Needs a Slack **app configuration
-  token** (not the bot/user token): `SLACK_APP_ID`, `SLACK_CONFIG_ACCESS_TOKEN`,
-  and optional `SLACK_CONFIG_REFRESH_TOKEN` (auto-rotates the short-lived access
-  token first). Scope changes require reinstalling the app.
+`deploySite`/`removeSite`/`listSites` publish static sites at `https://<host>/<name>/` (default host `kyto.devansh.hackclub.app`). Code in `lib/sites/`. The host **never executes site code** — building/testing happen in the E2B sandbox; only static output is copied out (`resolveWithin` path containment).
 
-### Running the bot / debugging "kyto isn't responding"
-- The bot runs under **systemd** (`kyto.service`, unit at `deploy/kyto.service`).
-  `systemctl status kyto.service` / `journalctl -u kyto.service -f -o cat`. It
-  auto-restarts (`Restart=always`) and starts on boot. Two other unrelated Slack
-  apps also run on this host (`slackbot.service` = `/root/slack-ai-helper`, a Q&A
-  helper; `hackclub-ai-status-bot.service`) — different apps/tokens, they don't
-  interfere.
-- **Never hand-launch a second copy** (`bun run start:bot`). Each running process
-  opens its own **Socket Mode** connection, and Slack delivers each event to only
-  ONE connection, so a stray manual instance silently steals ~half the mentions.
-  Diagnose the connection count with Slack's `hello` frame `num_connections` (open
-  a throwaway socket via `apps.connections.open` with `SLACK_APP_TOKEN` and read
-  the first frame) — it should be **1** (just the service).
-- **The app's live username is `gorkie__devansh_`** (immutable, gorkie-era) but
-  the **display name is `kyto`**, so `@kyto` DOES resolve to this bot
-  (`U0BD3555UCQ`, app `A0BCA6D6GAV`). `auth.test`'s `user` field returns the
-  username, not the display name — don't be fooled into thinking `@kyto` is a
-  different app.
-- **Slash commands work but @mentions/DMs don't = Event Subscriptions are off.**
-  Slack Socket Mode routes slash commands, interactivity, and event-subscription
-  events independently; if the **Enable Events** master toggle is off (it silently
-  turned off once), `slash_commands` still deliver over the socket while
-  `app_mention` / `message.*` deliver **nothing**, and the bot logs only startup
-  lines (it never sees the event). Fix: re-enable Event Subscriptions in the app
-  config (and reinstall if scopes changed). Confirm by opening a throwaway socket
-  and mentioning the bot — you should see an `app_mention` envelope arrive.
-- **Zombie socket:** a dropped Socket Mode WSS can stay TCP-`ESTAB` locally with a
-  stuck send-queue (`ss -tnp | grep :443` shows non-zero Send-Q) while delivering
-  nothing; `systemctl restart kyto.service` re-establishes a clean connection.
+Both tools take an optional `page` sub-path (`docs/intro`), served at `/<name>/<page>/`, validated by `isValidPagePath`. A page deploy atomically swaps only that sub-path; omit `page` for the whole site.
 
-### Models / LLM model router + fallback
-- **PRIMARY IS NOW PINNED GLM 5.2, not Sonnet 5.** `ROUTER_MODEL = 'z-ai/glm-5.2'`
-  (`packages/ai/src/providers/attempts.ts`), reached through HackClub. Switched
-  from `anthropic/claude-sonnet-5` because GLM 5.2 is far cheaper per token
-  (Sonnet is $2/$10), which stretches the daily HackClub $3 cap much further.
-  glm-5.2 is also a rung in `LEADERBOARD_FALLBACK`, deduped via `failedKeys` so
-  it isn't retried on fallback. (When the HackClub budget is exhausted, the
-  primary 403s "daily limit" → `hackclubBudgetExhausted` → straight to the
-  DigitalOcean BYOK tier, which serves glm-5.2 too.)
-- **Gemini tool use fixed (thought_signature replay)** (`packages/ai/src/agent.ts`):
-  Gemini 3.x attaches an encrypted `thought_signature` to every function call
-  and REQUIRES it echoed back on the next turn, or Google 400s ("Function call
-  is missing a thought_signature"). The `@ai-sdk/openai-compatible` provider
-  drops that field when replaying assistant tool calls, which broke ALL
-  multi-step Gemini tool turns after the rewrite (worked pre-rewrite on the Pi
-  stack). Fixed in `tunedFetch`: for `provider === 'gemini'` it tees each
-  response, captures `extra_content.google.thought_signature` per tool-call id
-  (`captureThoughtSignatures`), and re-injects them into subsequent request
-  bodies' assistant tool calls (`injectThoughtSignatures`). Verified end-to-end
-  (2-step tool loop completes). A dummy/placeholder signature is rejected
-  ("Corrupted thought signature"), so real capture is mandatory.
-- **The DigitalOcean BYOK tier goes through openrouter.ai, NOT baishui.** The
-  `.env` had `OPENROUTER_BASE_URL=https://baishui.jam06452.uk/v1`, but baishui
-  rejects our OpenRouter key with "invalid API key" on every call (including
-  `/models`) — so the whole DO fallback tier was dead. The key itself is valid
-  on real openrouter.ai (`/api/v1/key` shows active BYOK: ~$2.95/day DO usage),
-  and DO completions succeed there with the code's existing model names
-  (`glm-5.2` → `z-ai/glm-5.2-…` on `provider: DigitalOcean`). Fixed by setting
-  `OPENROUTER_BASE_URL="https://openrouter.ai/api/v1"` in `.env`. Do NOT point it
-  back at baishui unless a real baishui key + its own model names
-  (`glm5.2-normal`, `dsv4-fast`, …) are wired up.
-- **[historical] PINNED SONNET 5 era:** `ROUTER_MODEL = 'anthropic/claude-sonnet-5'`.
-  The
-  auto-router was dropped (owner's call) because its per-request re-routing was
-  flaky — empty completions / wrong-model picks that triggered long fallback
-  cascades. `agent.ts` no longer injects the `auto-router` plugin
-  (`ALLOWED_MODELS`/`COST_QUALITY_TRADEOFF` are retained but UNUSED, kept for
-  reference). The fallback machinery is otherwise unchanged: sonnet-5 is
-  attempt 0; on failure the pinned-resolved-retry is skipped (sonnet-5 already
-  failed, dedup via `failedKeys`) and it walks `LEADERBOARD_FALLBACK` best→worst
-  (sonnet-5 isn't in that list, so `findIndex` = -1 → full leaderboard). NOTE:
-  switching primary does NOT help on a **HackClub daily-budget-exhausted** day —
-  sonnet-5 is a HackClub call and 429s too, flipping `hackclubBudgetExhausted`
-  to skip straight to the DigitalOcean BYOK tier then the owner's Gemini key
-  (that's what serves requests once the $3/day cap is hit; resets at UK
-  midnight). The old auto-router doc below (auto plugin, resolved-model capture)
-  is historical.
-- **Prompt cache is now 1-HOUR TTL** (`agent.ts` `CACHE_CONTROL = {ttl:'1h',
-  type:'ephemeral'}`), so the system+tools prefix stays cached across a thread's
-  sporadic turns, not just within one multi-step loop. Anthropic/OpenRouter
-  honor `ttl:'1h'`; other providers ignore it.
-- **[historical] auto-router era:** The main query used to run on OpenRouter's
-  own auto-router via HackClub (`openrouter/auto`); the HackClub proxy is
-  OpenRouter-compatible. This replaced the old per-request router-LLM hop
-  (`pickModel`/`buildRoutingContext`, deleted) and the
-  `meta-llama/llama-3.3-70b-instruct` fast tier, which was unreliable for tool
-  use (hallucinated tool names, wrong-bot/persona confusion, stray "battles").
-- **Fallback on failure** (`agent/index.ts`, `routeNextAttempt`): `openrouter/auto`
-  is attempt 0. On any error or empty completion it (1) retries the **exact model
-  auto resolved to**, pinned via HackClub (auto's failure is often transient/an
-  empty completion), then (2) walks the `LEADERBOARD_FALLBACK` list (`attempts.ts`)
-  **UP** from that model toward the best (closest-better first), then **DOWN**
-  toward the weakest. `LEADERBOARD_FALLBACK` is the owner's arena leaderboard,
-  best→worst, restricted to reachable models: the strong tier on HackClub
-  (opus-4.8/4.7/4.6, gpt-5.5/5.4, glm-5.2/5.1, sonnet-4.6), then the rest of the
-  leaderboard appended in rank order (kimi-k2.7-code, gemini-3.5-flash,
-  deepseek-v4-flash, kimi-k2.6, minimax-m3, deepseek-v4-pro,
-  qwen3.6-plus, grok-4.3, grok-build-0.1, gemini-3-flash-preview, minimax-m2.7,
-  nemotron-3-ultra-550b-a55b — all verified present on
-  `ai.hackclub.com/proxy/v1/models`). Claude Fable 5 is also reachable there now
-  (`anthropic/claude-fable-5`) but deliberately excluded — ~2x opus-4.8's
-  per-token cost, not worth it against the daily HackClub spend cap.
-  gemini-3.5-flash was previously excluded here too for a confirmed
-  100%-empty-response failure, then re-added at the owner's request (see
-  below) — re-remove if the failure recurs. `gemini-3.1-pro-preview` was
-  re-added at the same time but then dropped again (2026-07-06, owner: too
-  expensive for the quality it delivers against this daily budget) — removed
-  from here, `ALLOWED_MODELS` (`packages/ai/src/agent.ts`), and `GEMINI_MODELS`
-  (`attempts.ts`).
-  The **baishui proxy** tail (`jam06452.uk`) is **commented out** — its `/models`
-  endpoint answers but every completion fails ("upstream authentication failed" /
-  "all provider keys rate-limited or in cooldown"), so it only wasted fallback
-  attempts; re-enable the block (with `proxyAttempt`/`proxyReady`) only after
-  verifying a real completion succeeds. **Last resort: the owner's own Gemini
-  key** (`geminiAttempts`, `GEMINI_API_KEY`, direct Google endpoint, provider
-  `gemini`) is appended to the very end of `LEADERBOARD_FALLBACK`, so a fully
-  budget-exhausted HackClub day still gets an answer off a separate, cheap quota;
-  skipped if `GEMINI_API_KEY` is unset. Fable 5 (rank #1) is reachable on
-  HackClub (`anthropic/claude-fable-5`) but deliberately excluded from both
-  `LEADERBOARD_FALLBACK` and the auto-router allowlist — ~2x opus-4.8's
-  per-token cost, not worth it against the daily HackClub spend cap. The
-  resolved slug is read off the per-turn model holder (`autoHolder`)
-  captured during the auto attempt, so it pins/pivots even when auto failed. Each
-  entry is tried at most once (tracked via `failedKeys`). `deepFallbackAttempts`
-  is retained/exported for reference but no longer drives routing.
-- **DigitalOcean BYOK tier** (`digitaloceanAttempts`, provider `openrouter-do`,
-  `attempts.ts`): the owner's OpenRouter key (`OPENROUTER_API_KEY`) holds **$0
-  OpenRouter credit** but is configured with **BYOK to DigitalOcean**, so
-  DigitalOcean-served models run at **$0 OpenRouter cost** (billed to the owner's
-  DigitalOcean account — a quota SEPARATE from HackClub). Reached via
-  `OPENROUTER_BASE_URL` (default `https://openrouter.ai/api/v1` — NOT `/v1`,
-  which returns the marketing site). `agent.ts`'s `tuneBody` injects `provider:
-  { only: ['digitalocean'] }` on every `openrouter-do` request — **required**,
-  since with $0 credit OpenRouter would otherwise route to a paid provider and
-  402. Roster = the **verified tool-capable** DO models only (`DIGITALOCEAN_MODELS`,
-  best→worst: glm-5.2, deepseek-v4-pro, kimi-k2.6, qwen3.5-397b-a17b,
-  minimax-m2.5, glm-5, deepseek-v4-flash, llama-4-maverick, mimo-v2.5-pro).
-  **`gpt-oss-120b` and `kimi-k2.5` are excluded** — DigitalOcean's endpoints for
-  them reject tool use, useless for kyto's tool loop. These are short BYOK
-  aliases (OpenRouter resolves `glm-5.2` → `z-ai/glm-5.2-…`); the `-fast`/
-  `-normal` proxy aliases in the owner's raw list are NOT valid OpenRouter ids.
-  Appended to `LEADERBOARD_FALLBACK` **before** the Gemini last resort;
-  `maxOutputTokens` caps their (reasoning-model) output like HackClub's.
-- **Prompt caching** (`agent.ts` `addCacheControl`): `tuneBody` injects
-  `cache_control: {type:'ephemeral'}` breakpoints on the **system message**
-  (tools+system prefix — the big constant chunk) and the **last user message**
-  (the replayed thread history), so within a multi-step tool loop every step
-  reads the cached prefix instead of re-billing it. Verified through the HackClub
-  proxy: Anthropic honors it for a **~10x cheaper cached read** ($0.0206 write →
-  $0.0019 read on a 3.2k-token prefix); the HackClub proxy passes `cache_control`
-  straight through to OpenRouter. Providers without explicit caching (OpenAI,
-  DeepSeek, GLM, Kimi, …) **safely ignore** the field (confirmed no error on
-  glm-5.2/deepseek/auto→gpt-5.5) and auto-cache on their own; DigitalOcean
-  already returned `cached_tokens` on a plain call. Applied to every attempt —
-  harmless where unsupported. Anthropic allows ≤4 breakpoints; we use 2, both on
-  content the SDK sends as plain strings (system, user), leaving assistant/tool
-  messages untouched.
-- **One fallback, not two (July 2026).** Three things made a dead HackClub cost
-  several `Thinking · fallback` cards and minutes of latency:
-  1. **The AI SDK retries internally.** `streamText` defaulted to 3 tries per
-     attempt, so every rung waited out three 429s before our router saw it.
-     `streamAttempt` now sets **`maxRetries: 1`** (`packages/ai/src/agent.ts`) —
-     we run our own cross-provider fallback, so SDK-level retries just multiply
-     the wait. One retry still absorbs a transient blip.
-  2. **The budget 403 was invisible.** HackClub returns OpenRouter's
-     `403 {"error":{"message":"Key limit exceeded (daily limit)"}}` (and
-     sometimes a bare 429), but the SDK rethrows an **`AI_RetryError`** whose own
-     message is only "Failed after 3 attempts…" — `responseBody` hangs off the
-     *wrapped* errors. The old shallow readers missed it, so a budget-exhausted
-     day looked like a generic failure. **`deepErrorText`** (`lib/utils/error.ts`)
-     now recurses through `lastError`/`cause`/`errors` (depth-capped, so a cyclic
-     `cause` can't hang the router) and both call sites use it —
-     `thrownErrorText` (agent) and the stream `error` part (`ai/stream/index.ts`,
-     whose duplicate `errorPartText` was deleted). `SPEND_LIMIT_PATTERN` gained
-     `limit exceeded`.
-  3. **`HACKCLUB_OUTAGE_THRESHOLD` is now 1**, not 2. Every HackClub rung shares
-     one proxy and one budget, so a rung failing for a non-model reason means the
-     next fails identically; trying a second only bought another fallback card
-     before the same verdict. DigitalOcean BYOK is a genuinely separate quota.
-  Net: a HackClub outage or budget-exhaustion now reaches DigitalOcean in **one**
-  fallback.
-- **HackClub outage failover → skip the rest of HackClub** (`agent/index.ts`):
-  distinct from the spend-limit case below. When HackClub itself is DOWN (5xx /
-  connection errors, not budget), every HackClub rung would fail identically, so
-  walking the whole HackClub-heavy leaderboard produced a long useless cascade
-  (the "lots of Thinking · fallback, sometimes no reply" bug). Now a per-turn
-  `hackclubFailures` counter (non-budget HackClub failures only) trips
-  `hackclubUnavailable` after `HACKCLUB_OUTAGE_THRESHOLD` (1) failure, which —
-  like `hackclubBudgetExhausted` — makes `buildFallbackQueue` and the
-  attempt-selection `.find` **skip all remaining HackClub rungs** and jump to the
-  DigitalOcean BYOK tier, then the owner's Gemini key. So a full HackClub outage
-  reaches a working model in ~3 attempts instead of ~15.
-- **HackClub spend-limit failover → straight to Gemini**: if a HackClub call
-  returns the daily-spend 429 (`SPEND_LIMIT_PATTERN`, surfaced via
-  `renderStream`'s `onError`), `routeNextAttempt` sets `hackclubBudgetExhausted`.
-  The whole HackClub budget is **shared**, so once the first call 429s every other
-  HackClub rung 429s the same way (they just burn attempts at ~4ms each). So the
-  flag flips `buildFallbackQueue` to **skip all HackClub rungs and go to the
-  non-HackClub rungs**: the **DigitalOcean BYOK tier first** (separate quota,
-  strong tool-capable models), then the owner's Gemini key
-  (`geminiAttempts`, separate quota, cheap) as the final backstop. (Order is
-  `[...otherNonHackclub, ...gemini]` — DO before Gemini, since DO's models are
-  far better than the cheap Gemini rung.) The pinned resolved-model retry is also
-  skipped on spend-limit (it's a HackClub call).
-  (This replaced the older cheapest-first-HackClub-retry approach — the
-  pessimistic-limit "a cheap rung might still fit" recovery wasn't worth the
-  wasted 429 attempts once the Gemini key exists as a clean, cheap escape.)
-- **Fetch interceptor** (now `packages/ai/src/agent.ts`, per-provider `fetch` — no global patching): Pi makes model calls through the process-global `fetch` (undici),
-  so we patch it to tune the request and read the response:
-  - **Tune the auto-router**: inject the `auto-router` plugin into the
-    `openrouter/auto` request body with `cost_quality_tradeoff` (0 = best/dearest,
-    7 = default, 10 = cheapest; we use **7** — the default, biased away from the
-    always-premium routing that blew up cost) and an **`allowed_models`** allowlist
-    of **exact slugs** (the field is `allowed_models` — the older `model_patterns`
-    name is silently ignored by the proxy; not globs, so no
-    `-nano`/`-mini`/`-flash-lite`/`-fast` or `claude-fable-5` leakage):
-    claude-opus-4.6/4.7/4.8, claude-sonnet-5, claude-sonnet-4.6, gpt-5.4/5.5, glm-5.1/5.2,
-    **gemini-3.1-flash-lite** (the cheap rung — added so auto
-    can route simple/casual turns off the premium tier, the main cost blowup, and
-    as the signal for handing a turn to the owner's Gemini key), plus
-    `gemini-3.5-flash` (re-added 2026-07-02 at the owner's request after
-    previously being removed for returning an **empty response on 100% of
-    observed attempts** — 22/22 direct via `geminiAttempts`/`GEMINI_MODELS` in
-    `attempts.ts`, 10/10 via the auto-router's `google/gemini-3.5-flash` slug in
-    `LEADERBOARD_FALLBACK`). The owner's Google AI Studio dashboard showed
-    **zero requests metered** against it despite these attempts, meaning the
-    calls were rejected before reaching generation (likely not enabled for a
-    free-tier key at the time), not that the model burned its output budget on
-    thinking; it also only carries a 20 RPD free-tier quota vs.
-    3.1-flash-lite's 500 RPD. Because of that dashboard signal,
-    `gemini-3.5-flash` was kept OUT of `GEMINI_MODELS` (`attempts.ts`, the direct-key
-    path) when re-adding it here and to `LEADERBOARD_FALLBACK` — the
-    HackClub-proxied call is a different request path and may not be
-    tier-gated the same way. If the empty-response failure recurs, watch
-    `[stream] tally` in the logs (0 textDeltas/reasoningParts despite tool
-    activity) and re-remove from `ALLOWED_MODELS` (here) and
-    `LEADERBOARD_FALLBACK` (`attempts.ts`). `gemini-3.1-pro-preview` was also
-    re-added at the same time, then dropped again 2026-07-06 (owner: too
-    expensive) from all three of `ALLOWED_MODELS` (here), `LEADERBOARD_FALLBACK`
-    (`attempts.ts`), and `GEMINI_MODELS` (`attempts.ts`) — it's not known to have the
-    dashboard/empty-response issue, this was purely a cost call. The
-    interceptor strips a stale `Content-Length` when re-issuing the tuned
-    (longer) body so the appended `plugins` isn't truncated. Verified honored
-    by the HackClub proxy. Edit `COST_QUALITY_TRADEOFF`/`ALLOWED_MODELS`.
-  - **Cap `max_tokens` on HackClub requests** (`MAX_OUTPUT_TOKENS = 8000`): the
-    HackClub proxy enforces its **daily spend limit pessimistically** — with no
-    `max_tokens` it assumes the model could emit its full max output, projects
-    that worst-case cost, and returns `429 Daily spending limit of $3 reached`
-    when the projection crosses the cap **even with budget still free** (the
-    dearer models — opus/gpt-5.x — were rejected at $2.33/$3 while cheap GLM went
-    through). Injecting `max_tokens` makes OpenRouter price off that bound, so
-    requests pass (verified: opus-4.8 429s without it, succeeds with it). Sized
-    to past usage: observed step outputs run **<6k tokens**, so 8k is generous
-    headroom while halving the projected cost vs. the old 16k — the lower
-    projection is what lets the cheaper HackClub rungs still fit near the budget
-    end (so the spend-limit fallback above can recover on HackClub). Applied only
-    to HackClub URLs (the baishui proxy is unmetered). Edit `MAX_OUTPUT_TOKENS`;
-    raise it if large single-step file writes get truncated.
-  - **Capture the resolved model**: the stream only exposes the *requested* id, so
-    we read the concrete model OpenRouter resolved to from the `model` field of a
-    clone of the response and stash it per-turn (`AsyncLocalStorage`).
-- The turn's work is surfaced as a **`Thinking` task in the thinking section**
-  (title `Thinking`, or `Thinking · fallback` on retries). The **model name IS
-  now shown (July 2026, owner reversed the earlier hide)**: the `in_progress`
-  card carries `details: currentAttempt.model` (the model it's about to run),
-  shown ONCE. `completeModelTask` deliberately sends **no `output`** — Slack keeps
-  the `details` line through the complete update, so also sending the model as
-  `output` rendered it TWICE (the "shows model name twice in same card" bug). So
-  on a fallback cascade each rung's `Thinking · fallback` card names its own model
-  once, via `details`. (Primary is pinned glm-5.2, not `openrouter/auto`, so
-  requested == resolved anyway; the resolved-model holder still feeds fallback
-  pivoting, just not this card.) Reasoning
-  tokens the model streams also render under the title **`Thinking`**
-  (`stream/index.ts`, renamed from `Reasoning`) so the plan uses a single word
-  rather than both `Thinking` and `Reasoning`. (The model task and reasoning
-  task are still separate task ids, so a reasoning turn shows two `Thinking`
-  rows; merging into literally one card is a possible follow-up.)
-  - **Each reasoning block gets a UNIQUE task id (July 2026).** Providers reuse
-    the same `part.id` (often `"0"`) for every step's reasoning, so keying the
-    task on `reasoning-${part.id}` collapsed ALL thinking into one row that
-    stayed pinned wherever it first appeared — which is why the plan looked like
-    "all thinking, then all tools" even though the model genuinely thinks between
-    tool calls. `renderStream` now mints `reasoning-${reasoningCounter++}` per
-    `reasoning-start` and maps the provider's (reused) id → that unique id in
-    `openReasoning` for the block's deltas/end. Result: each stretch of reasoning
-    is its own row landing in stream order, so the plan reads thinking → tool →
-    thinking → tool.
-  Emitted **`in_progress` while the attempt runs** (so the activity indicator reads
-  as working, never a misleading "completed" before anything has happened) and
-  marked **`complete` exactly once** via the `completeModelTask()` guard
-  (`modelTaskDone`): the post-stream success path completes it, and the catch
-  completes it only if that hasn't already fired (so an attempt that throws before
-  post-stream still stops the `Model · fallback` spinner). The single-completion
-  guard fixes a **display bug where each model rendered 2–3×**: a streamed attempt
-  that then failed the empty-check completed the task post-stream (with the
-  resolved arrow) AND again in the catch (plain), so the plan showed the same
-  model repeated. `modelHolder`/`modelTaskId`/`modelTaskTitle` are declared
-  outside the per-attempt try so the catch can read them. Updated in place by id
-  to append the resolved model. `openrouter/auto` re-routes **per step**, so a turn can use several
-  models; the task shows the **first** step's pick (every step is logged at info
-  as `[router] resolved openrouter/auto model`).
-- `MODEL_CATALOG`/`CATALOG_IDS` are retained for reference/diagnostics only (no
-  longer drive routing). `chatAttempts`/`attemptsFor`/`PREMIUM_MODEL` remain
-  exported for reference.
-- Fallback advances on **any** error AND on an **un-handled completion**. A turn
-  counts as **handled** iff it produced reply text or a deliberate `skip`.
-- **"Ends its turn without responding" (fixed July 2026).** `handled` used to
-  also accept `producedToolActivity && sawCleanStop` — a model that ran its
-  tools and then finished with `finishReason: 'stop'` and **zero text** counted
-  as handled, so no fallback fired; and since the streamed reply is created
-  lazily on the first text delta, **nothing was posted at all**. The user saw
-  tool cards and then silence. (That clause was itself the fix for the opposite
-  "stops mid-task" bug — a cascade after the model deliberately finished — but
-  it was drawn too wide: the deliberate no-reply path is the `skip` tool, which
-  is tracked separately.) Now that case runs `synthesizeFinalAnswer`
-  (`agent/index.ts`): re-ask **the same model, once, with `tools: {}`**, feeding
-  it the task plus `renderCarryover(gatheredResults)` and "you already did the
-  work, write the final reply now". Tools are off, so no side effect can fire
-  twice, and it costs one cheap call. If the nudge is also empty the turn is
-  **unhandled** and falls back to the next model, which replays the same
-  gathered results. `sawCleanStop` (from `onFinish`) now only gates the nudge.
-  A truly empty completion (no text, skip, or tools) falls back as before. Any
-  provider placeholder text like `(Empty response: ...)` is dropped before it
-  reaches Slack (`agent/index.ts`, `ai/stream/index.ts`).
-- **Tool-result carryover across fallback**: so a fallback model doesn't re-run
-  the same tools (e.g. repeat identical web searches) after an earlier step
-  truncated, `renderStream`'s `onToolResult` reports every completed
-  (non-phantom, non-`skip`) tool call's input+output. The agent stashes them in
-  `gatheredResults` (deduped by tool+input via `gatheredKeys`). On a **fallback**
-  attempt (`attempts.length > 0`) the prompt is augmented with `renderCarryover`
-  — a "previous attempt already ran these tools, answer from them, do NOT re-run"
-  block — so the new model continues from the gathered results. Bounded to avoid
-  context blow-up: last `CARRYOVER_MAX_RESULTS` (12) results, each clamped to
-  `CARRYOVER_OUTPUT_MAX` (1500) / `CARRYOVER_INPUT_MAX` (400) chars. The first
-  attempt always sends the plain prompt. NOTE: this is a prompt-level replay, not
-  true session continuation — each attempt is still a fresh Pi session/model (the
-  harness session history is owned per-runtime and isn't transferred across
-  different models), so the carried results are re-sent as text, not resumed.
-- **Daily-budget failure message**: when a turn fails after the HackClub
-  spend-limit 429 cascaded through every fallback, `agent/index.ts` throws
-  `BudgetExhaustedError` (carrying the raw 429 text), and `agentErrorMessage`
-  (`lib/errors.ts`) renders a plain message naming the cap and the reset
-  countdown — _"kyto's daily model budget ($3/day) is used up … it resets at UK
-  midnight, in Xh Ym"_ — instead of the generic "oops". The reset clock
-  (`timeUntilUkReset`) counts down to the next **Europe/London** midnight (tracks
-  BST/GMT automatically, computed from London wall-clock so it's host-tz
-  independent). It deliberately does **not** explain OpenRouter's pessimistic
-  limit accounting. The dollar amount is parsed from the 429 text (defaults to
-  $3). This wins over the stage-based (`after_text`/`after_progress`) messages
-  since the budget is the real cause.
-- **Hallucinated tool calls are hidden.** Weak models sometimes emit a tool call
-  to a tool we never registered (observed: a mangled name `" analemma"`); the
-  harness returns a `"Tool X not found"` tool-result and the model recovers next
-  step. `renderStream` is passed `knownTools` and drops any tool-call (and its
-  matching result/error) whose name isn't registered, so phantom calls never
-  surface as activity tasks (`ai/stream/index.ts`).
-- No **Stop button** is posted during a turn (removed from `postControls` flow).
-- **Per-attempt watchdog** (`agent/index.ts`, `ATTEMPT_TIMEOUT_MS`, default 10m,
-  env `AGENT_ATTEMPT_TIMEOUT_MS`): each model attempt runs under a dedicated
-  `AbortController` combined with the turn controller via `AbortSignal.any`. If
-  the attempt stalls (a frozen upstream SSE stream or a hung tool that never
-  returns) the timer aborts **only the attempt signal**, so it is NOT mistaken
-  for a user interrupt — it routes through the normal recovery path (fall back to
-  the next model if no reply text streamed yet, else surface an error). The
-  combined signal also reaches tool execution: sandbox tools that forward it
-  (`browser` passes `abortSignal` into `session.run`) get their hung command
-  killed, unblocking Pi. Without this a turn could hang forever (observed: a
-  website-build turn froze after an "On it…" preamble + a browser open that never
-  returned). Other sandbox tools (`deploySite`, `getFile`, `uploadFile`) do not
-  yet forward the signal — extend them the same way if they're seen to hang.
-- `glm-4.7` is omitted from HackClub (persistent 504); `glm-5.2` 504s
-  intermittently there but degrades via the empty-completion fallback (baishui is
-  disabled, so no `glm5.2-normal` backstop).
+The server starts from `apps/bot/src/index.ts` (`startSitesServer`) and serves **plain HTTP** by default because it sits behind Nest's TLS-terminating proxy (serving HTTPS there → 502); `SITES_TLS=true` for a self-signed cert standalone. Config: `SITES_ENABLED`, `SITES_PORT` (8080), `SITES_TLS`, `SITES_ROOT` (`/var/kytosites`), `SITES_PUBLIC_HOST`.
 
-### Identity & opt-in gating
-- **The bot's Slack username is a gorkie-era handle (`gorkie__devansh_`)** — the
-  app was forked from gorkie and the handle stuck (display name shows "Not set"
-  live even though `slack-manifest.json` says `kyto`; the manifest needs syncing
-  + reinstall to update it). Because of this, `annotateMentions`
-  (`lib/agent/mentions.ts`) special-cases the bot's own id (`slack.botUserId`) and
-  annotates it as `kyto`, so the agent never mistakes its own mention for gorkie.
-- **Opt-in gating** (`OPT_IN_CHANNEL`): an un-opted-in user who @s kyto gets
-  `offerOptIn` (`lib/onboarding.ts`) — a **visible in-thread reply** (not
-  ephemeral) with an "i accept" button, mirroring how gorkie surfaces its join
-  gate. Membership of `OPT_IN_CHANNEL` is the allowlist (`lib/allowed-users.ts`).
-- **`##` messages are invisible to kyto.** A message with any line that begins
-  with `##` (after stripping leading @mentions) is a human-only side-channel:
-  `isHiddenFromBot` (`lib/utils/message.ts`) makes `shouldIgnore` (`bot.ts`) skip
-  it AND `buildPrompt` (`lib/agent/prompt.ts`) filter it out of the replayed
-  thread history — so kyto never triggers on it and never even sees it in
-  context. (Previously it was only non-triggering but still visible in history.)
-- **No channel-join greeting at all.** The `member_joined_channel` handler
-  (`features/assistant/index.ts`) posts **nothing** — the welcome line was
-  removed entirely per workspace admins (an earlier inviter-gated version still
-  wasn't acceptable). Ban history: kyto once auto-joined a **post-restricted**
-  channel to search it and the greeting posted where normal members can't,
-  getting it banned. Do NOT re-add any `member_joined_channel` post. General
-  rule: kyto only ever speaks in **reply to being invoked**, never unsolicited.
-- **Cross-channel posting is owner-gated** (`tools/post-message.ts`). The
-  `postMessage` tool takes `currentThreadId` + `isOwner`; for a **non-owner** it
-  may only post back into the **same channel** kyto was mentioned in (a
-  different-channel target or a DM to another user is refused). The **owner** can
-  still direct it to post into any channel. This is the admin requirement that a
-  thread in #general can't be used (by anyone but the owner) to post into
-  #announcements. `sendAsUser`/`editAsUser` remain owner-only already.
-- **Kyto is closed-source.** `packages/ai/src/prompts/slack.ts` states plainly
-  that Kyto's own code is private with no public repo link to share (it
-  started as a private fork of the open-source gorkie project, but that's as
-  far as the public trail goes). This replaced an earlier line that
-  (incorrectly) told users Kyto's source was available at
-  `github.com/imdevarsh/gorkie-slack` — that's the upstream fork source, not
-  Kyto's own repo, and it isn't public.
-- **Owner grounding**: without it, asked "who coded you", kyto had confabulated
-  answers like "a team of engineers at a private organization" and disputed
-  the truth when the real owner said so. `RequestHints.ownerUserId` (from
-  `OWNER_USER_ID`, populated in `apps/bot/src/lib/ai/hints.ts`) is rendered
-  into the context block (`packages/ai/src/prompts/context.ts`) as a plain
-  statement of who owns/built Kyto, with an explicit instruction not to hedge
-  or invent a different origin. Skipped if `OWNER_USER_ID` is unset.
-- **`main` is the branch actually deployed** (`kyto.service`'s working
-  directory tracks whatever is checked out here). A separate branch,
-  `rebuild-on-upstream`, diverged with its own version of these identity fixes
-  plus unrelated features (MCP client, `gh` CLI tool, `/btw` side-channel,
-  Replicate TTS) — it was never merged and is **not** the source of truth for
-  this doc. Don't assume anything on that branch is live; re-derive fixes
-  directly on `main` instead of assuming a merge will happen.
-- **Branch audit (2026-07-09): `main` is now a strict superset of
-  `rebuild-on-upstream`, feature-wise.** The last thing that branch had and
-  `main` didn't was the reminder kinds (`script`/`bash`/`agent`) + `run-once.ts`,
-  now ported. Everything else that looks "new" over there is *older* Pi/chat-sdk
-  infrastructure (`session.ts`, `skills.ts`, `provider.ts`, `providers/pi.ts`,
-  `resolved-model.ts`, `controls.ts`). `main` additionally has focus mode,
-  `slack-script.ts`, the sandbox tools, MCP, identity profiles, and the subagent
-  prompt — none of which exist on the branch. Nothing further to harvest; the
-  branch's `MAX_RECURRING_RUNS = 20` global auto-cancel was deliberately NOT
-  ported (it would silently kill existing "forever" reminders; `max_runs` is
-  already opt-in per reminder).
+## Ownership & edit permission (reminders + sites)
 
-### DM threading (native in the custom harness)
-- **Every message threads, DMs included.** The custom harness assigns
-  `threadTs = event.thread_ts || event.ts` unconditionally (`buildMessage`,
-  `apps/bot/src/harness/harness.ts`) — the behavior the old adapter needed a
-  `bun patch` for is now just how the harness works (the patch and
-  `patchedDependencies` are gone). A top-level DM message starts (and kyto
-  replies within) its own thread; `buildPrompt` scopes context to just that
-  thread, so kyto has no memory of the rest of the DM by default — the model
-  uses `searchSlack` (`in:@user`) to pull earlier DM history on purpose.
+Things kyto creates on someone's behalf and can later change carry an access list, so a bystander in a public thread can't rewrite someone's reminder or take down their site. The rule, shared by both: **the creator, anyone the creator named as an editor, and the bot owner.** The core prompt tells the model the rule, and that a refusal is not something to work around — just say who owns the thing.
 
-### Sandbox / E2B — lazy, and PERSISTENT PER THREAD
-- Config in `packages/sandbox/src/config.ts`. The E2B sandbox is the execution
-  backend for the `bash`/file tools and the host tools that opt into it
-  (`browser`, `deploySite`, `getFile`, `uploadFile`).
-- **Lazy** (`packages/sandbox/src/lazy-sandbox.ts`, `LazySandbox`): the real
-  `Sandbox.create` is deferred until a tool actually touches it, so **chat-only
-  turns cost zero E2B**.
-- **Persistent per thread (July 2026).** `destroy()` now **pauses** rather than
-  kills, and the thread's `sandbox_id` is remembered in the new
-  **`thread_sandboxes`** table; the next turn in that thread calls
-  `Sandbox.connect(id)` (which auto-resumes a paused sandbox) and gets the same
-  filesystem back — files written, packages installed, data downloaded. Verified
-  end-to-end (write in turn 1 → read in turn 2, ~450ms resume; a different
-  thread cannot see it). This is what makes a **`bash` recurring reminder**
-  useful: kyto writes and tests a script in the thread, then schedules the
-  reminder to run it. `prompts/sandbox.ts` tells the model so.
-  - Persistence is opt-in via the injected **`SandboxStore`** (`load`/`save`/
-    `clear`) — `packages/sandbox` stays free of a DB dependency. The bot's
-    implementation is `lib/sandbox/store.ts` (`threadSandboxStore`). A
-    `LazySandbox` built WITHOUT a store is still ephemeral (killed on destroy) —
-    that's what the **subagent** uses.
-  - **NOTE: this was never a regression.** It is a NEW feature. The pre-rewrite
-    `lazy-session.ts` was also ephemeral ("we never persist a session, the
-    workspace is always empty at start"), and nothing ever wrote the old
-    `sandbox_sessions` table — that table is orphaned scaffolding from an
-    abandoned `feat(persistence)` attempt and is deliberately NOT reused.
-  - **A thread, not a "conversation."** Every message roots its own thread
-    (including a top-level DM), so a new top-level DM gets a **new** sandbox.
-    Persistence is within one Slack thread.
-  - **Two things are fixed at CREATE time and therefore stale on a resumed
-    sandbox**: the `network` egress rules (which broker the real `GH_TOKEN` —
-    see the `gh` note) and the create-time `envs`. Rotating `GH_TOKEN` only
-    takes effect on a thread's next fresh sandbox. Per-command env IS re-sent on
-    every `run()`, so the short-lived per-turn Slack proxy token stays current.
-  - **A thread's sandbox is one mutable machine**, and both a live turn and a
-    `bash`/`agent` reminder reach for it. `acquireThreadSandbox`/
-    `withThreadSandbox` (`lib/sandbox/store.ts`) serialize them, so a reminder
-    can't pause the sandbox out from under a running command. A turn holds the
-    lock for its whole duration (bounded by `AGENT_ATTEMPT_TIMEOUT_MS`).
-  - **A paused sandbox costs storage**, so `startSandboxReaper()` (hourly,
-    `index.ts`) kills anything untouched for **7 days** (`SANDBOX_TTL_MS`) and
-    forgets the row. `killSandbox()` is exported from `@repo/sandbox` for this.
-  - `runOnce(command, apiKey)` (`packages/sandbox/src/run-once.ts`) spins up a
-    throwaway sandbox for callers with no thread to reuse (a legacy `bash`
-    reminder whose row predates `thread_id`).
-- **Memory = the Slack thread.** `buildPrompt` (`lib/agent/prompt.ts`) still
-  feeds the **whole thread** (`slack.fetchMessages`, capped) as context; no
-  model session is persisted. Message contents are still never stored, so kyto
-  remains "live processing without storing message contents" for the Slack
-  Scraping policy — the sandbox persists a *filesystem*, not a transcript.
-  `langfuse` tracing stays disabled for the same reason (it would export message
-  content); env keys remain but unused.
+- Set at creation via an optional **`editors`** param on `scheduleRecurringReminder` and `deploySite` (user ids or `<@U123>` mentions; `parseEditors` in `tools/editors.ts` rejects anything that isn't a user id, so a display name can't become a permission entry that never matches). Omitted = creator only.
+- Enforced **at execute time against `message.author.userId`** — the person actually talking to kyto this turn, not whoever the model claims to act for. Reminders: `isReminderEditableBy` plus `editableBy` (a jsonb `@>` containment check) scoping every list/pause/resume/cancel/edit query. Sites: `checkSiteAccess` + `canEdit`.
+- Storage: `reminders.editor_user_ids` (jsonb) and the `sites` table (`name` PK, `owner_user_id`, `editor_user_ids`). The first deploy of a name **claims** it. A whole-site `removeSite` releases the name; removing one `page` does not. Sites published before the table existed have no row — `siteExistsOnDisk` makes them bot-owner-only rather than free for the next person to claim.
+
+## Identity, gating, and etiquette
+
+- **Broadcast mentions are owner-gated.** Only the owner may make kyto ping a whole channel. `neutralizeBroadcast` (`harness/markdown.ts`) downgrades `<!channel>`/`<!here>`/`<!everyone>`/`<!subteam^…>` to inert plaintext, applied to the streamed reply (`createReply({allowBroadcast})`, `allowBroadcast = isOwner`) and the `postMessage` tool's non-owner path.
+- **Broadcast rendering**: Slack's `markdown` block does NOT resolve control mentions — they come out as plaintext. So `ThreadHandle.post` detects a control-mention token (`CONTROL_MENTION`) and posts that message as a `section`+`mrkdwn` block instead (losing GFM niceties for that message only). The core prompt tells the model to ping with `<@id>` and broadcast with the raw `<!channel>` tokens.
+- **Cross-channel posting is owner-gated** (`tools/post-message.ts`): a non-owner may only post back into the same channel kyto was mentioned in. This is the admin requirement that a thread in #general can't be used to post into #announcements. **Send/edit-as-owner** (`sendAsUser`/`editAsUser`, via `SLACK_USER_TOKEN`) is only **registered** when the author is the owner, and each re-checks at execute time.
+- **Opt-in gating** (`OPT_IN_CHANNEL`): an un-opted-in user who @s kyto gets `offerOptIn` (`lib/onboarding.ts`) — a visible in-thread reply with an "i accept" button. Membership of `OPT_IN_CHANNEL` is the allowlist (`lib/allowed-users.ts`).
+- **`##` messages are invisible to kyto.** A message with any line beginning `##` (after stripping leading mentions) is a human-only side-channel: `isHiddenFromBot` makes `shouldIgnore` skip it AND `buildPrompt` filter it out of replayed history — so kyto never triggers on it and never sees it.
+- **No channel-join greeting, ever.** The `member_joined_channel` handler posts **nothing**. Ban history: kyto once auto-joined a post-restricted channel to search it, and its greeting posted where normal members can't — it got banned. Do NOT re-add any `member_joined_channel` post. General rule: **kyto only ever speaks in reply to being invoked, never unsolicited.**
+- **The bot's Slack username is a gorkie-era handle** (`gorkie__devansh_`, immutable) but its **display name is `kyto`**, so `@kyto` resolves to this bot (`U0BD3555UCQ`, app `A0BCA6D6GAV`). `auth.test`'s `user` field returns the username, not the display name — don't conclude `@kyto` is a different app. `annotateMentions` special-cases the bot's own id and annotates it as `kyto`, so the agent never mistakes its own mention for gorkie.
+- **Kyto is closed-source.** `prompts/slack.ts` says plainly that kyto's code is private with no public repo link to share. It began as a private fork of the open-source gorkie, but that's as far as the public trail goes — do NOT point users at `imdevarsh/gorkie-slack` as "kyto's source".
+- **Owner grounding**: without it, asked "who coded you", kyto confabulated ("a team of engineers at a private organization") and disputed the truth when the real owner corrected it. `RequestHints.ownerUserId` (from `OWNER_USER_ID`) is rendered into the context block as a plain statement of who owns/built kyto, with an instruction not to hedge or invent a different origin.
+
+### Identity profiles
+
+`identity_profiles` table (`message_type` PK ∈ `normal`|`subagent`|`reminder`, `name_suffix`, `icon`). Owner-configured from an **App Home "Identity"** section. The base name is ALWAYS "kyto" (a suffix is appended, e.g. "kyto subagent"); it can never be renamed. `resolveIdentity(type)` (`lib/identity.ts`, 30s cache) returns `{username?, iconEmoji?, iconUrl?}` — `icon` is a `:emoji:` code or an image URL (a unicode emoji can't be an `icon_emoji`). Applied to reminder posts, cross-channel `postMessage`, and the subagent's own streamed message. Needs `chat:write.customize`.
+
+## Response style and the plan UI
+
+- `prompts/personality.ts`: write like a human in Slack — natural sentence case, no Title Case, no ALL CAPS for emphasis, no over-punctuation; casual lowercase is fine, match the other person's register.
+- **kyto MAY narrate.** The old "don't narrate every step" block was removed (owner's call) — in-between status updates are wanted, and the plan splits to match.
+- **Multi-block turns — `streamSegmented`** (`agent/index.ts`): a turn is a SEQUENCE of streamed plan messages, not one. `renderStream` takes `emitText: true` (yields reply text as plain strings alongside task chunks, in stream order); `streamSegmented` cuts a new plan message whenever a task card arrives AFTER reply text has streamed in the current block. So `[plan] text [plan] text` — the model can post an update and keep working in a fresh collapsible block instead of every tool piling into one plan pinned above all the text. Text itself is posted by `createReply` (`agent/reply.ts` — length-splitting, fence/table healing); `streamSegmented` only controls WHEN each plan opens/closes around it.
+  - **Only VISIBLE text splits a block** (`isVisibleText` — non-whitespace). Models routinely emit whitespace-only fragments (`"\n"`) between tool calls; `createReply` never posts those, so splitting on them opened an empty collapsible block for every stretch of tools — the "three plan blocks, no text in between" bug.
+  - The attempt's **Thinking (model) card is completed at first visible reply text**, so it finishes inside its own block rather than a later one where its task id doesn't exist (which would leave a perpetually spinning Thinking).
+- **Reasoning** renders under the title `Thinking`, and **each reasoning block gets a UNIQUE task id**: providers reuse the same `part.id` (often `"0"`) for every step's reasoning, so keying the task on it collapsed ALL thinking into one row pinned wherever it first appeared. `renderStream` mints `reasoning-${counter++}` per `reasoning-start`, so the plan reads thinking → tool → thinking → tool.
+- **Hallucinated tool calls are hidden.** Weak models sometimes call a tool we never registered; the harness returns "Tool X not found" and the model recovers next step. `renderStream` is passed `knownTools` and drops any such tool-call (and its matching result/error).
+- **Usage footer** (`postUsageFooter`): a muted context block under the reply showing `<output tokens> · <N> tok/s`. Per-user opt-out via `user_customizations.show_usage_footer`, toggled from an App Home button. The resolved model is shown in the `Thinking` task, not here.
+
+## Models / fallback
+
+**Full detail lives in [`.claude/MODELS.md`](./MODELS.md) — read it before touching routing, and update it when you change routing.** The essentials:
+
+- **Primary is pinned `z-ai/glm-5.2`** (`ROUTER_MODEL`, `packages/ai/src/providers/attempts.ts`) via HackClub — cheap enough to stretch the daily $3 cap.
+- **A turn is "handled" iff it produced reply text or a deliberate `skip`.** Anything else falls back down `LEADERBOARD_FALLBACK`, then the DigitalOcean BYOK tier (a separate quota), then the owner's Gemini key. A model that ran tools but wrote nothing gets ONE `synthesizeFinalAnswer` nudge (same model, `tools: {}`) before that — this is the fix for turns that "stop in the middle".
+- **A tool call truncated mid-JSON is repaired, not fatal** (`repairTruncatedToolCall`) — a huge `writeFile`/`postMessage` argument can hit `MAX_OUTPUT_TOKENS` mid-string.
+- **HackClub's budget/outage failures short-circuit the rest of HackClub** (shared proxy, shared budget) and jump straight to DigitalOcean.
+- **Prompt caching** (1h TTL) and **`maxOutputTokens: 8000`** are applied on the metered proxies; the latter is what defuses HackClub's pessimistic spend projection.
+- **Gemini requires `thought_signature` replay** or every multi-step tool turn 400s.
+- **Per-attempt watchdog** (10m, `AGENT_ATTEMPT_TIMEOUT_MS`), re-armable — the `wait` tool extends it so a long deliberate pause isn't read as a stall.
+
+## Sandbox / E2B — lazy, and persistent per thread
+
+Config in `packages/sandbox/src/config.ts`. E2B is the execution backend for the `bash`/file tools and the host tools that opt into it (`browser`, `deploySite`, `getFile`, `uploadFile`).
+
+- **Lazy** (`LazySandbox`): the real `Sandbox.create` is deferred until a tool touches it, so chat-only turns cost zero E2B.
+- **Persistent per thread**: `destroy()` **pauses** rather than kills, and the thread's `sandbox_id` is remembered in `thread_sandboxes`; the next turn calls `Sandbox.connect(id)` (which auto-resumes) and gets the same filesystem back — files, installed packages, downloaded data (~450ms resume). This is what makes a **`bash` recurring reminder** useful: kyto writes and tests a script in the thread, then schedules the reminder to run it. `prompts/sandbox.ts` tells the model so. It's also what the `wait` tool's `pauseSandbox` leans on.
+  - Persistence is opt-in via the injected **`SandboxStore`** (`load`/`save`/`clear`) — `packages/sandbox` stays free of a DB dependency. The bot's impl is `lib/sandbox/store.ts` (`threadSandboxStore`). A `LazySandbox` built WITHOUT a store is ephemeral.
+  - **A thread, not a "conversation."** Every message roots its own thread (including a top-level DM), so a new top-level DM gets a **new** sandbox.
+  - **Two things are fixed at CREATE time and therefore stale on a resumed sandbox**: the `network` egress rules (which broker `GH_TOKEN`) and the create-time `envs`. Rotating `GH_TOKEN` only takes effect on a thread's next fresh sandbox. Per-command env IS re-sent on every `run()`, so the short-lived Slack proxy token stays current.
+  - **A thread's sandbox is one mutable machine**, and both a live turn and a `bash`/`agent` reminder reach for it. `acquireThreadSandbox`/`withThreadSandbox` serialize them, so a reminder can't pause the sandbox out from under a running command. A turn holds the lock for its whole duration.
+  - **A paused sandbox costs storage**, so `startSandboxReaper()` (hourly) kills anything untouched for **7 days** (`SANDBOX_TTL_MS`). `runOnce()` spins up a throwaway sandbox for callers with no thread to reuse.
+- **Memory = the Slack thread.** `buildPrompt` feeds the whole thread (`slack.fetchMessages`, capped) as context; no model session is persisted. Message contents are never stored, so kyto remains "live processing without storing message contents" for the Slack Scraping policy — the sandbox persists a *filesystem*, not a transcript. `langfuse` tracing stays disabled for the same reason.
+
+## Manifest sync
+
+`bun run sync:manifest` (apps/bot) pushes `slack-manifest.json` via `apps.manifest.update`. Needs a Slack **app configuration token** (not the bot/user token): `SLACK_APP_ID`, `SLACK_CONFIG_ACCESS_TOKEN`, optional `SLACK_CONFIG_REFRESH_TOKEN` (auto-rotates the short-lived access token first). Scope changes require reinstalling the app. Slack scopes are declared in `slack-manifest.json` — update it when a tool needs a new one.
+
+## Debugging "kyto isn't responding"
+
+- It runs under **systemd** (`kyto.service`, unit at `deploy/kyto.service`, `Restart=always`, on boot). `journalctl -u kyto.service -f -o cat`. Two unrelated Slack apps also run on this host (`slackbot.service`, `hackclub-ai-status-bot.service`) — different tokens, no interference.
+- **Never hand-launch a second copy.** Each process opens its own Socket Mode connection and Slack delivers each event to only ONE, so a stray manual instance silently steals ~half the mentions. Diagnose with the `hello` frame's `num_connections` (open a throwaway socket via `apps.connections.open`) — it should be **1**.
+- **Slash commands work but @mentions/DMs don't = Event Subscriptions are off.** Socket Mode routes slash commands, interactivity, and events independently; if the **Enable Events** master toggle is off (it silently turned off once), `slash_commands` still deliver while `app_mention`/`message.*` deliver nothing. Re-enable it in the app config.
+- **Zombie socket**: a dropped WSS can stay TCP-`ESTAB` with a stuck send-queue (`ss -tnp | grep :443` shows non-zero Send-Q) while delivering nothing. Restarting re-establishes it.
+
+## Branches
+
+**`main` is the branch actually deployed** (`kyto.service`'s working directory tracks what's checked out here). `rebuild-on-upstream` is an old Pi-era branch; **`main` is a strict superset of it** (audited 2026-07-09) — anything that looks "new" over there is *older* Pi/chat-sdk infrastructure. Nothing to harvest. Its `MAX_RECURRING_RUNS = 20` global auto-cancel was deliberately NOT ported (it would silently kill existing "forever" reminders).
+
+## Database notes
+
+New tables/columns are pushed with one-off SQL scripts — `drizzle-kit push` prompts interactively (a rename decision against pre-existing tables) and hangs in a non-TTY shell. Use `ALTER TABLE … ADD COLUMN IF NOT EXISTS` / `CREATE TABLE IF NOT EXISTS`. `db:generate`/`db:push` work normally for a human running the CLI. NOTE: `authorization` is a reserved word — quote it in DDL. The `sandbox_sessions` table is **orphaned scaffolding** from an abandoned persistence attempt; `thread_sandboxes` is the live one.

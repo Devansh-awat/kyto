@@ -1,5 +1,10 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { stepCountIs, streamText, type ToolSet } from 'ai';
+import {
+  stepCountIs,
+  streamText,
+  type ToolCallRepairFunction,
+  type ToolSet,
+} from 'ai';
 import {
   DIGITALOCEAN_ONLY,
   DIGITALOCEAN_PROVIDER,
@@ -74,6 +79,10 @@ export function streamAttempt({
     // away from a rate-limited or budget-exhausted proxy. One retry still
     // absorbs a genuinely transient blip.
     maxRetries: 1,
+    // A tool call whose arguments were cut off mid-JSON (the model tried to
+    // write a huge file / post a huge message and hit maxOutputTokens) otherwise
+    // dies as an unrecoverable AI_JSONParseError.
+    experimental_repairToolCall: repairTruncatedToolCall,
     model: provider.chatModel(attempt.model),
     ...(activeTools
       ? {
@@ -87,6 +96,75 @@ export function streamAttempt({
     system,
     tools,
   });
+}
+
+/**
+ * Salvage a tool call whose argument JSON was cut off mid-stream — the model
+ * tried to emit a large `content` (writeFile) or `text` (postMessage) and ran
+ * into `maxOutputTokens`, so the arguments arrive as an unterminated JSON
+ * fragment. The SDK's default is to throw `InvalidToolInputError`, which surfaces
+ * as an unrecoverable error and strands the turn.
+ *
+ * Closing the open string/array/object brackets turns the fragment back into
+ * valid JSON, so the call runs with the content that DID arrive rather than the
+ * turn dying. The model sees the (short) result and can continue the file with
+ * an append. Returns null when the fragment can't be closed into valid JSON, in
+ * which case the SDK's normal error path takes over.
+ */
+const repairTruncatedToolCall: ToolCallRepairFunction<ToolSet> = ({
+  toolCall,
+}) => {
+  const closed = closeTruncatedJson(toolCall.input);
+  return Promise.resolve(
+    closed === null ? null : { ...toolCall, input: closed }
+  );
+};
+
+// Walk the fragment tracking string/escape state and the bracket stack, then
+// append whatever closers are still owed. A fragment that ends mid-escape or
+// mid-key is dropped back to the last safe point first.
+function closeTruncatedJson(input: string): string | null {
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+  for (const char of input) {
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (inString) {
+      if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+    } else if (char === '{' || char === '[') {
+      stack.push(char === '{' ? '}' : ']');
+    } else if (char === '}' || char === ']') {
+      stack.pop();
+    }
+  }
+  // A trailing backslash would escape the quote we're about to add.
+  let repaired = escaped ? input.slice(0, -1) : input;
+  if (inString) {
+    repaired += '"';
+  } else {
+    // A fragment cut after a separator ("a":1,) can't be closed as-is.
+    repaired = repaired.replace(/,\s*$/, '');
+  }
+  while (stack.length > 0) {
+    repaired += stack.pop();
+  }
+  try {
+    JSON.parse(repaired);
+    return repaired;
+  } catch {
+    return null;
+  }
 }
 
 type FetchLike = (

@@ -86,11 +86,18 @@ export interface BuiltTools {
  */
 export async function buildTools({
   bot,
+  extendAttemptDeadline,
   getSandboxContext,
   message,
   thread,
 }: {
   bot: KytoBot;
+  /**
+   * Push the running attempt's watchdog out. The `wait` tool calls it so a long
+   * deliberate pause is never mistaken for a stalled attempt. Absent for callers
+   * with no watchdog of their own (the subagent, reminders).
+   */
+  extendAttemptDeadline?: (extraMs: number) => void;
   getSandboxContext: () => SandboxContext;
   message: Message;
   thread: ThreadHandle;
@@ -108,7 +115,7 @@ export async function buildTools({
     editFile: editFileTool({ getSandboxContext }),
     deleteFile: deleteFileTool({ getSandboxContext }),
     fileStat: fileStatTool({ getSandboxContext }),
-    wait: waitTool(),
+    wait: waitTool({ extendAttemptDeadline, getSandboxContext }),
     react: reactTool({ bot }),
     unreact: unreactTool({ bot }),
     getUser: getUserTool(),

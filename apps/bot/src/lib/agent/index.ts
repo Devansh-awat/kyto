@@ -275,11 +275,16 @@ async function executeTurn(
     let hackclubFailures = 0;
     let hackclubUnavailable = false;
     let attempt: ModelAttempt | undefined;
+    // Set per attempt (the watchdog is armed inside the loop below), but the
+    // toolset is built ONCE up front — so the tools get a stable indirection
+    // that always reaches the currently running attempt's watchdog.
+    let extendDeadline: ((extraMs: number) => void) | undefined;
     // Built once: the toolset does not depend on the chosen model. Its keys let
     // renderStream hide hallucinated calls to non-existent tools; activeTools
     // drives deferred-tool visibility via prepareStep.
     const built = await buildTools({
       bot,
+      extendAttemptDeadline: (extraMs) => extendDeadline?.(extraMs),
       getSandboxContext: () => sandboxContext,
       message: turnMessage,
       thread: turnThread,
@@ -355,9 +360,6 @@ async function executeTurn(
     );
     while (attempt) {
       const currentAttempt = attempt;
-      // Did THIS attempt's stream finish deliberately (`stop`)? Reset per
-      // attempt so a stale stop from a prior model can't mask a truncated one.
-      let sawCleanStop = false;
       const modelTaskId = `model-${attempts.length}`;
       const modelTaskTitle =
         attempts.length > 0 ? 'Thinking · fallback' : 'Thinking';
@@ -384,10 +386,20 @@ async function executeTurn(
       // so the catch below can recover instead of the turn hanging forever.
       // Kept separate from `controller` so a timeout is NOT mistaken for a
       // user interrupt. The combined signal also reaches tool execution.
+      // Re-armable: the `wait` tool pushes the deadline out for the length of a
+      // deliberate pause (up to an hour), so a long wait isn't read as a stall.
       const attemptAbort = new AbortController();
-      const attemptTimer = setTimeout(() => {
-        attemptAbort.abort(new AttemptTimeoutError(ATTEMPT_TIMEOUT_MS));
-      }, ATTEMPT_TIMEOUT_MS);
+      let attemptTimer: ReturnType<typeof setTimeout> | undefined;
+      const armWatchdog = (ms: number) => {
+        clearTimeout(attemptTimer);
+        attemptTimer = setTimeout(() => {
+          attemptAbort.abort(new AttemptTimeoutError(ms));
+        }, ms);
+      };
+      armWatchdog(ATTEMPT_TIMEOUT_MS);
+      // Grant the full idle budget on TOP of the pause, so the model still has
+      // its normal working window once the wait is over.
+      extendDeadline = (extraMs) => armWatchdog(ATTEMPT_TIMEOUT_MS + extraMs);
       try {
         activeAttempt = currentAttempt;
         if (currentAttempt.model === ROUTER_MODEL) {
@@ -451,11 +463,6 @@ async function executeTurn(
             gatheredKeys.add(key);
             gatheredResults.push(info);
           },
-          onFinish: (reason) => {
-            if (reason === 'stop') {
-              sawCleanStop = true;
-            }
-          },
           onError: (msg) => {
             // A HackClub daily-spend-limit 429 dooms every HackClub rung.
             if (
@@ -469,14 +476,17 @@ async function executeTurn(
           stream: result.fullStream,
         })) {
           if (typeof chunk === 'string') {
-            // First reply text of this attempt: complete its Thinking card NOW,
-            // in the current plan block, before streamSegmented splits off a new
-            // block for any tools that run after the text. Otherwise the model
-            // card would try to complete in a later block where its id doesn't
-            // exist and the plan would show a perpetually spinning Thinking.
-            const done = completeModelTask();
-            if (done) {
-              yield done;
+            // First VISIBLE reply text of this attempt: complete its Thinking
+            // card NOW, in the current plan block, before streamSegmented splits
+            // off a new block for any tools that run after the text. Otherwise
+            // the model card would try to complete in a later block where its id
+            // doesn't exist and the plan would show a perpetually spinning
+            // Thinking. Whitespace-only fragments don't count (see isVisibleText).
+            if (isVisibleText(chunk)) {
+              const done = completeModelTask();
+              if (done) {
+                yield done;
+              }
             }
           } else if (errorStage === 'before_output') {
             errorStage = 'after_progress';
@@ -491,18 +501,21 @@ async function executeTurn(
           }
         }
 
-        // A model that ran tools and then stopped cleanly WITHOUT writing a
-        // reply leaves the user staring at tool cards and nothing else — the
-        // "ends its turn without responding" bug. Treating that as handled (as
-        // we used to) meant silence; treating it as a failure would re-run the
-        // whole turn on another model and could repeat a side effect. So ask
-        // THIS model, once, to write up what it already found — tools are off,
-        // so it can only produce prose, and nothing can happen twice.
-        if (
-          !(producedText || skipped) &&
-          producedToolActivity &&
-          sawCleanStop
-        ) {
+        // A model that ran tools and then ended WITHOUT writing a reply leaves
+        // the user staring at tool cards and nothing else — the "stops in the
+        // middle" bug. Treating it as handled means silence; treating it as a
+        // failure re-runs the whole turn on another model and could repeat a
+        // side effect. So ask THIS model, once, to write up what it already
+        // found — tools are off, so it can only produce prose, and nothing can
+        // happen twice.
+        //
+        // This fires on ANY finish reason, not just a clean `stop`. The turns
+        // that actually went silent ended on `length` (the reply was cut off
+        // mid-tool-call by MAX_OUTPUT_TOKENS) or `tool-calls` (the MAX_STEPS cap
+        // hit with a call still pending) — exactly the cases the old
+        // `sawCleanStop` guard excluded, so they fell through to a fallback
+        // cascade that re-ran the work and often died with no reply at all.
+        if (!(producedText || skipped) && producedToolActivity) {
           yield* synthesizeFinalAnswer({
             attempt: currentAttempt,
             onText: () => {
@@ -631,7 +644,13 @@ async function executeTurn(
         while (!pending.done) {
           const value = pending.value;
           if (typeof value === 'string') {
-            sawText = true;
+            // Only text the user will actually SEE ends this block. Models
+            // routinely emit whitespace-only fragments ("\n") between tool
+            // calls; those never reach Slack (createReply drops them), so
+            // splitting on them opened a new empty collapsible block for every
+            // stretch of tools — the "three plan blocks, no text in between"
+            // bug. A block now splits only after real prose has been written.
+            sawText ||= isVisibleText(value);
             await reply?.append({ text: value, thread: turnThread });
             pending = await source.next();
             continue;
@@ -653,6 +672,15 @@ async function executeTurn(
       await reply?.flush({ thread: turnThread });
     }
   }
+}
+
+// Does this text fragment produce anything the user will actually see? Reply
+// text is buffered by createReply and posted on blank-line boundaries, and a
+// whitespace-only buffer is never posted at all — so a whitespace fragment must
+// not be treated as "the model has replied" for plan-block or model-card
+// purposes.
+function isVisibleText(text: string): boolean {
+  return text.trim().length > 0;
 }
 
 // Fold an error's message + provider responseBody/data into one string so the
