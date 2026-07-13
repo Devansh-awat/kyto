@@ -83,6 +83,31 @@ export function neutralizeBroadcast(text: string): string {
 }
 
 /**
+ * The same strip, applied to every string inside a Block Kit payload. A block's
+ * `text` notifies exactly like message text does, so a broadcast token smuggled
+ * into a block would sail past the plain-text gate. Walks the structure rather
+ * than regexing the serialized JSON, so an escaped quote in a token's label
+ * can't corrupt the payload.
+ */
+export function neutralizeBroadcastDeep<T>(value: T): T {
+  if (typeof value === 'string') {
+    return neutralizeBroadcast(value) as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => neutralizeBroadcastDeep(item)) as T;
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, nested]) => [
+        key,
+        neutralizeBroadcastDeep(nested),
+      ])
+    ) as T;
+  }
+  return value;
+}
+
+/**
  * Close any dangling markdown a mid-stream cut left open (unbalanced code
  * fence, inline code, bold or strikethrough) so a posted chunk renders clean.
  * Replaces the chat-sdk's StreamingMarkdownRenderer push/finish healing.

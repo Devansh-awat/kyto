@@ -4,6 +4,7 @@ export {
   healMarkdown,
   mrkdwnToMarkdown,
   neutralizeBroadcast,
+  neutralizeBroadcastDeep,
   openFenceLanguage,
 } from './markdown';
 export { ThreadHandle } from './thread';
