@@ -27,17 +27,22 @@ export interface ModelAttempt {
 }
 
 /**
- * The primary model for the main query: GLM 5.2, pinned, reached through the
- * HackClub proxy. Chosen over Claude Sonnet 5 because it's markedly cheaper per
- * token (Sonnet is $2/$10; GLM is a fraction of that), which stretches the daily
- * HackClub spend cap much further. Still a single strong pinned model — this
- * replaced `openrouter/auto`, whose per-request re-routing was flaky (empty
- * completions / wrong-model picks that triggered long fallback cascades) — so
- * 1-hour prompt caching sticks across a thread's turns. On failure the agent
- * walks LEADERBOARD_FALLBACK (glm-5.2 is also a rung there, deduped via
- * failedKeys so it isn't retried).
+ * The primary model for the main query: MiniMax M2.5, pinned, served by
+ * DigitalOcean through OpenRouter BYOK — NOT HackClub. That means the main
+ * query bills the owner's DigitalOcean account (its own quota) and never touches
+ * HackClub's shared daily $3 cap, which is now only reached on fallback.
+ *
+ * A single pinned model (this replaced `openrouter/auto`, whose per-request
+ * re-routing produced empty completions and long fallback cascades), so 1-hour
+ * prompt caching sticks across a thread's turns. On failure the agent walks
+ * LEADERBOARD_FALLBACK; minimax-m2.5 is also a rung there, deduped via
+ * `failedKeys` so it isn't retried.
  */
-export const ROUTER_MODEL = 'z-ai/glm-5.2';
+export const PRIMARY_MODEL = 'minimax-m2.5';
+
+// Used as the primary ONLY when no OpenRouter BYOK key is configured, so the
+// agent always has a first attempt to route to.
+const HACKCLUB_PRIMARY_FALLBACK_MODEL = 'z-ai/glm-5.2';
 
 // Auto-router cost/quality bias: 0 = pure quality, 7 = default, 10 = cheapest.
 // Retained for reference only — the auto-router path was removed (see
@@ -132,6 +137,16 @@ export const digitaloceanAttempts: ModelAttempt[] = env.OPENROUTER_API_KEY
       provider: DIGITALOCEAN_PROVIDER,
     }))
   : [];
+
+/**
+ * The attempt the main query starts on: PRIMARY_MODEL on DigitalOcean BYOK.
+ * Falls back to a HackClub-served model only if `OPENROUTER_API_KEY` is unset
+ * (no BYOK path exists at all) — otherwise a missing key would leave the agent
+ * with no first attempt to route to.
+ */
+export const PRIMARY_ATTEMPT: ModelAttempt =
+  digitaloceanAttempts.find((attempt) => attempt.model === PRIMARY_MODEL) ??
+  catalogAttempt(HACKCLUB_PRIMARY_FALLBACK_MODEL);
 
 /** Build a single direct-Gemini attempt, or undefined if no key is set. */
 export function geminiAttempt(model: string): ModelAttempt | undefined {

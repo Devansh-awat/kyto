@@ -14,7 +14,8 @@ export {
   LEADERBOARD_FALLBACK,
   MAX_OUTPUT_TOKENS,
   type ModelAttempt,
-  ROUTER_MODEL,
+  PRIMARY_ATTEMPT,
+  PRIMARY_MODEL,
   subagentAttempt,
   subagentAttempts,
 } from './providers/attempts';

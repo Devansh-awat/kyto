@@ -1,9 +1,8 @@
 import {
-  catalogAttempt,
   LEADERBOARD_FALLBACK,
   type ModelAttempt,
+  PRIMARY_ATTEMPT,
   type ResolvedModelHolder,
-  ROUTER_MODEL,
   type SandboxContext,
   streamAttempt,
   systemPrompt,
@@ -301,17 +300,13 @@ async function executeTurn(
     // instead of re-running the same tools.
     const gatheredResults: GatheredResult[] = [];
     const gatheredKeys = new Set<string>();
-    // The main query runs on OpenRouter's own model router via HackClub
-    // (`openrouter/auto`). On failure we (1) retry the exact model auto
-    // resolved to, then (2) walk the leaderboard UP from that model (toward
-    // the best) and then DOWN — see routeNextAttempt.
+    // The main query runs on PRIMARY_ATTEMPT (a pinned model on the owner's
+    // DigitalOcean BYOK quota). On failure we walk LEADERBOARD_FALLBACK from the
+    // primary's rank UP (toward the best model) and then DOWN — see
+    // routeNextAttempt. Models already tried are skipped via failedKeys.
     const failedKeys = new Set<string>();
-    let triedAuto = false;
-    let triedResolved = false;
+    let triedPrimary = false;
     let fallbackQueue: ModelAttempt[] | undefined;
-    // The auto attempt's holder; `.model` is filled with the slug auto
-    // actually resolved to (read off the response by streamAttempt's fetch).
-    let autoHolder: ResolvedModelHolder | undefined;
     // Set when a HackClub call returns the daily-spend-limit 429. The whole
     // HackClub budget is shared, so once one call 429s every HackClub rung
     // would too — the fallback queue then goes straight to the owner's Gemini
@@ -371,32 +366,17 @@ async function executeTurn(
       return [...up, ...down];
     };
     const routeNextAttempt = () => {
-      if (!triedAuto) {
-        triedAuto = true;
-        attempt = catalogAttempt(ROUTER_MODEL);
+      if (!triedPrimary) {
+        triedPrimary = true;
+        attempt = PRIMARY_ATTEMPT;
         return;
       }
-      const resolved = autoHolder?.model;
       const skipHackclub = hackclubBudgetExhausted || hackclubUnavailable;
-      if (!triedResolved) {
-        triedResolved = true;
-        fallbackQueue = buildFallbackQueue(resolved);
-        // Retry the exact model auto resolved to (auto's failure may be
-        // transient), unless HackClub is out of budget or down (that retry is a
-        // HackClub call too).
-        if (
-          !skipHackclub &&
-          resolved &&
-          !failedKeys.has(`hackclub:${resolved}`)
-        ) {
-          attempt = catalogAttempt(resolved);
-          return;
-        }
-      }
+      fallbackQueue ??= buildFallbackQueue(PRIMARY_ATTEMPT.model);
       // If HackClub went down mid-walk, the queue built earlier may still list
       // its rungs; skip any HackClub candidate at selection time too so we don't
       // keep retrying a dead proxy.
-      attempt = fallbackQueue?.find(
+      attempt = fallbackQueue.find(
         (candidate) =>
           !(
             failedKeys.has(`${candidate.provider}:${candidate.model}`) ||
@@ -479,9 +459,6 @@ async function executeTurn(
       const isFallback = attempts.length > 0;
       try {
         activeAttempt = currentAttempt;
-        if (currentAttempt.model === ROUTER_MODEL) {
-          autoHolder = holder;
-        }
         reply ??= createReply({ allowBroadcast: isOwner, threadId });
         logger.info(
           {
