@@ -22,11 +22,15 @@ import { clearTurn, getTurn, setTurn } from '@/lib/agent/turns';
 import { startThinking } from '@/lib/agent/utils';
 import { promptWithAttachments, seedAttachments } from '@/lib/ai/attachments';
 import { requestHints } from '@/lib/ai/hints';
-import { renderStream } from '@/lib/ai/stream';
+import { renderStream, type StreamError } from '@/lib/ai/stream';
 import { buildTools } from '@/lib/ai/toolset';
 import { runQueuedTurn } from '@/lib/ai/turn-queue';
 import { bot, slack } from '@/lib/chat';
-import { agentErrorMessage, BudgetExhaustedError } from '@/lib/errors';
+import {
+  agentErrorMessage,
+  BudgetExhaustedError,
+  StreamInterruptedError,
+} from '@/lib/errors';
 import logger from '@/lib/logger';
 import { acquireThreadSandbox, threadSandboxStore } from '@/lib/sandbox/store';
 import {
@@ -35,7 +39,7 @@ import {
   slackHelperInstall,
   slackProxyEnv,
 } from '@/lib/slack-proxy';
-import { deepErrorText, errorMessage } from '@/lib/utils/error';
+import { deepErrorText, errorMessage, errorStatus } from '@/lib/utils/error';
 import { clamp } from '@/lib/utils/text';
 import type { ActiveTurn, AgentErrorStage } from '@/types/agent';
 import type { AttemptFailure } from '@/types/attempts';
@@ -64,6 +68,23 @@ const HACKCLUB_OUTAGE_THRESHOLD = 1;
 // the next model if no reply text was streamed yet, or surface an error.
 const ATTEMPT_TIMEOUT_MS =
   Number(process.env.AGENT_ATTEMPT_TIMEOUT_MS) || 10 * 60 * 1000;
+
+// How much of a provider error body to keep in a log line: enough to name the
+// real upstream cause (rate limit, context length, budget) without pasting a
+// whole request body into the journal.
+const ERROR_LOG_MAX_LENGTH = 800;
+
+// How much already-sent reply text a continuation attempt is shown. Only the
+// TAIL matters (the model needs to know where the thought was cut off), and the
+// user's message plus carryover results are already in the prompt.
+const STREAMED_TEXT_MAX = 4000;
+
+function appendStreamedText(existing: string, text: string): string {
+  const combined = existing + text;
+  return combined.length > STREAMED_TEXT_MAX
+    ? combined.slice(-STREAMED_TEXT_MAX)
+    : combined;
+}
 
 class AttemptTimeoutError extends Error {
   constructor(ms: number) {
@@ -105,7 +126,17 @@ async function executeTurn(
   // postMessage tool, so a non-owner can't get it to ping the whole channel.
   const isOwner =
     Boolean(env.OWNER_USER_ID) && message.author.userId === env.OWNER_USER_ID;
-  logger.info({ text: message.text, threadId }, '[agent] turn started');
+  const turnStart = Date.now();
+  logger.info(
+    {
+      attachments: message.attachments.length,
+      isOwner,
+      text: message.text,
+      threadId,
+      userId: message.author.userId,
+    },
+    '[agent] turn started'
+  );
   const activeTurn: ActiveTurn = {
     controller,
     pendingMessages: [],
@@ -144,6 +175,9 @@ async function executeTurn(
   };
   let closeTools: (() => Promise<void>) | undefined;
   let activeAttempt: ModelAttempt | undefined;
+  // Every attempt that failed this turn, so the terminal log line explains the
+  // whole fallback walk (which models were tried, and why each one died).
+  const attempts: AttemptFailure[] = [];
   let reply: ReturnType<typeof createReply> | undefined;
   let errorStage: AgentErrorStage = 'before_output';
   // Filled by the successful attempt so the finalizer can render the usage
@@ -182,7 +216,13 @@ async function executeTurn(
     }
     await cleanup();
     logger.info(
-      { attempt: attemptLog(activeAttempt), threadId },
+      {
+        attempt: attemptLog(activeAttempt),
+        durationMs: Date.now() - turnStart,
+        failedAttempts: failedAttemptsLog(attempts),
+        outputTokens: usageFooter?.outputTokens,
+        threadId,
+      },
       '[agent] turn complete'
     );
   } catch (error) {
@@ -192,7 +232,16 @@ async function executeTurn(
       await cleanup();
     } else {
       logger.error(
-        { attempt: attemptLog(activeAttempt), err: error, threadId },
+        {
+          attempt: attemptLog(activeAttempt),
+          durationMs: Date.now() - turnStart,
+          err: errorMessage(error),
+          errorDetail: clamp(deepErrorText(error), ERROR_LOG_MAX_LENGTH),
+          failedAttempts: failedAttemptsLog(attempts),
+          stage: errorStage,
+          status: errorStatus(error),
+          threadId,
+        },
         '[agent] turn failed'
       );
       await reply?.flush({ thread });
@@ -242,14 +291,16 @@ async function executeTurn(
     // falls through to another model (see the handled check below).
     let producedText = false;
     let skipped = false;
-    let producedToolActivity = false;
+    // Everything the user has already been shown this turn. A fallback attempt
+    // that CONTINUES an interrupted turn is told about it so it picks up instead
+    // of repeating itself (renderContinuation).
+    let streamedText = '';
     // Tool results gathered so far this turn, deduped by tool+input. If a later
     // step truncates and the turn falls back to another model, these are
     // replayed into the fallback prompt so the new model answers from them
     // instead of re-running the same tools.
     const gatheredResults: GatheredResult[] = [];
     const gatheredKeys = new Set<string>();
-    const attempts: AttemptFailure[] = [];
     // The main query runs on OpenRouter's own model router via HackClub
     // (`openrouter/auto`). On failure we (1) retry the exact model auto
     // resolved to, then (2) walk the leaderboard UP from that model (toward
@@ -358,6 +409,23 @@ async function executeTurn(
       { model: attempt?.model, provider: attempt?.provider, threadId },
       '[agent] routed turn'
     );
+    // The prompt for the NEXT attempt: the user's message, plus (on a fallback)
+    // the tool results already gathered, plus (when the turn was cut off after
+    // it had started talking) what the user has already been shown.
+    const attemptPrompt = (isFallback: boolean): string => {
+      const blocks = [messageText];
+      if (isFallback && gatheredResults.length > 0) {
+        blocks.push(renderCarryover(gatheredResults));
+      }
+      if (isFallback && streamedText.trim().length > 0) {
+        blocks.push(renderContinuation(streamedText));
+      }
+      return promptWithAttachments({
+        attachments,
+        text: blocks.join('\n\n'),
+      });
+    };
+
     while (attempt) {
       const currentAttempt = attempt;
       const modelTaskId = `model-${attempts.length}`;
@@ -400,12 +468,30 @@ async function executeTurn(
       // Grant the full idle budget on TOP of the pause, so the model still has
       // its normal working window once the wait is over.
       extendDeadline = (extraMs) => armWatchdog(ATTEMPT_TIMEOUT_MS + extraMs);
+      // Per-ATTEMPT outcome (the turn-level flags above persist across attempts).
+      // A continuation attempt inherits `producedText` from the interrupted one,
+      // so "did THIS model answer?" has to be tracked separately or the fallback
+      // would count its predecessor's text as its own and return silently.
+      let attemptText = false;
+      let attemptToolActivity = false;
+      let attemptFinishReason: string | undefined;
+      let attemptStreamError: StreamError | undefined;
+      const isFallback = attempts.length > 0;
       try {
         activeAttempt = currentAttempt;
         if (currentAttempt.model === ROUTER_MODEL) {
           autoHolder = holder;
         }
         reply ??= createReply({ allowBroadcast: isOwner, threadId });
+        logger.info(
+          {
+            attempt: attemptLog(currentAttempt),
+            continuing: isFallback && streamedText.length > 0,
+            index: attempts.length,
+            threadId,
+          },
+          '[agent] attempt started'
+        );
         // Surface the model in the thinking section: `in_progress` while this
         // attempt runs (showing the model it's about to run), completed exactly
         // once with the slug it actually resolved to. Yielded once in_progress
@@ -426,19 +512,28 @@ async function executeTurn(
           activeTools: built.activeTools,
           attempt: currentAttempt,
           holder,
-          prompt: promptWithAttachments({
-            attachments,
-            // On a fallback attempt, replay any tool results already gathered
-            // so the new model continues from them instead of re-running them.
-            text:
-              attempts.length > 0 && gatheredResults.length > 0
-                ? `${messageText}\n\n${renderCarryover(gatheredResults)}`
-                : messageText,
-          }),
+          // Errors the SDK swallows into the stream would otherwise be dumped
+          // raw to stderr by its default console.error handler, unattributed.
+          onError: (error) => {
+            logger.error(
+              {
+                attempt: attemptLog(currentAttempt),
+                err: errorMessage(error),
+                status: errorStatus(error),
+                threadId,
+              },
+              '[agent] provider error inside attempt stream'
+            );
+          },
+          prompt: attemptPrompt(isFallback),
           system: systemPrompt({ hints }),
           tools: built.tools,
         });
         for await (const chunk of renderStream({
+          context: {
+            ...attemptLog(currentAttempt),
+            threadId,
+          },
           // Reply text is yielded as strings (the message body) so streamSegmented
           // can split the plan on text→tool boundaries; onTextDelta only tracks
           // flags now — the actual posting happens in streamSegmented.
@@ -448,12 +543,14 @@ async function executeTurn(
             // A skip is a deliberate, successful "no reply".
             skipped = true;
           },
-          onTextDelta: () => {
+          onTextDelta: (text) => {
             producedText = true;
+            attemptText = true;
             errorStage = 'after_text';
+            streamedText = appendStreamedText(streamedText, text);
           },
           onToolActivity: () => {
-            producedToolActivity = true;
+            attemptToolActivity = true;
           },
           onToolResult: (info) => {
             const key = `${info.toolName}:${stableInput(info.input)}`;
@@ -463,14 +560,18 @@ async function executeTurn(
             gatheredKeys.add(key);
             gatheredResults.push(info);
           },
-          onError: (msg) => {
+          onFinish: (reason) => {
+            attemptFinishReason = reason;
+          },
+          onError: (info) => {
+            attemptStreamError ??= info;
             // A HackClub daily-spend-limit 429 dooms every HackClub rung.
             if (
               currentAttempt.provider === 'hackclub' &&
-              SPEND_LIMIT_PATTERN.test(msg)
+              SPEND_LIMIT_PATTERN.test(info.message)
             ) {
               hackclubBudgetExhausted = true;
-              spendLimitMessage = msg;
+              spendLimitMessage = info.message;
             }
           },
           stream: result.fullStream,
@@ -501,13 +602,28 @@ async function executeTurn(
           }
         }
 
+        // The provider died PART WAY THROUGH this attempt. The SDK does not
+        // throw for that: a step whose request fails (429, 5xx, dropped
+        // connection) after its internal retries becomes an `error` part and the
+        // stream just ends. If the model was still mid-task — it never finished
+        // on a clean `stop` — then whatever it had already said is a half-finished
+        // thought, and the old code called the turn "handled" and went quiet:
+        // exactly the "kyto stopped in the middle" report. Raise it so the
+        // fallback chain CONTINUES the turn on the next model.
+        if (attemptStreamError && attemptFinishReason !== 'stop') {
+          throw new StreamInterruptedError(
+            `Model ${currentAttempt.model} died mid-task (${attemptStreamError.status ?? 'stream error'}): ${attemptStreamError.message}`,
+            { cause: attemptStreamError.error }
+          );
+        }
+
         // A model that ran tools and then ended WITHOUT writing a reply leaves
-        // the user staring at tool cards and nothing else — the "stops in the
-        // middle" bug. Treating it as handled means silence; treating it as a
-        // failure re-runs the whole turn on another model and could repeat a
-        // side effect. So ask THIS model, once, to write up what it already
-        // found — tools are off, so it can only produce prose, and nothing can
-        // happen twice.
+        // the user staring at tool cards and nothing else — the other half of the
+        // "stops in the middle" bug. Treating it as handled means silence;
+        // treating it as a failure re-runs the whole turn on another model and
+        // could repeat a side effect. So ask THIS model, once, to write up what
+        // it already found — tools are off, so it can only produce prose, and
+        // nothing can happen twice.
         //
         // This fires on ANY finish reason, not just a clean `stop`. The turns
         // that actually went silent ended on `length` (the reply was cut off
@@ -515,12 +631,14 @@ async function executeTurn(
         // hit with a call still pending) — exactly the cases the old
         // `sawCleanStop` guard excluded, so they fell through to a fallback
         // cascade that re-ran the work and often died with no reply at all.
-        if (!(producedText || skipped) && producedToolActivity) {
+        if (!(attemptText || skipped) && attemptToolActivity) {
           yield* synthesizeFinalAnswer({
             attempt: currentAttempt,
-            onText: () => {
+            onText: (text) => {
               producedText = true;
+              attemptText = true;
               errorStage = 'after_text';
+              streamedText = appendStreamedText(streamedText, text);
             },
             results: gatheredResults,
             signal: AbortSignal.any([controller.signal, attemptAbort.signal]),
@@ -529,20 +647,33 @@ async function executeTurn(
           });
         }
 
-        // Reply text or a deliberate skip counts as handled. Anything else —
-        // including tool activity whose synthesis (and the nudge above) came
-        // back empty — falls back to another model, which replays the gathered
-        // tool results via renderCarryover rather than re-running them.
-        const handled = producedText || skipped;
+        // Reply text from THIS attempt, or a deliberate skip, counts as handled.
+        // (Not the turn-level `producedText`: a continuation attempt inherits it
+        // from the interrupted attempt, and would otherwise report success while
+        // contributing nothing.) Anything else — including tool activity whose
+        // synthesis nudge above came back empty — falls back to another model,
+        // which replays the gathered tool results via renderCarryover rather than
+        // re-running them.
+        const handled = attemptText || skipped;
         if (!handled) {
           throw new Error(
-            producedToolActivity
+            attemptToolActivity
               ? `Model ${currentAttempt.model} ran tools but ended without a reply (truncated synthesis step).`
               : `Model ${currentAttempt.model} returned an empty response.`
           );
         }
+        logger.info(
+          {
+            attempt: attemptLog(currentAttempt),
+            durationMs: Date.now() - attemptStart,
+            outcome: skipped ? 'skip' : 'text',
+            steps: holder.calls,
+            threadId,
+          },
+          '[agent] attempt handled the turn'
+        );
         // Capture usage for the footer (best-effort; never fails the turn).
-        if (producedText) {
+        if (attemptText) {
           const usage = await Promise.resolve(result.usage).catch(
             () => undefined
           );
@@ -583,9 +714,14 @@ async function executeTurn(
         }
         routeNextAttempt();
         const retryAttempt = attempt;
-        // Only a turn that already streamed real reply text must not fall back
-        // (it would duplicate user-facing output).
-        if (controller.signal.aborted || producedText) {
+        // A turn that already streamed reply text normally must NOT fall back —
+        // the next model would restate the answer and the user would read it
+        // twice. The one exception is a provider that died mid-task: kyto has
+        // been cut off mid-sentence, so silence is the worse outcome. The next
+        // model is told what was already sent (renderContinuation) and picks the
+        // work back up instead of starting over.
+        const canContinue = error instanceof StreamInterruptedError;
+        if (controller.signal.aborted || (producedText && !canContinue)) {
           throw error;
         }
         if (!retryAttempt) {
@@ -597,8 +733,11 @@ async function executeTurn(
         logger.warn(
           {
             attempt: attemptLog(currentAttempt),
+            continuing: canContinue && producedText,
             err: errorMessage(error),
+            errorDetail: clamp(deepErrorText(error), ERROR_LOG_MAX_LENGTH),
             nextAttempt: attemptLog(retryAttempt),
+            status: errorStatus(error),
             threadId,
           },
           '[agent] attempt failed, falling back'
@@ -694,6 +833,18 @@ function attemptLog(attempt: ModelAttempt | undefined) {
     : undefined;
 }
 
+// The whole fallback walk on one line: which models were tried, and the real
+// upstream reason each one died. This is what turns "kyto went quiet" into a
+// diagnosable event without reading the Slack thread.
+function failedAttemptsLog(attempts: AttemptFailure[]) {
+  return attempts.map((failed) => ({
+    err: errorMessage(failed.error),
+    model: failed.attempt.model,
+    provider: failed.attempt.provider,
+    status: errorStatus(failed.error),
+  }));
+}
+
 const TOK_PER_SEC_DECIMAL_BELOW = 10;
 
 // Post the per-turn usage footer as a muted Slack context block under the
@@ -761,7 +912,7 @@ async function* synthesizeFinalAnswer({
   task,
 }: {
   attempt: ModelAttempt;
-  onText: () => void;
+  onText: (text: string) => void;
   results: GatheredResult[];
   signal: AbortSignal;
   system: string;
@@ -798,6 +949,22 @@ async function* synthesizeFinalAnswer({
       '[agent] synthesis nudge failed'
     );
   }
+}
+
+/**
+ * Tell a fallback model that the turn is already IN PROGRESS in Slack: the
+ * previous model streamed this text to the user before its provider died
+ * mid-task. Without this the continuation model restates the whole answer and
+ * the user reads it twice.
+ */
+function renderContinuation(streamedText: string): string {
+  return [
+    'IMPORTANT: this turn is already in progress. The user has ALREADY been shown the following reply text, and the model writing it was cut off mid-task by a provider failure:',
+    '',
+    streamedText.trim(),
+    '',
+    'Pick up exactly where that left off and finish the job. Do NOT repeat what was already said, do not re-introduce yourself, and do not start the task over — continue it.',
+  ].join('\n');
 }
 
 // Render gathered tool results as a prompt block the fallback model can answer

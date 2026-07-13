@@ -46,6 +46,7 @@ export function streamAttempt({
   activeTools,
   attempt,
   holder,
+  onError,
   prompt,
   system,
   tools,
@@ -55,6 +56,13 @@ export function streamAttempt({
   activeTools?: () => string[] | undefined;
   attempt: ModelAttempt;
   holder: ResolvedModelHolder;
+  /**
+   * Called for every error the SDK swallows into the stream. Without it the SDK
+   * default is `console.error`, which dumped an unstructured AI SDK stack blob
+   * into the journal while the turn itself was logged as "complete" — the
+   * failure that was impossible to attribute without a Slack transcript.
+   */
+  onError?: (error: unknown) => void;
   prompt: string;
   system: string;
   tools: ToolSet;
@@ -84,6 +92,7 @@ export function streamAttempt({
     // dies as an unrecoverable AI_JSONParseError.
     experimental_repairToolCall: repairTruncatedToolCall,
     model: provider.chatModel(attempt.model),
+    ...(onError ? { onError: ({ error }) => onError(error) } : {}),
     ...(activeTools
       ? {
           prepareStep: () => ({

@@ -13,6 +13,24 @@ export class BudgetExhaustedError extends Error {
   }
 }
 
+/**
+ * The provider died in the middle of a multi-step attempt. The AI SDK does not
+ * throw for this: a step that fails after its internal retries is emitted as an
+ * `error` part and the stream simply ends. If the model had already streamed
+ * reply text, the turn used to look "handled" and kyto went quiet mid-task with
+ * no error anywhere except a raw SDK blob on stderr.
+ *
+ * Raising it turns that silence into a real failure, which lets the fallback
+ * chain CONTINUE the turn on the next model (the one case where a turn that
+ * already produced text is allowed to fall back — see renderContinuation).
+ */
+export class StreamInterruptedError extends Error {
+  constructor(detail: string, options?: { cause?: unknown }) {
+    super(detail, options);
+    this.name = 'StreamInterruptedError';
+  }
+}
+
 const SPEND_AMOUNT_PATTERN = /\$\d+(?:\.\d+)?/;
 
 const SECONDS_PER_DAY = 86_400;

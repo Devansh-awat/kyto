@@ -129,12 +129,6 @@ lives in `plans/rewrite.md`.
   `origin_response_timeout` from `dashscope-us.aliyuncs.com` with
   `retryable: true` and `retry_after: 120`.
 
-### Sandbox Wait & Logging
-
-- [ ] Wait tool should work up to 1 hour (currently only works up to 240 seconds).
-- [ ] Add an optional parameter to the wait tool to pause the sandbox during the wait period to save E2B compute costs.
-- [ ] Improve logging across the agent turn lifecycle to catch more silent or transient errors.
-
 ## Models, BYOK, And Providers
 
 ### BYOK Implementation

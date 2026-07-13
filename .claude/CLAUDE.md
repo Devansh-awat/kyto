@@ -178,12 +178,19 @@ Things kyto creates on someone's behalf and can later change carry an access lis
 **Full detail lives in [`.claude/MODELS.md`](./MODELS.md) — read it before touching routing, and update it when you change routing.** The essentials:
 
 - **Primary is pinned `z-ai/glm-5.2`** (`ROUTER_MODEL`, `packages/ai/src/providers/attempts.ts`) via HackClub — cheap enough to stretch the daily $3 cap.
-- **A turn is "handled" iff it produced reply text or a deliberate `skip`.** Anything else falls back down `LEADERBOARD_FALLBACK`, then the DigitalOcean BYOK tier (a separate quota), then the owner's Gemini key. A model that ran tools but wrote nothing gets ONE `synthesizeFinalAnswer` nudge (same model, `tools: {}`) before that — this is the fix for turns that "stop in the middle".
+- **An ATTEMPT is "handled" iff IT produced reply text or a deliberate `skip`** (per-attempt, not per-turn — a continuation attempt inherits the turn's text and would otherwise report success having said nothing). Anything else falls back down `LEADERBOARD_FALLBACK`, then the DigitalOcean BYOK tier (a separate quota), then the owner's Gemini key. A model that ran tools but wrote nothing gets ONE `synthesizeFinalAnswer` nudge (same model, `tools: {}`) before that.
+- **A provider that dies MID-STREAM does not throw** — the AI SDK turns a failed step into an `error` part and just ends the stream. That was the real "kyto stops in the middle": text had already streamed, so the turn looked handled and it went quiet mid-task while the journal said `turn complete`. Now an error part + a last finish reason that isn't `stop` raises `StreamInterruptedError`, the ONE case where a turn that already streamed text may still fall back. The next model gets `renderContinuation` (the tail of what the user was already shown) plus `renderCarryover`, so it finishes the job instead of restating it.
 - **A tool call truncated mid-JSON is repaired, not fatal** (`repairTruncatedToolCall`) — a huge `writeFile`/`postMessage` argument can hit `MAX_OUTPUT_TOKENS` mid-string.
 - **HackClub's budget/outage failures short-circuit the rest of HackClub** (shared proxy, shared budget) and jump straight to DigitalOcean.
 - **Prompt caching** (1h TTL) and **`maxOutputTokens: 8000`** are applied on the metered proxies; the latter is what defuses HackClub's pessimistic spend projection.
 - **Gemini requires `thought_signature` replay** or every multi-step tool turn 400s.
 - **Per-attempt watchdog** (10m, `AGENT_ATTEMPT_TIMEOUT_MS`), re-armable — the `wait` tool extends it so a long deliberate pause isn't read as a stall.
+
+### Turn logging (diagnose a bad turn from the journal alone)
+
+Every failure mode above should be readable from `journalctl -u kyto.service` without a Slack transcript. The lifecycle lines, in order: `[agent] turn started` (user, thread, attachments) → `[agent] routed turn` → `[agent] attempt started` (model, index, whether it's continuing an interrupted turn) → `[stream] provider error mid-stream` (status + upstream body, on an error part) → `[stream] attempt stream ended` (the `StreamTally`: textChars, toolCalls, finishReasons, errors) → `[agent] attempt handled the turn` / `[agent] attempt failed, falling back` (status + `errorDetail`) → `[agent] turn complete` / `[agent] turn failed` (durationMs, `failedAttempts` = the whole fallback walk with each model's status and error).
+
+`streamAttempt` takes an `onError` — without it the SDK's default handler `console.error`s a raw unattributed stack blob, which is what made the mid-stream 429 impossible to pin to a turn. Never remove it. `errorStatus()` digs the HTTP status out of the `AI_RetryError` → `APICallError` chain (it's never on the outer error), and `deepErrorText()` gets the upstream body.
 
 ## Sandbox / E2B — lazy, and persistent per thread
 

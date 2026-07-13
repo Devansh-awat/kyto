@@ -57,6 +57,36 @@ export function deepErrorText(error: unknown, depth = 0): string {
   return pieces.filter(Boolean).join(' ') || String(error);
 }
 
+/**
+ * The HTTP status buried in a provider error chain, if any. The AI SDK wraps the
+ * real `APICallError` (which carries `statusCode`) inside an `AI_RetryError`, so
+ * the status a log needs to say "429, rate limited" is never on the outer error.
+ */
+export function errorStatus(error: unknown, depth = 0): number | undefined {
+  if (error == null || depth > UNWRAP_DEPTH) {
+    return;
+  }
+  const record = error as Record<string, unknown>;
+  if (typeof record.statusCode === 'number') {
+    return record.statusCode;
+  }
+  for (const key of WRAPPER_KEYS) {
+    const status = errorStatus(record[key], depth + 1);
+    if (status !== undefined) {
+      return status;
+    }
+  }
+  if (Array.isArray(record.errors)) {
+    for (const nested of record.errors) {
+      const status = errorStatus(nested, depth + 1);
+      if (status !== undefined) {
+        return status;
+      }
+    }
+  }
+  return;
+}
+
 function toError(error: unknown): Error {
   if (error instanceof Error) {
     return error;

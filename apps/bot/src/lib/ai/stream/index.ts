@@ -1,14 +1,40 @@
 import type { TextStreamPart, ToolSet } from 'ai';
 import type { StreamChunk } from '@/harness';
 import logger from '@/lib/logger';
-import { deepErrorText } from '@/lib/utils/error';
+import { deepErrorText, errorStatus } from '@/lib/utils/error';
 import { clamp } from '@/lib/utils/text';
 import { renderTask } from './tasks';
 
 const MAX_VISIBLE_TASKS = 45;
 const REASONING_OUTPUT_MAX_LENGTH = 2800;
+// How much of a provider error body to keep in the log. Enough to see the real
+// upstream message (rate limit, context length, budget) without dumping a whole
+// request body into the journal.
+const ERROR_LOG_MAX_LENGTH = 800;
+
+/**
+ * What one model attempt's stream actually emitted. Logged at the end of every
+ * attempt so a turn that went quiet can be explained from the journal alone:
+ * zero text with tool calls is a silent completion, a non-empty `errors` with a
+ * `tool-calls` last finish reason is a provider that died mid-task.
+ */
+export interface StreamTally {
+  errors: string[];
+  finishReasons: string[];
+  reasoningParts: number;
+  textChars: number;
+  toolCalls: number;
+  toolResults: number;
+}
+
+export interface StreamError {
+  error: unknown;
+  message: string;
+  status?: number;
+}
 
 export async function* renderStream({
+  context,
   emitText = false,
   knownTools,
   onTextDelta,
@@ -17,8 +43,13 @@ export async function* renderStream({
   onToolResult,
   onError,
   onFinish,
+  onTally,
   stream,
 }: {
+  /** Attempt identity (model/provider/threadId) folded into every log line. */
+  context?: Record<string, unknown>;
+  /** Receives the attempt's tally once the stream ends (for the caller's log). */
+  onTally?: (tally: StreamTally) => void;
   // When true, reply text is ALSO yielded as plain strings (the message body),
   // not only routed through onTextDelta. The main turn keeps this off (its text
   // is posted as separate messages via createReply); the subagent turns it on so
@@ -44,8 +75,9 @@ export async function* renderStream({
   }) => void;
   // Fires for each stream-level error part (e.g. a provider 429 swallowed into
   // the stream). Lets the agent loop react to provider conditions — like a
-  // HackClub "daily spending limit" 429 — that never surface as a thrown error.
-  onError?: (message: string) => void;
+  // HackClub "daily spending limit" 429, or a mid-task death that must not be
+  // mistaken for a finished turn — that never surface as a thrown error.
+  onError?: (info: StreamError) => void;
   // Fires for each stream finish/finish-step that carries a finishReason. Lets
   // the agent loop tell a deliberate completion (`stop`) apart from a truncated
   // or empty step that emitted no finish — the latter, when it also produced no
@@ -75,17 +107,16 @@ export async function* renderStream({
   const visibleTaskIds = new Set<string>();
   let hiddenTaskCount = 0;
   let skipped = false;
-  // TEMP diagnostic: tally what the whole (multi-step) stream emitted so we can
-  // see why a turn ends with no reply — e.g. tool calls but zero text/reasoning
-  // (an empty continuation step). Remove once the "stops mid-task" bug is fixed.
-  const tally = {
-    textDeltas: 0,
-    droppedTextDeltas: 0,
+  let droppedTextDeltas = 0;
+  // What this attempt emitted, so the caller can log why a turn ended the way it
+  // did (silent completion vs. provider death mid-task) without a transcript.
+  const tally: StreamTally = {
+    errors: [],
+    finishReasons: [],
     reasoningParts: 0,
+    textChars: 0,
     toolCalls: 0,
     toolResults: 0,
-    finishReasons: [] as string[],
-    errors: [] as string[],
   };
   for await (const part of stream) {
     if (part.type === 'finish-step' || part.type === 'finish') {
@@ -96,9 +127,15 @@ export async function* renderStream({
       }
     }
     if (part.type === 'error') {
-      const message = deepErrorText((part as { error?: unknown }).error);
-      tally.errors.push(message.slice(0, 200));
-      onError?.(message);
+      const error = (part as { error?: unknown }).error;
+      const message = clamp(deepErrorText(error), ERROR_LOG_MAX_LENGTH) ?? '';
+      const status = errorStatus(error);
+      tally.errors.push(message);
+      logger.error(
+        { ...context, err: message, status },
+        '[stream] provider error mid-stream'
+      );
+      onError?.({ error, message, status });
     }
     switch (part.type) {
       case 'text-delta': {
@@ -106,13 +143,13 @@ export async function* renderStream({
         // emit placeholder garbage (e.g. "(Empty response: ...)") in this slot
         // when the model returned only a thinking block — never forward either.
         if (part.text && !skipped && !isPlaceholderText(part.text)) {
-          tally.textDeltas += 1;
+          tally.textChars += part.text.length;
           await onTextDelta?.(part.text);
           if (emitText) {
             yield part.text;
           }
         } else if (part.text) {
-          tally.droppedTextDeltas += 1;
+          droppedTextDeltas += 1;
         }
         break;
       }
@@ -207,6 +244,7 @@ export async function* renderStream({
           phantomToolCallIds.delete(part.toolCallId);
           break;
         }
+        tally.toolResults += 1;
         if (part.toolName === 'skip') {
           skipped = true;
           onSkip?.();
@@ -287,10 +325,11 @@ export async function* renderStream({
   if (hiddenTaskCount > 0) {
     yield hiddenTaskUpdate({ count: hiddenTaskCount, done: true });
   }
-  // TEMP diagnostic: a turn that ran tools but emitted 0 text + 0 reasoning is
-  // an empty continuation step — the "stops mid-task" bug. finishReasons shows
-  // how each step ended; droppedTextDeltas counts placeholder/skip text we hid.
-  logger.info({ ...tally }, '[stream] tally');
+  logger.info(
+    { ...context, ...tally, droppedTextDeltas },
+    '[stream] attempt stream ended'
+  );
+  onTally?.(tally);
 }
 
 // Some upstream proxies, when a model returns only a thinking block with no
