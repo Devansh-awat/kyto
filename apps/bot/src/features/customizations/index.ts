@@ -1,20 +1,32 @@
-import { personas } from '@repo/ai';
+import { isByokProviderId, personas } from '@repo/ai';
 import {
   addMcpServer,
   cancelReminder,
   clearUserCustomization,
+  deleteUserModelCredential,
   getIdentityProfiles,
   getUserCustomization,
+  listUserModelCredentials,
   pauseReminder,
   removeMcpServer,
   resumeReminder,
+  setCredentialServiceFallback,
+  setCredentialValidation,
   setIdentityProfile,
   setUsageFooter,
   setUserCustomization,
+  updateUserModelCredentialConfig,
+  upsertUserModelCredential,
 } from '@repo/db/queries';
 import { env } from '@/env';
 import type { ModalSubmitEvent, ModalSubmitResult } from '@/harness';
 import { mrkdwn, plainText } from '@/harness';
+import {
+  byokConfigured,
+  encryptSecret,
+  keyPreview,
+  validateCredential,
+} from '@/lib/byok';
 import { bot, slack } from '@/lib/chat';
 import { IDENTITY_TYPES, resetIdentityCache } from '@/lib/identity';
 import logger from '@/lib/logger';
@@ -29,9 +41,13 @@ import { publishHome } from './service';
 import {
   buildIdentityModal,
   buildMcpModal,
+  buildModelKeyModal,
   buildPresetModal,
   buildPromptModal,
 } from './views';
+
+// Slack rejects an input-block error string longer than this.
+const MODAL_ERROR_MAX = 300;
 
 function isOwnerUser(userId: string): boolean {
   return Boolean(env.OWNER_USER_ID) && userId === env.OWNER_USER_ID;
@@ -305,6 +321,202 @@ bot.onModalSubmit(
       return {
         action: 'errors',
         errors: { mcp_url: 'Could not save this server. Try again.' },
+      };
+    }
+    await publishHome({ userId: event.user.userId }).catch(() => undefined);
+    return;
+  }
+);
+
+// ── Model keys / BYOK (per-user, App Home) ──────────────────────────────────
+
+// A user's own key never leaves this flow in the clear: it is encrypted before
+// it reaches the DB, never written to a log, never placed in the modal's
+// private_metadata, and never shown back (only a `…tail` preview is stored).
+
+bot.onAction('home_add_model_key', async (event) => {
+  if (!(event.triggerId && byokConfigured())) {
+    return;
+  }
+  await slack.webClient.views
+    .open({
+      trigger_id: event.triggerId,
+      view: buildModelKeyModal() as never,
+    })
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), userId: event.user.userId },
+        'Failed to open model key modal'
+      );
+    });
+});
+
+bot.onAction('home_edit_model_key', async (event) => {
+  const provider = event.value;
+  if (!(event.triggerId && provider && byokConfigured())) {
+    return;
+  }
+  const credentials = await listUserModelCredentials(event.user.userId).catch(
+    () => []
+  );
+  const credential = credentials.find((row) => row.provider === provider);
+  if (!credential) {
+    return;
+  }
+  await slack.webClient.views
+    .open({
+      trigger_id: event.triggerId,
+      view: buildModelKeyModal(credential) as never,
+    })
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), provider, userId: event.user.userId },
+        'Failed to open model key modal'
+      );
+    });
+});
+
+bot.onAction('home_remove_model_key', async (event) => {
+  const provider = event.value;
+  if (!provider) {
+    return;
+  }
+  await deleteUserModelCredential({ provider, userId: event.user.userId })
+    .then(() => publishHome({ userId: event.user.userId }))
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), provider, userId: event.user.userId },
+        'Failed to remove model key'
+      );
+    });
+});
+
+bot.onAction('home_toggle_model_key_fallback', async (event) => {
+  // value is `<provider>:<target state>`, so a stale home view can't flip it the
+  // wrong way.
+  const [provider, target] = (event.value ?? '').split(':');
+  if (!(provider && (target === 'on' || target === 'off'))) {
+    return;
+  }
+  await setCredentialServiceFallback({
+    allowed: target === 'on',
+    provider,
+    userId: event.user.userId,
+  })
+    .then(() => publishHome({ userId: event.user.userId }))
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), provider, userId: event.user.userId },
+        'Failed to toggle model key service fallback'
+      );
+    });
+});
+
+bot.onModalSubmit(
+  'home_save_model_key',
+  async (event: ModalSubmitEvent): Promise<ModalSubmitResult> => {
+    if (!byokConfigured()) {
+      return;
+    }
+    const provider = event.values.byok_provider?.trim();
+    const model = event.values.byok_model?.trim();
+    const key = event.values.byok_key?.trim();
+    const baseUrl = event.values.byok_base_url?.trim() || null;
+    if (!(provider && isByokProviderId(provider))) {
+      return {
+        action: 'errors',
+        errors: { byok_provider: 'Choose a provider.' },
+      };
+    }
+    if (!model) {
+      return { action: 'errors', errors: { byok_model: 'Enter a model id.' } };
+    }
+    if (provider === 'custom' && !baseUrl) {
+      return {
+        action: 'errors',
+        errors: { byok_base_url: 'A custom provider needs a base URL.' },
+      };
+    }
+
+    const existing = (
+      await listUserModelCredentials(event.user.userId).catch(() => [])
+    ).find((row) => row.provider === provider);
+
+    // Editing without pasting a key again: keep the stored secret and update
+    // only the model / base URL.
+    if (!key) {
+      if (!existing) {
+        return {
+          action: 'errors',
+          errors: { byok_key: 'Enter your API key.' },
+        };
+      }
+      try {
+        await updateUserModelCredentialConfig({
+          baseUrl,
+          model,
+          provider,
+          userId: event.user.userId,
+        });
+      } catch (error) {
+        logger.warn(
+          { ...toLogError(error), provider, userId: event.user.userId },
+          'Failed to update model key config'
+        );
+        return {
+          action: 'errors',
+          errors: { byok_model: 'Could not save. Try again.' },
+        };
+      }
+      await publishHome({ userId: event.user.userId }).catch(() => undefined);
+      return;
+    }
+
+    // Check the key against the provider before storing it, so a typo surfaces
+    // here rather than as a failed turn later.
+    const check = await validateCredential({
+      apiKey: key,
+      baseUrl,
+      model,
+      provider,
+    });
+    if (!check.valid) {
+      return {
+        action: 'errors',
+        errors: {
+          byok_key: (check.message ?? 'The provider rejected this key.').slice(
+            0,
+            MODAL_ERROR_MAX
+          ),
+        },
+      };
+    }
+
+    try {
+      await upsertUserModelCredential({
+        baseUrl,
+        encryptedKey: encryptSecret(key),
+        keyPreview: keyPreview(key),
+        model,
+        provider,
+        // Preserve the user's existing fallback choice across a rotation.
+        serviceFallback: existing?.serviceFallback ?? false,
+        userId: event.user.userId,
+      });
+      await setCredentialValidation({
+        provider,
+        status: 'valid',
+        userId: event.user.userId,
+      });
+    } catch (error) {
+      // Log the failure WITHOUT the key or anything derived from it.
+      logger.warn(
+        { ...toLogError(error), provider, userId: event.user.userId },
+        'Failed to save model key'
+      );
+      return {
+        action: 'errors',
+        errors: { byok_key: 'Could not save this key. Try again.' },
       };
     }
     await publishHome({ userId: event.user.userId }).catch(() => undefined);

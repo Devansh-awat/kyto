@@ -75,11 +75,13 @@ export function streamAttempt({
   });
   return streamText({
     abortSignal,
-    // Cap output on metered proxies (HackClub's pessimistic spend projection;
-    // DigitalOcean BYOK bills real tokens to the owner's account) — reasoning
-    // models otherwise burn unbounded thinking tokens.
+    // Cap output on every metered path: HackClub (pessimistic spend projection),
+    // DigitalOcean (real tokens on the owner's account), and a user's own BYOK
+    // key (real tokens on THEIR account) — reasoning models otherwise burn
+    // unbounded thinking tokens on someone's bill.
     ...(attempt.provider === 'hackclub' ||
-    attempt.provider === DIGITALOCEAN_PROVIDER
+    attempt.provider === DIGITALOCEAN_PROVIDER ||
+    attempt.byokProvider !== undefined
       ? { maxOutputTokens: MAX_OUTPUT_TOKENS }
       : {}),
     // We run our own fallback chain across providers, so the SDK's default of 3

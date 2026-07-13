@@ -383,7 +383,9 @@ export class KytoBot {
     const body = envelope.body;
     const view = (body.view ?? {}) as {
       callback_id?: string;
-      state?: { values?: Record<string, Record<string, { value?: string }>> };
+      state?: {
+        values?: Record<string, Record<string, ModalStateElement>>;
+      };
     };
     const handler = view.callback_id
       ? this.modalHandlers.get(view.callback_id)
@@ -394,7 +396,7 @@ export class KytoBot {
     }
     const values: Record<string, string | undefined> = {};
     for (const [blockId, actions] of Object.entries(view.state?.values ?? {})) {
-      values[blockId] = Object.values(actions)[0]?.value ?? undefined;
+      values[blockId] = modalStateValue(Object.values(actions)[0]);
     }
     const user = (body.user ?? {}) as { id?: string; username?: string };
     const result = await handler({
@@ -414,6 +416,20 @@ export class KytoBot {
     }
     await envelope.ack();
   }
+}
+
+/**
+ * One element of a submitted modal's state. A plain text input reports `value`,
+ * but a select reports `selected_option.value` — reading only `value` silently
+ * dropped every select in a modal (they arrived as undefined).
+ */
+interface ModalStateElement {
+  selected_option?: { value?: string } | null;
+  value?: string | null;
+}
+
+function modalStateValue(element?: ModalStateElement): string | undefined {
+  return element?.value ?? element?.selected_option?.value ?? undefined;
 }
 
 async function runAll<T>(

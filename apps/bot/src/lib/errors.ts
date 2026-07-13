@@ -31,6 +31,19 @@ export class StreamInterruptedError extends Error {
   }
 }
 
+/**
+ * The acting user brought their own model key(s), every one of them failed, and
+ * they did NOT opt into spending the shared service budget as a backstop. Only
+ * they can fix it, so the message points at their App Home tab rather than
+ * reading as a kyto outage.
+ */
+export class ByokExhaustedError extends Error {
+  constructor(detail?: string, options?: { cause?: unknown }) {
+    super(detail ?? 'Your model key failed.', options);
+    this.name = 'ByokExhaustedError';
+  }
+}
+
 const SPEND_AMOUNT_PATTERN = /\$\d+(?:\.\d+)?/;
 
 const SECONDS_PER_DAY = 86_400;
@@ -87,6 +100,13 @@ export function agentErrorMessage({
   // it wins over the stage-based messages. Name the daily cap when the 429 text
   // carried it. Deliberately does NOT explain OpenRouter's pessimistic limit
   // accounting — just that the daily budget is spent.
+  // The user's own key is the root cause and only they can fix it, so this wins
+  // over the stage-based messages too. Deliberately does not quote the
+  // provider's raw rejection into a possibly-public channel — the detail lives
+  // in their App Home tab, where only they can see it.
+  if (error instanceof ByokExhaustedError) {
+    return "_kyto couldn't run this on your own model key — every key you added failed. check the Model keys section of kyto's App Home tab for what the provider said, or turn on shared-model fallback there._";
+  }
   if (error instanceof BudgetExhaustedError) {
     const amount = message.match(SPEND_AMOUNT_PATTERN)?.[0] ?? '$3';
     const { hours, minutes } = timeUntilUkReset();

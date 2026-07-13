@@ -187,6 +187,16 @@ Things kyto creates on someone's behalf and can later change carry an access lis
 - **Gemini requires `thought_signature` replay** or every multi-step tool turn 400s.
 - **Per-attempt watchdog** (10m, `AGENT_ATTEMPT_TIMEOUT_MS`), re-armable — the `wait` tool extends it so a long deliberate pause isn't read as a stall.
 
+### BYOK — a user's own model key
+
+A user can add their own provider key from the **App Home "Model keys"** section; their turns then run on **their** key and model instead of kyto's shared models. Detail in `.claude/MODELS.md`; the load-bearing rules:
+
+- **`BYOK_ENCRYPTION_KEY` (min 32 chars) gates the whole feature.** Unset = no App Home section, no per-user routing — keys are never stored in the clear. It's stretched with scrypt into an AES-256-GCM key (`lib/byok/crypto.ts`, versioned `v1:iv:payload`). **Changing it makes every stored key unreadable** and users must re-add them.
+- **`packages/db` never sees a plaintext key.** `listUserModelCredentials` selects an explicit column list that OMITS the ciphertext; only `listUserModelCredentialSecrets` (called by the bot's resolver) returns it. A key is never logged, never put in a prompt or the sandbox env, and never in a modal's `private_metadata` — the UI shows only a stored `…tail` preview.
+- **Service fallback is OFF by default, per key** (`service_fallback`). A user's broken key must not silently spend the shared HackClub/DigitalOcean budget; if every one of their keys fails and they haven't opted in, the turn ends with `ByokExhaustedError` pointing them at their App Home tab. Opting in on ANY of their keys unlocks the service chain for the turn.
+- A key is marked **invalid only on a 401/402/403** (`recordByokOutcome`) — a 429 or a 5xx says nothing about whether the key is good. It's marked valid whenever it completes a turn, and checked with a real 1-token completion when saved (`validateCredential`).
+- `generateImage` stays on the **service** provider even on a BYOK turn (a stored chat-completions key can't serve images).
+
 ### Turn logging (diagnose a bad turn from the journal alone)
 
 Every failure mode above should be readable from `journalctl -u kyto.service` without a Slack transcript. The lifecycle lines, in order: `[agent] turn started` (user, thread, attachments) → `[agent] routed turn` → `[agent] attempt started` (model, index, whether it's continuing an interrupted turn) → `[stream] provider error mid-stream` (status + upstream body, on an error part) → `[stream] attempt stream ended` (the `StreamTally`: textChars, toolCalls, finishReasons, errors) → `[agent] attempt handled the turn` / `[agent] attempt failed, falling back` (status + `errorDetail`) → `[agent] turn complete` / `[agent] turn failed` (durationMs, `failedAttempts` = the whole fallback walk with each model's status and error).

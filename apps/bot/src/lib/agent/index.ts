@@ -24,10 +24,12 @@ import { requestHints } from '@/lib/ai/hints';
 import { renderStream, type StreamError } from '@/lib/ai/stream';
 import { buildTools } from '@/lib/ai/toolset';
 import { runQueuedTurn } from '@/lib/ai/turn-queue';
+import { recordByokOutcome, resolveUserRouting } from '@/lib/byok';
 import { bot, slack } from '@/lib/chat';
 import {
   agentErrorMessage,
   BudgetExhaustedError,
+  ByokExhaustedError,
   StreamInterruptedError,
 } from '@/lib/errors';
 import logger from '@/lib/logger';
@@ -300,7 +302,13 @@ async function executeTurn(
     // instead of re-running the same tools.
     const gatheredResults: GatheredResult[] = [];
     const gatheredKeys = new Set<string>();
-    // The main query runs on PRIMARY_ATTEMPT (a pinned model on the owner's
+    // BYOK: if the ACTING USER brought their own model keys, this turn runs on
+    // them (in the order they added them) instead of the service models. The
+    // shared service chain is only reachable afterwards if they opted in — a
+    // broken personal key must not silently spend the shared budget.
+    const routing = await resolveUserRouting(turnMessage.author.userId);
+    const byokQueue = [...routing.byok];
+    // The service query runs on PRIMARY_ATTEMPT (a pinned model on the owner's
     // DigitalOcean BYOK quota). On failure we walk LEADERBOARD_FALLBACK from the
     // primary's rank UP (toward the best model) and then DOWN — see
     // routeNextAttempt. Models already tried are skipped via failedKeys.
@@ -366,6 +374,17 @@ async function executeTurn(
       return [...up, ...down];
     };
     const routeNextAttempt = () => {
+      // The user's own keys come first, and are the ONLY thing tried unless they
+      // opted into service fallback.
+      const ownKey = byokQueue.shift();
+      if (ownKey) {
+        attempt = ownKey;
+        return;
+      }
+      if (routing.byok.length > 0 && !routing.serviceFallback) {
+        attempt = undefined;
+        return;
+      }
       if (!triedPrimary) {
         triedPrimary = true;
         attempt = PRIMARY_ATTEMPT;
@@ -649,6 +668,11 @@ async function executeTurn(
           },
           '[agent] attempt handled the turn'
         );
+        // A BYOK key that just answered a whole turn is demonstrably valid.
+        await recordByokOutcome({
+          attempt: currentAttempt,
+          userId: turnMessage.author.userId,
+        });
         // Capture usage for the footer (best-effort; never fails the turn).
         if (attemptText) {
           const usage = await Promise.resolve(result.usage).catch(
@@ -673,6 +697,13 @@ async function executeTurn(
         }
         attempts.push({ attempt: currentAttempt, error });
         failedKeys.add(`${currentAttempt.provider}:${currentAttempt.model}`);
+        // Mark the user's key invalid only if the PROVIDER rejected the key
+        // itself (401/402/403) — a rate limit or an outage says nothing about it.
+        await recordByokOutcome({
+          attempt: currentAttempt,
+          error,
+          userId: turnMessage.author.userId,
+        });
         // Also catch a spend-limit 429 that surfaced as a THROWN error (not a
         // stream error part) — same effect as onError: skip the rest of the
         // HackClub rungs and go straight to DigitalOcean/Gemini.
@@ -702,6 +733,12 @@ async function executeTurn(
           throw error;
         }
         if (!retryAttempt) {
+          // The user's own keys were the only path allowed and they're spent:
+          // say so plainly instead of a generic failure, since only they can fix
+          // it (and they explicitly did NOT opt into the shared budget).
+          if (routing.byok.length > 0 && !routing.serviceFallback) {
+            throw new ByokExhaustedError(errorMessage(error), { cause: error });
+          }
           if (hackclubBudgetExhausted) {
             throw new BudgetExhaustedError(spendLimitMessage, { cause: error });
           }

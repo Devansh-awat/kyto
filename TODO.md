@@ -131,48 +131,24 @@ lives in `plans/rewrite.md`.
 
 ## Models, BYOK, And Providers
 
-### BYOK Implementation
+### BYOK Follow-ups
 
-- [ ] Add `BYOK_ENCRYPTION_KEY` to bot env validation and deployment docs.
-  Require enough entropy for AES-256-GCM key derivation.
-- [ ] Add a bot-owned versioned secret encryption helper.
-- [ ] Add tests for the encryption helper: round-trip, tamper failure,
-  wrong-key failure, malformed ciphertext, and no plaintext in thrown errors.
-- [ ] Add `user_model_credentials` Drizzle schema and queries keyed by
-  `(user_id, provider)`. Store encrypted key, base URL metadata, provider slug,
-  selected model id, key preview, validation status, validation message,
-  last-used timestamp, and audit timestamps.
-- [ ] Keep raw BYOK secrets out of `packages/db` query logs and return types
-  unless a bot-owned decrypting service explicitly asks for the encrypted
-  payload.
-- [ ] Define a single exported provider discriminant union and provider adapter
-  map in `packages/ai` for Pi attempts: OpenRouter-compatible, opencode-go, and
-  any direct provider added later.
-- [ ] Replace static `chatAttempts` call sites with per-Acting-User attempt
-  resolution: BYOK attempts first, service attempts only when no BYOK exists or
-  explicit service fallback is enabled.
-- [ ] Update turn execution, compaction, attempt selection, and attempt logging
-  so provider/model selection is per turn and logs never include raw env or key
-  material.
-- [ ] Make `generateImage` policy explicit in code/UI: service image provider
-  only unless an image-capable BYOK provider is configured.
-- [ ] Add App Home Model Keys UI: add/rotate/delete credential, provider input,
-  model id input, optional base URL, status display, and masked key preview
-  only.
-- [ ] Ensure Slack modal `private_metadata`, view state re-renders, prompt
-  hints, Pi session files, E2B env, task renderers, and logs never contain raw
-  API keys.
-- [ ] Validate credentials on save or first use, store safe validation status,
-  and surface invalid-key/auth/quota errors only to the Acting User where Slack
-  allows.
-- [ ] Decide service fallback UX: default off for BYOK failures, with explicit
-  opt-in if users may spend the shared service key after their key fails.
-- [ ] Add tests for provider-to-`customEnv` mapping, BYOK-first fallback order,
-  service fallback disabled, invalid-key handling, App Home modal parsing, and
-  ownership checks.
-- [ ] Live smoke: save a key, run a Slack turn, run compaction, rotate the key,
-  delete the key, trigger an invalid-key turn, and verify two users in one
-  thread use separate credentials without leaking provider/key details.
+BYOK shipped (see `.claude/MODELS.md`): `BYOK_ENCRYPTION_KEY`, the versioned
+AES-256-GCM helper + its tests, `user_model_credentials`, the provider catalog in
+`packages/ai/src/providers/byok.ts`, per-acting-user routing with opt-in service
+fallback, and the App Home "Model keys" section. What is left:
+
+- [ ] Add tests for BYOK-first attempt ordering, service-fallback-disabled
+  routing, invalid-key handling, and App Home modal parsing. (Only the crypto
+  helper is unit-tested today; the rest was verified by hand.)
+- [ ] Live smoke with a second user: two users in one thread must use separate
+  credentials, and neither may see the other's provider or key details.
+- [ ] Offer an image-capable BYOK provider. `generateImage` is deliberately
+  service-only today (a stored chat key can't serve images).
+- [ ] Key rotation: `encryptSecret`/`decryptSecret` already take an explicit
+  passphrase, so a rotation script can decrypt under the old key and re-encrypt
+  under the new one. Nothing calls it yet — today, changing
+  `BYOK_ENCRYPTION_KEY` means every user re-adds their key.
 
 ### Provider Selection
 

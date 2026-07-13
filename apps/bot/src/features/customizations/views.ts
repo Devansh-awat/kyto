@@ -1,8 +1,9 @@
-import { personas } from '@repo/ai';
+import { BYOK_PROVIDER_IDS, BYOK_PROVIDERS, personas } from '@repo/ai';
 import type {
   IdentityProfile,
   Reminder,
   UserMcpServer,
+  UserModelCredential,
 } from '@repo/db/queries';
 import { mrkdwn, plainText } from '@/harness';
 import { IDENTITY_TYPES, type IdentityType } from '@/lib/identity';
@@ -40,18 +41,133 @@ function escapeSlackText(text: string): string {
     .replaceAll('>', '&gt;');
 }
 
+const VALIDATION_BADGES: Record<string, string> = {
+  invalid: ':x: invalid',
+  unvalidated: ':grey_question: not checked yet',
+  valid: ':white_check_mark: valid',
+};
+
+const VALIDATION_MESSAGE_MAX = 140;
+
+// The Model keys (BYOK) section: the acting user's own provider keys, which
+// their turns run on instead of kyto's shared models. Only ever rendered for the
+// key's owner — the App Home tab is per-user, so no one else can see these.
+function modelKeyBlocks(credentials: UserModelCredential[]): SlackBlock[] {
+  const blocks: SlackBlock[] = [
+    { type: 'divider' },
+    {
+      accessory: {
+        action_id: 'home_add_model_key',
+        text: plainText('Add key'),
+        type: 'button',
+      },
+      text: mrkdwn(
+        "*Model keys*\nBring your own key: your turns run on your provider and model instead of kyto's shared models. Keys are encrypted at rest and only ever used for your own turns."
+      ),
+      type: 'section',
+    },
+  ];
+  if (credentials.length === 0) {
+    blocks.push({
+      elements: [mrkdwn("_No keys — you're on kyto's shared models._")],
+      type: 'context',
+    });
+    return blocks;
+  }
+  for (const credential of credentials) {
+    const label =
+      BYOK_PROVIDERS[credential.provider as keyof typeof BYOK_PROVIDERS]
+        ?.label ?? credential.provider;
+    const badge =
+      VALIDATION_BADGES[credential.validationStatus] ??
+      VALIDATION_BADGES.unvalidated;
+    blocks.push(
+      {
+        accessory: {
+          action_id: 'home_remove_model_key',
+          confirm: {
+            confirm: plainText('Remove'),
+            deny: plainText('Keep'),
+            text: mrkdwn(`Your ${escapeSlackText(label)} key will be deleted.`),
+            title: plainText('Remove key?'),
+          },
+          style: 'danger',
+          text: plainText('Remove'),
+          type: 'button',
+          value: credential.provider,
+        },
+        text: mrkdwn(
+          `*${escapeSlackText(label)}* — \`${escapeSlackText(credential.model)}\` · key ${escapeSlackText(credential.keyPreview)} · ${badge}`
+        ),
+        type: 'section',
+      },
+      {
+        elements: [
+          {
+            action_id: 'home_edit_model_key',
+            text: plainText('Edit / rotate'),
+            type: 'button',
+            value: credential.provider,
+          },
+          {
+            action_id: 'home_toggle_model_key_fallback',
+            text: plainText(
+              credential.serviceFallback
+                ? 'Shared fallback: on'
+                : 'Shared fallback: off'
+            ),
+            type: 'button',
+            // The target state, so a stale home view can't flip it the wrong way.
+            value: `${credential.provider}:${credential.serviceFallback ? 'off' : 'on'}`,
+          },
+        ],
+        type: 'actions',
+      }
+    );
+    if (credential.validationStatus === 'invalid') {
+      blocks.push({
+        elements: [
+          mrkdwn(
+            `:warning: ${escapeSlackText(
+              (
+                credential.validationMessage ??
+                'The provider rejected this key.'
+              ).slice(0, VALIDATION_MESSAGE_MAX)
+            )}`
+          ),
+        ],
+        type: 'context',
+      });
+    }
+  }
+  blocks.push({
+    elements: [
+      mrkdwn(
+        "_Shared fallback off means a failing key stops the turn — kyto won't quietly spend the shared budget for you._"
+      ),
+    ],
+    type: 'context',
+  });
+  return blocks;
+}
+
 export function buildHomeView({
+  byokEnabled = false,
   identityProfiles = [],
   isOwner = false,
   mcpServers = [],
+  modelCredentials = [],
   prompt,
   reminders = [],
   showUsageFooter = true,
   userId,
 }: {
+  /** False when the host has no BYOK_ENCRYPTION_KEY: hide the section entirely. */
+  byokEnabled?: boolean;
   identityProfiles?: IdentityProfile[];
   isOwner?: boolean;
   mcpServers?: UserMcpServer[];
+  modelCredentials?: UserModelCredential[];
   prompt: string | null;
   reminders?: Reminder[];
   showUsageFooter?: boolean;
@@ -121,6 +237,10 @@ export function buildHomeView({
       type: 'section',
     }
   );
+
+  if (byokEnabled) {
+    blocks.push(...modelKeyBlocks(modelCredentials));
+  }
 
   blocks.push(
     { type: 'divider' },
@@ -307,6 +427,101 @@ export function buildIdentityModal(
     close: plainText('Cancel'),
     submit: plainText('Save'),
     title: plainText('Kyto identity'),
+    type: 'modal',
+  };
+}
+
+const KEY_INPUT_MAX = 400;
+
+/**
+ * Add or rotate one BYOK key. On edit the key field is optional: leaving it
+ * blank keeps the stored key and only updates the model/base URL, so changing a
+ * model doesn't force the user to paste their secret again.
+ *
+ * `private_metadata` carries ONLY the provider slug. Never put key material in
+ * it — Slack echoes it back into the view payload.
+ */
+export function buildModelKeyModal(
+  credential?: UserModelCredential
+): SlackModalView {
+  const editing = Boolean(credential);
+  const options = BYOK_PROVIDER_IDS.map((id) => ({
+    text: plainText(BYOK_PROVIDERS[id].label),
+    value: id,
+  }));
+  const initialProvider = credential
+    ? options.find((option) => option.value === credential.provider)
+    : undefined;
+  return {
+    blocks: [
+      {
+        block_id: 'byok_provider',
+        element: {
+          action_id: 'provider',
+          ...(initialProvider ? { initial_option: initialProvider } : {}),
+          options,
+          placeholder: plainText('Choose a provider'),
+          type: 'static_select',
+        },
+        hint: plainText(
+          'Any OpenAI-compatible provider. Pick Custom to supply your own base URL.'
+        ),
+        label: plainText('Provider'),
+        type: 'input',
+      },
+      {
+        block_id: 'byok_model',
+        element: {
+          action_id: 'model',
+          ...(credential ? { initial_value: credential.model } : {}),
+          max_length: 120,
+          placeholder: plainText('e.g. gpt-5.5'),
+          type: 'plain_text_input',
+        },
+        hint: plainText('The model id kyto should run for your turns.'),
+        label: plainText('Model'),
+        type: 'input',
+      },
+      {
+        block_id: 'byok_key',
+        element: {
+          action_id: 'key',
+          max_length: KEY_INPUT_MAX,
+          placeholder: plainText(editing ? 'Leave blank to keep' : 'sk-…'),
+          type: 'plain_text_input',
+        },
+        hint: plainText(
+          editing
+            ? 'Paste a new key to rotate it, or leave blank to keep the current one.'
+            : 'Encrypted at rest. Only ever used for your own turns; never shown back to you or put in a prompt.'
+        ),
+        label: plainText('API key'),
+        optional: editing,
+        type: 'input',
+      },
+      {
+        block_id: 'byok_base_url',
+        element: {
+          action_id: 'base_url',
+          ...(credential?.baseUrl ? { initial_value: credential.baseUrl } : {}),
+          placeholder: plainText('https://…/v1'),
+          type: 'plain_text_input',
+        },
+        hint: plainText(
+          'Optional. Required for Custom; otherwise only to point at a proxy.'
+        ),
+        label: plainText('Base URL'),
+        optional: true,
+        type: 'input',
+      },
+    ],
+    callback_id: 'home_save_model_key',
+    close: plainText('Cancel'),
+    ...(credential
+      ? { private_metadata: JSON.stringify({ provider: credential.provider }) }
+      : {}),
+    submit: plainText('Save'),
+    title: plainText(editing ? 'Edit model key' : 'Add model key'),
     type: 'modal',
   };
 }

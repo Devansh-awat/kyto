@@ -10,6 +10,12 @@ import type { GeneratedImage } from '@/types/tools/generate-image';
 // fetch rather than through the AI SDK's `generateImage` + OpenRouter provider,
 // whose image path did not actually reach this endpoint (the "image gen not
 // working" bug).
+//
+// This is deliberately the SERVICE image provider even on a BYOK turn: a user's
+// stored key is a chat-completions credential (we never asked them for an
+// image-capable one, and most aren't), so routing images at it would just fail.
+// Image generation therefore always spends the service budget, regardless of
+// whose key is answering the rest of the turn.
 const IMAGES_URL = 'https://ai.hackclub.com/proxy/v1/images/generations';
 const IMAGE_MODEL = 'google/gemini-3.1-flash-image';
 

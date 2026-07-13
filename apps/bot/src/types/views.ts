@@ -20,6 +20,19 @@ interface SlackTextInputElement {
   type: 'plain_text_input';
 }
 
+interface SlackSelectOption {
+  text: ReturnType<typeof plainText>;
+  value: string;
+}
+
+interface SlackSelectElement {
+  action_id: string;
+  initial_option?: SlackSelectOption;
+  options: SlackSelectOption[];
+  placeholder?: ReturnType<typeof plainText>;
+  type: 'static_select';
+}
+
 interface SlackConfirm {
   confirm: ReturnType<typeof plainText>;
   deny: ReturnType<typeof plainText>;
@@ -50,7 +63,7 @@ export type SlackBlock =
     }
   | {
       block_id: string;
-      element: SlackTextInputElement;
+      element: SlackSelectElement | SlackTextInputElement;
       hint?: ReturnType<typeof plainText>;
       label: ReturnType<typeof plainText>;
       optional?: boolean;

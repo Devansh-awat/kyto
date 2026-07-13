@@ -19,5 +19,14 @@ export {
   subagentAttempt,
   subagentAttempts,
 } from './providers/attempts';
+export {
+  BYOK_PROVIDER_IDS,
+  BYOK_PROVIDERS,
+  type ByokProviderId,
+  type ByokProviderSpec,
+  byokAttempt,
+  isByokAttempt,
+  isByokProviderId,
+} from './providers/byok';
 export { provider } from './providers/models';
 export type { SandboxContext } from './types';

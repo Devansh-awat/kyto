@@ -54,6 +54,12 @@ export const env = createEnv({
     // backend; falls back to Gemini TTS when unset.
     HACKCLUB_REPLICATE_API_KEY: z.string().min(1).optional(),
 
+    // Passphrase for encrypting users' own model API keys (BYOK) at rest. Needs
+    // real entropy: it is stretched with scrypt into the AES-256-GCM key that
+    // protects every stored key. Unset = the BYOK feature is off entirely (no
+    // App Home section, no per-user routing) rather than storing keys in clear.
+    BYOK_ENCRYPTION_KEY: z.string().min(32).optional(),
+
     LANGFUSE_BASEURL: z.url().optional(),
     LANGFUSE_PUBLIC_KEY: z.string().min(1).optional(),
     LANGFUSE_SECRET_KEY: z.string().min(1).optional(),

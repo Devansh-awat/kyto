@@ -22,6 +22,13 @@ export const DIGITALOCEAN_ONLY = 'digitalocean';
 export interface ModelAttempt {
   apiKey: string;
   baseURL: string;
+  /**
+   * Set only on a BYOK attempt (the acting user's own key, see providers/byok):
+   * the catalog id the key belongs to. Its presence is what marks the attempt as
+   * "paid for by the user, not by the service" — which decides whether a failure
+   * is reported back to them and whether the shared budget may be touched next.
+   */
+  byokProvider?: string;
   model: string;
   provider: string;
 }
