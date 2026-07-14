@@ -38,6 +38,7 @@ export async function* renderStream({
   emitText = false,
   knownTools,
   onTextDelta,
+  onReasoning,
   onSkip,
   onToolActivity,
   onToolResult,
@@ -57,6 +58,11 @@ export async function* renderStream({
   emitText?: boolean;
   knownTools?: ReadonlySet<string>;
   onTextDelta?: (text: string) => PromiseLike<void> | void;
+  // Fires once per completed reasoning block with its full text. The agent loop
+  // keeps the turn's reasoning so the NEXT turn in the thread can be shown what
+  // kyto was thinking last time (lib/agent/thinking.ts) — Slack replays what was
+  // said, never what was thought, so without this every turn starts from cold.
+  onReasoning?: (text: string) => void;
   onSkip?: () => void;
   // Fires on the first real (non-phantom, registered) tool call. Lets the agent
   // loop tell "the model did actual work" apart from a truly empty completion,
@@ -159,12 +165,15 @@ export async function* renderStream({
         // thinking don't collapse onto one another (providers reuse part.id).
         const id = `reasoning-${reasoningCounter++}`;
         openReasoning.set(part.id, id);
+        // Text is collected for EVERY reasoning block, including one whose plan
+        // card is hidden (the visible-task budget is a UI limit; a thought kyto
+        // had is still a thought it should remember next turn — see onReasoning).
+        reasoning.set(id, '');
         if (!showTask({ id, visibleTaskIds })) {
           hiddenTaskCount += 1;
           yield hiddenTaskUpdate({ count: hiddenTaskCount, done: false });
           break;
         }
-        reasoning.set(id, '');
         yield {
           id,
           status: 'in_progress',
@@ -175,7 +184,7 @@ export async function* renderStream({
       }
       case 'reasoning-delta': {
         const id = openReasoning.get(part.id);
-        if (id && visibleTaskIds.has(id)) {
+        if (id) {
           reasoning.set(id, (reasoning.get(id) ?? '') + part.text);
         }
         break;
@@ -183,10 +192,17 @@ export async function* renderStream({
       case 'reasoning-end': {
         const id = openReasoning.get(part.id);
         openReasoning.delete(part.id);
-        if (!(id && visibleTaskIds.has(id))) {
+        if (!id) {
           break;
         }
         const text = reasoning.get(id)?.trim();
+        reasoning.delete(id);
+        if (text) {
+          onReasoning?.(text);
+        }
+        if (!visibleTaskIds.has(id)) {
+          break;
+        }
         yield {
           id,
           output: text ? clamp(text, REASONING_OUTPUT_MAX_LENGTH) : undefined,
@@ -194,7 +210,6 @@ export async function* renderStream({
           title: 'Thinking',
           type: 'task_update',
         };
-        reasoning.delete(id);
         break;
       }
       case 'tool-call': {

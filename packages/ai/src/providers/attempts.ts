@@ -36,22 +36,24 @@ export interface ModelAttempt {
 
 /**
  * The primary model for the main query: Kimi K2.6, pinned, served by
- * DigitalOcean through OpenRouter BYOK — NOT HackClub. That means the main
- * query bills the owner's DigitalOcean account (its own quota) and never touches
- * HackClub's shared daily $3 cap, which is now only reached on fallback.
- * (Owner's call, replacing minimax-m2.5.)
+ * **HackClub** (`moonshotai/kimi-k2.6`) — owner's call.
+ *
+ * COST NOTE, because this reverses an earlier decision: the primary used to be
+ * a DigitalOcean BYOK model precisely so the main query billed the owner's DO
+ * quota and HackClub's shared daily $3 cap was only ever touched on fallback.
+ * With the primary on HackClub, **every turn now spends that daily cap** — which
+ * is the intent (DigitalOcean was rate-limiting the roster). The DigitalOcean
+ * roster is still the FIRST fallback tier (free, and no longer rate-limit-
+ * blocked, since the primary no longer hammers it), and a HackClub budget/outage
+ * failure still short-circuits straight to it.
  *
  * A single pinned model (this replaced `openrouter/auto`, whose per-request
  * re-routing produced empty completions and long fallback cascades), so 1-hour
- * prompt caching sticks across a thread's turns. On failure the agent walks the
- * fallback queue; this model is also a DigitalOcean rung there, deduped via
- * `failedKeys` so it isn't retried.
+ * prompt caching sticks across a thread's turns. The DigitalOcean-served
+ * `kimi-k2.6` remains a fallback rung; `failedKeys` is keyed on provider+model,
+ * so the two are distinct entries and the DO one is still tried if this fails.
  */
-export const PRIMARY_MODEL = 'kimi-k2.6';
-
-// Used as the primary ONLY when no OpenRouter BYOK key is configured, so the
-// agent always has a first attempt to route to.
-const HACKCLUB_PRIMARY_FALLBACK_MODEL = 'z-ai/glm-5.2';
+export const PRIMARY_MODEL = 'moonshotai/kimi-k2.6';
 
 // Cap output tokens on HackClub requests. OpenRouter enforces the daily spend
 // limit PESSIMISTICALLY: with no `max_tokens` it assumes the model could emit
@@ -119,14 +121,11 @@ export const digitaloceanAttempts: ModelAttempt[] = env.OPENROUTER_API_KEY
   : [];
 
 /**
- * The attempt the main query starts on: PRIMARY_MODEL on DigitalOcean BYOK.
- * Falls back to a HackClub-served model only if `OPENROUTER_API_KEY` is unset
- * (no BYOK path exists at all) — otherwise a missing key would leave the agent
- * with no first attempt to route to.
+ * The attempt the main query starts on: PRIMARY_MODEL, served by HackClub. No
+ * key-dependent degradation any more — HackClub is always configured, whereas
+ * the DigitalOcean path needs OPENROUTER_API_KEY.
  */
-export const PRIMARY_ATTEMPT: ModelAttempt =
-  digitaloceanAttempts.find((attempt) => attempt.model === PRIMARY_MODEL) ??
-  catalogAttempt(HACKCLUB_PRIMARY_FALLBACK_MODEL);
+export const PRIMARY_ATTEMPT: ModelAttempt = catalogAttempt(PRIMARY_MODEL);
 
 /** Build a single direct-Gemini attempt, or undefined if no key is set. */
 export function geminiAttempt(model: string): ModelAttempt | undefined {

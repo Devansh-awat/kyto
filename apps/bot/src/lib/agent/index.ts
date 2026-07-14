@@ -24,6 +24,7 @@ import {
   interruptTurn,
   queuedInput,
 } from '@/lib/agent/steering';
+import { rememberThinking } from '@/lib/agent/thinking';
 import { clearTurn, getTurn, setTurn } from '@/lib/agent/turns';
 import { startThinking } from '@/lib/agent/utils';
 import { promptWithAttachments, seedAttachments } from '@/lib/ai/attachments';
@@ -62,12 +63,20 @@ import type { AttemptFailure } from '@/types/attempts';
 const SPEND_LIMIT_PATTERN =
   /spending limit|insufficient credits|daily limit|limit exceeded/i;
 
-// How many non-budget HackClub failures in a turn before we treat HackClub as
-// down and skip its remaining rungs. ONE is enough: every HackClub rung shares
+// How many non-budget HackClub PROXY failures in a turn before we treat HackClub
+// as down and skip its remaining rungs. ONE is enough: every HackClub rung shares
 // one proxy and one budget, so a rung that fails for a non-model reason (5xx,
 // connection error, rate limit) means the next rung fails identically. Trying a
 // second one only bought another "Thinking · fallback" card before the same
 // verdict. The DigitalOcean BYOK tier is a genuinely separate quota, so jump.
+//
+// Only a failure the PROXY reported counts (`errorStatus` found an HTTP status).
+// This matters now that the PRIMARY is itself a HackClub call: the model-level
+// faults kyto raises on its own — an empty response, tools-but-no-reply, a
+// degenerate loop — carry no status, and they say nothing about the proxy. If
+// they counted, one bad completion from the primary would write off the entire
+// HackClub leaderboard (opus-4.8 included) for that turn and dump the user on
+// the DigitalOcean tier.
 const HACKCLUB_OUTAGE_THRESHOLD = 1;
 
 // DigitalOcean's BYOK rate limit is per ACCOUNT, not per model: when one rung
@@ -513,6 +522,10 @@ async function executeTurn(
       // Trips if THIS model stops answering and starts looping (see degenerate.ts).
       const repetition = createRepetitionGuard();
       let degenerated = false;
+      // This attempt's reasoning. Per-attempt, so a model that failed or spiralled
+      // takes its thinking down with it — only the attempt that ANSWERS gets to
+      // leave its train of thought behind for the next turn (see thinking.ts).
+      const attemptThinking: string[] = [];
       const isFallback = attempts.length > 0;
       try {
         activeAttempt = currentAttempt;
@@ -582,6 +595,9 @@ async function executeTurn(
             attemptText = true;
             errorStage = 'after_text';
             streamedText = appendStreamedText(streamedText, text);
+          },
+          onReasoning: (text) => {
+            attemptThinking.push(text);
           },
           onToolActivity: () => {
             attemptToolActivity = true;
@@ -735,6 +751,10 @@ async function executeTurn(
           },
           '[agent] attempt handled the turn'
         );
+        // Leave this turn's train of thought behind for the next one. Only the
+        // attempt that actually answered gets to: a failed attempt's reasoning
+        // died with it, and feeding a spiral back in would only seed another.
+        rememberThinking({ blocks: attemptThinking, threadId });
         // A BYOK key that just answered a whole turn is demonstrably valid.
         await recordByokOutcome({
           attempt: currentAttempt,
@@ -787,9 +807,12 @@ async function executeTurn(
           if (SPEND_LIMIT_PATTERN.test(thrownErrorText(error))) {
             hackclubBudgetExhausted = true;
             spendLimitMessage ??= thrownErrorText(error);
-          } else {
-            // A non-budget HackClub failure. Enough of these means the proxy is
-            // down, not just this one model, so bail off HackClub entirely.
+          } else if (errorStatus(error) !== undefined) {
+            // A non-budget HackClub failure that the PROXY reported (it has an
+            // HTTP status). Enough of these means the proxy is down, not just
+            // this one model, so bail off HackClub entirely. A model-level fault
+            // kyto raised itself (empty response, degenerate loop) has no status
+            // and must NOT condemn the tier — see HACKCLUB_OUTAGE_THRESHOLD.
             hackclubFailures += 1;
             if (hackclubFailures >= HACKCLUB_OUTAGE_THRESHOLD) {
               hackclubUnavailable = true;

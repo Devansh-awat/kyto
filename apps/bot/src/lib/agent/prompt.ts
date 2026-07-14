@@ -5,6 +5,7 @@ import {
 } from '@/harness';
 import { isFocusAllowed } from '@/lib/agent/focus';
 import { annotateMentions } from '@/lib/agent/mentions';
+import { recallThinking, renderThinking } from '@/lib/agent/thinking';
 import { slack } from '@/lib/chat';
 import { isHiddenFromBot, rawSlackText } from '@/lib/utils/message';
 
@@ -43,6 +44,11 @@ export async function buildPrompt(
 ): Promise<string> {
   const current = await renderMessage(message);
 
+  // What kyto was THINKING on this thread's last few turns. Slack replayed above
+  // only records what it said, so without this each turn re-derives the reasoning
+  // (and the dead ends) of the one before it.
+  const thinking = thread ? renderThinking(recallThinking(thread.id)) : '';
+
   let history = '';
   if (thread) {
     // Focus mode: drop messages from non-focused users so kyto genuinely never
@@ -71,7 +77,8 @@ export async function buildPrompt(
     }
   }
 
-  const body = history ? `${history}\n${current}` : current;
+  const conversation = history ? `${history}\n${current}` : current;
+  const body = thinking ? `${thinking}\n\n${conversation}` : conversation;
 
   return customizationPrompt
     ? [
