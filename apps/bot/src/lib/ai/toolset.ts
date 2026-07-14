@@ -120,6 +120,7 @@ export async function buildTools({
     unreact: unreactTool({ bot }),
     getUser: getUserTool(),
     postMessage: postMessageTool({
+      authorUserId,
       bot,
       currentThreadId: thread.id,
       isOwner,

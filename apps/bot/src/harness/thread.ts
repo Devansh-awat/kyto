@@ -147,17 +147,19 @@ export class ThreadHandle {
   async postEphemeral(
     user: Author | string,
     text: string,
-    options: { fallbackToDM?: boolean } = {}
+    options: { fallbackToDM?: boolean; blocks?: unknown[] } = {}
   ): Promise<void> {
     const userId = typeof user === 'string' ? user : user.userId;
     const { channel, threadTs } = this.location;
+    const blocks = options.blocks;
     try {
       await this.adapter.webClient.chat.postEphemeral({
         channel,
         text,
+        ...(blocks ? { blocks } : {}),
         ...(threadTs ? { thread_ts: threadTs } : {}),
         user: userId,
-      });
+      } as Parameters<typeof this.adapter.webClient.chat.postEphemeral>[0]);
     } catch (error) {
       if (!options.fallbackToDM) {
         throw error;
@@ -171,6 +173,7 @@ export class ThreadHandle {
       }
       await this.adapter.webClient.chat.postMessage({
         channel: dmChannel,
+        ...(blocks ? { blocks } : {}),
         text,
       });
     }

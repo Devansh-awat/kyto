@@ -7,8 +7,44 @@ import {
   type PostContent,
 } from '@/harness';
 import { slack } from '@/lib/chat';
+import { requestPostConfirmation } from '@/lib/confirm-post/request';
 import { resolveIdentity } from '@/lib/identity';
 import { toRawSlackChannelId } from '@/lib/slack/ids';
+
+type PostTarget = { type: 'thread' | 'channel' | 'user'; id: string };
+
+/**
+ * Actually deliver a post. Shared by the immediate (same-channel) path and by
+ * the confirm-button handler, so a confirmed cross-channel post travels the
+ * exact same code as an inline one.
+ */
+export async function executePostMessage(
+  bot: Chat,
+  {
+    target,
+    body,
+    blocks,
+  }: { target: PostTarget; body: string; blocks?: unknown[] }
+): Promise<{ messageId: string; threadId: string }> {
+  const identity = await resolveIdentity('normal');
+  const content: PostContent = {
+    ...(blocks ? { blocks, fallbackText: body } : { markdown: body }),
+    iconEmoji: identity.iconEmoji,
+    iconUrl: identity.iconUrl,
+    username: identity.username,
+  };
+  if (target.type === 'thread') {
+    const sent = await bot.thread(target.id).post(content);
+    return { messageId: sent.id, threadId: sent.threadId };
+  }
+  if (target.type === 'channel') {
+    const sent = await bot.channel(target.id).post(content);
+    return { messageId: sent.id, threadId: sent.threadId };
+  }
+  const dm = await bot.openDM(target.id);
+  const sent = await dm.post(content);
+  return { messageId: sent.id, threadId: sent.threadId };
+}
 
 // Slack rejects a message with more than 50 blocks.
 const MAX_BLOCKS = 50;
@@ -43,10 +79,12 @@ function parseBlocks(raw: string): { blocks?: unknown[]; error?: string } {
 }
 
 export function postMessageTool({
+  authorUserId,
   bot,
   currentThreadId,
   isOwner,
 }: {
+  authorUserId: string;
   bot: Chat;
   currentThreadId: string;
   isOwner: boolean;
@@ -110,24 +148,34 @@ export function postMessageTool({
           : neutralizeBroadcastDeep(parsed.blocks);
       }
 
-      const identity = await resolveIdentity('normal');
-      const content: PostContent = {
-        ...(blocks ? { blocks, fallbackText: body } : { markdown: body }),
-        iconEmoji: identity.iconEmoji,
-        iconUrl: identity.iconUrl,
-        username: identity.username,
-      };
-      if (type === 'thread') {
-        const sent = await bot.thread(id).post(content);
-        return { messageId: sent.id, threadId: sent.threadId };
+      // A post that leaves the current channel (a different channel, or a DM to
+      // someone) is only reachable by the owner, and now never fires inline: it
+      // waits for the owner to click a confirm button. This is the human-click
+      // gate that a prompt injection cannot forge — it can request the post but
+      // can't press the button. Same-channel replies still post immediately.
+      const crossChannel = type === 'user' || target !== currentChannel;
+      if (crossChannel) {
+        const where =
+          type === 'user' ? `a DM to <@${id}>` : `<#${target ?? id}>`;
+        return await requestPostConfirmation({
+          ownerUserId: authorUserId,
+          post: {
+            blocks,
+            body,
+            kind: 'postMessage',
+            requestedBy: authorUserId,
+            summary: `post to ${where}${blocks ? ' (Block Kit)' : ''}`,
+            target: { id, type },
+          },
+          thread: bot.thread(currentThreadId),
+        });
       }
-      if (type === 'channel') {
-        const sent = await bot.channel(id).post(content);
-        return { messageId: sent.id, threadId: sent.threadId };
-      }
-      const dm = await bot.openDM(id);
-      const sent = await dm.post(content);
-      return { messageId: sent.id, threadId: sent.threadId };
+
+      return await executePostMessage(bot, {
+        blocks,
+        body,
+        target: { id, type },
+      });
     },
   });
 }

@@ -2,6 +2,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { env } from '@/env';
 import type { ThreadHandle as Thread } from '@/harness';
+import { requestPostConfirmation } from '@/lib/confirm-post/request';
 import logger from '@/lib/logger';
 import { errorMessage } from '@/lib/utils/error';
 
@@ -30,10 +31,94 @@ function checkOwner(
 }
 
 /**
- * Posts a message to the current thread AS the owner, using their personal user
- * OAuth token. The factory is only ever called for the owner (see toolset.ts),
- * but we re-check the author here as defense-in-depth so a misconfiguration can
- * never let one user speak as another.
+ * Post AS the owner using their personal user token. Shared by the confirm
+ * handler — sendAsUser never fires inline; every "speak as the owner" waits for
+ * the owner's confirm click first (a prompt injection can ask, not press).
+ */
+export async function executeSendAsUser({
+  targetChannel,
+  text,
+  threadTs,
+  crossChannel,
+}: {
+  targetChannel: string;
+  text: string;
+  threadTs?: string;
+  crossChannel: boolean;
+}): Promise<{ success: boolean; summary?: string; error?: string }> {
+  const gate = checkOwner(env.OWNER_USER_ID ?? '');
+  if (!gate.ok) {
+    return { error: gate.error, success: false };
+  }
+  const response = await fetch('https://slack.com/api/chat.postMessage', {
+    body: JSON.stringify({
+      channel: targetChannel,
+      text,
+      ...(!crossChannel && threadTs && { thread_ts: threadTs }),
+    }),
+    headers: {
+      Authorization: `Bearer ${gate.userToken}`,
+      'Content-Type': 'application/json; charset=utf-8',
+    },
+    method: 'POST',
+  });
+  const result = postMessageSchema.parse(await response.json());
+  if (!result.ok) {
+    return {
+      error: `Failed to send as owner: ${result.error}`,
+      success: false,
+    };
+  }
+  if (crossChannel) {
+    logger.info(
+      { targetChannel },
+      '[sendAsUser] posted as owner to another channel'
+    );
+  }
+  return {
+    success: true,
+    summary: crossChannel
+      ? `Sent the message as the owner to <#${targetChannel}>.`
+      : 'Sent the message as the owner.',
+  };
+}
+
+/** Edit one of the owner's own messages. Shared by the confirm handler. */
+export async function executeEditAsUser({
+  targetChannel,
+  messageTs,
+  text,
+}: {
+  targetChannel: string;
+  messageTs: string;
+  text: string;
+}): Promise<{ success: boolean; summary?: string; error?: string }> {
+  const gate = checkOwner(env.OWNER_USER_ID ?? '');
+  if (!gate.ok) {
+    return { error: gate.error, success: false };
+  }
+  const response = await fetch('https://slack.com/api/chat.update', {
+    body: JSON.stringify({ channel: targetChannel, text, ts: messageTs }),
+    headers: {
+      Authorization: `Bearer ${gate.userToken}`,
+      'Content-Type': 'application/json; charset=utf-8',
+    },
+    method: 'POST',
+  });
+  const result = postMessageSchema.parse(await response.json());
+  if (!result.ok) {
+    return {
+      error: `Failed to edit the owner's message: ${result.error}`,
+      success: false,
+    };
+  }
+  return { success: true, summary: "Edited the owner's message." };
+}
+
+/**
+ * Send a message AS the owner. Owner-gated, and never inline: it stages the
+ * post and shows the owner a confirm button. The message only goes out — under
+ * the owner's own name — once they click Confirm.
  */
 export function sendAsUserTool({
   authorUserId,
@@ -44,7 +129,7 @@ export function sendAsUserTool({
 }) {
   return tool({
     description:
-      'Send a message AS the owner (under their own name), not as the bot. Defaults to the current thread. Pass channelId to post a top-level message in a different channel. Only available when the owner triggered this turn.',
+      'Send a message AS the owner (under their own name), not as the bot. Defaults to the current thread. Pass channelId to post a top-level message in a different channel. Only available when the owner triggered this turn. The owner must confirm via a button before it sends.',
     inputSchema: z.object({
       text: z
         .string()
@@ -65,8 +150,6 @@ export function sendAsUserTool({
         if (!gate.ok) {
           return { error: gate.error, success: false };
         }
-        const { userToken } = gate;
-
         const [platform, currentChannelId, threadTs] = thread.id.split(':');
         if (platform !== 'slack' || !currentChannelId) {
           return {
@@ -74,45 +157,25 @@ export function sendAsUserTool({
             success: false,
           };
         }
-
-        // A cross-channel post lands as a top-level message; only posts in the
-        // current channel inherit the active thread.
         const crossChannel = Boolean(
           channelId && channelId !== currentChannelId
         );
         const targetChannel = channelId ?? currentChannelId;
-
-        const response = await fetch('https://slack.com/api/chat.postMessage', {
-          body: JSON.stringify({
-            channel: targetChannel,
+        return await requestPostConfirmation({
+          ownerUserId: authorUserId,
+          post: {
+            crossChannel,
+            kind: 'sendAsUser',
+            requestedBy: authorUserId,
+            summary: crossChannel
+              ? `send as YOU to <#${targetChannel}>`
+              : 'send as YOU in this thread',
+            targetChannel,
             text,
-            ...(!crossChannel && threadTs && { thread_ts: threadTs }),
-          }),
-          headers: {
-            Authorization: `Bearer ${userToken}`,
-            'Content-Type': 'application/json; charset=utf-8',
+            threadTs,
           },
-          method: 'POST',
+          thread,
         });
-        const result = postMessageSchema.parse(await response.json());
-        if (!result.ok) {
-          return {
-            error: `Failed to send as owner: ${result.error}`,
-            success: false,
-          };
-        }
-        if (crossChannel) {
-          logger.info(
-            { authorUserId, targetChannel },
-            '[sendAsUser] posted as owner to another channel'
-          );
-        }
-        return {
-          success: true,
-          summary: crossChannel
-            ? `Sent the message as the owner to <#${targetChannel}>.`
-            : 'Sent the message as the owner.',
-        };
       } catch (error) {
         logger.warn({ error: errorMessage(error) }, '[sendAsUser] failed');
         return { error: errorMessage(error), success: false };
@@ -122,9 +185,9 @@ export function sendAsUserTool({
 }
 
 /**
- * Edits a message previously sent AS the owner, using their personal user OAuth
- * token. Slack only permits editing the user's own messages, so this can never
- * alter another person's message. Owner-gated like sendAsUser.
+ * Edit a message previously sent AS the owner. Owner-gated, and confirmed via a
+ * button like sendAsUser — editing under the owner's name is just as
+ * outward-facing as posting under it.
  */
 export function editAsUserTool({
   authorUserId,
@@ -135,7 +198,7 @@ export function editAsUserTool({
 }) {
   return tool({
     description:
-      "Edit one of the owner's own messages (under their own name). Defaults to the current channel; pass channelId to edit a message in another channel. Only available when the owner triggered this turn.",
+      "Edit one of the owner's own messages (under their own name). Defaults to the current channel; pass channelId to edit a message in another channel. Only available when the owner triggered this turn. The owner must confirm via a button before the edit applies.",
     inputSchema: z.object({
       messageTs: z
         .string()
@@ -162,8 +225,6 @@ export function editAsUserTool({
         if (!gate.ok) {
           return { error: gate.error, success: false };
         }
-        const { userToken } = gate;
-
         const [platform, currentChannelId] = thread.id.split(':');
         if (platform !== 'slack' || !currentChannelId) {
           return {
@@ -172,30 +233,18 @@ export function editAsUserTool({
           };
         }
         const targetChannel = channelId ?? currentChannelId;
-
-        const response = await fetch('https://slack.com/api/chat.update', {
-          body: JSON.stringify({
-            channel: targetChannel,
+        return await requestPostConfirmation({
+          ownerUserId: authorUserId,
+          post: {
+            kind: 'editAsUser',
+            messageTs,
+            requestedBy: authorUserId,
+            summary: `edit YOUR message in <#${targetChannel}>`,
+            targetChannel,
             text,
-            ts: messageTs,
-          }),
-          headers: {
-            Authorization: `Bearer ${userToken}`,
-            'Content-Type': 'application/json; charset=utf-8',
           },
-          method: 'POST',
+          thread,
         });
-        const result = postMessageSchema.parse(await response.json());
-        if (!result.ok) {
-          return {
-            error: `Failed to edit the owner's message: ${result.error}`,
-            success: false,
-          };
-        }
-        return {
-          success: true,
-          summary: "Edited the owner's message.",
-        };
       } catch (error) {
         logger.warn({ error: errorMessage(error) }, '[editAsUser] failed');
         return { error: errorMessage(error), success: false };
