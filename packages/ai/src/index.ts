@@ -8,9 +8,11 @@ export { type Persona, personas } from './prompts/presets';
 export {
   ALLOWED_MODELS,
   catalogAttempt,
+  DIGITALOCEAN_PROVIDER,
   digitaloceanAttempts,
   GEMINI_PROVIDER,
   geminiAttempt,
+  HACKCLUB_PROVIDER,
   LEADERBOARD_FALLBACK,
   MAX_OUTPUT_TOKENS,
   type ModelAttempt,

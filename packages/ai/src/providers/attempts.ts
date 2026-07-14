@@ -10,6 +10,7 @@ const OPENROUTER_BASE_URL =
   env.OPENROUTER_BASE_URL ?? 'https://openrouter.ai/api/v1';
 
 export const GEMINI_PROVIDER = 'gemini';
+export const HACKCLUB_PROVIDER = 'hackclub';
 // DigitalOcean models reached through OpenRouter BYOK (the owner's key). The
 // key holds $0 OpenRouter credit, so every attempt MUST force the DigitalOcean
 // provider (agent.ts injects `provider: { only: ['digitalocean'] }`) — that's
@@ -93,7 +94,7 @@ export function catalogAttempt(model: string): ModelAttempt {
     apiKey: env.HACKCLUB_API_KEY,
     baseURL: HACKCLUB_BASE_URL,
     model,
-    provider: 'hackclub',
+    provider: HACKCLUB_PROVIDER,
   };
 }
 
@@ -183,10 +184,18 @@ export const subagentAttempt: ModelAttempt | undefined = subagentAttempts[0];
 // The owner's arena leaderboard, best→worst, restricted to models reachable on
 // HackClub. Fable 5 (rank #1) is reachable (`anthropic/claude-fable-5`) but
 // deliberately excluded — ~2x opus-4.8's per-token cost, not worth it against
-// the daily HackClub spend cap. The agent runs `openrouter/auto` first, retries
-// the exact model it resolved to, then walks THIS list UP from that model
-// (toward #1) and then DOWN (toward the weakest). Order matters: each entry's
-// index is the rank used for the up/down pivot.
+// the daily HackClub spend cap. The agent tries PRIMARY_ATTEMPT first, then
+// walks this list in RANK ORDER, best first (buildFallbackQueue in the bot's
+// agent loop). Order matters: it is the order kyto actually falls back in.
+//
+// EVERY RUNG MUST BE A MODEL GOOD ENOUGH TO HAND A LIVE THREAD TO. A fallback
+// is not a consolation prize — whichever rung answers IS kyto for that turn, in
+// public, in front of the same people. `nvidia/nemotron-3-ultra-550b-a55b` was
+// a rung until it degenerated into a token loop and streamed "@devansh" several
+// hundred times into a public thread; it is not coming back, and neither is
+// anything else that can't hold a multi-step tool conversation. Reachable on
+// the proxy is NOT the bar. (See also the repetition guard in the agent loop,
+// which now aborts an attempt that starts looping rather than posting it.)
 //
 // The baishui proxy tail (jam06452.uk) stays disabled — its /models endpoint
 // answers but every completion fails ("upstream authentication failed" / "all
@@ -216,16 +225,14 @@ export const LEADERBOARD_FALLBACK: ModelAttempt[] = [
   catalogAttempt('x-ai/grok-build-0.1'),
   catalogAttempt('google/gemini-3-flash-preview'),
   catalogAttempt('minimax/minimax-m2.7'),
-  catalogAttempt('nvidia/nemotron-3-ultra-550b-a55b'),
   // DigitalOcean via OpenRouter BYOK — strong, tool-capable models on a
   // SEPARATE quota (billed to the owner's DigitalOcean account, not HackClub).
-  // Placed before the Gemini last resort: on a HackClub budget-exhaustion 429
-  // these are still reachable (buildFallbackQueue keeps non-HackClub rungs),
-  // and they're far better models than the cheap Gemini backstop. Empty if
-  // OPENROUTER_API_KEY is unset.
+  // buildFallbackQueue walks these BEFORE the HackClub rungs above (free, and
+  // the primary already lives here), so their position in this list only orders
+  // them against each other. Empty if OPENROUTER_API_KEY is unset.
   ...digitaloceanAttempts,
-  // Last resort: the owner's OWN Gemini key — reached after the HackClub rungs
-  // fail (and immediately on a HackClub budget-exhaustion 429). Empty if the
-  // key is unset (then these rungs are simply skipped).
+  // Last resort: the owner's OWN Gemini key — walked after every DigitalOcean
+  // and HackClub rung, and reached immediately when both of those tiers are
+  // out (DO rate limit + HackClub budget). Empty if the key is unset.
   ...geminiAttempts,
 ];

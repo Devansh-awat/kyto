@@ -1,4 +1,7 @@
 import {
+  DIGITALOCEAN_PROVIDER,
+  GEMINI_PROVIDER,
+  HACKCLUB_PROVIDER,
   LEADERBOARD_FALLBACK,
   type ModelAttempt,
   PRIMARY_ATTEMPT,
@@ -10,6 +13,10 @@ import {
 import { LazySandbox } from '@repo/sandbox';
 import { env } from '@/env';
 import type { Message, StreamChunk, ThreadHandle } from '@/harness';
+import {
+  createRepetitionGuard,
+  stripRepeatedLines,
+} from '@/lib/agent/degenerate';
 import { buildPrompt } from '@/lib/agent/prompt';
 import { createReply } from '@/lib/agent/reply';
 import {
@@ -30,6 +37,7 @@ import {
   agentErrorMessage,
   BudgetExhaustedError,
   ByokExhaustedError,
+  DegenerateOutputError,
   StreamInterruptedError,
 } from '@/lib/errors';
 import logger from '@/lib/logger';
@@ -61,6 +69,26 @@ const SPEND_LIMIT_PATTERN =
 // second one only bought another "Thinking · fallback" card before the same
 // verdict. The DigitalOcean BYOK tier is a genuinely separate quota, so jump.
 const HACKCLUB_OUTAGE_THRESHOLD = 1;
+
+// DigitalOcean's BYOK rate limit is per ACCOUNT, not per model: when one rung
+// 429s "Rate limit exceeded", every other DigitalOcean rung 429s within seconds
+// — the whole roster went down that way in one turn, nine models deep, each
+// burning ~15s and a "Thinking · fallback" card before the identical verdict.
+// So the first rate-limited DigitalOcean attempt trips the whole tier for the
+// turn and kyto goes straight to the HackClub leaderboard. Only a RATE LIMIT
+// does this: a single model 5xx-ing says nothing about its siblings.
+const RATE_LIMIT_PATTERN = /rate limit/i;
+const TOO_MANY_REQUESTS = 429;
+
+function isRateLimited({
+  message,
+  status,
+}: {
+  message: string;
+  status?: number;
+}): boolean {
+  return status === TOO_MANY_REQUESTS || RATE_LIMIT_PATTERN.test(message);
+}
 
 // Hard ceiling on a single model attempt (the whole multi-step agentic stream).
 // Without it, a stalled upstream SSE connection or a hung tool leaves the turn
@@ -309,9 +337,8 @@ async function executeTurn(
     const routing = await resolveUserRouting(turnMessage.author.userId);
     const byokQueue = [...routing.byok];
     // The service query runs on PRIMARY_ATTEMPT (a pinned model on the owner's
-    // DigitalOcean BYOK quota). On failure we walk LEADERBOARD_FALLBACK from the
-    // primary's rank UP (toward the best model) and then DOWN — see
-    // routeNextAttempt. Models already tried are skipped via failedKeys.
+    // DigitalOcean BYOK quota). On failure we walk the fallback queue built by
+    // buildFallbackQueue. Models already tried are skipped via failedKeys.
     const failedKeys = new Set<string>();
     let triedPrimary = false;
     let fallbackQueue: ModelAttempt[] | undefined;
@@ -328,6 +355,9 @@ async function executeTurn(
     // burning a dozen doomed attempts (the "lots of Thinking · fallback" bug).
     let hackclubFailures = 0;
     let hackclubUnavailable = false;
+    // Set when a DigitalOcean rung returns a rate-limit 429 — the limit is on
+    // the account, so the rest of that tier is spent for this turn too.
+    let digitaloceanRateLimited = false;
     let attempt: ModelAttempt | undefined;
     // Set per attempt (the watchdog is armed inside the loop below), but the
     // toolset is built ONCE up front — so the tools get a stable indirection
@@ -346,32 +376,34 @@ async function executeTurn(
     closeTools = built.close;
     const knownTools = new Set(Object.keys(built.tools));
 
-    const buildFallbackQueue = (pivotModel?: string): ModelAttempt[] => {
-      if (hackclubBudgetExhausted || hackclubUnavailable) {
-        const gemini = LEADERBOARD_FALLBACK.filter(
-          (candidate) => candidate.provider === 'gemini'
+    // The order kyto falls back in once PRIMARY_ATTEMPT fails, by TIER:
+    //
+    //   1. the rest of the DigitalOcean BYOK roster — strong, tool-capable, and
+    //      billed to the owner's own DigitalOcean quota, so a fallback is free;
+    //   2. the HackClub leaderboard in RANK order, BEST FIRST (opus-4.8 down);
+    //   3. the owner's Gemini key, the cheap last resort.
+    //
+    // Within each tier, LEADERBOARD_FALLBACK's own order decides.
+    //
+    // This used to pivot on the primary's index in LEADERBOARD_FALLBACK and walk
+    // "up" from it — logic inherited from `openrouter/auto`, which resolved to a
+    // real leaderboard rank. The pinned primary (minimax-m2.5) is a DigitalOcean
+    // rung appended at the BOTTOM of that list, so "up" reversed the leaderboard
+    // and kyto fell back WORST FIRST: with the DigitalOcean tier rate-limited it
+    // landed on nvidia/nemotron (which looped "@devansh" a few hundred times into
+    // a public thread), and it would only ever have reached opus-4.8 after every
+    // junk rung failed. Keep the queue explicit and rank-ordered; do NOT
+    // reintroduce a pivot.
+    const buildFallbackQueue = (): ModelAttempt[] => {
+      const tier = (provider: string) =>
+        LEADERBOARD_FALLBACK.filter(
+          (candidate) => candidate.provider === provider
         );
-        // Non-HackClub, non-Gemini rungs = the DigitalOcean BYOK models. Try
-        // them FIRST on a budget-exhaustion 429: they're a separate quota
-        // (billed to DigitalOcean, not HackClub) and much stronger than the
-        // cheap Gemini backstop, which stays last as the final safety net.
-        const otherNonHackclub = LEADERBOARD_FALLBACK.filter(
-          (candidate) =>
-            candidate.provider !== 'hackclub' && candidate.provider !== 'gemini'
-        );
-        return [...otherNonHackclub, ...gemini];
-      }
-      const idx = pivotModel
-        ? LEADERBOARD_FALLBACK.findIndex(
-            (candidate) => candidate.model === pivotModel
-          )
-        : -1;
-      if (idx === -1) {
-        return [...LEADERBOARD_FALLBACK];
-      }
-      const up = LEADERBOARD_FALLBACK.slice(0, idx).reverse();
-      const down = LEADERBOARD_FALLBACK.slice(idx + 1);
-      return [...up, ...down];
+      return [
+        ...tier(DIGITALOCEAN_PROVIDER),
+        ...tier(HACKCLUB_PROVIDER),
+        ...tier(GEMINI_PROVIDER),
+      ];
     };
     const routeNextAttempt = () => {
       // The user's own keys come first, and are the ONLY thing tried unless they
@@ -391,15 +423,18 @@ async function executeTurn(
         return;
       }
       const skipHackclub = hackclubBudgetExhausted || hackclubUnavailable;
-      fallbackQueue ??= buildFallbackQueue(PRIMARY_ATTEMPT.model);
-      // If HackClub went down mid-walk, the queue built earlier may still list
-      // its rungs; skip any HackClub candidate at selection time too so we don't
-      // keep retrying a dead proxy.
+      fallbackQueue ??= buildFallbackQueue();
+      // A whole tier can go out MID-WALK (HackClub over budget or down,
+      // DigitalOcean rate-limited), so the skips are applied at selection time
+      // rather than baked into the queue: no point retrying a dead proxy or a
+      // spent quota one rung at a time.
       attempt = fallbackQueue.find(
         (candidate) =>
           !(
             failedKeys.has(`${candidate.provider}:${candidate.model}`) ||
-            (skipHackclub && candidate.provider === 'hackclub')
+            (skipHackclub && candidate.provider === HACKCLUB_PROVIDER) ||
+            (digitaloceanRateLimited &&
+              candidate.provider === DIGITALOCEAN_PROVIDER)
           )
       );
     };
@@ -475,6 +510,9 @@ async function executeTurn(
       let attemptToolActivity = false;
       let attemptFinishReason: string | undefined;
       let attemptStreamError: StreamError | undefined;
+      // Trips if THIS model stops answering and starts looping (see degenerate.ts).
+      const repetition = createRepetitionGuard();
+      let degenerated = false;
       const isFallback = attempts.length > 0;
       try {
         activeAttempt = currentAttempt;
@@ -563,16 +601,36 @@ async function executeTurn(
             attemptStreamError ??= info;
             // A HackClub daily-spend-limit 429 dooms every HackClub rung.
             if (
-              currentAttempt.provider === 'hackclub' &&
+              currentAttempt.provider === HACKCLUB_PROVIDER &&
               SPEND_LIMIT_PATTERN.test(info.message)
             ) {
               hackclubBudgetExhausted = true;
               spendLimitMessage = info.message;
             }
+            // A DigitalOcean rate limit dooms every DigitalOcean rung: it is the
+            // account's limit, not the model's.
+            if (
+              currentAttempt.provider === DIGITALOCEAN_PROVIDER &&
+              isRateLimited(info)
+            ) {
+              digitaloceanRateLimited = true;
+            }
           },
           stream: result.fullStream,
         })) {
           if (typeof chunk === 'string') {
+            // The model has stopped answering and started looping. Cut it off
+            // here, BEFORE this chunk is yielded on to streamSegmented — that is
+            // what keeps the loop out of the thread — and abort the attempt so
+            // the turn is handed to a different model instead of shipping
+            // "@devansh" three hundred times to a public channel.
+            if (repetition.push(chunk)) {
+              degenerated = true;
+              attemptAbort.abort(
+                new DegenerateOutputError(currentAttempt.model)
+              );
+              break;
+            }
             // First VISIBLE reply text of this attempt: complete its Thinking
             // card NOW, in the current plan block, before streamSegmented splits
             // off a new block for any tools that run after the text. Otherwise
@@ -589,6 +647,15 @@ async function executeTurn(
             errorStage = 'after_progress';
           }
           yield chunk;
+        }
+
+        if (degenerated) {
+          // Drop whatever the loop already pushed into the reply buffer but that
+          // Slack has not seen yet, and scrub it out of the text a continuation
+          // attempt is shown — the next model must not read the loop as context.
+          reply?.drop();
+          streamedText = stripRepeatedLines(streamedText);
+          throw new DegenerateOutputError(currentAttempt.model);
         }
 
         {
@@ -704,10 +771,19 @@ async function executeTurn(
           error,
           userId: turnMessage.author.userId,
         });
-        // Also catch a spend-limit 429 that surfaced as a THROWN error (not a
-        // stream error part) — same effect as onError: skip the rest of the
-        // HackClub rungs and go straight to DigitalOcean/Gemini.
-        if (currentAttempt.provider === 'hackclub') {
+        // Also catch a rate limit / spend limit that surfaced as a THROWN error
+        // (not a stream error part) — same effect as onError: write off the tier
+        // rather than walking the rest of it one doomed rung at a time.
+        if (
+          currentAttempt.provider === DIGITALOCEAN_PROVIDER &&
+          isRateLimited({
+            message: thrownErrorText(error),
+            status: errorStatus(error),
+          })
+        ) {
+          digitaloceanRateLimited = true;
+        }
+        if (currentAttempt.provider === HACKCLUB_PROVIDER) {
           if (SPEND_LIMIT_PATTERN.test(thrownErrorText(error))) {
             hackclubBudgetExhausted = true;
             spendLimitMessage ??= thrownErrorText(error);
@@ -724,11 +800,15 @@ async function executeTurn(
         const retryAttempt = attempt;
         // A turn that already streamed reply text normally must NOT fall back —
         // the next model would restate the answer and the user would read it
-        // twice. The one exception is a provider that died mid-task: kyto has
-        // been cut off mid-sentence, so silence is the worse outcome. The next
-        // model is told what was already sent (renderContinuation) and picks the
-        // work back up instead of starting over.
-        const canContinue = error instanceof StreamInterruptedError;
+        // twice. Two exceptions: a provider that died mid-task (kyto was cut off
+        // mid-sentence, so silence is the worse outcome), and a model that
+        // degenerated into a loop (what it "said" is not an answer at all). In
+        // both, the next model is told what was already sent
+        // (renderContinuation, scrubbed of the loop) and picks the work back up
+        // instead of starting over.
+        const canContinue =
+          error instanceof StreamInterruptedError ||
+          error instanceof DegenerateOutputError;
         if (controller.signal.aborted || (producedText && !canContinue)) {
           throw error;
         }

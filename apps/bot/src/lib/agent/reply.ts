@@ -119,6 +119,13 @@ export function createReply({
       buffer += text;
       return drain({ force: false, thread });
     },
+    // Throw away everything still buffered, i.e. everything not yet posted. Used
+    // when an attempt degenerates into a token loop: the loop is caught within a
+    // few short lines, which is well under the flush thresholds above, so this is
+    // what actually keeps it out of the thread.
+    drop(): void {
+      buffer = '';
+    },
     flush({ thread }: { thread: Thread }): Promise<void> {
       return drain({ force: true, thread });
     },

@@ -32,6 +32,28 @@ export class StreamInterruptedError extends Error {
 }
 
 /**
+ * The model fell into a token loop: it stopped answering and started repeating
+ * itself (the same line, or the same phrase, over and over). Formally this is
+ * reply text, so the old loop counted it as a handled turn and posted it —
+ * `nvidia/nemotron-3-ultra-550b-a55b` streamed "@devansh" several hundred times
+ * into a public thread that way.
+ *
+ * Repetition is not an answer. The guard raises this as soon as it trips, which
+ * aborts the attempt, keeps the loop out of Slack, and falls back to another
+ * model — one of the two cases (with StreamInterruptedError) where a turn that
+ * already streamed text is still allowed to fall back.
+ */
+export class DegenerateOutputError extends Error {
+  constructor(model: string, options?: { cause?: unknown }) {
+    super(
+      `Model ${model} started repeating itself instead of answering.`,
+      options
+    );
+    this.name = 'DegenerateOutputError';
+  }
+}
+
+/**
  * The acting user brought their own model key(s), every one of them failed, and
  * they did NOT opt into spending the shared service budget as a backstop. Only
  * they can fix it, so the message points at their App Home tab rather than
