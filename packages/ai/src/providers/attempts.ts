@@ -35,27 +35,23 @@ export interface ModelAttempt {
 }
 
 /**
- * The primary model for the main query: MiniMax M2.5, pinned, served by
+ * The primary model for the main query: Kimi K2.6, pinned, served by
  * DigitalOcean through OpenRouter BYOK — NOT HackClub. That means the main
  * query bills the owner's DigitalOcean account (its own quota) and never touches
  * HackClub's shared daily $3 cap, which is now only reached on fallback.
+ * (Owner's call, replacing minimax-m2.5.)
  *
  * A single pinned model (this replaced `openrouter/auto`, whose per-request
  * re-routing produced empty completions and long fallback cascades), so 1-hour
- * prompt caching sticks across a thread's turns. On failure the agent walks
- * LEADERBOARD_FALLBACK; minimax-m2.5 is also a rung there, deduped via
+ * prompt caching sticks across a thread's turns. On failure the agent walks the
+ * fallback queue; this model is also a DigitalOcean rung there, deduped via
  * `failedKeys` so it isn't retried.
  */
-export const PRIMARY_MODEL = 'minimax-m2.5';
+export const PRIMARY_MODEL = 'kimi-k2.6';
 
 // Used as the primary ONLY when no OpenRouter BYOK key is configured, so the
 // agent always has a first attempt to route to.
 const HACKCLUB_PRIMARY_FALLBACK_MODEL = 'z-ai/glm-5.2';
-
-// Auto-router cost/quality bias: 0 = pure quality, 7 = default, 10 = cheapest.
-// Retained for reference only — the auto-router path was removed (see
-// ROUTER_MODEL above); nothing injects this anymore.
-export const COST_QUALITY_TRADEOFF = 7;
 
 // Cap output tokens on HackClub requests. OpenRouter enforces the daily spend
 // limit PESSIMISTICALLY: with no `max_tokens` it assumes the model could emit
@@ -63,30 +59,6 @@ export const COST_QUALITY_TRADEOFF = 7;
 // projection crosses the cap even with budget still free. Sized to observed
 // step outputs (<6k tokens). Raise if large single-step file writes truncate.
 export const MAX_OUTPUT_TOKENS = 8000;
-
-// Restrict the auto-router to these EXACT model ids (owner-chosen allowlist).
-// Passed as the auto-router plugin's `allowed_models` field (NOT
-// `model_patterns` — silently ignored). Exact slugs, not globs, so trimmed
-// variants (-nano/-mini/-flash-lite/-fast) and claude-fable-5 (~2x opus-4.8
-// cost) can never be routed to.
-export const ALLOWED_MODELS = [
-  'anthropic/claude-opus-4.8',
-  'anthropic/claude-opus-4.7',
-  'anthropic/claude-opus-4.6',
-  'anthropic/claude-sonnet-5',
-  'anthropic/claude-sonnet-4.6',
-  'openai/gpt-5.5',
-  'openai/gpt-5.4',
-  'z-ai/glm-5.2',
-  'z-ai/glm-5.1',
-  // `google/gemini-3.5-flash` previously had a 100% empty-response rate in
-  // production; re-added at the owner's request — re-remove if it recurs.
-  // `google/gemini-3.1-pro-preview` was dropped (owner: too expensive).
-  'google/gemini-3.5-flash',
-  // Cheap tier: lets auto route simple/casual turns to a low-cost model
-  // instead of always landing on the premium tier (the main cost blowup).
-  'google/gemini-3.1-flash-lite',
-];
 
 /** Build a HackClub attempt for any model id. */
 export function catalogAttempt(model: string): ModelAttempt {
@@ -197,34 +169,41 @@ export const subagentAttempt: ModelAttempt | undefined = subagentAttempts[0];
 // the proxy is NOT the bar. (See also the repetition guard in the agent loop,
 // which now aborts an attempt that starts looping rather than posting it.)
 //
+// So the list is EXACTLY the owner's arena top 19 — nothing gets to be a rung
+// just for existing on the proxy. When the owner hands over a new leaderboard,
+// REPLACE this list with it; do not merge the old tail back in. That tail is
+// where the junk lives (the previous one trailed off into grok-build-0.1,
+// minimax-m2.7 and nemotron, all now gone).
+//
 // The baishui proxy tail (jam06452.uk) stays disabled — its /models endpoint
 // answers but every completion fails ("upstream authentication failed" / "all
 // provider keys rate-limited or in cooldown"). Re-add rungs here only after
 // verifying a real completion succeeds.
+//
+// The arena ranks a model + a REASONING EFFORT ("High", "xHigh", "Thinking"),
+// but the proxy only has one slug per model — GPT 5.5 holds ranks 2/4/8/10 and
+// Opus 4.8 holds 3 and 14. Each model therefore appears ONCE here, at its BEST
+// rank. Every slug below was verified against ai.hackclub.com/proxy/v1/models.
 export const LEADERBOARD_FALLBACK: ModelAttempt[] = [
-  catalogAttempt('anthropic/claude-opus-4.8'),
-  catalogAttempt('openai/gpt-5.5'),
-  catalogAttempt('anthropic/claude-opus-4.7'),
-  catalogAttempt('anthropic/claude-opus-4.6'),
-  catalogAttempt('openai/gpt-5.4'),
-  catalogAttempt('z-ai/glm-5.2'),
-  catalogAttempt('anthropic/claude-sonnet-4.6'),
-  catalogAttempt('z-ai/glm-5.1'),
-  // The rest of the owner's leaderboard, appended in rank order (verified
-  // reachable via ai.hackclub.com/proxy/v1/models). `google/gemini-3.5-flash`
-  // is HackClub-only (see GEMINI_MODELS note); re-remove if the
-  // empty-response failure recurs.
-  catalogAttempt('moonshotai/kimi-k2.7-code'),
-  catalogAttempt('google/gemini-3.5-flash'),
-  catalogAttempt('deepseek/deepseek-v4-flash'),
-  catalogAttempt('moonshotai/kimi-k2.6'),
-  catalogAttempt('minimax/minimax-m3'),
-  catalogAttempt('deepseek/deepseek-v4-pro'),
-  catalogAttempt('qwen/qwen3.6-plus'),
-  catalogAttempt('x-ai/grok-4.3'),
-  catalogAttempt('x-ai/grok-build-0.1'),
-  catalogAttempt('google/gemini-3-flash-preview'),
-  catalogAttempt('minimax/minimax-m2.7'),
+  // Owner's arena top 19, in rank order. Rank #1 (Claude Fable 5) is reachable
+  // as `anthropic/claude-fable-5` and deliberately skipped — see above.
+  catalogAttempt('openai/gpt-5.6-sol'), // 2
+  catalogAttempt('anthropic/claude-opus-4.8'), // 3
+  catalogAttempt('openai/gpt-5.5'), // 4
+  catalogAttempt('anthropic/claude-sonnet-5'), // 5
+  catalogAttempt('anthropic/claude-opus-4.7'), // 6
+  catalogAttempt('z-ai/glm-5.2'), // 9
+  catalogAttempt('anthropic/claude-opus-4.6'), // 11
+  catalogAttempt('openai/gpt-5.4'), // 12
+  // Rank 13 (Grok 4.5) is listed on the proxy but NOT usable from this host:
+  // xAI hard-403s it, `permission-denied: The model grok-4.5 is not available
+  // in your region`. It would burn an attempt on every fallback, so it is not a
+  // rung. Re-add if the region block ever lifts (verify with a real completion).
+  catalogAttempt('anthropic/claude-sonnet-4.6'), // 15
+  catalogAttempt('z-ai/glm-5.1'), // 16
+  catalogAttempt('qwen/qwen3.7-plus'), // 17
+  catalogAttempt('google/gemini-3.1-pro-preview'), // 18
+  catalogAttempt('moonshotai/kimi-k2.7-code'), // 19
   // DigitalOcean via OpenRouter BYOK — strong, tool-capable models on a
   // SEPARATE quota (billed to the owner's DigitalOcean account, not HackClub).
   // buildFallbackQueue walks these BEFORE the HackClub rungs above (free, and

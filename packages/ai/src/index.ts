@@ -6,7 +6,6 @@ export {
 } from './prompts';
 export { type Persona, personas } from './prompts/presets';
 export {
-  ALLOWED_MODELS,
   catalogAttempt,
   DIGITALOCEAN_PROVIDER,
   digitaloceanAttempts,
