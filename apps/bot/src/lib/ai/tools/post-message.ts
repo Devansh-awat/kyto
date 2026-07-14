@@ -11,7 +11,10 @@ import { requestPostConfirmation } from '@/lib/confirm-post/request';
 import { resolveIdentity } from '@/lib/identity';
 import { toRawSlackChannelId } from '@/lib/slack/ids';
 
-type PostTarget = { type: 'thread' | 'channel' | 'user'; id: string };
+interface PostTarget {
+  id: string;
+  type: 'thread' | 'channel' | 'user';
+}
 
 /**
  * Actually deliver a post. Shared by the immediate (same-channel) path and by
@@ -82,11 +85,13 @@ export function postMessageTool({
   authorUserId,
   bot,
   currentThreadId,
+  extendAttemptDeadline,
   isOwner,
 }: {
   authorUserId: string;
   bot: Chat;
   currentThreadId: string;
+  extendAttemptDeadline?: (extraMs: number) => void;
   isOwner: boolean;
 }) {
   const currentChannel = rawChannelOf(currentThreadId);
@@ -113,7 +118,10 @@ export function postMessageTool({
         .enum(['thread', 'channel', 'user'])
         .describe('Target kind: thread, channel, or user.'),
     }),
-    execute: async ({ blocks: rawBlocks, id, message, type }) => {
+    execute: async (
+      { blocks: rawBlocks, id, message, type },
+      { abortSignal }
+    ) => {
       const target = type === 'user' ? undefined : rawChannelOf(id);
       if (!isOwner) {
         if (type === 'user') {
@@ -158,6 +166,8 @@ export function postMessageTool({
         const where =
           type === 'user' ? `a DM to <@${id}>` : `<#${target ?? id}>`;
         return await requestPostConfirmation({
+          abortSignal,
+          extendAttemptDeadline,
           ownerUserId: authorUserId,
           post: {
             blocks,

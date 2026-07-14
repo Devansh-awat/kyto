@@ -2,7 +2,18 @@ import type { ThreadHandle } from '@/harness';
 import { mrkdwn, plainText } from '@/harness/views';
 import logger from '@/lib/logger';
 import { toLogError } from '@/lib/utils/error';
-import { type PendingPost, stashPendingPost } from './pending';
+import {
+  CONFIRM_WAIT_MS,
+  type ConfirmOutcome,
+  discardPendingPost,
+  type PendingPost,
+  stashPendingPost,
+} from './pending';
+
+/** What the tool hands back to the model once the owner has (or hasn't) acted. */
+export type ConfirmResult =
+  | { success: true; summary: string }
+  | { success: false; denied?: boolean; error?: string; summary?: string };
 
 export const CONFIRM_SEND_ACTION = 'confirm_post_send';
 export const CONFIRM_CANCEL_ACTION = 'confirm_post_cancel';
@@ -54,31 +65,92 @@ function confirmBlocks(id: string, post: PendingPost): unknown[] {
   ];
 }
 
+function outcomeToResult(
+  outcome: ConfirmOutcome | null,
+  post: PendingPost,
+  aborted: boolean
+): ConfirmResult {
+  if (outcome?.decision === 'confirmed') {
+    return outcome.ok
+      ? { success: true, summary: outcome.detail }
+      : { error: outcome.detail, success: false };
+  }
+  if (outcome?.decision === 'denied') {
+    return {
+      denied: true,
+      success: false,
+      summary: `The owner denied this — I did NOT ${post.summary}. Do not retry it; acknowledge that they declined.`,
+    };
+  }
+  return {
+    success: false,
+    summary: aborted
+      ? `Interrupted before the owner responded — I did NOT ${post.summary}.`
+      : `The owner did not respond within ${Math.round(
+          CONFIRM_WAIT_MS / 60_000
+        )} minutes — I did NOT ${post.summary}. You can ask them again.`,
+  };
+}
+
 /**
- * Hold an outward-facing post (cross-channel, or as the owner) and show the
- * owner an ephemeral confirm button in the current thread. Nothing is sent
- * until they click. Returns the string the tool hands back to the model so it
- * tells the user to look for the confirmation instead of claiming it posted.
+ * Hold an outward-facing post (cross-channel, or as the owner), show the owner
+ * an ephemeral Confirm/Cancel button in the current thread, and BLOCK until
+ * they choose (or the wait times out / the turn aborts). Returns the real
+ * outcome so the model can say it sent it, that the owner declined, or that
+ * nobody answered — never a premature "waiting…". Nothing is sent here; the
+ * button handler performs the send and reports back through the pending row.
  */
 export async function requestPostConfirmation({
+  abortSignal,
+  extendAttemptDeadline,
   ownerUserId,
   post,
   thread,
 }: {
+  abortSignal?: AbortSignal;
+  extendAttemptDeadline?: (extraMs: number) => void;
   ownerUserId: string;
   post: PendingPost;
   thread: ThreadHandle;
-}): Promise<{ awaitingConfirmation: true; summary: string }> {
-  const id = stashPendingPost(post);
+}): Promise<ConfirmResult> {
+  const { id, wait } = stashPendingPost(post);
   await thread.postEphemeral(
     ownerUserId,
     `Confirm before I send: ${post.summary}`,
     { blocks: confirmBlocks(id, post), fallbackToDM: true }
   );
-  return {
-    awaitingConfirmation: true,
-    summary: `Waiting for the owner to confirm: ${post.summary}. I posted a Confirm/Cancel button that only they can see — nothing is sent until they click Confirm.`,
-  };
+
+  // Tell the attempt watchdog this deliberate pause isn't a stall (same as the
+  // `wait` tool), so a slow decision doesn't get the turn killed mid-wait.
+  extendAttemptDeadline?.(CONFIRM_WAIT_MS + 30_000);
+
+  const outcome = await new Promise<ConfirmOutcome | null>((resolve) => {
+    let done = false;
+    const finish = (value: ConfirmOutcome | null) => {
+      if (done) {
+        return;
+      }
+      done = true;
+      resolve(value);
+    };
+    const timer = setTimeout(() => {
+      discardPendingPost(id);
+      finish(null);
+    }, CONFIRM_WAIT_MS);
+    const onAbort = () => {
+      clearTimeout(timer);
+      discardPendingPost(id);
+      finish(null);
+    };
+    abortSignal?.addEventListener('abort', onAbort, { once: true });
+    wait.then((value) => {
+      clearTimeout(timer);
+      abortSignal?.removeEventListener('abort', onAbort);
+      finish(value);
+    });
+  });
+
+  return outcomeToResult(outcome, post, Boolean(abortSignal?.aborted));
 }
 
 const interactionSchema = { response_url: '' };

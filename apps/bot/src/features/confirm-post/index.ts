@@ -28,56 +28,60 @@ bot.onAction(CONFIRM_SEND_ACTION, async (event) => {
     await respondToInteraction(event.raw, 'Only the owner can confirm this.');
     return;
   }
-  const id = event.value;
-  const post = id ? takePendingPost(id) : null;
-  if (!post) {
+  const claimed = event.value ? takePendingPost(event.value) : null;
+  if (!claimed) {
     await respondToInteraction(
       event.raw,
       'That confirmation expired or was already used.'
     );
     return;
   }
+  const { post, settle } = claimed;
   try {
-    let summary: string;
+    let result: { success: boolean; summary?: string; error?: string };
     if (post.kind === 'postMessage') {
       await executePostMessage(bot, {
         blocks: post.blocks,
         body: post.body,
         target: post.target,
       });
-      summary = `:white_check_mark: Sent — ${post.summary}.`;
+      result = { success: true, summary: `Sent — ${post.summary}.` };
     } else if (post.kind === 'sendAsUser') {
-      const result = await executeSendAsUser(post);
-      if (!result.success) {
-        await respondToInteraction(event.raw, `:x: ${result.error}`);
-        return;
-      }
-      summary = `:white_check_mark: ${result.summary}`;
+      result = await executeSendAsUser(post);
     } else {
-      const result = await executeEditAsUser(post);
-      if (!result.success) {
-        await respondToInteraction(event.raw, `:x: ${result.error}`);
-        return;
-      }
-      summary = `:white_check_mark: ${result.summary}`;
+      result = await executeEditAsUser(post);
     }
+    const detail = result.success
+      ? (result.summary ?? 'Sent.')
+      : (result.error ?? 'Send failed.');
+    // Unblock the waiting tool with the real result, so the model reports the
+    // truth (sent / failed) instead of a guess.
+    settle({ decision: 'confirmed', detail, ok: result.success });
     logger.info(
-      { kind: post.kind, userId: event.user.userId },
-      '[confirm-post] owner confirmed and sent'
+      { kind: post.kind, ok: result.success, userId: event.user.userId },
+      '[confirm-post] owner confirmed'
     );
-    await respondToInteraction(event.raw, summary);
-  } catch (error) {
-    logger.warn(toLogError(error), '[confirm-post] send failed');
     await respondToInteraction(
       event.raw,
-      `:x: Failed to send: ${errorMessage(error)}`
+      result.success ? `:white_check_mark: ${detail}` : `:x: ${detail}`
     );
+  } catch (error) {
+    const message = errorMessage(error);
+    settle({ decision: 'confirmed', detail: message, ok: false });
+    logger.warn(toLogError(error), '[confirm-post] send failed');
+    await respondToInteraction(event.raw, `:x: Failed to send: ${message}`);
   }
 });
 
 bot.onAction(CONFIRM_CANCEL_ACTION, async (event) => {
-  if (event.value) {
-    takePendingPost(event.value);
+  if (!isOwner(event)) {
+    await respondToInteraction(event.raw, 'Only the owner can act on this.');
+    return;
   }
-  await respondToInteraction(event.raw, ':heavy_multiplication_x: Cancelled.');
+  const claimed = event.value ? takePendingPost(event.value) : null;
+  claimed?.settle({ decision: 'denied' });
+  await respondToInteraction(
+    event.raw,
+    ":heavy_multiplication_x: Cancelled — I won't send it."
+  );
 });

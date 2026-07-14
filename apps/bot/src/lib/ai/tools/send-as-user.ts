@@ -122,9 +122,11 @@ export async function executeEditAsUser({
  */
 export function sendAsUserTool({
   authorUserId,
+  extendAttemptDeadline,
   thread,
 }: {
   authorUserId: string;
+  extendAttemptDeadline?: (extraMs: number) => void;
   thread: Thread;
 }) {
   return tool({
@@ -144,7 +146,7 @@ export function sendAsUserTool({
           'Target Slack channel id (e.g. C0123ABC) to post into as a top-level message. Defaults to the current thread.'
         ),
     }),
-    execute: async ({ text, channelId }) => {
+    execute: async ({ text, channelId }, { abortSignal }) => {
       try {
         const gate = checkOwner(authorUserId);
         if (!gate.ok) {
@@ -162,6 +164,8 @@ export function sendAsUserTool({
         );
         const targetChannel = channelId ?? currentChannelId;
         return await requestPostConfirmation({
+          abortSignal,
+          extendAttemptDeadline,
           ownerUserId: authorUserId,
           post: {
             crossChannel,
@@ -191,9 +195,11 @@ export function sendAsUserTool({
  */
 export function editAsUserTool({
   authorUserId,
+  extendAttemptDeadline,
   thread,
 }: {
   authorUserId: string;
+  extendAttemptDeadline?: (extraMs: number) => void;
   thread: Thread;
 }) {
   return tool({
@@ -219,7 +225,7 @@ export function editAsUserTool({
           'Slack channel id (e.g. C0123ABC) the message lives in. Defaults to the current channel.'
         ),
     }),
-    execute: async ({ messageTs, text, channelId }) => {
+    execute: async ({ messageTs, text, channelId }, { abortSignal }) => {
       try {
         const gate = checkOwner(authorUserId);
         if (!gate.ok) {
@@ -234,6 +240,8 @@ export function editAsUserTool({
         }
         const targetChannel = channelId ?? currentChannelId;
         return await requestPostConfirmation({
+          abortSignal,
+          extendAttemptDeadline,
           ownerUserId: authorUserId,
           post: {
             kind: 'editAsUser',

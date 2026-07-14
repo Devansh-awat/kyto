@@ -123,6 +123,7 @@ export async function buildTools({
       authorUserId,
       bot,
       currentThreadId: thread.id,
+      extendAttemptDeadline,
       isOwner,
     }),
     getFile: getFileTool({ getSandboxContext }),
@@ -327,11 +328,19 @@ export async function buildTools({
       ? {
           sendAsUser: {
             summary: 'send a Slack message AS the owner',
-            tool: sendAsUserTool({ authorUserId, thread }),
+            tool: sendAsUserTool({
+              authorUserId,
+              extendAttemptDeadline,
+              thread,
+            }),
           },
           editAsUser: {
             summary: 'edit one of the owner’s Slack messages',
-            tool: editAsUserTool({ authorUserId, thread }),
+            tool: editAsUserTool({
+              authorUserId,
+              extendAttemptDeadline,
+              thread,
+            }),
           },
         }
       : {}),
