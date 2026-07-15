@@ -3,6 +3,7 @@ import {
   GEMINI_PROVIDER,
   HACKCLUB_PROVIDER,
   LEADERBOARD_FALLBACK,
+  MAX_STEPS,
   type ModelAttempt,
   PRIMARY_ATTEMPT,
   type ResolvedModelHolder,
@@ -213,6 +214,9 @@ async function executeTurn(
   };
   let closeTools: (() => Promise<void>) | undefined;
   let activeAttempt: ModelAttempt | undefined;
+  // Agentic steps the winning attempt ran, surfaced in the terminal turn log so
+  // a turn that ended near the step ceiling is visible without a Slack transcript.
+  let handledSteps: number | undefined;
   // Every attempt that failed this turn, so the terminal log line explains the
   // whole fallback walk (which models were tried, and why each one died).
   const attempts: AttemptFailure[] = [];
@@ -259,6 +263,7 @@ async function executeTurn(
         durationMs: Date.now() - turnStart,
         failedAttempts: failedAttemptsLog(attempts),
         outputTokens: usageFooter?.outputTokens,
+        steps: handledSteps,
         threadId,
       },
       '[agent] turn complete'
@@ -665,6 +670,27 @@ async function executeTurn(
           yield chunk;
         }
 
+        // The attempt ran right up to the agentic-step ceiling with a tool call
+        // still pending — the job was cut off mid-work, not finished. This is one
+        // of the "kyto stopped in the middle" shapes, so name it explicitly in
+        // the journal instead of leaving a bare `tool-calls` finish reason that
+        // reads like a normal step boundary. (Raise AGENT_MAX_STEPS if genuine
+        // work keeps hitting it.)
+        if (
+          (holder.calls ?? 0) >= MAX_STEPS &&
+          attemptFinishReason === 'tool-calls'
+        ) {
+          logger.warn(
+            {
+              attempt: attemptLog(currentAttempt),
+              maxSteps: MAX_STEPS,
+              steps: holder.calls,
+              threadId,
+            },
+            '[agent] attempt hit the step ceiling with work still pending'
+          );
+        }
+
         if (degenerated) {
           // Drop whatever the loop already pushed into the reply buffer but that
           // Slack has not seen yet, and scrub it out of the text a continuation
@@ -741,6 +767,7 @@ async function executeTurn(
               : `Model ${currentAttempt.model} returned an empty response.`
           );
         }
+        handledSteps = holder.calls;
         logger.info(
           {
             attempt: attemptLog(currentAttempt),
