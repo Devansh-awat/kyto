@@ -16,6 +16,7 @@ import {
   canvasWriteTool,
 } from './tools/canvas';
 import { createChannelTool, setChannelTopicTool } from './tools/channels';
+import { codeModeTool } from './tools/code-mode';
 import {
   deploySiteTool,
   listSitesTool,
@@ -32,6 +33,11 @@ import { ghTool } from './tools/gh';
 import { joinThreadTool } from './tools/join-thread';
 import { leaveThreadTool } from './tools/leave-thread';
 import { listThreadsTool } from './tools/list-threads';
+import {
+  editMemoryTool,
+  fetchMemoryTool,
+  saveMemoryTool,
+} from './tools/memory';
 import { mermaidTool } from './tools/mermaid';
 import {
   bookmarkLinkTool,
@@ -110,6 +116,7 @@ export async function buildTools({
 
   const core: ToolSet = {
     bash: bashTool({ getSandboxContext }),
+    codeMode: codeModeTool({ getSandboxContext }),
     readFile: readFileTool({ getSandboxContext }),
     writeFile: writeFileTool({ getSandboxContext }),
     editFile: editFileTool({ getSandboxContext }),
@@ -143,6 +150,9 @@ export async function buildTools({
     listSites: listSitesTool(),
     removeSite: removeSiteTool({ isOwner, userId: authorUserId }),
     skip: skipTool({ threadId: thread.id }),
+    saveMemory: saveMemoryTool({ authorUserId }),
+    fetchMemory: fetchMemoryTool(),
+    editMemory: editMemoryTool(),
     listThreads: listThreadsTool({ currentThreadId: thread.id }),
     readConversationHistory: readConversationHistoryTool({
       currentThreadId: thread.id,
