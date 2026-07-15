@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { ResolvedIdentity } from '@/lib/identity';
 
 // A post that is about to go out but is waiting for the OWNER to physically
 // click "Confirm & send" or "Cancel" in an ephemeral message. Cross-channel
@@ -18,6 +19,10 @@ export type PendingPost =
       target: { type: 'thread' | 'channel' | 'user'; id: string };
       body: string;
       blocks?: unknown[];
+      // Per-post identity override (custom name/icon, or a mirrored person/bot).
+      // Carried through the confirm gate so the sent post wears the same face the
+      // owner saw described in the confirmation.
+      identity?: ResolvedIdentity;
       summary: string;
     }
   | {

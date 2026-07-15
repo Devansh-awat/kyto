@@ -43,6 +43,7 @@ bot.onAction(CONFIRM_SEND_ACTION, async (event) => {
       await executePostMessage(bot, {
         blocks: post.blocks,
         body: post.body,
+        identity: post.identity,
         target: post.target,
       });
       result = { success: true, summary: `Sent — ${post.summary}.` };

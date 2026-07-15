@@ -8,7 +8,8 @@ import {
 } from '@/harness';
 import { slack } from '@/lib/chat';
 import { requestPostConfirmation } from '@/lib/confirm-post/request';
-import { resolveIdentity } from '@/lib/identity';
+import { type ResolvedIdentity, resolveIdentity } from '@/lib/identity';
+import { resolvePostIdentity } from '@/lib/post-identity';
 import { toRawSlackChannelId } from '@/lib/slack/ids';
 
 interface PostTarget {
@@ -27,9 +28,17 @@ export async function executePostMessage(
     target,
     body,
     blocks,
-  }: { target: PostTarget; body: string; blocks?: unknown[] }
+    identity: override,
+  }: {
+    target: PostTarget;
+    body: string;
+    blocks?: unknown[];
+    identity?: ResolvedIdentity;
+  }
 ): Promise<{ messageId: string; threadId: string }> {
-  const identity = await resolveIdentity('normal');
+  // A per-post override (custom name/icon, or a person/bot to mirror) replaces
+  // kyto's configured identity; without one, the normal profile applies.
+  const identity = override ?? (await resolveIdentity('normal'));
   const content: PostContent = {
     ...(blocks ? { blocks, fallbackText: body } : { markdown: body }),
     iconEmoji: identity.iconEmoji,
@@ -99,7 +108,11 @@ export function postMessageTool({
     ? 'Post to another target. Type must be thread, channel, or user.'
     : 'You may ONLY post into the current channel/thread (type thread or channel, the same channel you were mentioned in) — posting to a different channel or DMing another user is not allowed.';
   return tool({
-    description: `Post a message. ${permission} Body is markdown; pass \`blocks\` to send Block Kit instead (the markdown body is then the notification fallback text). Broadcast pings (<!channel>/<!here>/<!everyone>) NEVER survive a post into a different channel or a DM — they are stripped to plain text there even for the owner, who can only broadcast in the channel kyto was invoked in.`,
+    description: `Post a message. ${permission} Body is markdown; pass \`blocks\` to send Block Kit instead (the markdown body is then the notification fallback text). Broadcast pings (<!channel>/<!here>/<!everyone>) NEVER survive a post into a different channel or a DM — they are stripped to plain text there even for the owner, who can only broadcast in the channel kyto was invoked in.${
+      isOwner
+        ? ' You can post under a custom identity: `asName` + `asIcon` for a fully custom display name and avatar, or `asUser` (a user/bot id or @mention) to post looking like that person/bot (their name + avatar). Slack still marks it as an app.'
+        : ''
+    }`,
     inputSchema: z.object({
       blocks: z
         .string()
@@ -117,9 +130,27 @@ export function postMessageTool({
       type: z
         .enum(['thread', 'channel', 'user'])
         .describe('Target kind: thread, channel, or user.'),
+      asName: z
+        .string()
+        .optional()
+        .describe(
+          "Owner only. Custom display name to post under (overrides kyto's name and any asUser name)."
+        ),
+      asIcon: z
+        .string()
+        .optional()
+        .describe(
+          'Owner only. Avatar for the post: a :emoji: code or an https image URL. Overrides any asUser avatar.'
+        ),
+      asUser: z
+        .string()
+        .optional()
+        .describe(
+          "Owner only. A user/bot id or @mention to mirror — the post wears that person/bot's display name and avatar. A plain name (not an id) is used as the display name only."
+        ),
     }),
     execute: async (
-      { blocks: rawBlocks, id, message, type },
+      { blocks: rawBlocks, id, message, type, asName, asIcon, asUser },
       { abortSignal }
     ) => {
       const target = type === 'user' ? undefined : rawChannelOf(id);
@@ -156,6 +187,14 @@ export function postMessageTool({
           : neutralizeBroadcastDeep(parsed.blocks);
       }
 
+      // Owner-only: wear a custom name/icon or mirror a person/bot. A non-owner
+      // (who can only post same-channel) must not be able to post under someone
+      // else's name — that is the impersonation vector. Overrides are ignored
+      // for them; kyto's normal identity applies.
+      const identity = isOwner
+        ? await resolvePostIdentity({ asIcon, asName, asUser })
+        : undefined;
+
       // A post that leaves the current channel (a different channel, or a DM to
       // someone) is only reachable by the owner, and now never fires inline: it
       // waits for the owner to click a confirm button. This is the human-click
@@ -172,9 +211,10 @@ export function postMessageTool({
           post: {
             blocks,
             body,
+            identity,
             kind: 'postMessage',
             requestedBy: authorUserId,
-            summary: `post to ${where}${blocks ? ' (Block Kit)' : ''}`,
+            summary: `post to ${where}${blocks ? ' (Block Kit)' : ''}${identity?.username ? ` as "${identity.username}"` : ''}`,
             target: { id, type },
           },
           thread: bot.thread(currentThreadId),
@@ -184,6 +224,7 @@ export function postMessageTool({
       return await executePostMessage(bot, {
         blocks,
         body,
+        identity,
         target: { id, type },
       });
     },
