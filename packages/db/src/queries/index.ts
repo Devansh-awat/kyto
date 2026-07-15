@@ -1,6 +1,7 @@
 export * from './customizations';
 export * from './identity';
 export * from './mcp';
+export * from './memories';
 export * from './model-credentials';
 export * from './reminders';
 export * from './sandbox';
