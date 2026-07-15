@@ -31,18 +31,17 @@ export function contextPrompt(hints: RequestHints): string {
   return `<context>\n${lines.join('\n')}\n</context>${memoriesBlock(hints)}`;
 }
 
-// The workspace memory index: every saved memory's title + summary. kyto reads
-// this to know what durable knowledge already exists, then calls fetchMemory to
-// pull the full body of one that looks relevant to the current task. Saving is
-// via saveMemory (after solving something big/non-obvious); editing via
-// editMemory. Memories are shared across everyone and can never be deleted.
+// The workspace memory index: ONLY the title of each saved memory (kept cheap —
+// no bodies or summaries ride in every prompt). kyto reads the titles to know
+// what durable knowledge exists, then calls fetchMemory("<title>") to pull the
+// full content of one that looks relevant. Saving is via saveMemory (after
+// solving something big/non-obvious); editing via editMemory. Memories are
+// shared across everyone and can never be deleted.
 function memoriesBlock(hints: RequestHints): string {
   const memories = hints.memories ?? [];
   if (memories.length === 0) {
     return '';
   }
-  const list = memories
-    .map((memory) => `- ${memory.title} — ${memory.summary}`)
-    .join('\n');
-  return `\n\n<memories>\nDurable notes you (or a past thread) saved. If one is relevant to the task, read it with fetchMemory("<title>"); update it with editMemory. Save a new one with saveMemory after you work out something big or non-obvious that a future thread would want. Memories can't be deleted.\n${list}\n</memories>`;
+  const list = memories.map((memory) => `- ${memory.title}`).join('\n');
+  return `\n\n<memories>\nDurable notes you (or a past thread) saved. These are just the TITLES — if one looks relevant to the task, read its full content with fetchMemory("<title>"), then update it with editMemory if needed. Save a new one with saveMemory after you work out something big or non-obvious that a future thread would want. Memories can't be deleted.\n${list}\n</memories>`;
 }
