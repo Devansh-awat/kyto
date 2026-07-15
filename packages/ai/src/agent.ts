@@ -13,8 +13,13 @@ import {
   type ModelAttempt,
 } from './providers/attempts';
 
-// Hard ceiling on agentic steps within one attempt (model → tools → model …).
-const MAX_STEPS = 60;
+// Ceiling on agentic steps within one attempt (model → tools → model …).
+// Effectively "no limit" for real work: a hard 60 used to strand long jobs
+// (screenshotting 50 captcha frames, a big scripted scrape) mid-solve, and the
+// stop looked like "kyto went quiet in the middle". The real bound on a runaway
+// attempt is the wall-clock watchdog (AGENT_ATTEMPT_TIMEOUT_MS) plus the
+// degenerate-loop guard, not this counter — so it's set high and overridable.
+export const MAX_STEPS = Number(process.env.AGENT_MAX_STEPS) || 1000;
 
 /**
  * Filled in as the attempt runs: `model` is the concrete slug OpenRouter's

@@ -1,4 +1,4 @@
-export { type ResolvedModelHolder, streamAttempt } from './agent';
+export { MAX_STEPS, type ResolvedModelHolder, streamAttempt } from './agent';
 export {
   type RequestHints,
   subagentSystemPrompt,
