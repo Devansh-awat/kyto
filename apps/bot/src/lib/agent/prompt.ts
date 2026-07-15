@@ -47,7 +47,9 @@ export async function buildPrompt(
   // What kyto was THINKING on this thread's last few turns. Slack replayed above
   // only records what it said, so without this each turn re-derives the reasoning
   // (and the dead ends) of the one before it.
-  const thinking = thread ? renderThinking(recallThinking(thread.id)) : '';
+  const thinking = thread
+    ? renderThinking(await recallThinking(thread.id))
+    : '';
 
   let history = '';
   if (thread) {

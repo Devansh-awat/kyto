@@ -1,5 +1,6 @@
 import { bot } from '@/bot';
 import { stopAllTurns } from '@/lib/agent';
+import { startThinkingReaper } from '@/lib/agent/thinking';
 import { buildAllowlist } from '@/lib/allowed-users';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
@@ -29,6 +30,8 @@ try {
   startReminderScheduler(bot);
   // Paused thread sandboxes keep costing storage; collect the idle ones.
   startSandboxReaper();
+  // Reap thread reasoning older than the retention window.
+  startThinkingReaper();
   const botProfile = slack.botUserId
     ? await slack.webClient.users
         .info({ user: slack.botUserId })

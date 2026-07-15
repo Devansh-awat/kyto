@@ -7,4 +7,5 @@ export * from './reminders';
 export * from './sandbox';
 export * from './sites';
 export * from './thread-sandboxes';
+export * from './thread-thinking';
 export * from './threads';

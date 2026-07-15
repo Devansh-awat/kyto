@@ -12,8 +12,11 @@ import { errorMessage } from '@/lib/utils/error';
 
 // A paused sandbox keeps its filesystem (and so its cost) indefinitely. Threads
 // go quiet forever, so anything untouched for this long is killed and forgotten;
-// the next turn in that thread just starts from a fresh sandbox.
-const SANDBOX_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+// the next turn in that thread just starts from a fresh sandbox. Held for ~a
+// month (the E2B plan allows long pauses) so a thread picked back up weeks later
+// still has its files; override with SANDBOX_TTL_DAYS.
+const SANDBOX_TTL_MS =
+  (Number(process.env.SANDBOX_TTL_DAYS) || 30) * 24 * 60 * 60 * 1000;
 const REAP_INTERVAL_MS = 60 * 60 * 1000;
 
 /**

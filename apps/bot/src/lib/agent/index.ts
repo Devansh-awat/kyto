@@ -781,7 +781,8 @@ async function executeTurn(
         // Leave this turn's train of thought behind for the next one. Only the
         // attempt that actually answered gets to: a failed attempt's reasoning
         // died with it, and feeding a spiral back in would only seed another.
-        rememberThinking({ blocks: attemptThinking, threadId });
+        // Persisted (best-effort) so it survives a restart.
+        await rememberThinking({ blocks: attemptThinking, threadId });
         // A BYOK key that just answered a whole turn is demonstrably valid.
         await recordByokOutcome({
           attempt: currentAttempt,

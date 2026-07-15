@@ -1,3 +1,11 @@
+import {
+  clearThreadThinking,
+  getThreadThinking,
+  pruneThreadThinking,
+  saveThreadThinking,
+} from '@repo/db/queries';
+import logger from '@/lib/logger';
+
 // Kyto's memory of a conversation is the Slack thread itself (buildPrompt
 // replays it). But Slack only records what was SAID — the reasoning that led to
 // it is rendered into the plan's "Thinking" cards and then gone. So every turn
@@ -5,18 +13,12 @@
 // slider positions" but not why, what it had already ruled out, or what it was
 // part-way through. It re-derived the same dead ends.
 //
-// This keeps the reasoning of a thread's last few turns, in memory only, and
-// buildPrompt feeds it back on the next turn.
-//
-// IN MEMORY ONLY, deliberately — never a DB table. Kyto's Slack Scraping
-// position is that it does live processing and does not store message contents,
-// and reasoning quotes message contents freely. Process lifetime is also the
-// honest lifetime for this: it's a train of thought, not a record.
-
-interface ThreadThinking {
-  turns: string[];
-  updatedAt: number;
-}
+// This keeps the reasoning of a thread's last few turns and buildPrompt feeds it
+// back on the next turn. PERSISTED to Postgres (thread_thinking) so it survives
+// a restart — the old in-memory buffer was wiped on every deploy, which is why a
+// thread picked back up after a restart lost its train of thought. Rows are
+// reaped after RETENTION_MS so this stays a recent train of thought, not a
+// permanent transcript.
 
 // How many past turns of reasoning a new turn is shown. Three keeps the thread's
 // recent train of thought without letting an old turn's plan crowd out the live
@@ -26,32 +28,22 @@ const MAX_TURNS = 3;
 // of tokens); the tail is what matters, since that is where the turn had
 // actually worked out what was going on. Cutting from the FRONT keeps it.
 const MAX_TURN_CHARS = 1500;
-// A thread nobody has touched in this long is dropped. Bounds the map, and a
-// stale train of thought is worse context than none.
-const TTL_MS = 12 * 60 * 60 * 1000;
-
-const threads = new Map<string, ThreadThinking>();
-
-function prune(now: number): void {
-  for (const [threadId, entry] of threads) {
-    if (now - entry.updatedAt > TTL_MS) {
-      threads.delete(threadId);
-    }
-  }
-}
+// How long a thread's stored reasoning stays usable and on disk (~a month).
+const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
  * Record one completed turn's reasoning. Called with the reasoning blocks of the
  * attempt that actually ANSWERED — a failed attempt's thinking is discarded with
  * the attempt, so a model that spiralled doesn't poison the next turn.
+ * Best-effort: a DB hiccup here must never fail the turn.
  */
-export function rememberThinking({
+export async function rememberThinking({
   blocks,
   threadId,
 }: {
   blocks: string[];
   threadId: string;
-}): void {
+}): Promise<void> {
   const text = blocks
     .map((block) => block.trim())
     .filter(Boolean)
@@ -59,27 +51,42 @@ export function rememberThinking({
   if (!text) {
     return;
   }
-  const now = Date.now();
-  prune(now);
-  const entry = threads.get(threadId) ?? { turns: [], updatedAt: now };
-  entry.turns.push(tail(text, MAX_TURN_CHARS));
-  entry.turns = entry.turns.slice(-MAX_TURNS);
-  entry.updatedAt = now;
-  threads.set(threadId, entry);
+  try {
+    const existing = await getThreadThinking(threadId, RETENTION_MS);
+    const turns = [...existing, tail(text, MAX_TURN_CHARS)].slice(-MAX_TURNS);
+    await saveThreadThinking(threadId, turns);
+  } catch (error) {
+    logger.warn({ err: error, threadId }, '[thinking] failed to persist');
+  }
 }
 
 /** The reasoning of this thread's last few turns, oldest first. */
-export function recallThinking(threadId: string): string[] {
-  const entry = threads.get(threadId);
-  if (!entry || Date.now() - entry.updatedAt > TTL_MS) {
-    return [];
-  }
-  return entry.turns;
+export async function recallThinking(threadId: string): Promise<string[]> {
+  return await getThreadThinking(threadId, RETENTION_MS).catch(() => []);
 }
 
 /** Forget a thread's train of thought (a new turn is starting from scratch). */
-export function forgetThinking(threadId: string): void {
-  threads.delete(threadId);
+export async function forgetThinking(threadId: string): Promise<void> {
+  await clearThreadThinking(threadId).catch(() => undefined);
+}
+
+// Reap reasoning older than the retention window, on startup and daily after.
+const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+async function pruneThinking(): Promise<void> {
+  await pruneThreadThinking(new Date(Date.now() - RETENTION_MS)).catch(
+    (error: unknown) => {
+      logger.warn({ err: error }, '[thinking] prune failed');
+    }
+  );
+}
+
+export function startThinkingReaper(): void {
+  const tick = (): void => {
+    pruneThinking().catch(() => undefined);
+  };
+  setInterval(tick, PRUNE_INTERVAL_MS);
+  tick();
 }
 
 /**
