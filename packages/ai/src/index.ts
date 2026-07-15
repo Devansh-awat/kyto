@@ -1,4 +1,9 @@
-export { MAX_STEPS, type ResolvedModelHolder, streamAttempt } from './agent';
+export {
+  type ImageInput,
+  MAX_STEPS,
+  type ResolvedModelHolder,
+  streamAttempt,
+} from './agent';
 export {
   type RequestHints,
   subagentSystemPrompt,

@@ -1,5 +1,6 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import {
+  type ModelMessage,
   stepCountIs,
   streamText,
   type ToolCallRepairFunction,
@@ -31,6 +32,30 @@ export interface ResolvedModelHolder {
   model?: string;
 }
 
+/**
+ * An image the model should SEE (not just be told about). Slack image
+ * attachments become these on the user turn; the viewImage tool feeds sandbox
+ * screenshots in mid-turn. The openai-compatible providers only render images
+ * that ride in a USER message — a tool RESULT image is JSON-stringified and lost
+ * — so both paths land as user-message file parts (see below).
+ */
+export interface ImageInput {
+  bytes: Uint8Array;
+  mediaType: string;
+  /** Sandbox path or filename, shown to the model as a label. */
+  path?: string;
+}
+
+// An image as an AI SDK file part. Bare Uint8Array data + an image media type is
+// converted to an OpenAI `image_url` by the openai-compatible provider.
+function imagePart(image: ImageInput) {
+  return {
+    data: image.bytes,
+    mediaType: image.mediaType,
+    type: 'file' as const,
+  };
+}
+
 const MODEL_FIELD = /"model"\s*:\s*"([^"]+)"/;
 // The resolved slug appears in the first SSE chunk; don't scan forever.
 const MAX_SCAN_BYTES = 16_384;
@@ -51,6 +76,8 @@ export function streamAttempt({
   activeTools,
   attempt,
   holder,
+  images,
+  getFreshImages,
   onError,
   prompt,
   system,
@@ -61,6 +88,14 @@ export function streamAttempt({
   activeTools?: () => string[] | undefined;
   attempt: ModelAttempt;
   holder: ResolvedModelHolder;
+  /** Images to show the model on the user turn (e.g. Slack image attachments). */
+  images?: ImageInput[];
+  /**
+   * Drained before each step for any images the model asked to view mid-turn
+   * (the viewImage tool). Returns the not-yet-shown ones; they are injected as a
+   * user message so the model actually sees them on the next step.
+   */
+  getFreshImages?: () => ImageInput[];
   /**
    * Called for every error the SDK swallows into the stream. Without it the SDK
    * default is `console.error`, which dumped an unstructured AI SDK stack blob
@@ -78,7 +113,26 @@ export function streamAttempt({
     fetch: tunedFetch({ attempt, holder }) as unknown as typeof fetch,
     name: attempt.provider,
   });
+  // Attachment images ride in the user turn (put BEFORE the text so the cache
+  // breakpoint still lands on the trailing text block). With none, keep the
+  // plain string prompt so the default path is byte-identical to before.
+  const initialImages = images ?? [];
+  const promptInput =
+    initialImages.length > 0
+      ? {
+          messages: [
+            {
+              content: [
+                ...initialImages.map(imagePart),
+                { text: prompt, type: 'text' as const },
+              ],
+              role: 'user' as const,
+            },
+          ] satisfies ModelMessage[],
+        }
+      : { prompt };
   return streamText({
+    ...promptInput,
     abortSignal,
     // Cap output on every metered path: HackClub (pessimistic spend projection),
     // DigitalOcean (real tokens on the owner's account), and a user's own BYOK
@@ -100,14 +154,43 @@ export function streamAttempt({
     experimental_repairToolCall: repairTruncatedToolCall,
     model: provider.chatModel(attempt.model),
     ...(onError ? { onError: ({ error }) => onError(error) } : {}),
-    ...(activeTools
+    ...(activeTools || getFreshImages
       ? {
-          prepareStep: () => ({
-            activeTools: activeTools() as never[] | undefined,
-          }),
+          // Gate deferred tools per step AND inject any images the model asked to
+          // view: the SDK renders images only in a user message, so a screenshot
+          // the model loaded mid-turn is appended as a user turn here (the
+          // override carries forward, so it stays visible on later steps).
+          prepareStep: ({ messages }) => {
+            const result: {
+              activeTools?: never[];
+              messages?: ModelMessage[];
+            } = {};
+            if (activeTools) {
+              result.activeTools = activeTools() as never[] | undefined;
+            }
+            const fresh = getFreshImages?.() ?? [];
+            if (fresh.length > 0) {
+              const label = fresh
+                .map((image) => image.path ?? 'image')
+                .join(', ');
+              result.messages = [
+                ...messages,
+                {
+                  content: [
+                    ...fresh.map(imagePart),
+                    {
+                      text: `[You are now viewing the image(s) you loaded: ${label}]`,
+                      type: 'text' as const,
+                    },
+                  ],
+                  role: 'user' as const,
+                },
+              ];
+            }
+            return result;
+          },
         }
       : {}),
-    prompt,
     stopWhen: stepCountIs(MAX_STEPS),
     system,
     tools,

@@ -194,6 +194,7 @@ export function runSubagentTool({
                     abortSignal,
                     activeTools: built.activeTools,
                     attempt,
+                    getFreshImages: built.drainImages,
                     holder: {},
                     prompt: task,
                     system,

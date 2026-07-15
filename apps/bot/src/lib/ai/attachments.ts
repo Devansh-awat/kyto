@@ -54,11 +54,30 @@ async function seedAttachment({
       : new Uint8Array(data);
   await sandboxContext.session.writeBinaryFile({ content: bytes, path });
   return {
+    imageBytes: isVisionImage(attachment.mimeType, bytes.byteLength)
+      ? bytes
+      : undefined,
     mimeType: attachment.mimeType,
     name: filename,
     path,
     type: attachment.type,
   };
+}
+
+// Images the model can be shown directly. Capped so a giant upload doesn't blow
+// up the request; the file is still on disk for the model to process in code.
+const MAX_VISION_BYTES = 8 * 1024 * 1024;
+const VISION_MIME = /^image\/(png|jpe?g|webp|gif)$/i;
+
+function isVisionImage(
+  mimeType: string | undefined,
+  byteLength: number
+): boolean {
+  return (
+    mimeType !== undefined &&
+    VISION_MIME.test(mimeType) &&
+    byteLength <= MAX_VISION_BYTES
+  );
 }
 
 export function promptWithAttachments({

@@ -1,5 +1,9 @@
 import nodePath from 'node:path/posix';
-import { type SandboxContext, subagentAttempt } from '@repo/ai';
+import {
+  type ImageInput,
+  type SandboxContext,
+  subagentAttempt,
+} from '@repo/ai';
 import { listMcpServers } from '@repo/db/queries';
 import { type Tool, type ToolSet, tool } from 'ai';
 import { z } from 'zod';
@@ -73,6 +77,7 @@ import { summarizeThreadTool } from './tools/summarize-thread';
 import { textToSpeechTool } from './tools/text-to-speech';
 import { uploadFileTool } from './tools/upload-file';
 import { fetchUrlTool, getPermalinkTool } from './tools/url';
+import { viewImageTool } from './tools/view-image';
 import { waitTool } from './tools/wait';
 
 export interface BuiltTools {
@@ -80,6 +85,12 @@ export interface BuiltTools {
   activeTools: () => string[];
   /** Close per-turn resources (MCP connections). */
   close: () => Promise<void>;
+  /**
+   * Drain images the model asked to view (via viewImage) since the last call.
+   * The agent loop injects them as a user message so the model actually sees
+   * them on its next step.
+   */
+  drainImages: () => ImageInput[];
   tools: ToolSet;
 }
 
@@ -114,6 +125,10 @@ export async function buildTools({
   const canActAsOwner = Boolean(env.SLACK_USER_TOKEN) && isOwner;
   const agentMailKey = env.AGENTMAIL_API_KEY;
 
+  // Images the model loaded with viewImage this turn, waiting to be injected
+  // into the conversation as a user message on the next step (drainImages).
+  const pendingImages: ImageInput[] = [];
+
   const core: ToolSet = {
     bash: bashTool({ getSandboxContext }),
     codeMode: codeModeTool({ getSandboxContext }),
@@ -134,6 +149,10 @@ export async function buildTools({
       isOwner,
     }),
     getFile: getFileTool({ getSandboxContext }),
+    viewImage: viewImageTool({
+      getSandboxContext,
+      pushImage: (image) => pendingImages.push(image),
+    }),
     joinThread: joinThreadTool({ thread }),
     leaveThread: leaveThreadTool({ thread }),
     focusMode: focusModeTool({ thread }),
@@ -416,6 +435,7 @@ export async function buildTools({
   return {
     activeTools: () => [...active],
     close: mcp.close,
+    drainImages: () => pendingImages.splice(0),
     tools,
   };
 }

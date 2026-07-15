@@ -328,6 +328,15 @@ async function executeTurn(
       turnMessage.attachments.length > 0
         ? await seedAttachments({ message: turnMessage, sandboxContext })
         : [];
+    // Images the user attached, shown to the model's vision on the user turn
+    // (not just handed over as file paths). Bounded/filtered in seedAttachments.
+    const attachmentImages = attachments
+      .filter((entry) => entry.imageBytes !== undefined)
+      .map((entry) => ({
+        bytes: entry.imageBytes as Uint8Array,
+        mediaType: entry.mimeType ?? 'image/png',
+        path: entry.name,
+      }));
     // Distinguish a turn that did real work from a truly empty completion. Only
     // a completion that produced NEITHER reply text, NOR a deliberate skip, NOR
     // tool activity that ended on a clean `stop` is treated as unhandled and
@@ -566,6 +575,8 @@ async function executeTurn(
           holder,
           // Errors the SDK swallows into the stream would otherwise be dumped
           // raw to stderr by its default console.error handler, unattributed.
+          getFreshImages: built.drainImages,
+          images: attachmentImages,
           onError: (error) => {
             logger.error(
               {
