@@ -507,12 +507,20 @@ async function executeTurn(
           type: 'task_update',
         };
       };
-      // Per-attempt watchdog: if this attempt stalls, abort just THIS attempt
-      // so the catch below can recover instead of the turn hanging forever.
-      // Kept separate from `controller` so a timeout is NOT mistaken for a
-      // user interrupt. The combined signal also reaches tool execution.
-      // Re-armable: the `wait` tool pushes the deadline out for the length of a
-      // deliberate pause (up to an hour), so a long wait isn't read as a stall.
+      // Per-attempt STALL watchdog: it fires only after ATTEMPT_TIMEOUT_MS of no
+      // progress, aborting just THIS attempt so the catch below can recover
+      // instead of the turn hanging forever. It is re-armed on every sign of
+      // progress — a streamed text delta, a tool call, a tool result (see the
+      // armWatchdog calls in the stream callbacks) — so a long-but-working turn
+      // (e.g. a benchmark making a tool call every ~20s for 15 min) is NOT killed;
+      // only a genuine stall is. (It used to be a fixed cap from attempt start,
+      // which killed progressing long tasks and surfaced as "kyto hit an error
+      // after it had already started responding".) Deliberately NOT reset by
+      // reasoning tokens alone: a model that only "thinks" for the whole window
+      // without acting is stuck and should trip. Kept separate from `controller`
+      // so a timeout is NOT mistaken for a user interrupt; the combined signal
+      // also reaches tool execution. The `wait` tool pushes the deadline out for
+      // the length of a deliberate pause (up to an hour) on top of this.
       const attemptAbort = new AbortController();
       let attemptTimer: ReturnType<typeof setTimeout> | undefined;
       const armWatchdog = (ms: number) => {
@@ -611,14 +619,18 @@ async function executeTurn(
             attemptText = true;
             errorStage = 'after_text';
             streamedText = appendStreamedText(streamedText, text);
+            // Progress: reset the stall watchdog (see armWatchdog).
+            armWatchdog(ATTEMPT_TIMEOUT_MS);
           },
           onReasoning: (text) => {
             attemptThinking.push(text);
           },
           onToolActivity: () => {
             attemptToolActivity = true;
+            armWatchdog(ATTEMPT_TIMEOUT_MS);
           },
           onToolResult: (info) => {
+            armWatchdog(ATTEMPT_TIMEOUT_MS);
             const key = `${info.toolName}:${stableInput(info.input)}`;
             if (gatheredKeys.has(key)) {
               return;
