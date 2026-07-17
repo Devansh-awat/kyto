@@ -100,13 +100,18 @@ function isRateLimited({
   return status === TOO_MANY_REQUESTS || RATE_LIMIT_PATTERN.test(message);
 }
 
-// Hard ceiling on a single model attempt (the whole multi-step agentic stream).
-// Without it, a stalled upstream SSE connection or a hung tool leaves the turn
-// awaiting forever. On expiry we abort only THIS attempt's signal (not the
-// shared turn controller), so the normal recovery path takes over: fall back to
-// the next model if no reply text was streamed yet, or surface an error.
+// How long a single attempt may go with NO sign of progress before it's aborted
+// (see the STALL watchdog below — it's re-armed on every streamed text delta,
+// tool call, and tool result, so this is an IDLE budget, not a cap on total turn
+// length). Without it, a stalled upstream SSE connection or a hung tool leaves
+// the turn awaiting forever. On expiry we abort only THIS attempt's signal (not
+// the shared turn controller), so the normal recovery path takes over: fall back
+// to the next model if no reply text was streamed yet, or surface an error.
+// 5 min covers a slow model step and most single long tool calls (a foreground
+// subagent / codeMode is bounded only by this) while recovering from a real
+// stall far quicker than the old 10-minute cap did.
 const ATTEMPT_TIMEOUT_MS =
-  Number(process.env.AGENT_ATTEMPT_TIMEOUT_MS) || 10 * 60 * 1000;
+  Number(process.env.AGENT_ATTEMPT_TIMEOUT_MS) || 5 * 60 * 1000;
 
 // How much of a provider error body to keep in a log line: enough to name the
 // real upstream cause (rate limit, context length, budget) without pasting a
