@@ -12,7 +12,7 @@ export function uploadFileTool({
 }) {
   return tool({
     description:
-      'Upload a file from the sandbox workspace to the current Slack thread. Use this when the user asks to see, share, or download a file you created or inspected.',
+      'Upload a file from the sandbox workspace to the current Slack thread. Use this when the user asks to see, share, send, or download a file you created or inspected. This is how you actually SEND a picture/screenshot/file to the user — viewImage only lets YOU look at an image, it never shows it to them, so a request like "send me that screenshot" needs THIS tool.',
     inputSchema: z.object({
       path: z
         .string()
