@@ -20,32 +20,53 @@ import logger from '@/lib/logger';
 // reaped after RETENTION_MS so this stays a recent train of thought, not a
 // permanent transcript.
 
-// How many past turns of reasoning a new turn is shown. Three keeps the thread's
-// recent train of thought without letting an old turn's plan crowd out the live
-// one — and the prompt cost is bounded by MAX_TURN_CHARS below.
-const MAX_TURNS = 3;
-// Per-turn cap. Reasoning runs long (a tool-heavy turn can think for thousands
-// of tokens); the tail is what matters, since that is where the turn had
-// actually worked out what was going on. Cutting from the FRONT keeps it.
-const MAX_TURN_CHARS = 1500;
+// How many past turns of reasoning a new turn is shown. Enough to cover a
+// multi-turn investigation (kyto solves something over several turns, then a
+// later turn asks about the result) without letting ancient turns crowd out the
+// live one. Prompt cost is bounded by MAX_TURN_CHARS below.
+const MAX_TURNS = 6;
+// Per-turn cap on the WHOLE record (reasoning + observations). Reasoning and
+// tool output both run long; the tail is what matters, since that is where the
+// turn had actually worked out what was going on and what its tools returned.
+// Cutting from the FRONT keeps it.
+const MAX_TURN_CHARS = 6000;
 // How long a thread's stored reasoning stays usable and on disk (~a month).
 const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
- * Record one completed turn's reasoning. Called with the reasoning blocks of the
- * attempt that actually ANSWERED — a failed attempt's thinking is discarded with
- * the attempt, so a model that spiralled doesn't poison the next turn.
+ * Record one completed turn's reasoning AND what its tools observed. Called with
+ * the reasoning blocks and tool observations of the attempt that actually
+ * ANSWERED — a failed attempt's thinking is discarded with the attempt, so a
+ * model that spiralled doesn't poison the next turn.
+ *
+ * Slack replays only what kyto SAID, never what it thought or what a tool
+ * returned — so a fact kyto worked out but never typed (a captcha it decoded, an
+ * OCR result, a computed value) is otherwise lost the moment the turn ends. Both
+ * halves ride back into the next turn via buildPrompt.
+ *
  * Best-effort: a DB hiccup here must never fail the turn.
  */
 export async function rememberThinking({
   blocks,
+  observations,
   threadId,
 }: {
   blocks: string[];
+  /** Pre-rendered, already-clamped summary of the turn's tool results. */
+  observations?: string;
   threadId: string;
 }): Promise<void> {
-  const text = blocks
+  const reasoning = blocks
     .map((block) => block.trim())
+    .filter(Boolean)
+    .join('\n\n');
+  const trimmedObservations = observations?.trim();
+  const text = [
+    reasoning,
+    trimmedObservations
+      ? `[what your tools returned this turn]\n${trimmedObservations}`
+      : '',
+  ]
     .filter(Boolean)
     .join('\n\n');
   if (!text) {
@@ -105,8 +126,8 @@ export function renderThinking(turns: string[]): string {
   });
   return [
     '<your_previous_thinking>',
-    'Your own private reasoning from earlier turns in THIS thread, oldest first. Nobody in Slack can see it — Slack only kept what you said out loud, so this is the only way you still have your train of thought.',
-    'Use it to pick up where you left off: what you already tried, ruled out, or were part-way through. Do NOT narrate it, quote it, or apologise for it — it is a memory, not something the user said.',
+    'Your own private reasoning AND what your tools returned in earlier turns in THIS thread, oldest first. Nobody in Slack can see it — Slack only kept what you said out loud, so this is the only way you still have your train of thought and the facts your tools uncovered (a value you computed, a captcha you decoded, an OCR result) but never typed into a message.',
+    'Use it to pick up where you left off: what you already tried, ruled out, were part-way through, or found. Do NOT narrate it, quote it, or apologise for it — it is a memory, not something the user said.',
     '',
     ...rendered,
     '</your_previous_thinking>',

@@ -793,7 +793,11 @@ async function executeTurn(
         // attempt that actually answered gets to: a failed attempt's reasoning
         // died with it, and feeding a spiral back in would only seed another.
         // Persisted (best-effort) so it survives a restart.
-        await rememberThinking({ blocks: attemptThinking, threadId });
+        await rememberThinking({
+          blocks: attemptThinking,
+          observations: renderObservations(gatheredResults),
+          threadId,
+        });
         // A BYOK key that just answered a whole turn is demonstrably valid.
         await recordByokOutcome({
           attempt: currentAttempt,
@@ -1125,6 +1129,33 @@ function renderContinuation(streamedText: string): string {
 
 // Render gathered tool results as a prompt block the fallback model can answer
 // from without re-running the tools. Most recent results win when over the cap.
+// Bounds on the tool observations persisted into the thinking store, kept
+// smaller than the carryover so reasoning + observations both fit the per-turn
+// thinking budget (MAX_TURN_CHARS). Keeps the most recent results.
+const OBSERVATION_MAX_RESULTS = 8;
+const OBSERVATION_OUTPUT_MAX = 400;
+const OBSERVATION_INPUT_MAX = 200;
+
+/**
+ * A compact record of what this turn's tools returned, persisted alongside the
+ * reasoning so the NEXT turn can recall a fact kyto observed but never typed into
+ * Slack (a decoded captcha, an OCR result, a computed value). Empty string when
+ * the turn ran no tools.
+ */
+function renderObservations(results: GatheredResult[]): string {
+  if (results.length === 0) {
+    return '';
+  }
+  return results
+    .slice(-OBSERVATION_MAX_RESULTS)
+    .map((result) => {
+      const input = toCompactText(result.input, OBSERVATION_INPUT_MAX);
+      const output = toCompactText(result.output, OBSERVATION_OUTPUT_MAX);
+      return `${result.toolName}(${input}) → ${output}`;
+    })
+    .join('\n');
+}
+
 function renderCarryover(results: GatheredResult[]): string {
   const recent = results.slice(-CARRYOVER_MAX_RESULTS);
   const lines = recent.map((result, index) => {
