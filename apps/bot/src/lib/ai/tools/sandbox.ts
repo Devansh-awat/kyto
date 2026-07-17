@@ -3,12 +3,20 @@ import type { SandboxContext } from '@repo/ai';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { clamp } from '@/lib/utils/text';
+import type { BackgroundProcessTools } from './background';
 
 // The model's workspace tools (replacing Pi's builtin bash/file tools). Every
 // tool runs in the lazy E2B sandbox: the first call materializes it, chat-only
 // turns never create one.
 
 const OUTPUT_MAX = 12_000;
+
+// A foreground bash command that runs longer than this is auto-moved to the
+// background so it can't freeze the whole turn (a turn blocks until bash
+// returns; a slow benchmark or a runaway script would otherwise leave the user
+// staring at an empty message until the watchdog kills it). The command keeps
+// running detached and the model gets a handle to poll.
+const AUTO_BACKGROUND_MS = 60_000;
 
 function resolvePath(context: SandboxContext, path: string): string {
   return nodePath.normalize(
@@ -21,13 +29,18 @@ function clip(text: string): string {
 }
 
 export function bashTool({
+  background,
   getSandboxContext,
 }: {
+  // Shared with the background-process trio, so an auto-backgrounded command is
+  // pollable via getProcessOutput. Optional so a caller can opt out of
+  // auto-backgrounding (then a long command blocks as before).
+  background?: BackgroundProcessTools;
   getSandboxContext: () => SandboxContext;
 }) {
   return tool({
     description:
-      'Run a bash command in your isolated Linux sandbox (network access, common CLIs, bun/node/python preinstalled). The workspace PERSISTS across turns in this thread — files you write and packages you install are still there next time.',
+      'Run a bash command in your isolated Linux sandbox (network access, common CLIs, bun/node/python preinstalled). The workspace PERSISTS across turns in this thread — files you write and packages you install are still there next time. A command still running after ~1 minute is automatically moved to the background and you get a handle to poll with getProcessOutput — so for anything you expect to be slow, bound it with `timeout` or start it with runBackgroundProcess yourself rather than relying on the auto-move.',
     inputSchema: z.object({
       command: z.string().describe('The bash command to run.'),
       workingDirectory: z
@@ -37,12 +50,21 @@ export function bashTool({
     }),
     execute: async ({ command, workingDirectory }, { abortSignal }) => {
       const context = getSandboxContext();
+      const resolvedDir = workingDirectory
+        ? resolvePath(context, workingDirectory)
+        : undefined;
+      if (background) {
+        return await runWithAutoBackground({
+          abortSignal,
+          background,
+          command,
+          workingDirectory: resolvedDir,
+        });
+      }
       const result = await context.session.run({
         abortSignal,
         command,
-        workingDirectory: workingDirectory
-          ? resolvePath(context, workingDirectory)
-          : undefined,
+        workingDirectory: resolvedDir,
       });
       return {
         exitCode: result.exitCode,
@@ -51,6 +73,43 @@ export function bashTool({
       };
     },
   });
+}
+
+async function runWithAutoBackground({
+  abortSignal,
+  background,
+  command,
+  workingDirectory,
+}: {
+  abortSignal?: AbortSignal;
+  background: BackgroundProcessTools;
+  command: string;
+  workingDirectory?: string;
+}): Promise<Record<string, unknown>> {
+  const started = await background.startManaged(command, workingDirectory);
+  if ('error' in started) {
+    return { error: started.error, exitCode: 1 };
+  }
+  const result = await background.waitManaged(
+    started.id,
+    AUTO_BACKGROUND_MS,
+    abortSignal
+  );
+  if (result.finished) {
+    return {
+      exitCode: result.exitCode,
+      stderr: clip(result.stderr),
+      stdout: clip(result.stdout),
+    };
+  }
+  return {
+    backgrounded: true,
+    id: started.id,
+    note: `This command was still running after 60s, so it was moved to the background (handle "${started.id}") to keep the turn responsive — it is STILL RUNNING. Poll it with getProcessOutput("${started.id}") and stop it with killProcess("${started.id}"). Don't just re-run it. If you need its result before replying, keep working on other things and check back, or use the wait tool.`,
+    running: true,
+    stderr: clip(result.stderr),
+    stdout: clip(result.stdout),
+  };
 }
 
 export function readFileTool({

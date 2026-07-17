@@ -129,8 +129,12 @@ export async function buildTools({
   // into the conversation as a user message on the next step (drainImages).
   const pendingImages: ImageInput[] = [];
 
+  // Background-process trio shares one in-turn handle map; built before `core`
+  // so the bash tool can share it and auto-background a command that runs long.
+  const background = backgroundProcessTools({ getSandboxContext });
+
   const core: ToolSet = {
-    bash: bashTool({ getSandboxContext }),
+    bash: bashTool({ background, getSandboxContext }),
     codeMode: codeModeTool({ getSandboxContext }),
     readFile: readFileTool({ getSandboxContext }),
     writeFile: writeFileTool({ getSandboxContext }),
@@ -227,8 +231,6 @@ export async function buildTools({
     }),
   };
 
-  // Background-process trio shares one in-turn handle map, so build it once.
-  const background = backgroundProcessTools({ getSandboxContext });
   const ttsAvailable = Boolean(
     env.HACKCLUB_REPLICATE_API_KEY || env.GEMINI_API_KEY
   );
