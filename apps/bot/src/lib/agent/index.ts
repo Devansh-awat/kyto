@@ -1132,9 +1132,9 @@ function renderContinuation(streamedText: string): string {
 // Bounds on the tool observations persisted into the thinking store, kept
 // smaller than the carryover so reasoning + observations both fit the per-turn
 // thinking budget (MAX_TURN_CHARS). Keeps the most recent results.
-const OBSERVATION_MAX_RESULTS = 8;
-const OBSERVATION_OUTPUT_MAX = 400;
-const OBSERVATION_INPUT_MAX = 200;
+const OBSERVATION_MAX_RESULTS = 14;
+const OBSERVATION_OUTPUT_MAX = 1000;
+const OBSERVATION_INPUT_MAX = 300;
 
 /**
  * A compact record of what this turn's tools returned, persisted alongside the

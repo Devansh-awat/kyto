@@ -13,23 +13,40 @@ import logger from '@/lib/logger';
 // slider positions" but not why, what it had already ruled out, or what it was
 // part-way through. It re-derived the same dead ends.
 //
-// This keeps the reasoning of a thread's last few turns and buildPrompt feeds it
-// back on the next turn. PERSISTED to Postgres (thread_thinking) so it survives
-// a restart — the old in-memory buffer was wiped on every deploy, which is why a
-// thread picked back up after a restart lost its train of thought. Rows are
-// reaped after RETENTION_MS so this stays a recent train of thought, not a
-// permanent transcript.
+// This keeps the FULL reasoning (and tool observations) of a thread's turns and
+// buildPrompt feeds it back on the next turn — the whole history, oldest dropped
+// only when the block would exceed a char budget (see THINKING_BUDGET_CHARS).
+// PERSISTED to Postgres (thread_thinking) so it survives a restart — the old
+// in-memory buffer was wiped on every deploy, which is why a thread picked back
+// up after a restart lost its train of thought. Rows are reaped after
+// RETENTION_MS so this stays a recent train of thought, not a permanent
+// transcript.
 
-// How many past turns of reasoning a new turn is shown. Enough to cover a
-// multi-turn investigation (kyto solves something over several turns, then a
-// later turn asks about the result) without letting ancient turns crowd out the
-// live one. Prompt cost is bounded by MAX_TURN_CHARS below.
-const MAX_TURNS = 6;
-// Per-turn cap on the WHOLE record (reasoning + observations). Reasoning and
-// tool output both run long; the tail is what matters, since that is where the
-// turn had actually worked out what was going on and what its tools returned.
-// Cutting from the FRONT keeps it.
-const MAX_TURN_CHARS = 6000;
+// The model carries its FULL reasoning across turns, the way it carries reasoning
+// across tool calls WITHIN a turn: the end of a turn is just another boundary, so
+// the next turn is shown every earlier turn's thinking, oldest dropped only when
+// the whole block would exceed the budget below (a stand-in for "max input
+// tokens"). ~60k chars ≈ 15k tokens — generous, but capped so a long thread's
+// thinking can't crowd out the replayed Slack history or blow the context.
+const THINKING_BUDGET_CHARS = numericEnv('THINKING_BUDGET_CHARS', 60_000);
+// Per-turn safety cap on ONE turn's whole record (reasoning + observations), so a
+// single pathological turn can't eat the entire budget. Normal turns are far
+// under this and keep their full thinking; only a runaway is trimmed, from the
+// FRONT (the tail is where the turn worked out what was going on). Well below the
+// budget, so at least a couple of recent turns always fit.
+const MAX_TURN_CHARS = 20_000;
+// Hard cap on how many turns are kept on disk, so a very long-lived thread's row
+// stays bounded regardless of the char budget. Rendering trims further to fit.
+const MAX_STORED_TURNS = 40;
+
+function numericEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
 // How long a thread's stored reasoning stays usable and on disk (~a month).
 const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -74,14 +91,17 @@ export async function rememberThinking({
   }
   try {
     const existing = await getThreadThinking(threadId, RETENTION_MS);
-    const turns = [...existing, tail(text, MAX_TURN_CHARS)].slice(-MAX_TURNS);
+    const turns = [...existing, tail(text, MAX_TURN_CHARS)].slice(
+      -MAX_STORED_TURNS
+    );
     await saveThreadThinking(threadId, turns);
   } catch (error) {
     logger.warn({ err: error, threadId }, '[thinking] failed to persist');
   }
 }
 
-/** The reasoning of this thread's last few turns, oldest first. */
+/** The stored reasoning of this thread's turns, oldest first (render trims to
+ * the char budget). */
 export async function recallThinking(threadId: string): Promise<string[]> {
   return await getThreadThinking(threadId, RETENTION_MS).catch(() => []);
 }
@@ -116,11 +136,12 @@ export function startThinkingReaper(): void {
  * instead of moving on.
  */
 export function renderThinking(turns: string[]): string {
-  if (turns.length === 0) {
+  const selected = selectWithinBudget(turns, THINKING_BUDGET_CHARS);
+  if (selected.length === 0) {
     return '';
   }
-  const rendered = turns.map((turn, index) => {
-    const ago = turns.length - index;
+  const rendered = selected.map((turn, index) => {
+    const ago = selected.length - index;
     const label = ago === 1 ? 'your previous turn' : `${ago} turns ago`;
     return `[${label}]\n${turn}`;
   });
@@ -139,4 +160,26 @@ function tail(text: string, max: number): string {
     return text;
   }
   return `…${text.slice(-max)}`;
+}
+
+// Given all stored turns (oldest→newest), keep the NEWEST that fit the char
+// budget and return them oldest-first. At least the most recent turn is always
+// kept, even if it alone exceeds the budget (it never does — per-turn is capped
+// well below it).
+function selectWithinBudget(turns: string[], budget: number): string[] {
+  const kept: string[] = [];
+  let used = 0;
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index];
+    if (turn === undefined) {
+      continue;
+    }
+    const cost = turn.length + 2;
+    if (used + cost > budget && kept.length > 0) {
+      break;
+    }
+    kept.push(turn);
+    used += cost;
+  }
+  return kept.reverse();
 }
