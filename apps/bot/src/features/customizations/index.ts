@@ -13,7 +13,6 @@ import {
   removeMcpServer,
   resumeReminder,
   setChatgptChatgptFirst,
-  setChatgptServiceFallback,
   setCredentialServiceFallback,
   setCredentialValidation,
   setIdentityProfile,
@@ -675,24 +674,6 @@ bot.onAction('home_toggle_chatgpt_first', async (event) => {
       logger.warn(
         { ...toLogError(error), userId: event.user.userId },
         'Failed to toggle ChatGPT ordering'
-      );
-    });
-});
-
-bot.onAction('home_toggle_chatgpt_fallback', async (event) => {
-  const target = event.value;
-  if (!(target === 'on' || target === 'off')) {
-    return;
-  }
-  await setChatgptServiceFallback({
-    allowed: target === 'on',
-    userId: event.user.userId,
-  })
-    .then(() => publishHome({ userId: event.user.userId }))
-    .catch((error: unknown) => {
-      logger.warn(
-        { ...toLogError(error), userId: event.user.userId },
-        'Failed to toggle ChatGPT service fallback'
       );
     });
 });

@@ -82,7 +82,10 @@ export async function resolveUserRouting(userId: string): Promise<UserRouting> {
   let serviceFallback = false;
   if (chatgpt) {
     own.push(chatgpt.attempt);
-    serviceFallback ||= chatgpt.serviceFallback;
+    // A linked ChatGPT account uses ONE control (ChatGPT-first vs shared-first),
+    // and either way the other tier is the fallback — so the shared chain is
+    // always reachable when an account is linked.
+    serviceFallback = true;
   }
   for (const credential of credentials) {
     if (!isByokProviderId(credential.provider)) {

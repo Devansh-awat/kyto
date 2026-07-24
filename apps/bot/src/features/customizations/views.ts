@@ -221,16 +221,6 @@ function chatgptBlocks(account: ChatgptAccount | null): SlackBlock[] {
           // The target state, so a stale home view can't flip it the wrong way.
           value: account.chatgptFirst ? 'off' : 'on',
         },
-        {
-          action_id: 'home_toggle_chatgpt_fallback',
-          text: plainText(
-            account.serviceFallback
-              ? 'Shared fallback: on'
-              : 'Shared fallback: off'
-          ),
-          type: 'button',
-          value: account.serviceFallback ? 'off' : 'on',
-        },
       ],
       type: 'actions',
     },
@@ -252,7 +242,7 @@ function chatgptBlocks(account: ChatgptAccount | null): SlackBlock[] {
   blocks.push({
     elements: [
       mrkdwn(
-        '_“ChatGPT first” runs your subscription before kyto’s shared models; “shared first” only uses ChatGPT if the shared models are exhausted. Shared fallback off means a failing login stops the turn._'
+        '_“ChatGPT first” runs your subscription first and falls back to kyto’s shared models; “shared first” uses the shared models first and only falls back to ChatGPT. Tap to switch._'
       ),
     ],
     type: 'context',
