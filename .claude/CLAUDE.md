@@ -167,7 +167,7 @@ Config in `packages/sandbox/src/config.ts`. E2B is the execution backend for the
 
 ## Host / deployment
 
-- **Runs on the `oracle` server** (Oracle Linux 9, aarch64), migrated from the old `nest` server. On oracle, Postgres is **local with no TLS**, so `packages/db/src/client.ts` uses `ssl: false` (the nest setup used `ssl: 'require'`). Keep it `false` while oracle is the deploy target.
+- **Runs on the `oracle` server** (Oracle Linux 9, aarch64), migrated from the old `nest` server after the nest account was suspended for an AUP violation (unrelated to kyto). On oracle, Postgres is **local with no TLS**, so `packages/db/src/client.ts` uses `ssl: false` (the nest setup used `ssl: 'require'`). Keep it `false` while oracle is the deploy target.
 - **`gh` is NOT in the Oracle Linux repos** (`dnf install gh` → "No match for argument: gh"); install the GitHub CLI from its official RPM repo, or authenticate git pushes with a PAT credential (see below) instead of `gh`.
 
 ## Debugging "kyto isn't responding"
