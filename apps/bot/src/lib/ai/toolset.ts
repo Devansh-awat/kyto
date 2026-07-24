@@ -199,6 +199,7 @@ export async function buildTools({
     searchWeb: searchWebTool({ apiKey: env.EXA_API_KEY }),
     summarizeThread: summarizeThreadTool({ bot, threadId: thread.id }),
     generateImage: generateImageTool({
+      getSandboxContext,
       upload: async ({ bytes, mediaType, index, total }) => {
         const filename = `kyto-image-${index + 1}.${mediaType.split('/').at(1) ?? 'png'}`;
         await thread.post({

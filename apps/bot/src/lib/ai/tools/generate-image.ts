@@ -1,3 +1,5 @@
+import nodePath from 'node:path/posix';
+import type { SandboxContext } from '@repo/ai';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { env } from '@/env';
@@ -34,14 +36,47 @@ function detectMediaType(bytes: Uint8Array): string {
   return 'image/png';
 }
 
+// Every generated image is written to the workspace as well as (optionally)
+// posted: an upload that fails, or a picture the model wants to edit or serve
+// from a site, is otherwise gone the moment the call returns. Best effort — a
+// sandbox that won't take the write must not fail the generation.
+async function saveToSandbox({
+  bytes,
+  getSandboxContext,
+  index,
+  mediaType,
+}: {
+  bytes: Uint8Array;
+  getSandboxContext: () => SandboxContext;
+  index: number;
+  mediaType: string;
+}): Promise<string | null> {
+  const extension = mediaType.split('/').at(1) ?? 'png';
+  try {
+    const context = getSandboxContext();
+    const path = nodePath.join(
+      context.sessionWorkDir,
+      'generated-images',
+      `kyto-image-${Date.now()}-${index + 1}.${extension}`
+    );
+    await context.session.writeBinaryFile({ content: bytes, path });
+    return path;
+  } catch {
+    return null;
+  }
+}
+
 export function generateImageTool({
+  getSandboxContext,
   upload,
 }: {
+  /** Where generated images are saved, so they survive an upload that fails. */
+  getSandboxContext: () => SandboxContext;
   upload: (image: GeneratedImage) => Promise<void>;
 }) {
   return tool({
     description:
-      'Generate one or more AI images from a prompt and upload them to the current Slack thread. Use it for explicit image creation requests.',
+      'Generate one or more AI images from a prompt. By default they are posted to the current Slack thread; pass upload:false to generate quietly (e.g. an asset for a site you are building, or an input for further editing). Either way every image is also saved into your sandbox workspace and the paths come back in the result, so you can edit, reuse, or upload it later.',
     inputSchema: z.object({
       n: z
         .number()
@@ -55,8 +90,14 @@ export function generateImageTool({
         .min(1)
         .max(1500)
         .describe('What to generate, with the visual details.'),
+      upload: z
+        .boolean()
+        .default(true)
+        .describe(
+          'Post the images to this Slack thread. Set false to only save them to the sandbox.'
+        ),
     }),
-    execute: async ({ n, prompt }) => {
+    execute: async ({ n, prompt, upload: shouldUpload }) => {
       try {
         const response = await fetch(IMAGES_URL, {
           body: JSON.stringify({ model: IMAGE_MODEL, n, prompt }),
@@ -84,6 +125,8 @@ export function generateImageTool({
           };
         }
         const total = entries.length;
+        const paths: string[] = [];
+        let uploaded = 0;
         for (const [index, entry] of entries.entries()) {
           let bytes: Uint8Array | undefined;
           if (entry.b64_json) {
@@ -95,17 +138,29 @@ export function generateImageTool({
           if (!bytes) {
             continue;
           }
-          await upload({
+          const mediaType = detectMediaType(bytes);
+          const saved = await saveToSandbox({
             bytes,
+            getSandboxContext,
             index,
-            mediaType: detectMediaType(bytes),
-            total,
+            mediaType,
           });
+          if (saved) {
+            paths.push(saved);
+          }
+          if (shouldUpload) {
+            await upload({ bytes, index, mediaType, total });
+            uploaded += 1;
+          }
         }
+        const plural = total === 1 ? '' : 's';
         return {
+          paths,
           prompt,
-          summary: `Generated and uploaded ${total} image${total === 1 ? '' : 's'} to this Slack thread.`,
-          uploaded: total,
+          summary: shouldUpload
+            ? `Generated and uploaded ${total} image${plural} to this Slack thread (also saved in the sandbox: ${paths.join(', ') || 'none'}).`
+            : `Generated ${total} image${plural} in the sandbox (not posted to Slack): ${paths.join(', ') || 'none'}.`,
+          uploaded,
         };
       } catch (error) {
         return { error: errorMessage(error), success: false };
