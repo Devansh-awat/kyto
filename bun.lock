@@ -49,6 +49,7 @@
     "packages/ai": {
       "name": "@repo/ai",
       "dependencies": {
+        "@ai-sdk/openai": "catalog:",
         "@ai-sdk/openai-compatible": "catalog:",
         "@ai-sdk/provider-utils": "catalog:",
         "@openrouter/ai-sdk-provider": "catalog:",
@@ -129,6 +130,7 @@
     },
   },
   "catalog": {
+    "@ai-sdk/openai": "4.0.0-beta.77",
     "@ai-sdk/openai-compatible": "3.0.0-beta.58",
     "@ai-sdk/provider-utils": "5.0.0-beta.49",
     "@commitlint/cli": "^21.0.1",
@@ -155,6 +157,8 @@
   },
   "packages": {
     "@ai-sdk/gateway": ["@ai-sdk/gateway@4.0.0-beta.109", "", { "dependencies": { "@ai-sdk/provider": "4.0.0-beta.19", "@ai-sdk/provider-utils": "5.0.0-beta.49", "@vercel/oidc": "3.2.0" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-W/1kLlPb6Bgbhwep3CA3R6do0HD7SXV5gyuz2XBLY1YABqgxYkw+IhEcjOYlmn9v+Tifjqy5yJqmWdSHMJhyPQ=="],
+
+    "@ai-sdk/openai": ["@ai-sdk/openai@4.0.0-beta.77", "", { "dependencies": { "@ai-sdk/provider": "4.0.0-beta.20", "@ai-sdk/provider-utils": "5.0.0-beta.50" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-M5JvjLk5PJXdPhZHshwlCoz8Dlo1WkB/rQ7SbeqWdVwscHNdZCbAaPM9zKwATs8KEVw+SZaantCx0JPmDUARyg=="],
 
     "@ai-sdk/openai-compatible": ["@ai-sdk/openai-compatible@3.0.0-beta.58", "", { "dependencies": { "@ai-sdk/provider": "4.0.0-beta.20", "@ai-sdk/provider-utils": "5.0.0-beta.50" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-vNO1ClWrOXENgeRHeZzb6DajEb8IygtcFV4DmG1KwqVzAVDywuGOwaDE1r7SI5lL2bFBhYgrfMjRtjcNRYSn2w=="],
 
@@ -1175,6 +1179,8 @@
     "zod-to-json-schema": ["zod-to-json-schema@3.25.2", "", { "peerDependencies": { "zod": "^3.25.28 || ^4" } }, "sha512-O/PgfnpT1xKSDeQYSCfRI5Gy3hPf91mKVDuYLUHZJMiDFptvP41MSnWofm8dnCm0256ZNfZIM7DSzuSMAFnjHA=="],
 
     "@ai-sdk/gateway/@ai-sdk/provider": ["@ai-sdk/provider@4.0.0-beta.19", "", { "dependencies": { "json-schema": "^0.4.0" } }, "sha512-Aca/KiGeRtMM7rOJ38Qio+Dc2V45PpiGoWgdrdtIkgM9zkhYpS043t0ggKoNOWgm/csv99XWGrfSF63PSkVeHw=="],
+
+    "@ai-sdk/openai/@ai-sdk/provider-utils": ["@ai-sdk/provider-utils@5.0.0-beta.50", "", { "dependencies": { "@ai-sdk/provider": "4.0.0-beta.20", "@standard-schema/spec": "^1.1.0", "@workflow/serde": "4.1.0", "eventsource-parser": "^3.0.8" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-B0sw1hDWbU4Prrjql5d/mcCLVWPnhIVvLwoSQV0JbHf9Jqm4c660HqsDN/C7316foa4Z8JlaO5IDVm3o9BPs5Q=="],
 
     "@ai-sdk/openai-compatible/@ai-sdk/provider-utils": ["@ai-sdk/provider-utils@5.0.0-beta.50", "", { "dependencies": { "@ai-sdk/provider": "4.0.0-beta.20", "@standard-schema/spec": "^1.1.0", "@workflow/serde": "4.1.0", "eventsource-parser": "^3.0.8" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-B0sw1hDWbU4Prrjql5d/mcCLVWPnhIVvLwoSQV0JbHf9Jqm4c660HqsDN/C7316foa4Z8JlaO5IDVm3o9BPs5Q=="],
 

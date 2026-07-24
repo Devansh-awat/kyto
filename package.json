@@ -10,6 +10,7 @@
       "tooling/*"
     ],
     "catalog": {
+      "@ai-sdk/openai": "4.0.0-beta.77",
       "@ai-sdk/provider-utils": "5.0.0-beta.49",
       "@commitlint/cli": "^21.0.1",
       "@commitlint/config-conventional": "^21.0.1",

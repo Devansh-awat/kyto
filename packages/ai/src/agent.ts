@@ -1,3 +1,4 @@
+import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import {
   type ModelMessage,
@@ -13,6 +14,7 @@ import {
   MAX_OUTPUT_TOKENS,
   type ModelAttempt,
 } from './providers/attempts';
+import { CHATGPT_PROVIDER } from './providers/chatgpt';
 
 // Ceiling on agentic steps within one attempt (model → tools → model …).
 // Effectively "no limit" for real work: a hard 60 used to strand long jobs
@@ -107,15 +109,29 @@ export function streamAttempt({
   system: string;
   tools: ToolSet;
 }) {
-  const provider = createOpenAICompatible({
-    apiKey: attempt.apiKey,
-    baseURL: attempt.baseURL,
-    fetch: tunedFetch({ attempt, holder }) as unknown as typeof fetch,
-    // Extra per-attempt headers (e.g. the ChatGPT account-scoping header). The
-    // Authorization header is still set from apiKey by the client.
-    ...(attempt.headers ? { headers: attempt.headers } : {}),
-    name: attempt.provider,
-  });
+  // "Sign in with ChatGPT" runs on the ChatGPT (Codex) backend, which speaks the
+  // OpenAI **Responses API** (POST …/codex/responses) — NOT chat/completions,
+  // which 404s there. So this attempt uses the OpenAI provider's `.responses()`
+  // model instead of the openai-compatible chat client, with a fetch that forces
+  // `store:false` (Codex rejects the request otherwise). Every other provider is
+  // an ordinary openai-compatible chat endpoint.
+  const isChatgpt = attempt.provider === CHATGPT_PROVIDER;
+  const model = isChatgpt
+    ? createOpenAI({
+        apiKey: attempt.apiKey,
+        baseURL: attempt.baseURL,
+        fetch: codexFetch({ attempt, holder }) as unknown as typeof fetch,
+        // The ChatGPT account-scoping header; Authorization comes from apiKey.
+        ...(attempt.headers ? { headers: attempt.headers } : {}),
+      }).responses(attempt.model)
+    : createOpenAICompatible({
+        apiKey: attempt.apiKey,
+        baseURL: attempt.baseURL,
+        fetch: tunedFetch({ attempt, holder }) as unknown as typeof fetch,
+        // Extra per-attempt headers. Authorization is set from apiKey.
+        ...(attempt.headers ? { headers: attempt.headers } : {}),
+        name: attempt.provider,
+      }).chatModel(attempt.model);
   // Attachment images ride in the user turn (put BEFORE the text so the cache
   // breakpoint still lands on the trailing text block). With none, keep the
   // plain string prompt so the default path is byte-identical to before.
@@ -155,7 +171,7 @@ export function streamAttempt({
     // write a huge file / post a huge message and hit maxOutputTokens) otherwise
     // dies as an unrecoverable AI_JSONParseError.
     experimental_repairToolCall: repairTruncatedToolCall,
-    model: provider.chatModel(attempt.model),
+    model,
     ...(onError ? { onError: ({ error }) => onError(error) } : {}),
     ...(activeTools || getFreshImages
       ? {
@@ -273,6 +289,57 @@ type FetchLike = (
   input: string | URL | Request,
   init?: RequestInit
 ) => Promise<Response>;
+
+// Fetch for the ChatGPT (Codex) Responses API. The AI SDK's OpenAI provider
+// already sends the right Responses shape (`input` as a list, `stream:true`),
+// but the Codex backend additionally REQUIRES `store:false` (it 400s "Store must
+// be set to false" otherwise). So this injects that into every /responses body
+// and counts the call as an agentic step. The account-scoping header rides on
+// the provider's `headers`, and Authorization on `apiKey`.
+function codexFetch({
+  attempt,
+  holder,
+}: {
+  attempt: ModelAttempt;
+  holder: ResolvedModelHolder;
+}): FetchLike {
+  return async (input, init) => {
+    const url = requestUrl(input);
+    if (!url.includes('/responses')) {
+      return fetch(input as Parameters<typeof fetch>[0], init);
+    }
+    holder.calls = (holder.calls ?? 0) + 1;
+    holder.model ??= attempt.model;
+    const raw = await readRequestBody(input, init);
+    if (raw === undefined) {
+      return fetch(input as Parameters<typeof fetch>[0], init);
+    }
+    let body = raw;
+    try {
+      const payload = JSON.parse(raw) as Record<string, unknown>;
+      payload.store = false;
+      body = JSON.stringify(payload);
+    } catch {
+      // Un-parseable body: send it through unchanged rather than dropping it.
+      return fetch(input as Parameters<typeof fetch>[0], init);
+    }
+    const source =
+      init?.headers ?? (input instanceof Request ? input.headers : undefined);
+    const headers = new Headers(
+      source as ConstructorParameters<typeof Headers>[0]
+    );
+    headers.delete('content-length');
+    return fetch(url, {
+      ...init,
+      body,
+      headers,
+      method:
+        init?.method ?? (input instanceof Request ? input.method : 'POST'),
+      signal:
+        init?.signal ?? (input instanceof Request ? input.signal : undefined),
+    });
+  };
+}
 
 function tunedFetch({
   attempt,
