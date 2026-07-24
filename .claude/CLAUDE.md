@@ -75,6 +75,7 @@ Read it before touching a tool — Code Mode, Vision, Memory, the host-side tool
 - **`fetchUrl` refuses `*.slack.com`** (302s to a login wall) and points at the Slack read tools instead.
 - **The bot token never enters the sandbox.** `slackScript` / the `slack`-on-PATH helper reach Slack only through the host-side, READ-ONLY, allowlisted proxy (`lib/slack-proxy/`).
 - **`gh`'s `GH_TOKEN` is brokered via E2B egress rules**, never in the sandbox env (`echo $GH_TOKEN` reveals nothing).
+- **A git repo that lands in the sandbox is disarmed by CODE, not by asking the model.** Every sandbox materialization runs `GIT_HARDEN_COMMAND` (global `core.hooksPath=/dev/null` + `protocol.ext.allow=never`), and any tool call that could have fetched/extracted a repo triggers `sanitizeGitRepos`, which deletes `.git/hooks/*` and strips the command-executing keys/sections from each repo config (a repo-local `core.hooksPath` would otherwise override the global one). Detail in TOOLS.md.
 - **Ownership gate (reminders + sites)**: editable only by the creator, named editors, and the bot owner — enforced at execute time against `message.author.userId`, not whoever the model claims to act for. Detail in TOOLS.md.
 
 

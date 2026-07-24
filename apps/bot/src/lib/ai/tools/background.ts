@@ -1,6 +1,8 @@
 import type { SandboxContext } from '@repo/ai';
+import { mayHaveFetchedRepo } from '@repo/sandbox';
 import { tool } from 'ai';
 import { z } from 'zod';
+import { disarmFetchedRepos } from '@/lib/sandbox/git-safety';
 import { errorMessage } from '@/lib/utils/error';
 
 // There is no native background/detached-process concept in the sandbox
@@ -52,6 +54,10 @@ export function backgroundProcessTools({
   getSandboxContext: () => SandboxContext;
 }) {
   const processes = new Map<string, BackgroundProcess>();
+  // Commands still to be checked for a repo they may have fetched; a detached
+  // command finishes out of band, so the disarm happens when a poll first sees
+  // it done rather than at start time.
+  const pendingDisarm = new Map<string, string>();
   let counter = 0;
 
   async function startManaged(
@@ -87,7 +93,23 @@ export function backgroundProcessTools({
     }
     proc.pid = pid;
     processes.set(id, proc);
+    if (mayHaveFetchedRepo(command)) {
+      pendingDisarm.set(id, command);
+    }
     return { id };
+  }
+
+  /** Strip hooks from anything a finished background command fetched. */
+  async function disarmIfFinished(
+    id: string,
+    result: ManagedResult
+  ): Promise<void> {
+    const command = pendingDisarm.get(id);
+    if (!(command && result.finished)) {
+      return;
+    }
+    pendingDisarm.delete(id);
+    await disarmFetchedRepos({ command, context: getSandboxContext() });
   }
 
   async function readManaged(id: string): Promise<ManagedResult | null> {
@@ -178,6 +200,7 @@ export function backgroundProcessTools({
         if (!result) {
           return { error: `Unknown process id: ${id}`, success: false };
         }
+        await disarmIfFinished(id, result);
         return {
           exitCode: result.exitCode,
           id,

@@ -2,6 +2,7 @@ import { CommandExitError, Sandbox } from '@e2b/code-interpreter';
 import type { Logger } from '@repo/logging/logger';
 import { ALL_TRAFFIC, type SandboxNetworkOpts } from 'e2b';
 import { sandboxConfig as config } from './config';
+import { GIT_HARDEN_COMMAND } from './git-safety';
 
 // gh/git need SOME token value to act authenticated; the real one is injected
 // at the network egress layer (below), never placed in the sandbox. So the env
@@ -203,6 +204,18 @@ export class LazySandbox {
    * helper it installs is simply absent, which the caller's command will report.
    */
   private async bootstrap(sandbox: Sandbox): Promise<void> {
+    // Git hardening first, and unconditionally: a repo that arrives as a
+    // tarball/zip brings its own hooks, and this makes sure none of them can
+    // run before any tool touches the workspace. Idempotent, so re-running it
+    // on a resumed sandbox is free.
+    await sandbox.commands
+      .run(GIT_HARDEN_COMMAND, { cwd: this.workDir, timeoutMs: 15_000 })
+      .catch((error: unknown) => {
+        this.logger.warn(
+          { err: errorText(error), sandboxId: sandbox.sandboxId },
+          '[sandbox] git hardening failed'
+        );
+      });
     if (!this.bootstrapCommand) {
       return;
     }
