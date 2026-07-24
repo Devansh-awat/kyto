@@ -2,6 +2,8 @@ import nodePath from 'node:path/posix';
 import type { SandboxContext } from '@repo/ai';
 import { tool } from 'ai';
 import { z } from 'zod';
+import { guardGithubCommand } from '@/lib/github/guard';
+import { disarmFetchedRepos } from '@/lib/sandbox/git-safety';
 import { clamp } from '@/lib/utils/text';
 import type { BackgroundProcessTools } from './background';
 
@@ -31,12 +33,20 @@ function clip(text: string): string {
 export function bashTool({
   background,
   getSandboxContext,
+  github,
 }: {
   // Shared with the background-process trio, so an auto-backgrounded command is
   // pollable via getProcessOutput. Optional so a caller can opt out of
   // auto-backgrounding (then a long command blocks as before).
   background?: BackgroundProcessTools;
   getSandboxContext: () => SandboxContext;
+  /**
+   * Who this turn runs for, so a `gh`/`git push` typed into bash goes through
+   * the same repo-ownership gate as the `gh` tool — otherwise the gate would be
+   * one `bash("gh pr close …")` away from irrelevant. Omit for callers with no
+   * requesting user (reminders, subagents inherit their parent's check).
+   */
+  github?: { isOwner: boolean; userId: string };
 }) {
   return tool({
     description:
@@ -53,17 +63,52 @@ export function bashTool({
       const resolvedDir = workingDirectory
         ? resolvePath(context, workingDirectory)
         : undefined;
+      const guard = github
+        ? await guardGithubCommand({
+            command,
+            context,
+            isOwner: github.isOwner,
+            userId: github.userId,
+            workingDirectory: resolvedDir,
+          })
+        : null;
+      if (guard?.allowed === false) {
+        return { error: guard.reason, exitCode: 1 };
+      }
       if (background) {
-        return await runWithAutoBackground({
+        const backgrounded = await runWithAutoBackground({
           abortSignal,
           background,
           command,
           workingDirectory: resolvedDir,
         });
+        // Only once it has actually finished — a still-running extraction gets
+        // disarmed when getProcessOutput reports it done.
+        if (!backgrounded.running) {
+          if (backgrounded.exitCode === 0) {
+            await guard?.claim();
+          }
+          await disarmFetchedRepos({
+            abortSignal,
+            command,
+            context,
+            workingDirectory: resolvedDir,
+          });
+        }
+        return backgrounded;
       }
       const result = await context.session.run({
         abortSignal,
         command,
+        workingDirectory: resolvedDir,
+      });
+      if (result.exitCode === 0) {
+        await guard?.claim();
+      }
+      await disarmFetchedRepos({
+        abortSignal,
+        command,
+        context,
         workingDirectory: resolvedDir,
       });
       return {
@@ -85,7 +130,9 @@ async function runWithAutoBackground({
   background: BackgroundProcessTools;
   command: string;
   workingDirectory?: string;
-}): Promise<Record<string, unknown>> {
+}): Promise<
+  Record<string, unknown> & { exitCode?: number; running?: boolean }
+> {
   const started = await background.startManaged(command, workingDirectory);
   if ('error' in started) {
     return { error: started.error, exitCode: 1 };

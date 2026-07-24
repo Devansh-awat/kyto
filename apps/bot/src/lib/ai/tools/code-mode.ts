@@ -2,6 +2,7 @@ import nodePath from 'node:path/posix';
 import type { SandboxContext } from '@repo/ai';
 import { tool } from 'ai';
 import { z } from 'zod';
+import { guardGithubCommand } from '@/lib/github/guard';
 import { clamp } from '@/lib/utils/text';
 
 // Code Mode (the Cloudflare pattern): instead of calling one host tool per step
@@ -67,8 +68,15 @@ function resolveDir(context: SandboxContext): string {
 
 export function codeModeTool({
   getSandboxContext,
+  github,
 }: {
   getSandboxContext: () => SandboxContext;
+  /**
+   * The requesting user, so a script that shells out to `gh`/`git push` is held
+   * to the same repo-ownership gate as the gh and bash tools (the `sh` helper is
+   * a shell, and the gate has to cover every shell).
+   */
+  github?: { isOwner: boolean; userId: string };
 }) {
   return tool({
     description:
@@ -88,6 +96,17 @@ export function codeModeTool({
     }),
     execute: async ({ code, install }, { abortSignal }) => {
       const context = getSandboxContext();
+      const guard = github
+        ? await guardGithubCommand({
+            command: code,
+            context,
+            isOwner: github.isOwner,
+            userId: github.userId,
+          })
+        : null;
+      if (guard?.allowed === false) {
+        return { exitCode: 1, stderr: guard.reason, stdout: '' };
+      }
       const dir = resolveDir(context);
       const encoder = new TextEncoder();
       await context.session.writeBinaryFile({
@@ -120,6 +139,9 @@ export function codeModeTool({
         command: 'bun run run.ts',
         workingDirectory: dir,
       });
+      if (result.exitCode === 0) {
+        await guard?.claim();
+      }
       return {
         exitCode: result.exitCode,
         stderr: clamp(result.stderr, OUTPUT_MAX),

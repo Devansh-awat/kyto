@@ -49,6 +49,10 @@ export const env = createEnv({
     // GitHub CLI token for the `gh` tool (injected per-call into the sandbox,
     // never persisted as a shell env var). Tool is registered only when set.
     GH_TOKEN: z.string().min(1).optional(),
+    // The GitHub account that token belongs to — kyto's own identity there. Used
+    // to tell the model that PRs/issues authored by it are kyto's own work, and
+    // to decide which repos the ownership gate auto-claims.
+    GH_LOGIN: z.string().min(1).default('kyto-agent'),
     // Replicate access via HackClub's proxy — a SEPARATE key from
     // HACKCLUB_API_KEY (Replicate is gated per-key there). Preferred TTS
     // backend; falls back to Gemini TTS when unset.

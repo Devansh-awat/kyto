@@ -1,5 +1,6 @@
 export * from './chatgpt-accounts';
 export * from './customizations';
+export * from './github-repos';
 export * from './identity';
 export * from './mcp';
 export * from './memories';

@@ -33,7 +33,7 @@ import { generateImageTool } from './tools/generate-image';
 import { getChannelInfoTool } from './tools/get-channel-info';
 import { getFileTool } from './tools/get-file';
 import { getUserTool } from './tools/get-user';
-import { ghTool } from './tools/gh';
+import { ghTool, githubAccessTool } from './tools/gh';
 import { joinThreadTool } from './tools/join-thread';
 import { leaveThreadTool } from './tools/leave-thread';
 import { listThreadsTool } from './tools/list-threads';
@@ -134,8 +134,15 @@ export async function buildTools({
   const background = backgroundProcessTools({ getSandboxContext });
 
   const core: ToolSet = {
-    bash: bashTool({ background, getSandboxContext }),
-    codeMode: codeModeTool({ getSandboxContext }),
+    bash: bashTool({
+      background,
+      getSandboxContext,
+      github: { isOwner, userId: authorUserId },
+    }),
+    codeMode: codeModeTool({
+      getSandboxContext,
+      github: { isOwner, userId: authorUserId },
+    }),
     readFile: readFileTool({ getSandboxContext }),
     writeFile: writeFileTool({ getSandboxContext }),
     editFile: editFileTool({ getSandboxContext }),
@@ -289,7 +296,16 @@ export async function buildTools({
       ? {
           gh: {
             summary: 'run a GitHub CLI (`gh`) command in the sandbox',
-            tool: ghTool({ getSandboxContext }),
+            tool: ghTool({
+              getSandboxContext,
+              isOwner,
+              userId: authorUserId,
+            }),
+          },
+          githubAccess: {
+            summary:
+              'see who a GitHub repo belongs to, or change who may write to it',
+            tool: githubAccessTool({ isOwner, userId: authorUserId }),
           },
         }
       : {}),
