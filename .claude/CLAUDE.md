@@ -165,6 +165,11 @@ Config in `packages/sandbox/src/config.ts`. E2B is the execution backend for the
 
 `bun run sync:manifest` (apps/bot) pushes `slack-manifest.json` via `apps.manifest.update`. Needs a Slack **app configuration token** (not the bot/user token): `SLACK_APP_ID`, `SLACK_CONFIG_ACCESS_TOKEN`, optional `SLACK_CONFIG_REFRESH_TOKEN` (auto-rotates the short-lived access token). Scope changes require reinstalling the app. Slack scopes are declared in `slack-manifest.json` — update it when a tool needs a new one.
 
+## Host / deployment
+
+- **Runs on the `oracle` server** (Oracle Linux 9, aarch64), migrated from the old `nest` server. On oracle, Postgres is **local with no TLS**, so `packages/db/src/client.ts` uses `ssl: false` (the nest setup used `ssl: 'require'`). Keep it `false` while oracle is the deploy target.
+- **`gh` is NOT in the Oracle Linux repos** (`dnf install gh` → "No match for argument: gh"); install the GitHub CLI from its official RPM repo, or authenticate git pushes with a PAT credential (see below) instead of `gh`.
+
 ## Debugging "kyto isn't responding"
 
 - Runs under **systemd** (`kyto.service`, unit at `deploy/kyto.service`, `Restart=always`). `journalctl -u kyto.service -f -o cat`. Two unrelated Slack apps also run here (`slackbot.service`, `hackclub-ai-status-bot.service`) — different tokens, no interference.
