@@ -111,6 +111,9 @@ export function streamAttempt({
     apiKey: attempt.apiKey,
     baseURL: attempt.baseURL,
     fetch: tunedFetch({ attempt, holder }) as unknown as typeof fetch,
+    // Extra per-attempt headers (e.g. the ChatGPT account-scoping header). The
+    // Authorization header is still set from apiKey by the client.
+    ...(attempt.headers ? { headers: attempt.headers } : {}),
     name: attempt.provider,
   });
   // Attachment images ride in the user turn (put BEFORE the text so the cache

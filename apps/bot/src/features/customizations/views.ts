@@ -1,5 +1,6 @@
 import { BYOK_PROVIDER_IDS, BYOK_PROVIDERS, personas } from '@repo/ai';
 import type {
+  ChatgptAccount,
   IdentityProfile,
   Reminder,
   UserMcpServer,
@@ -151,8 +152,223 @@ function modelKeyBlocks(credentials: UserModelCredential[]): SlackBlock[] {
   return blocks;
 }
 
+// The "Sign in with ChatGPT" section: link a ChatGPT account so the user's turns
+// run on their own subscription. Gated on the same key as BYOK (both store
+// encrypted secrets). Only ever rendered for the account owner (App Home is
+// per-user).
+const CHATGPT_DEFAULT_MODEL = 'gpt-5';
+
+function chatgptBlocks(account: ChatgptAccount | null): SlackBlock[] {
+  if (!account) {
+    return [
+      { type: 'divider' },
+      {
+        accessory: {
+          action_id: 'home_link_chatgpt',
+          style: 'primary',
+          text: plainText('Sign in with ChatGPT'),
+          type: 'button',
+        },
+        text: mrkdwn(
+          "*Sign in with ChatGPT*\nLink your ChatGPT account (Plus / Pro / Team) and your turns run on your own subscription instead of kyto's shared models."
+        ),
+        type: 'section',
+      },
+      {
+        elements: [mrkdwn('_Not linked._')],
+        type: 'context',
+      },
+    ];
+  }
+  const badge =
+    VALIDATION_BADGES[account.validationStatus] ??
+    VALIDATION_BADGES.unvalidated;
+  const blocks: SlackBlock[] = [
+    { type: 'divider' },
+    {
+      accessory: {
+        action_id: 'home_unlink_chatgpt',
+        confirm: {
+          confirm: plainText('Unlink'),
+          deny: plainText('Keep'),
+          text: mrkdwn('Your ChatGPT account will be disconnected.'),
+          title: plainText('Unlink ChatGPT?'),
+        },
+        style: 'danger',
+        text: plainText('Unlink'),
+        type: 'button',
+      },
+      text: mrkdwn(
+        `*ChatGPT* — ${escapeSlackText(account.accountLabel)} · \`${escapeSlackText(account.model)}\` · ${badge}`
+      ),
+      type: 'section',
+    },
+    {
+      elements: [
+        {
+          action_id: 'home_edit_chatgpt_model',
+          text: plainText('Change model'),
+          type: 'button',
+        },
+        {
+          action_id: 'home_toggle_chatgpt_first',
+          text: plainText(
+            account.chatgptFirst
+              ? 'Order: ChatGPT first'
+              : 'Order: shared first'
+          ),
+          type: 'button',
+          // The target state, so a stale home view can't flip it the wrong way.
+          value: account.chatgptFirst ? 'off' : 'on',
+        },
+        {
+          action_id: 'home_toggle_chatgpt_fallback',
+          text: plainText(
+            account.serviceFallback
+              ? 'Shared fallback: on'
+              : 'Shared fallback: off'
+          ),
+          type: 'button',
+          value: account.serviceFallback ? 'off' : 'on',
+        },
+      ],
+      type: 'actions',
+    },
+  ];
+  if (account.validationStatus === 'invalid') {
+    blocks.push({
+      elements: [
+        mrkdwn(
+          `:warning: ${escapeSlackText(
+            (
+              account.validationMessage ?? 'Your ChatGPT login needs attention.'
+            ).slice(0, VALIDATION_MESSAGE_MAX)
+          )}`
+        ),
+      ],
+      type: 'context',
+    });
+  }
+  blocks.push({
+    elements: [
+      mrkdwn(
+        '_“ChatGPT first” runs your subscription before kyto’s shared models; “shared first” only uses ChatGPT if the shared models are exhausted. Shared fallback off means a failing login stops the turn._'
+      ),
+    ],
+    type: 'context',
+  });
+  return blocks;
+}
+
+/**
+ * The "Sign in with ChatGPT" modal. `authUrl` is the pre-generated authorize
+ * link (the PKCE verifier for it is held server-side, keyed by the user). The
+ * user opens it, signs in, and pastes the URL they land on back here.
+ */
+export function buildChatgptLinkModal(authUrl: string): SlackModalView {
+  return {
+    blocks: [
+      {
+        text: mrkdwn(
+          `*1.* <${authUrl}|Open the ChatGPT sign-in page> and log in.\n*2.* Your browser will try to open a \`localhost:1455\` page that won't load — that's expected.\n*3.* Copy the full URL from your browser's address bar and paste it below.`
+        ),
+        type: 'section',
+      },
+      {
+        block_id: 'chatgpt_callback',
+        element: {
+          action_id: 'callback',
+          multiline: true,
+          placeholder: plainText('http://localhost:1455/auth/callback?code=…'),
+          type: 'plain_text_input',
+        },
+        hint: plainText(
+          'The full URL you were redirected to (or just the code).'
+        ),
+        label: plainText('Redirected URL'),
+        type: 'input',
+      },
+      {
+        block_id: 'chatgpt_model',
+        element: {
+          action_id: 'model',
+          initial_value: CHATGPT_DEFAULT_MODEL,
+          max_length: 120,
+          placeholder: plainText('e.g. gpt-5'),
+          type: 'plain_text_input',
+        },
+        hint: plainText(
+          'The model to run for your turns. Change it later from App Home.'
+        ),
+        label: plainText('Model'),
+        type: 'input',
+      },
+    ],
+    callback_id: 'home_save_chatgpt',
+    close: plainText('Cancel'),
+    submit: plainText('Link account'),
+    title: plainText('Sign in with ChatGPT'),
+    type: 'modal',
+  };
+}
+
+// Slack caps a static_select at 100 options.
+const CHATGPT_MODEL_OPTIONS_MAX = 100;
+
+/**
+ * Change the model a linked ChatGPT account runs on. When the account's
+ * available models were fetched (`models`), render a dropdown of exactly those;
+ * otherwise fall back to a free-text field (the fetch can fail, and the user can
+ * still type a valid id).
+ */
+export function buildChatgptModelModal(
+  account: ChatgptAccount,
+  models: string[] = []
+): SlackModalView {
+  const usable = models.slice(0, CHATGPT_MODEL_OPTIONS_MAX);
+  const options = usable.map((id) => ({ text: plainText(id), value: id }));
+  const initial = options.find((option) => option.value === account.model);
+  const modelBlock: SlackBlock =
+    usable.length > 0
+      ? {
+          block_id: 'chatgpt_model',
+          element: {
+            action_id: 'model',
+            ...(initial ? { initial_option: initial } : {}),
+            options,
+            placeholder: plainText('Choose a model'),
+            type: 'static_select',
+          },
+          hint: plainText('The models available to your ChatGPT account.'),
+          label: plainText('Model'),
+          type: 'input',
+        }
+      : {
+          block_id: 'chatgpt_model',
+          element: {
+            action_id: 'model',
+            initial_value: account.model,
+            max_length: 120,
+            placeholder: plainText('e.g. gpt-5'),
+            type: 'plain_text_input',
+          },
+          hint: plainText('The model kyto runs on your ChatGPT subscription.'),
+          label: plainText('Model'),
+          type: 'input',
+        };
+  return {
+    blocks: [modelBlock],
+    callback_id: 'home_save_chatgpt_model',
+    close: plainText('Cancel'),
+    submit: plainText('Save'),
+    title: plainText('ChatGPT model'),
+    type: 'modal',
+  };
+}
+
 export function buildHomeView({
   byokEnabled = false,
+  chatgptAccount = null,
   identityProfiles = [],
   isOwner = false,
   mcpServers = [],
@@ -164,6 +380,8 @@ export function buildHomeView({
 }: {
   /** False when the host has no BYOK_ENCRYPTION_KEY: hide the section entirely. */
   byokEnabled?: boolean;
+  /** The user's linked ChatGPT account, or null. Rendered under the BYOK gate. */
+  chatgptAccount?: ChatgptAccount | null;
   identityProfiles?: IdentityProfile[];
   isOwner?: boolean;
   mcpServers?: UserMcpServer[];
@@ -239,6 +457,7 @@ export function buildHomeView({
   );
 
   if (byokEnabled) {
+    blocks.push(...chatgptBlocks(chatgptAccount));
     blocks.push(...modelKeyBlocks(modelCredentials));
   }
 

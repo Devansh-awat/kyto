@@ -35,6 +35,7 @@ import { buildTools } from '@/lib/ai/toolset';
 import { runQueuedTurn } from '@/lib/ai/turn-queue';
 import { recordByokOutcome, resolveUserRouting } from '@/lib/byok';
 import { bot, slack } from '@/lib/chat';
+import { recordChatgptOutcome } from '@/lib/chatgpt';
 import {
   agentErrorMessage,
   BudgetExhaustedError,
@@ -363,7 +364,10 @@ async function executeTurn(
     // shared service chain is only reachable afterwards if they opted in — a
     // broken personal key must not silently spend the shared budget.
     const routing = await resolveUserRouting(turnMessage.author.userId);
-    const byokQueue = [...routing.byok];
+    // The user's own paid attempts (a linked ChatGPT account and/or BYOK keys),
+    // consumed in order. routing.ownFirst decides whether these run before or
+    // after kyto's shared service chain.
+    const ownQueue = [...routing.own];
     // The service query runs on PRIMARY_ATTEMPT (a pinned model on the owner's
     // DigitalOcean BYOK quota). On failure we walk the fallback queue built by
     // buildFallbackQueue. Models already tried are skipped via failedKeys.
@@ -433,22 +437,16 @@ async function executeTurn(
         ...tier(GEMINI_PROVIDER),
       ];
     };
-    const routeNextAttempt = () => {
-      // The user's own keys come first, and are the ONLY thing tried unless they
-      // opted into service fallback.
-      const ownKey = byokQueue.shift();
-      if (ownKey) {
-        attempt = ownKey;
-        return;
-      }
-      if (routing.byok.length > 0 && !routing.serviceFallback) {
-        attempt = undefined;
-        return;
-      }
+    // The next of the user's OWN attempts (ChatGPT account / BYOK keys), or
+    // undefined when they're spent.
+    const nextOwnAttempt = (): ModelAttempt | undefined => ownQueue.shift();
+    // The next SHARED service attempt: PRIMARY_ATTEMPT first, then the fallback
+    // queue in tier order, skipping already-failed keys and any tier written off
+    // mid-walk. Undefined when the whole shared chain is exhausted.
+    const nextSharedAttempt = (): ModelAttempt | undefined => {
       if (!triedPrimary) {
         triedPrimary = true;
-        attempt = PRIMARY_ATTEMPT;
-        return;
+        return PRIMARY_ATTEMPT;
       }
       const skipHackclub = hackclubBudgetExhausted || hackclubUnavailable;
       fallbackQueue ??= buildFallbackQueue();
@@ -456,7 +454,7 @@ async function executeTurn(
       // DigitalOcean rate-limited), so the skips are applied at selection time
       // rather than baked into the queue: no point retrying a dead proxy or a
       // spent quota one rung at a time.
-      attempt = fallbackQueue.find(
+      return fallbackQueue.find(
         (candidate) =>
           !(
             failedKeys.has(`${candidate.provider}:${candidate.model}`) ||
@@ -465,6 +463,27 @@ async function executeTurn(
               candidate.provider === DIGITALOCEAN_PROVIDER)
           )
       );
+    };
+    const routeNextAttempt = () => {
+      if (routing.ownFirst) {
+        // Own attempts first; the shared chain only after them, and only if the
+        // user opted into it (otherwise the turn stops — see ByokExhaustedError).
+        const own = nextOwnAttempt();
+        if (own) {
+          attempt = own;
+          return;
+        }
+        if (routing.own.length > 0 && !routing.serviceFallback) {
+          attempt = undefined;
+          return;
+        }
+        attempt = nextSharedAttempt();
+        return;
+      }
+      // Shared-first: kyto's models lead, and the user's own attempts are the
+      // final fallback once the shared chain is exhausted.
+      const shared = nextSharedAttempt();
+      attempt = shared ?? nextOwnAttempt();
     };
     routeNextAttempt();
     logger.info(
@@ -815,8 +834,13 @@ async function executeTurn(
           observations: renderObservations(gatheredResults),
           threadId,
         });
-        // A BYOK key that just answered a whole turn is demonstrably valid.
+        // A user's own key/account that just answered a whole turn is
+        // demonstrably valid (each recorder no-ops unless the attempt is theirs).
         await recordByokOutcome({
+          attempt: currentAttempt,
+          userId: turnMessage.author.userId,
+        });
+        await recordChatgptOutcome({
           attempt: currentAttempt,
           userId: turnMessage.author.userId,
         });
@@ -844,9 +868,15 @@ async function executeTurn(
         }
         attempts.push({ attempt: currentAttempt, error });
         failedKeys.add(`${currentAttempt.provider}:${currentAttempt.model}`);
-        // Mark the user's key invalid only if the PROVIDER rejected the key
-        // itself (401/402/403) — a rate limit or an outage says nothing about it.
+        // Mark the user's key/account invalid only if the PROVIDER rejected it
+        // (401/402/403) — a rate limit or an outage says nothing about it. Each
+        // recorder no-ops unless the failed attempt is theirs.
         await recordByokOutcome({
+          attempt: currentAttempt,
+          error,
+          userId: turnMessage.author.userId,
+        });
+        await recordChatgptOutcome({
           attempt: currentAttempt,
           error,
           userId: turnMessage.author.userId,
@@ -896,10 +926,16 @@ async function executeTurn(
           throw error;
         }
         if (!retryAttempt) {
-          // The user's own keys were the only path allowed and they're spent:
-          // say so plainly instead of a generic failure, since only they can fix
-          // it (and they explicitly did NOT opt into the shared budget).
-          if (routing.byok.length > 0 && !routing.serviceFallback) {
+          // The user's own attempts were the only path allowed and they're
+          // spent: say so plainly instead of a generic failure, since only they
+          // can fix it (and they explicitly did NOT opt into the shared budget).
+          // Only meaningful in own-first mode; in shared-first the shared chain
+          // has already run.
+          if (
+            routing.ownFirst &&
+            routing.own.length > 0 &&
+            !routing.serviceFallback
+          ) {
             throw new ByokExhaustedError(errorMessage(error), { cause: error });
           }
           if (hackclubBudgetExhausted) {

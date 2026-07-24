@@ -9,6 +9,7 @@ import {
   setCredentialValidation,
 } from '@repo/db/queries';
 import { byokConfigured, decryptSecret } from '@/lib/byok/crypto';
+import { resolveChatgptRouting } from '@/lib/chatgpt';
 import logger from '@/lib/logger';
 import { deepErrorText, errorStatus } from '@/lib/utils/error';
 
@@ -19,24 +20,40 @@ export {
   SecretCryptoError,
 } from '@/lib/byok/crypto';
 
-/** How the acting user's turn is routed. */
+/**
+ * How the acting user's turn is routed. "Own" attempts are the ones the user
+ * pays for: a linked ChatGPT account (their subscription) plus any BYOK keys.
+ */
 export interface UserRouting {
-  /** The user's own keys, in the order they were added. Empty = service turn. */
-  byok: ModelAttempt[];
+  /** The user's own paid attempts, in order. Empty = an ordinary service turn. */
+  own: ModelAttempt[];
   /**
-   * May kyto spend the SHARED service budget after the user's own keys fail?
-   * Opt-in per key and OFF by default: a broken personal key must not silently
-   * bill the shared HackClub/DigitalOcean budget. Always true when the user has
-   * no keys at all (an ordinary service turn).
+   * Run the user's own attempts BEFORE kyto's shared models (true, the default —
+   * their subscription/key pays), or only AFTER the shared chain is exhausted
+   * (false). Set from a linked ChatGPT account's "ChatGPT first / shared first"
+   * choice; BYOK-only users are always own-first, as before.
+   */
+  ownFirst: boolean;
+  /**
+   * May kyto spend the SHARED service budget after the user's own attempts fail?
+   * Opt-in and OFF by default: a broken personal key/login must not silently bill
+   * the shared HackClub/DigitalOcean budget. Always true when the user has no own
+   * attempts at all (an ordinary service turn), and irrelevant when ownFirst is
+   * false (the shared chain already runs first in that mode).
    */
   serviceFallback: boolean;
 }
 
-const SERVICE_ONLY: UserRouting = { byok: [], serviceFallback: true };
+const SERVICE_ONLY: UserRouting = {
+  own: [],
+  ownFirst: true,
+  serviceFallback: true,
+};
 
 /**
- * Resolve how THIS user's turn should be routed: their own model keys first (in
- * the order added), and whether the service chain may be used after them.
+ * Resolve how THIS user's turn should be routed: a linked ChatGPT account and
+ * their own BYOK keys ("own" attempts), the order they run relative to kyto's
+ * shared models, and whether the shared chain may be used at all.
  *
  * A key that can't be decrypted (encryption key rotated, row tampered) is
  * skipped rather than failing the turn — the user still gets an answer, and the
@@ -46,6 +63,11 @@ export async function resolveUserRouting(userId: string): Promise<UserRouting> {
   if (!byokConfigured()) {
     return SERVICE_ONLY;
   }
+
+  // A linked ChatGPT account leads the "own" list and carries the ordering
+  // choice (ChatGPT-first vs shared-first). Token refresh happens inside.
+  const chatgpt = await resolveChatgptRouting(userId).catch(() => undefined);
+
   const credentials = await listUserModelCredentialSecrets(userId).catch(
     (error: unknown) => {
       logger.warn(
@@ -55,12 +77,13 @@ export async function resolveUserRouting(userId: string): Promise<UserRouting> {
       return [];
     }
   );
-  if (credentials.length === 0) {
-    return SERVICE_ONLY;
-  }
 
-  const byok: ModelAttempt[] = [];
+  const own: ModelAttempt[] = [];
   let serviceFallback = false;
+  if (chatgpt) {
+    own.push(chatgpt.attempt);
+    serviceFallback ||= chatgpt.serviceFallback;
+  }
   for (const credential of credentials) {
     if (!isByokProviderId(credential.provider)) {
       continue;
@@ -90,23 +113,26 @@ export async function resolveUserRouting(userId: string): Promise<UserRouting> {
     if (!attempt) {
       continue;
     }
-    byok.push(attempt);
+    own.push(attempt);
     // Any key that opts in unlocks the service chain for the turn.
     serviceFallback ||= credential.serviceFallback;
   }
 
-  if (byok.length === 0) {
+  if (own.length === 0) {
     return SERVICE_ONLY;
   }
+  // The ChatGPT account owns the ordering choice; a BYOK-only user is own-first.
+  const ownFirst = chatgpt ? chatgpt.chatgptFirst : true;
   logger.info(
     {
-      providers: byok.map((attempt) => attempt.provider),
+      ownFirst,
+      providers: own.map((attempt) => attempt.provider),
       serviceFallback,
       userId,
     },
-    '[byok] routing turn on the user’s own model keys'
+    '[byok] routing turn on the user’s own attempts'
   );
-  return { byok, serviceFallback };
+  return { own, ownFirst, serviceFallback };
 }
 
 // Statuses a provider returns when the KEY itself is the problem, as opposed to

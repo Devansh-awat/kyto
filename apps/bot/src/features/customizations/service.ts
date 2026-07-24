@@ -1,4 +1,5 @@
 import {
+  getChatgptAccount,
   getIdentityProfiles,
   getUserCustomization,
   listMcpServers,
@@ -23,6 +24,7 @@ export async function publishHome({
     identityProfiles,
     reminders,
     modelCredentials,
+    chatgptAccount,
   ] = await Promise.all([
     getUserCustomization(userId),
     listMcpServers(userId).catch(() => []),
@@ -31,12 +33,16 @@ export async function publishHome({
     byokEnabled
       ? listUserModelCredentials(userId).catch(() => [])
       : Promise.resolve([]),
+    byokEnabled
+      ? getChatgptAccount(userId).catch(() => undefined)
+      : Promise.resolve(undefined),
   ]);
 
   await slack.webClient.views.publish({
     user_id: userId,
     view: buildHomeView({
       byokEnabled,
+      chatgptAccount: chatgptAccount ?? null,
       identityProfiles,
       isOwner,
       mcpServers,

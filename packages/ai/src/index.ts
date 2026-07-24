@@ -34,5 +34,14 @@ export {
   isByokAttempt,
   isByokProviderId,
 } from './providers/byok';
+export {
+  buildChatgptAuthUrl,
+  CHATGPT_OAUTH,
+  CHATGPT_PROVIDER,
+  type ChatgptPkce,
+  chatgptAttempt,
+  generateOauthState,
+  generatePkce,
+} from './providers/chatgpt';
 export { provider } from './providers/models';
 export type { SandboxContext } from './types';

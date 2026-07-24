@@ -3,18 +3,23 @@ import {
   addMcpServer,
   cancelReminder,
   clearUserCustomization,
+  deleteChatgptAccount,
   deleteUserModelCredential,
+  getChatgptAccount,
   getIdentityProfiles,
   getUserCustomization,
   listUserModelCredentials,
   pauseReminder,
   removeMcpServer,
   resumeReminder,
+  setChatgptChatgptFirst,
+  setChatgptServiceFallback,
   setCredentialServiceFallback,
   setCredentialValidation,
   setIdentityProfile,
   setUsageFooter,
   setUserCustomization,
+  updateChatgptModel,
   updateUserModelCredentialConfig,
   upsertUserModelCredential,
 } from '@repo/db/queries';
@@ -28,6 +33,12 @@ import {
   validateCredential,
 } from '@/lib/byok';
 import { bot, slack } from '@/lib/chat';
+import {
+  chatgptConfigured,
+  completeChatgptLink,
+  listChatgptModels,
+  startChatgptLink,
+} from '@/lib/chatgpt';
 import { IDENTITY_TYPES, resetIdentityCache } from '@/lib/identity';
 import logger from '@/lib/logger';
 import { toLogError } from '@/lib/utils/error';
@@ -39,6 +50,8 @@ import {
 } from './schema';
 import { publishHome } from './service';
 import {
+  buildChatgptLinkModal,
+  buildChatgptModelModal,
   buildIdentityModal,
   buildMcpModal,
   buildModelKeyModal,
@@ -523,6 +536,166 @@ bot.onModalSubmit(
     return;
   }
 );
+
+// ── Sign in with ChatGPT (per-user, App Home) ───────────────────────────────
+
+// The tokens never leave this flow in the clear: the OAuth exchange happens
+// host-side, the access/refresh tokens are encrypted before the DB, never
+// logged, and never shown back. See lib/chatgpt.
+
+bot.onAction('home_link_chatgpt', async (event) => {
+  if (!(event.triggerId && chatgptConfigured())) {
+    return;
+  }
+  const authUrl = startChatgptLink(event.user.userId);
+  await slack.webClient.views
+    .open({
+      trigger_id: event.triggerId,
+      view: buildChatgptLinkModal(authUrl) as never,
+    })
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), userId: event.user.userId },
+        'Failed to open ChatGPT link modal'
+      );
+    });
+});
+
+bot.onModalSubmit(
+  'home_save_chatgpt',
+  async (event: ModalSubmitEvent): Promise<ModalSubmitResult> => {
+    if (!chatgptConfigured()) {
+      return;
+    }
+    const pasted = event.values.chatgpt_callback?.trim();
+    const model = event.values.chatgpt_model?.trim();
+    if (!pasted) {
+      return {
+        action: 'errors',
+        errors: { chatgpt_callback: 'Paste the URL you were redirected to.' },
+      };
+    }
+    if (!model) {
+      return {
+        action: 'errors',
+        errors: { chatgpt_model: 'Enter a model id.' },
+      };
+    }
+    const result = await completeChatgptLink({
+      model,
+      pasted,
+      userId: event.user.userId,
+    });
+    if (!result.ok) {
+      return {
+        action: 'errors',
+        errors: {
+          chatgpt_callback: (
+            result.error ?? 'Could not link your account.'
+          ).slice(0, MODAL_ERROR_MAX),
+        },
+      };
+    }
+    await publishHome({ userId: event.user.userId }).catch(() => undefined);
+    return;
+  }
+);
+
+bot.onAction('home_edit_chatgpt_model', async (event) => {
+  if (!(event.triggerId && chatgptConfigured())) {
+    return;
+  }
+  const account = await getChatgptAccount(event.user.userId).catch(
+    () => undefined
+  );
+  if (!account) {
+    return;
+  }
+  // Populate the picker with the models this account can actually use; on a
+  // fetch failure the modal falls back to a free-text field.
+  const models = await listChatgptModels(event.user.userId).catch(() => []);
+  await slack.webClient.views
+    .open({
+      trigger_id: event.triggerId,
+      view: buildChatgptModelModal(account, models) as never,
+    })
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), userId: event.user.userId },
+        'Failed to open ChatGPT model modal'
+      );
+    });
+});
+
+bot.onModalSubmit(
+  'home_save_chatgpt_model',
+  async (event: ModalSubmitEvent): Promise<ModalSubmitResult> => {
+    const model = event.values.chatgpt_model?.trim();
+    if (!model) {
+      return {
+        action: 'errors',
+        errors: { chatgpt_model: 'Enter a model id.' },
+      };
+    }
+    await updateChatgptModel({ model, userId: event.user.userId }).catch(
+      (error: unknown) => {
+        logger.warn(
+          { ...toLogError(error), userId: event.user.userId },
+          'Failed to update ChatGPT model'
+        );
+      }
+    );
+    await publishHome({ userId: event.user.userId }).catch(() => undefined);
+    return;
+  }
+);
+
+bot.onAction('home_unlink_chatgpt', async (event) => {
+  await deleteChatgptAccount(event.user.userId)
+    .then(() => publishHome({ userId: event.user.userId }))
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), userId: event.user.userId },
+        'Failed to unlink ChatGPT account'
+      );
+    });
+});
+
+bot.onAction('home_toggle_chatgpt_first', async (event) => {
+  const target = event.value;
+  if (!(target === 'on' || target === 'off')) {
+    return;
+  }
+  await setChatgptChatgptFirst({
+    chatgptFirst: target === 'on',
+    userId: event.user.userId,
+  })
+    .then(() => publishHome({ userId: event.user.userId }))
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), userId: event.user.userId },
+        'Failed to toggle ChatGPT ordering'
+      );
+    });
+});
+
+bot.onAction('home_toggle_chatgpt_fallback', async (event) => {
+  const target = event.value;
+  if (!(target === 'on' || target === 'off')) {
+    return;
+  }
+  await setChatgptServiceFallback({
+    allowed: target === 'on',
+    userId: event.user.userId,
+  })
+    .then(() => publishHome({ userId: event.user.userId }))
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), userId: event.user.userId },
+        'Failed to toggle ChatGPT service fallback'
+      );
+    });
+});
 
 // ── Reminders (per-user, App Home) ──────────────────────────────────────────
 
