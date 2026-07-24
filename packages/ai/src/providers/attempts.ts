@@ -30,13 +30,22 @@ export interface ModelAttempt {
    * is reported back to them and whether the shared budget may be touched next.
    */
   byokProvider?: string;
+  /**
+   * Extra request headers merged onto every call for this attempt. Used by the
+   * "Sign in with ChatGPT" path (providers/chatgpt) to send the account-scoping
+   * header the ChatGPT backend expects; unset for every other attempt.
+   */
+  headers?: Record<string, string>;
   model: string;
   provider: string;
 }
 
 /**
- * The primary model for the main query: Kimi K2.6, pinned, served by
- * **HackClub** (`moonshotai/kimi-k2.6`) — owner's call.
+ * The primary model for the main query: Kimi K2.7, pinned, served by
+ * **HackClub** (`moonshotai/kimi-k2.7-code`, the only K2.7 slug HackClub
+ * exposes) — owner's call. K2.7 on HackClub, K2.6 on DigitalOcean (see
+ * DIGITALOCEAN_MODELS); the two are distinct fallback entries (`failedKeys` is
+ * keyed on provider+model) so a DO-served K2.6 is still tried when this fails.
  *
  * COST NOTE, because this reverses an earlier decision: the primary used to be
  * a DigitalOcean BYOK model precisely so the main query billed the owner's DO
@@ -49,11 +58,10 @@ export interface ModelAttempt {
  *
  * A single pinned model (this replaced `openrouter/auto`, whose per-request
  * re-routing produced empty completions and long fallback cascades), so 1-hour
- * prompt caching sticks across a thread's turns. The DigitalOcean-served
- * `kimi-k2.6` remains a fallback rung; `failedKeys` is keyed on provider+model,
- * so the two are distinct entries and the DO one is still tried if this fails.
+ * prompt caching (addCacheControl in agent.ts) sticks across a thread's turns —
+ * which is what keeps K2.7 competitive on cost with the K2.6 it replaced.
  */
-export const PRIMARY_MODEL = 'moonshotai/kimi-k2.6';
+export const PRIMARY_MODEL = 'moonshotai/kimi-k2.7-code';
 
 // Cap output tokens on HackClub requests. OpenRouter enforces the daily spend
 // limit PESSIMISTICALLY: with no `max_tokens` it assumes the model could emit
@@ -99,10 +107,16 @@ const geminiAttempts: ModelAttempt[] = env.GEMINI_API_KEY
 // which makes them useless for kyto's tool-driven loop. These are short BYOK
 // aliases (OpenRouter resolves `glm-5.2` → `z-ai/glm-5.2-…`); the `-fast`/
 // `-normal` proxy aliases in the owner's list are NOT valid OpenRouter ids.
+//
+// Kimi K2.6 LEADS this tier: it's the DigitalOcean-served K2.x (K2.7 is NOT on
+// DigitalOcean — `moonshotai/kimi-k2.7` is an invalid OpenRouter id and
+// `kimi-k2.7-code` has no DigitalOcean provider, verified), so K2.7 lives on
+// HackClub (the primary) and K2.6 is the DO counterpart. `glm-5.2` was dropped
+// from this tier for cost (owner's call — expensive on the DO account); it stays
+// on the HackClub leaderboard, which is a separate quota.
 const DIGITALOCEAN_MODELS = [
-  'glm-5.2',
-  'deepseek-v4-pro',
   'kimi-k2.6',
+  'deepseek-v4-pro',
   'qwen3.5-397b-a17b',
   'minimax-m2.5',
   'glm-5',
