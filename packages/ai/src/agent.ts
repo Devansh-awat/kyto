@@ -172,6 +172,21 @@ export function streamAttempt({
     // dies as an unrecoverable AI_JSONParseError.
     experimental_repairToolCall: repairTruncatedToolCall,
     model,
+    // Mirror the Codex client on a ChatGPT turn. `store: false` has to be told
+    // to the SDK, not just forced onto the wire body (codexFetch): knowing it,
+    // the provider asks for `include: reasoning.encrypted_content` and replays
+    // reasoning items WITH their payload instead of by `rs_…` id. Without it
+    // every multi-step tool turn died at the second step with a 404 "Item with
+    // id 'rs_…' not found. Items are not persisted when `store` is set to
+    // false" — which is what made ChatGPT turns fall back to the shared models
+    // so much more often than the same account does in Codex itself.
+    ...(isChatgpt
+      ? {
+          providerOptions: {
+            openai: { reasoningSummary: 'auto', store: false },
+          },
+        }
+      : {}),
     ...(onError ? { onError: ({ error }) => onError(error) } : {}),
     ...(activeTools || getFreshImages
       ? {
@@ -316,6 +331,10 @@ function codexFetch({
     }
     let body = raw;
     try {
+      // Belt and braces: the provider already sets store:false from
+      // providerOptions (which is what makes it request encrypted reasoning
+      // content), but Codex rejects a stored request outright, so pin it here
+      // too in case an SDK update stops threading the option through.
       const payload = JSON.parse(raw) as Record<string, unknown>;
       payload.store = false;
       body = JSON.stringify(payload);

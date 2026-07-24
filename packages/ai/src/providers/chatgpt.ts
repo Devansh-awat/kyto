@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { ModelAttempt } from './attempts';
 
 /**
@@ -19,6 +19,13 @@ import type { ModelAttempt } from './attempts';
  * a kyto modal, which finishes the PKCE exchange host-side.
  */
 export const CHATGPT_PROVIDER = 'chatgpt-oauth';
+
+/**
+ * A recent Codex client version. Sent as the `version` header on turns and as
+ * `?client_version=` on the model-catalog call — the backend uses it to decide
+ * which models an account may see, so a stale value quietly narrows the list.
+ */
+export const CODEX_CLIENT_VERSION = '0.144.1';
 
 export const CHATGPT_OAUTH = {
   apiBaseUrl: 'https://chatgpt.com/backend-api/codex',
@@ -90,10 +97,25 @@ export function chatgptAttempt(input: {
   return {
     apiKey: input.accessToken,
     baseURL: CHATGPT_OAUTH.apiBaseUrl,
-    ...(input.accountId
-      ? { headers: { 'chatgpt-account-id': input.accountId } }
-      : {}),
+    headers: {
+      ...(input.accountId ? { 'chatgpt-account-id': input.accountId } : {}),
+      ...codexClientHeaders(),
+    },
     model: input.model,
     provider: CHATGPT_PROVIDER,
+  };
+}
+
+/**
+ * The client-identity headers the Codex CLI sends on every turn. The backend is
+ * a Codex endpoint rather than a general API, so it is happier when the request
+ * looks like the client it serves; `session_id` is per attempt, like a Codex
+ * session.
+ */
+function codexClientHeaders(): Record<string, string> {
+  return {
+    originator: 'codex_cli_rs',
+    session_id: randomUUID(),
+    version: CODEX_CLIENT_VERSION,
   };
 }

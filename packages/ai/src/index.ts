@@ -39,6 +39,7 @@ export {
   CHATGPT_OAUTH,
   CHATGPT_PROVIDER,
   type ChatgptPkce,
+  CODEX_CLIENT_VERSION,
   chatgptAttempt,
   generateOauthState,
   generatePkce,

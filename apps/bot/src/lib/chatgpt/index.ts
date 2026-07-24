@@ -2,6 +2,7 @@ import {
   buildChatgptAuthUrl,
   CHATGPT_OAUTH,
   CHATGPT_PROVIDER,
+  CODEX_CLIENT_VERSION,
   chatgptAttempt,
   generateOauthState,
   generatePkce,
@@ -365,10 +366,9 @@ interface CodexModelsResponse {
   }>;
 }
 
-// A recent Codex client version — the catalog endpoint wants one. It only gates
-// which models come back; a slightly stale value still lists the account's
-// models.
-const CODEX_CLIENT_VERSION = '0.144.1';
+// The catalog endpoint wants a client version (shared with the turn headers, so
+// there is one value to bump). It only gates which models come back; a slightly
+// stale value still lists the account's models.
 const MODELS_TIMEOUT_MS = 15_000;
 
 // The catalog marks each model's visibility; only surface usable ones.
