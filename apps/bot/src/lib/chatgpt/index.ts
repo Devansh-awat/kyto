@@ -11,6 +11,7 @@ import {
   getChatgptAccount,
   getChatgptAccountSecret,
   setChatgptValidation,
+  updateChatgptModel,
   updateChatgptTokens,
   upsertChatgptAccount,
 } from '@repo/db/queries';
@@ -174,7 +175,7 @@ export async function completeChatgptLink(input: {
   model: string;
   pasted: string;
   userId: string;
-}): Promise<{ label?: string; ok: boolean; error?: string }> {
+}): Promise<{ error?: string; label?: string; model?: string; ok: boolean }> {
   if (!chatgptConfigured()) {
     return { error: 'Sign in with ChatGPT is not enabled.', ok: false };
   }
@@ -250,7 +251,34 @@ export async function completeChatgptLink(input: {
       ok: false,
     };
   }
-  return { label, ok: true };
+  // The link modal can only seed a guessed default model (no token yet), which
+  // may not be one the account can actually use. Now that the account is stored
+  // and its token works, fetch the real catalog and correct the model if needed
+  // so the first turn doesn't fail on an unavailable model. Best-effort.
+  const available = await listChatgptModels(input.userId).catch(() => []);
+  const chosen = pickDefaultModel(input.model, available);
+  if (chosen && chosen !== input.model) {
+    await updateChatgptModel({ model: chosen, userId: input.userId }).catch(
+      () => undefined
+    );
+  }
+  return { label, model: chosen ?? input.model, ok: true };
+}
+
+// Keep the user's requested model if the account actually offers it; otherwise
+// pick a sensible one from the catalog (prefer a non-"mini" model, then the
+// highest slug). Returns undefined to leave the requested model untouched when
+// the catalog couldn't be read.
+function pickDefaultModel(
+  requested: string,
+  available: string[]
+): string | undefined {
+  if (available.length === 0 || available.includes(requested)) {
+    return;
+  }
+  const full = available.filter((slug) => !slug.includes('mini'));
+  const pool = full.length > 0 ? full : available;
+  return pool.at(-1);
 }
 
 // Load, decrypt, and (if needed) refresh the tokens for a user. Persists a
@@ -325,18 +353,40 @@ async function loadFreshTokens(
   }
 }
 
-// A response from the ChatGPT backend's account-aware model listing.
-interface ModelsResponse {
-  data?: Array<{ id?: unknown }>;
+// The Codex model catalog: GET /models?client_version=<v> returns
+// { models: [{ slug, visibility, supported_in_api, ... }] } — NOT the OpenAI
+// /v1/models { data: [{ id }] } shape. Model id = slug. This is the account-aware
+// list the user's local `npx openai-oauth`/Codex command shows.
+interface CodexModelsResponse {
+  models?: Array<{
+    slug?: unknown;
+    supported_in_api?: unknown;
+    visibility?: unknown;
+  }>;
 }
 
+// A recent Codex client version — the catalog endpoint wants one. It only gates
+// which models come back; a slightly stale value still lists the account's
+// models.
+const CODEX_CLIENT_VERSION = '0.144.1';
 const MODELS_TIMEOUT_MS = 15_000;
 
+// The catalog marks each model's visibility; only surface usable ones.
+function isPublicCodexModel(model: {
+  supported_in_api?: unknown;
+  visibility?: unknown;
+}): boolean {
+  return (
+    model.supported_in_api !== false &&
+    (model.visibility === undefined || model.visibility === 'list')
+  );
+}
+
 /**
- * List the model ids available to the user's linked account, by calling the
- * account-aware `/v1/models` on the ChatGPT backend with a fresh token. Returns
- * [] if there's no account, the token can't be refreshed, or the call fails —
- * the App Home model picker then falls back to a free-text field.
+ * List the model slugs available to the user's linked account, from the
+ * account-aware Codex model catalog (fresh token). Returns [] if there's no
+ * account, the token can't be refreshed, or the call fails — the App Home model
+ * picker then falls back to a free-text field.
  */
 export async function listChatgptModels(userId: string): Promise<string[]> {
   const tokens = await loadFreshTokens(userId);
@@ -344,21 +394,27 @@ export async function listChatgptModels(userId: string): Promise<string[]> {
     return [];
   }
   try {
-    const response = await fetch(`${CHATGPT_OAUTH.apiBaseUrl}/v1/models`, {
-      headers: {
-        Authorization: `Bearer ${tokens.accessToken}`,
-        ...(tokens.accountId ? { 'chatgpt-account-id': tokens.accountId } : {}),
-      },
-      signal: AbortSignal.timeout(MODELS_TIMEOUT_MS),
-    });
+    const response = await fetch(
+      `${CHATGPT_OAUTH.apiBaseUrl}/models?client_version=${encodeURIComponent(CODEX_CLIENT_VERSION)}`,
+      {
+        headers: {
+          Authorization: `Bearer ${tokens.accessToken}`,
+          ...(tokens.accountId
+            ? { 'chatgpt-account-id': tokens.accountId }
+            : {}),
+        },
+        signal: AbortSignal.timeout(MODELS_TIMEOUT_MS),
+      }
+    );
     if (!response.ok) {
       return [];
     }
-    const body = (await response.json()) as ModelsResponse;
-    const ids = (body.data ?? [])
-      .map((model) => model.id)
-      .filter((id): id is string => typeof id === 'string');
-    return [...new Set(ids)].sort();
+    const body = (await response.json()) as CodexModelsResponse;
+    const slugs = (body.models ?? [])
+      .filter(isPublicCodexModel)
+      .map((model) => model.slug)
+      .filter((slug): slug is string => typeof slug === 'string');
+    return [...new Set(slugs)].sort();
   } catch (error) {
     logger.warn(
       { err: deepErrorText(error), userId },
