@@ -27,6 +27,14 @@ interface RawSlackFile {
 
 const USER_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
+// Slack keeps a single native stream (chat.startStream → appendStream) open only
+// ~5 minutes; past that the stream expires and further appends are dropped. A
+// turn that runs a long stretch of tools would otherwise have its live plan card
+// die mid-render. So we proactively rotate to a FRESH streamer (a new plan
+// message) a little before the limit — a new card is exactly the desired outcome
+// here. Task cards from the old stream are finalized as-is when it stops.
+const STREAM_ROTATE_MS = 4.5 * 60 * 1000;
+
 // Recursively pull readable text out of a Slack rich-text node (table cells are
 // rich_text blocks). Collects `text`, link labels/urls, and recurses into
 // `elements`. Kept tolerant of unknown shapes since the payload is untyped.
@@ -455,27 +463,53 @@ export class SlackHarness {
     if (!threadTs) {
       throw new Error('Slack streaming requires a thread ts.');
     }
-    const streamer = this.webClient.chatStream({
-      channel,
-      recipient_team_id: options.recipientTeamId,
-      recipient_user_id: options.recipientUserId,
-      ...(options.taskDisplayMode
-        ? { task_display_mode: options.taskDisplayMode }
-        : {}),
-      ...(options.username ? { username: options.username } : {}),
-      ...(options.iconEmoji ? { icon_emoji: options.iconEmoji } : {}),
-      ...(options.iconUrl ? { icon_url: options.iconUrl } : {}),
-      thread_ts: threadTs,
-    });
+    const startStreamer = () =>
+      this.webClient.chatStream({
+        channel,
+        recipient_team_id: options.recipientTeamId,
+        recipient_user_id: options.recipientUserId,
+        ...(options.taskDisplayMode
+          ? { task_display_mode: options.taskDisplayMode }
+          : {}),
+        ...(options.username ? { username: options.username } : {}),
+        ...(options.iconEmoji ? { icon_emoji: options.iconEmoji } : {}),
+        ...(options.iconUrl ? { icon_url: options.iconUrl } : {}),
+        thread_ts: threadTs,
+      });
+    let streamer = startStreamer();
+    let streamStartedAt = Date.now();
+    // Whether the CURRENT streamer has appended anything: decides whether to stop
+    // it (both on rotation and at the end). Reset on each rotation.
+    let currentHasContent = false;
     let structuredSupported = true;
-    let appendedAnything = false;
+    const stopStreamer = async (): Promise<void> => {
+      if (!currentHasContent) {
+        return;
+      }
+      await streamer.stop().catch((error: unknown) => {
+        this.logger.warn({ err: error }, '[harness] stream stop failed');
+      });
+    };
+    // Rotate to a fresh streamer before Slack expires the current one (see
+    // STREAM_ROTATE_MS). Finalizes the current card and opens a new one that
+    // subsequent chunks append to.
+    const rotateIfStale = async (): Promise<void> => {
+      if (Date.now() - streamStartedAt < STREAM_ROTATE_MS) {
+        return;
+      }
+      await stopStreamer();
+      streamer = startStreamer();
+      streamStartedAt = Date.now();
+      currentHasContent = false;
+    };
     try {
       for await (const chunk of chunks) {
+        await rotateIfStale();
         if (typeof chunk === 'string' || chunk.type === 'markdown_text') {
           const text = typeof chunk === 'string' ? chunk : chunk.text;
           if (text) {
             await streamer.append({ markdown_text: text });
-            appendedAnything = true;
+            currentHasContent = true;
           }
           continue;
         }
@@ -486,7 +520,7 @@ export class SlackHarness {
           await streamer.append({
             chunks: [chunk] as never,
           });
-          appendedAnything = true;
+          currentHasContent = true;
         } catch (error) {
           structuredSupported = false;
           this.logger.warn(
@@ -496,11 +530,7 @@ export class SlackHarness {
         }
       }
     } finally {
-      if (appendedAnything) {
-        await streamer.stop().catch((error: unknown) => {
-          this.logger.warn({ err: error }, '[harness] stream stop failed');
-        });
-      }
+      await stopStreamer();
     }
   }
 }
