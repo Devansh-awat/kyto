@@ -87,6 +87,8 @@ The scheduler fires due reminders **concurrently** and guards **overlapping fire
 
 `focusMode` (core) locks kyto onto specific user ids in the current thread: it only replies to those users AND their messages are the only ones it **sees** — non-focused messages are filtered out of the prompt (`isFocusAllowed`, `lib/agent/focus.ts`), so others can't hijack it in a public thread. The **owner is always allowed through** and kyto's own messages always stay in context. Gated in `bot.ts`; persisted on `thread_subscriptions.focus_user_ids`. `clear: true` turns it off.
 
+The owner exemption is a fact kyto must KNOW but not advertise: the tool result carries a `note` saying never to promise to ignore the owner and not to mention the exemption unprompted, and the success `summary` no longer claims "I'll only respond to your messages here". kyto had told a user exactly that in a thread the owner was in — a promise it cannot keep.
+
 ## Canvases and pins
 
 - `canvasList` takes an optional `channelId`; on `not_in_channel` it joins the public channel **silently** and retries.
