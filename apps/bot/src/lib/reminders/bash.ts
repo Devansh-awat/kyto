@@ -1,6 +1,7 @@
 import type { Reminder } from '@repo/db/queries';
 import { LazySandbox, runOnce } from '@repo/sandbox';
 import { env } from '@/env';
+import { brokerableGithubToken } from '@/lib/github/token';
 import logger from '@/lib/logger';
 import { threadSandboxStore, withThreadSandbox } from '@/lib/sandbox/store';
 import {
@@ -66,7 +67,7 @@ export async function runReminderBash(reminder: Reminder): Promise<string> {
       apiKey: env.E2B_API_KEY,
       bootstrapCommand: secret ? slackHelperInstall() : undefined,
       env: secret ? slackProxyEnv(secret, env.SITES_PUBLIC_HOST) : {},
-      githubToken: env.GH_TOKEN,
+      githubToken: await brokerableGithubToken(),
       logger,
       sessionId: threadId,
       store: threadSandboxStore,

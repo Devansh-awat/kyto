@@ -11,6 +11,7 @@ import {
 import {
   getChatgptAccount,
   getChatgptAccountSecret,
+  setChatgptQuotaReset,
   setChatgptValidation,
   updateChatgptModel,
   updateChatgptTokens,
@@ -446,6 +447,17 @@ export async function resolveChatgptRouting(
   if (!row) {
     return;
   }
+  // The plan's quota is spent and we know when it comes back. Skip the account
+  // entirely until then: it is the FIRST attempt of every turn by default, so a
+  // free plan whose window resets in weeks would otherwise prepend a guaranteed
+  // 429 (plus the SDK's own retries of it) to every single fallback walk.
+  if (row.quotaResetsAt && row.quotaResetsAt.getTime() > Date.now()) {
+    logger.info(
+      { resetsAt: row.quotaResetsAt.toISOString(), userId },
+      '[chatgpt] skipping account until its plan quota resets'
+    );
+    return;
+  }
   const tokens = await loadFreshTokens(userId);
   if (!tokens) {
     return;
@@ -467,6 +479,49 @@ export async function resolveChatgptRouting(
 
 const REJECTION_MAX_LENGTH = 200;
 
+const TOO_MANY_REQUESTS = 429;
+
+// A quota 429 from the ChatGPT backend carries the exact reset time, e.g.
+// {"error":{"type":"usage_limit_reached","message":"The usage limit has been
+// reached","plan_type":"free","resets_at":1787463079,"resets_in_seconds":2498975}}
+// — epoch SECONDS. `resets_in_seconds` is the same information relative to now,
+// used as a fallback since only one of the two is guaranteed to be present.
+const RESETS_AT = /"resets_at"\s*:\s*(\d+)/;
+const RESETS_IN_SECONDS = /"resets_in_seconds"\s*:\s*(\d+)/;
+const USAGE_LIMIT = /usage_limit_reached|usage limit has been reached/i;
+
+// Don't trust an absurd window: a bad parse that parked the account for years
+// would look exactly like the account silently never being used again. A month
+// covers the longest real reset seen (a free plan's ~29 days).
+const MAX_QUOTA_PARK_MS = 31 * 24 * 60 * 60 * 1000;
+// A quota 429 with no parseable reset still shouldn't be retried immediately.
+const DEFAULT_QUOTA_PARK_MS = 60 * 60 * 1000;
+
+/**
+ * When a usage-limit 429 says the account's quota comes back, or undefined when
+ * the error isn't a quota rejection at all.
+ */
+function quotaResetFrom(error: unknown): Date | undefined {
+  const text = deepErrorText(error);
+  if (!USAGE_LIMIT.test(text)) {
+    return;
+  }
+  const absolute = RESETS_AT.exec(text);
+  const relative = RESETS_IN_SECONDS.exec(text);
+  const candidate = (() => {
+    if (absolute?.[1]) {
+      return Number(absolute[1]) * 1000;
+    }
+    if (relative?.[1]) {
+      return Date.now() + Number(relative[1]) * 1000;
+    }
+    return Date.now() + DEFAULT_QUOTA_PARK_MS;
+  })();
+  const clamped = Math.min(candidate, Date.now() + MAX_QUOTA_PARK_MS);
+  // A reset already in the past means the quota is available now — nothing to do.
+  return clamped > Date.now() ? new Date(clamped) : undefined;
+}
+
 /**
  * Record what a ChatGPT attempt's outcome says about the linked account, so the
  * user sees it in App Home. Mirrors recordByokOutcome: only a hard auth
@@ -484,9 +539,29 @@ export async function recordChatgptOutcome(input: {
     await setChatgptValidation({ status: 'valid', userId: input.userId }).catch(
       () => undefined
     );
+    // A turn that completed proves the quota is back, whatever we recorded before.
+    await setChatgptQuotaReset({
+      resetsAt: null,
+      userId: input.userId,
+    }).catch(() => undefined);
     return;
   }
   const status = errorStatus(input.error);
+  // A spent plan quota is not a broken login — park the account until the reset
+  // the 429 named instead of marking it invalid or retrying it next turn.
+  if (status === TOO_MANY_REQUESTS) {
+    const resetsAt = quotaResetFrom(input.error);
+    if (resetsAt) {
+      logger.warn(
+        { resetsAt: resetsAt.toISOString(), userId: input.userId },
+        '[chatgpt] plan quota exhausted; parking the account until it resets'
+      );
+      await setChatgptQuotaReset({ resetsAt, userId: input.userId }).catch(
+        () => undefined
+      );
+    }
+    return;
+  }
   if (!(status && (status === 401 || status === 402 || status === 403))) {
     return;
   }

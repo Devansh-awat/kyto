@@ -19,6 +19,7 @@ import {
   stripRepeatedLines,
 } from '@/lib/agent/degenerate';
 import { buildPrompt } from '@/lib/agent/prompt';
+import { createChunkRelay } from '@/lib/agent/relay';
 import { createReply } from '@/lib/agent/reply';
 import {
   abortReasonOf,
@@ -43,6 +44,7 @@ import {
   DegenerateOutputError,
   StreamInterruptedError,
 } from '@/lib/errors';
+import { brokerableGithubToken } from '@/lib/github/token';
 import logger from '@/lib/logger';
 import { acquireThreadSandbox, threadSandboxStore } from '@/lib/sandbox/store';
 import {
@@ -215,7 +217,10 @@ async function executeTurn(
     // read-only too — not just the slackScript tool.
     bootstrapCommand: slackProxySecret ? slackHelperInstall() : undefined,
     env: proxyEnv,
-    githubToken: env.GH_TOKEN,
+    // Only a token GitHub still accepts. Brokering a dead one attaches an
+    // Authorization header GitHub rejects to EVERY github.com request, which
+    // breaks anonymous reads of PUBLIC repos too (see lib/github/token).
+    githubToken: await brokerableGithubToken(),
     logger,
     sessionId: threadId,
     store: threadSandboxStore,
@@ -240,7 +245,14 @@ async function executeTurn(
     | { outputTokens: number; tokensPerSecond: number }
     | undefined;
 
+  // Task cards from outside the model stream — a subagent's run — rendered into
+  // this turn's plan block. Closed at turn end so a background subagent that
+  // outlives the turn stops pushing into a plan nobody is draining any more; its
+  // report still comes back as a wake turn.
+  const chunkRelay = createChunkRelay();
+
   const cleanup = async (): Promise<void> => {
+    chunkRelay.close();
     revokeProxyToken(slackProxySecret);
     await closeTools?.().catch(() => undefined);
     await sandboxSession.destroy().catch(() => undefined);
@@ -406,6 +418,7 @@ async function executeTurn(
     // drives deferred-tool visibility via prepareStep.
     const built = await buildTools({
       bot,
+      chunkRelay,
       extendAttemptDeadline: (extraMs) => extendDeadline?.(extraMs),
       getSandboxContext: () => sandboxContext,
       message: turnMessage,
@@ -578,6 +591,11 @@ async function executeTurn(
       // takes its thinking down with it — only the attempt that ANSWERS gets to
       // leave its train of thought behind for the next turn (see thinking.ts).
       const attemptThinking: string[] = [];
+      // Exactly what THIS attempt wrote as reply text, so a reply that turns out
+      // to be nothing but a bare `skip` can be recognised and dropped once the
+      // stream ends (see isBareSkipText). Kept whole rather than capped: it is
+      // only read when it is short enough to be a bare token.
+      let attemptRawText = '';
       const isFallback = attempts.length > 0;
       try {
         activeAttempt = currentAttempt;
@@ -648,6 +666,7 @@ async function executeTurn(
             producedText = true;
             attemptText = true;
             errorStage = 'after_text';
+            attemptRawText += text;
             streamedText = appendStreamedText(streamedText, text);
             // Progress: reset the stall watchdog (see armWatchdog).
             armWatchdog(ATTEMPT_TIMEOUT_MS);
@@ -751,6 +770,31 @@ async function executeTurn(
           reply?.drop();
           streamedText = stripRepeatedLines(streamedText);
           throw new DegenerateOutputError(currentAttempt.model);
+        }
+
+        // The model wrote the word `skip` instead of calling the tool, and that
+        // word is the entire reply. Honour what it meant: drop the buffered text
+        // before Slack ever sees it (nothing is posted until flush, so the bare
+        // token is still in the buffer here) and record a deliberate skip, which
+        // keeps the turn "handled" AND suppresses the usage footer that used to
+        // follow the stray `skip` message.
+        if (
+          attemptText &&
+          isBareSkipText(attemptRawText) &&
+          reply?.dropTail(attemptRawText)
+        ) {
+          streamedText = streamedText.slice(
+            0,
+            Math.max(0, streamedText.length - attemptRawText.length)
+          );
+          attemptText = false;
+          producedText = streamedText.trim().length > 0;
+          errorStage = producedText ? errorStage : 'after_progress';
+          skipped = true;
+          logger.info(
+            { attempt: attemptLog(currentAttempt), threadId },
+            '[agent] model wrote a bare "skip" instead of calling the tool; treating it as a skip'
+          );
         }
 
         {
@@ -955,15 +999,23 @@ async function executeTurn(
         const retryAttempt = attempt;
         // A turn that already streamed reply text normally must NOT fall back —
         // the next model would restate the answer and the user would read it
-        // twice. Two exceptions: a provider that died mid-task (kyto was cut off
-        // mid-sentence, so silence is the worse outcome), and a model that
-        // degenerated into a loop (what it "said" is not an answer at all). In
-        // both, the next model is told what was already sent
-        // (renderContinuation, scrubbed of the loop) and picks the work back up
-        // instead of starting over.
+        // twice. Three exceptions: a provider that died mid-task (kyto was cut
+        // off mid-sentence, so silence is the worse outcome), a model that
+        // degenerated into a loop (what it "said" is not an answer at all), and
+        // a model that STALLED (the watchdog tripped — it is just as cut off as
+        // a provider that died, only quieter about it). In all three, the next
+        // model is told what was already sent (renderContinuation, scrubbed of
+        // the loop) and picks the work back up instead of starting over.
+        //
+        // The stall case is why an 11-minute turn ended on "kyto hit an error
+        // after it had already started responding": four rungs in, deepseek-v4-pro
+        // went idle, the watchdog aborted it, and because text had streamed
+        // earlier in the turn this guard threw instead of handing over — with
+        // fifteen healthy models still left in the queue.
         const canContinue =
           error instanceof StreamInterruptedError ||
-          error instanceof DegenerateOutputError;
+          error instanceof DegenerateOutputError ||
+          error instanceof AttemptTimeoutError;
         if (controller.signal.aborted || (producedText && !canContinue)) {
           throw error;
         }
@@ -1022,13 +1074,47 @@ async function executeTurn(
       message: turnMessage,
       thread: turnThread,
     })[Symbol.asyncIterator]();
-    let pending = await source.next();
+    // A pulled-but-unconsumed model-stream promise. When a relayed subagent card
+    // wins the race below, this promise MUST be kept rather than re-requested —
+    // calling next() twice on the same iterator would drop a chunk on the floor.
+    let sourcePull: Promise<IteratorResult<string | StreamChunk>> | undefined;
+    // Take the next thing to render from either the model stream or the subagent
+    // relay, whichever produces first. Relayed cards are checked before sleeping
+    // so a burst that arrived while we were committed to the model stream drains
+    // in order.
+    const nextRendered = async (): Promise<
+      IteratorResult<string | StreamChunk>
+    > => {
+      const relayed = chunkRelay.take();
+      if (relayed) {
+        return { done: false, value: relayed };
+      }
+      sourcePull ??= source.next();
+      const winner = await Promise.race([
+        sourcePull.then((result) => ({ kind: 'source' as const, result })),
+        chunkRelay.wait().then(() => ({ kind: 'relay' as const })),
+      ]);
+      if (winner.kind === 'source') {
+        sourcePull = undefined;
+        return winner.result;
+      }
+      const pushed = chunkRelay.take();
+      // A wake with nothing behind it means the relay closed; fall through to the
+      // model stream, which is the only thing that can end the turn.
+      if (!pushed) {
+        const result = await sourcePull;
+        sourcePull = undefined;
+        return result;
+      }
+      return { done: false, value: pushed };
+    };
+    let pending = await nextRendered();
     while (!pending.done) {
       // Reply text before any plan block of this segment (a pure-text turn, or
       // text trailing the previous block) is just posted — no empty plan.
       if (typeof pending.value === 'string') {
         await reply?.append({ text: pending.value, thread: turnThread });
-        pending = await source.next();
+        pending = await nextRendered();
         continue;
       }
       let sawText = false;
@@ -1046,14 +1132,14 @@ async function executeTurn(
             // bug. A block now splits only after real prose has been written.
             sawText ||= isVisibleText(value);
             await reply?.append({ text: value, thread: turnThread });
-            pending = await source.next();
+            pending = await nextRendered();
             continue;
           }
           if (sawText) {
             return;
           }
           yield value;
-          pending = await source.next();
+          pending = await nextRendered();
         }
       };
       await slack.stream(threadId, segment(), {
@@ -1075,6 +1161,22 @@ async function executeTurn(
 // purposes.
 function isVisibleText(text: string): boolean {
   return text.trim().length > 0;
+}
+
+// A model that means to stay quiet is supposed to CALL the `skip` tool. Some
+// write the word instead — and then the whole "reply" is the bare token, which
+// got posted to the thread as a message reading `skip`, followed by a usage
+// footer. Seen three times in a row on subagent wake turns, where "call skip
+// instead of posting filler" is exactly what the prompt asks for.
+//
+// Only an entire reply that is nothing but the token counts. Someone asking kyto
+// to "skip the first step" gets a reply containing the word, and that must post
+// normally — so this deliberately does NOT strip a trailing `skip` off real prose.
+const BARE_SKIP =
+  /^\s*(?:`{1,3})?\s*skip(?:\s*\(\s*\))?\s*[.!]?\s*(?:`{1,3})?\s*$/i;
+
+function isBareSkipText(text: string): boolean {
+  return BARE_SKIP.test(text);
 }
 
 // Fold an error's message + provider responseBody/data into one string so the

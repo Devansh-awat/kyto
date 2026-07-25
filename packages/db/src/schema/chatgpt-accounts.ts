@@ -28,6 +28,13 @@ export const userChatgptAccounts = pgTable('user_chatgpt_accounts', {
   serviceFallback: boolean('service_fallback').notNull().default(false),
   validationStatus: text('validation_status').notNull().default('unvalidated'),
   validationMessage: text('validation_message'),
+  // When the account's plan quota is known to reset, from the `resets_at` field
+  // of a `usage_limit_reached` 429. Until then this account is skipped entirely.
+  // Without it a free-plan account whose quota resets in 29 DAYS was still tried
+  // FIRST on every single turn, adding a doomed attempt (and its retries) to the
+  // front of every fallback walk. A 429 says nothing about the login itself, so
+  // this is deliberately separate from validationStatus.
+  quotaResetsAt: timestamp('quota_resets_at', { withTimezone: true }),
   lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true })
     .notNull()

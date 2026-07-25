@@ -9,6 +9,7 @@ import { type Tool, type ToolSet, tool } from 'ai';
 import { z } from 'zod';
 import { env } from '@/env';
 import type { KytoBot, Message, ThreadHandle } from '@/harness';
+import type { ChunkRelay } from '@/lib/agent/relay';
 import { buildMcpTools } from '@/lib/ai/mcp';
 import logger from '@/lib/logger';
 import { backgroundProcessTools } from './tools/background';
@@ -109,12 +110,20 @@ export interface BuiltTools {
  */
 export async function buildTools({
   bot,
+  chunkRelay,
   extendAttemptDeadline,
   getSandboxContext,
   message,
   thread,
 }: {
   bot: KytoBot;
+  /**
+   * Where a subagent's task cards go so they render inside the CURRENT turn's
+   * plan block instead of a separate Slack message. Absent for callers with no
+   * plan of their own (a reminder job, or a subagent's own nested toolset — which
+   * cannot spawn a further subagent anyway).
+   */
+  chunkRelay?: ChunkRelay;
   /**
    * Push the running attempt's watchdog out. The `wait` tool calls it so a long
    * deliberate pause is never mistaken for a stalled attempt. Absent for callers
@@ -330,6 +339,7 @@ export async function buildTools({
     ...(subagentAttempt
       ? (() => {
           const subagent = runSubagentTool({
+            chunkRelay,
             getSandboxContext,
             bot,
             message,

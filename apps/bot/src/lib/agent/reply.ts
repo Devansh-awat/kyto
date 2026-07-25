@@ -126,6 +126,18 @@ export function createReply({
     drop(): void {
       buffer = '';
     },
+    // Unbuffer just this trailing text, if it is still unposted. Used to retract
+    // one attempt's output without touching an earlier attempt's — `drop()` would
+    // throw away a previous model's real answer along with it. A no-op once the
+    // text has already gone to Slack, which is the honest outcome: it cannot be
+    // unsent, and silently reporting success would be worse.
+    dropTail(text: string): boolean {
+      if (!(text && buffer.endsWith(text))) {
+        return false;
+      }
+      buffer = buffer.slice(0, -text.length);
+      return true;
+    },
     flush({ thread }: { thread: Thread }): Promise<void> {
       return drain({ force: true, thread });
     },

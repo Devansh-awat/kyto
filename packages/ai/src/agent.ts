@@ -437,6 +437,16 @@ function tunedFetch({
   };
 }
 
+// Models whose DigitalOcean deployment REQUIRES an exact `top_p`, rejecting the
+// request outright otherwise: `{"error":{"message":"top_p must be 0.95 for this
+// model","type":"invalid_request_error"}}` with a 400. The AI SDK sends no
+// `top_p` unless asked to, and this provider treats "absent" as wrong rather
+// than substituting its own default, so the rung was unusable from the day it
+// was added — visible only as a 400 in the journal partway down a fallback walk.
+const REQUIRED_TOP_P: Record<string, number> = {
+  'kimi-k2.6': 0.95,
+};
+
 function tuneBody(
   raw: string | undefined,
   attempt: ModelAttempt,
@@ -469,6 +479,18 @@ function tuneBody(
           : {};
       payload.provider = { ...existing, only: [DIGITALOCEAN_ONLY] };
       changed = true;
+    }
+    // Some DigitalOcean deployments pin a sampling parameter and reject anything
+    // else — including OMITTING it, which is what the SDK does by default. See
+    // REQUIRED_TOP_P: without this, kimi-k2.6 (the LEAD rung of the DigitalOcean
+    // tier) 400'd on every single turn and the fallback walk silently skipped
+    // straight past its best free model.
+    if (attempt.provider === DIGITALOCEAN_PROVIDER) {
+      const requiredTopP = REQUIRED_TOP_P[attempt.model];
+      if (requiredTopP !== undefined && payload.top_p !== requiredTopP) {
+        payload.top_p = requiredTopP;
+        changed = true;
+      }
     }
     if (
       (attempt.provider === 'hackclub' ||

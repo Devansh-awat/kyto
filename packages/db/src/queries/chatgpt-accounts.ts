@@ -21,6 +21,7 @@ const publicColumns = {
   createdAt: userChatgptAccounts.createdAt,
   lastUsedAt: userChatgptAccounts.lastUsedAt,
   model: userChatgptAccounts.model,
+  quotaResetsAt: userChatgptAccounts.quotaResetsAt,
   serviceFallback: userChatgptAccounts.serviceFallback,
   updatedAt: userChatgptAccounts.updatedAt,
   userId: userChatgptAccounts.userId,
@@ -127,6 +128,21 @@ export async function setChatgptServiceFallback(input: {
   await db
     .update(userChatgptAccounts)
     .set({ serviceFallback: input.allowed })
+    .where(eq(userChatgptAccounts.userId, input.userId));
+}
+
+/**
+ * Remember when the account's plan quota resets, so the attempt is skipped until
+ * then rather than retried (and re-retried by the SDK) at the head of every
+ * turn. `null` clears it — a successful turn proves the quota is back.
+ */
+export async function setChatgptQuotaReset(input: {
+  resetsAt: Date | null;
+  userId: string;
+}): Promise<void> {
+  await db
+    .update(userChatgptAccounts)
+    .set({ quotaResetsAt: input.resetsAt })
     .where(eq(userChatgptAccounts.userId, input.userId));
 }
 

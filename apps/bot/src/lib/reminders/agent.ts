@@ -10,6 +10,7 @@ import { env } from '@/env';
 import type { Message, ThreadHandle } from '@/harness';
 import { requestHints } from '@/lib/ai/hints';
 import { bot } from '@/lib/chat';
+import { brokerableGithubToken } from '@/lib/github/token';
 import logger from '@/lib/logger';
 import { threadSandboxStore, withThreadSandbox } from '@/lib/sandbox/store';
 import {
@@ -82,7 +83,7 @@ async function runAgent(
     apiKey: env.E2B_API_KEY,
     bootstrapCommand: secret ? slackHelperInstall() : undefined,
     env: secret ? slackProxyEnv(secret, env.SITES_PUBLIC_HOST) : {},
-    githubToken: env.GH_TOKEN,
+    githubToken: await brokerableGithubToken(),
     logger,
     // Sharing the thread's sandbox is the whole point: the job can use what the
     // model built earlier. Jobs without a thread get an unremembered sandbox.
