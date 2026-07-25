@@ -33,10 +33,13 @@ function truncate(text: string): string {
 export function ghTool({
   getSandboxContext,
   isOwner,
+  threadId,
   userId,
 }: {
   getSandboxContext: () => SandboxContext;
   isOwner: boolean;
+  /** Recorded on a queued approval request so the owner can read the thread. */
+  threadId?: string;
   /** The Slack user this turn is running for — the identity writes are gated on. */
   userId: string;
 }) {
@@ -61,6 +64,7 @@ export function ghTool({
           command,
           context,
           isOwner,
+          threadId,
           userId,
           workingDirectory: context.sessionWorkDir,
         });

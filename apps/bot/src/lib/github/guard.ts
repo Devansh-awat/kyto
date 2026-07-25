@@ -1,5 +1,10 @@
 import type { SandboxContext } from '@repo/ai';
-import { claimGithubRepo, getGithubRepos } from '@repo/db/queries';
+import {
+  claimGithubRepo,
+  getGithubRepos,
+  getGithubTrust,
+  recordGithubRequest,
+} from '@repo/db/queries';
 import { env } from '@/env';
 import { canEdit } from '@/lib/ai/tools/editors';
 import logger from '@/lib/logger';
@@ -8,10 +13,19 @@ import { parseGithubCommand } from './command';
 /**
  * kyto has ONE GitHub identity, so GitHub's own permissions can't tell two Slack
  * users apart: anything kyto can write, everybody who can talk to kyto can write
- * through it. This is the missing half — a repo kyto creates for someone (or
- * first writes to on their behalf, inside kyto's own namespace) is claimed for
- * them, and after that only they, their named editors, and the bot owner can get
- * kyto to change it. Reads stay open to everyone.
+ * through it. Two gates sit on top of that, checked in this order:
+ *
+ * 1. **Ownership** — a repo kyto creates for someone (or first writes to on
+ *    their behalf, inside kyto's own namespace) is claimed for them, and after
+ *    that only they, their named editors, and the bot owner can get kyto to
+ *    change it. This protects people from each other.
+ *
+ * 2. **Trust** — a write to a repo OUTSIDE kyto's own namespace goes out into
+ *    the world under `kyto-agent`'s name, so it needs the bot owner to have
+ *    trusted that person (blanket, or for that repo) from the dashboard. This
+ *    protects kyto's GitHub account from the workspace; an untrusted attempt is
+ *    refused and queued for the owner to approve. Reads stay open to everyone
+ *    under both gates.
  *
  * Enforcement is at execute time against the REQUESTING user, never against
  * whoever the model says it is acting for — same rule as reminders and sites.
@@ -28,6 +42,9 @@ const ALLOW_NOOP: GithubGuard = {
   allowed: true,
   claim: () => Promise.resolve(),
 };
+
+/** How much of a refused command to keep as context on the queued request. */
+const REQUEST_COMMAND_MAX = 2000;
 
 /** Whether a repo lives under kyto's own GitHub account. */
 function inKytoNamespace(repo: string): boolean {
@@ -77,6 +94,7 @@ export async function guardGithubCommand({
   command,
   context,
   isOwner,
+  threadId,
   userId,
   workingDirectory,
 }: {
@@ -84,6 +102,8 @@ export async function guardGithubCommand({
   /** Used to resolve a bare `git push` to its remote. Omit to skip that. */
   context?: SandboxContext;
   isOwner: boolean;
+  /** Recorded on a queued request so the owner can go read the thread. */
+  threadId?: string;
   userId: string;
   workingDirectory?: string;
 }): Promise<GithubGuard> {
@@ -120,6 +140,46 @@ export async function guardGithubCommand({
       allowed: false,
       reason: `Refused: the GitHub repo "${claim.repo}" belongs to <@${claim.ownerUserId}>, who set it up through you. Only they, anyone they named as an editor, and the bot owner can have you change it — so don't close/merge/edit/push there for this person, and don't look for another route to do it. Reading it is fine. Tell them whose repo it is and that <@${claim.ownerUserId}> can add them as an editor.`,
     };
+  }
+
+  // Gate 2: anything outside kyto's own namespace that this person hasn't been
+  // trusted for. A repo they already hold a claim on passed the loop above and
+  // is theirs by construction, so it doesn't need trust as well.
+  const claimedByUser = new Set(
+    claims
+      .filter((claim) => claim.ownerUserId === userId)
+      .map((claim) => claim.repo)
+  );
+  const thirdParty = [...targets].filter(
+    (repo) => !(inKytoNamespace(repo) || claimedByUser.has(repo))
+  );
+  if (thirdParty.length > 0 && !isOwner) {
+    const trust = await getGithubTrust(userId).catch((error: unknown) => {
+      logger.warn({ err: error }, '[github] failed to read trust');
+      return null;
+    });
+    const untrusted = trust?.allRepos
+      ? []
+      : thirdParty.filter((repo) => !(trust?.repos ?? []).includes(repo));
+    if (untrusted.length > 0) {
+      // Don't hold the turn open waiting for a decision — a turn can't block
+      // for hours. Record it, refuse, and let them ask again once approved.
+      for (const repo of untrusted) {
+        await recordGithubRequest({
+          command: command.slice(0, REQUEST_COMMAND_MAX),
+          repo,
+          threadId,
+          userId,
+        }).catch((error: unknown) => {
+          logger.warn({ err: error, repo }, '[github] failed to queue request');
+        });
+      }
+      const list = untrusted.map((repo) => `"${repo}"`).join(', ');
+      return {
+        allowed: false,
+        reason: `Refused for now: ${list} ${untrusted.length === 1 ? 'is not a repo' : 'are not repos'} you own, and writes there go out under your own GitHub account, so <@${env.OWNER_USER_ID}> has to approve this person for it. The request has been logged for him to review on the dashboard. Tell them it's waiting on his approval and that they can ask you again once he's granted it. Don't look for another route — forking it, pushing from a different checkout, and calling the REST API directly are all the same thing. Reading the repo is still fine.`,
+      };
+    }
   }
 
   // Nothing blocked. Claim on success: repos this command creates (whoever they

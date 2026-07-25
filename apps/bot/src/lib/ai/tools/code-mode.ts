@@ -76,7 +76,7 @@ export function codeModeTool({
    * to the same repo-ownership gate as the gh and bash tools (the `sh` helper is
    * a shell, and the gate has to cover every shell).
    */
-  github?: { isOwner: boolean; userId: string };
+  github?: { isOwner: boolean; threadId?: string; userId: string };
 }) {
   return tool({
     description:
@@ -101,6 +101,7 @@ export function codeModeTool({
             command: code,
             context,
             isOwner: github.isOwner,
+            threadId: github.threadId,
             userId: github.userId,
           })
         : null;

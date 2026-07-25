@@ -46,7 +46,7 @@ export function bashTool({
    * one `bash("gh pr close …")` away from irrelevant. Omit for callers with no
    * requesting user (reminders, subagents inherit their parent's check).
    */
-  github?: { isOwner: boolean; userId: string };
+  github?: { isOwner: boolean; threadId?: string; userId: string };
 }) {
   return tool({
     description:
@@ -68,6 +68,7 @@ export function bashTool({
             command,
             context,
             isOwner: github.isOwner,
+            threadId: github.threadId,
             userId: github.userId,
             workingDirectory: resolvedDir,
           })
