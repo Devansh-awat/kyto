@@ -36,6 +36,23 @@ const MAX_SUBAGENT_DEPTH = 1;
 
 const depthStore = new AsyncLocalStorage<number>();
 
+// A BACKGROUND subagent almost always outlives the turn that started it — that
+// is the point of backgrounding it — and `jobs` below lives in the turn's tool
+// closure. So kyto would say "launched 5, they'll post when they're done", the
+// turn would end, the reports would land in five separate messages, and kyto
+// itself would never learn any of it happened. Nobody could ask it to act on
+// what its own subagents found.
+//
+// So a finished background job WAKES the thread: it starts a fresh turn whose
+// input is the report. kyto reads the findings and responds to them, the way a
+// reminder firing does.
+const WAKE_MESSAGE_PREFIX = 'subagent-report-';
+// The wake must not abort the parent: runTurn's "a turn is already active" path
+// interrupts the running one, which for a subagent finishing mid-turn would
+// kill the very work that spawned it. Wait for the thread to go quiet instead.
+const WAKE_POLL_MS = 4000;
+const WAKE_MAX_WAIT_MS = 15 * 60 * 1000;
+
 // The result a subagent run resolves to (also what a foreground call returns).
 type SubagentResult =
   | { report: string; success: true }
@@ -308,10 +325,16 @@ export function runSubagentTool({
           status: 'running',
         };
         jobs.set(id, record);
+        // A turn started BY a wake doesn't get to schedule another one, or five
+        // subagents reporting back could each spawn a turn that spawns more.
+        const mayWake = !message.id.startsWith(WAKE_MESSAGE_PREFIX);
         job.then(
           (result) => {
             record.status = result.success ? 'done' : 'failed';
             record.result = result;
+            if (mayWake) {
+              void wakeThread({ job: record, message, thread });
+            }
           },
           (error: unknown) => {
             record.status = 'failed';
@@ -320,13 +343,16 @@ export function runSubagentTool({
               { err: error, thread: thread.id },
               '[subagent] background run failed'
             );
+            if (mayWake) {
+              void wakeThread({ job: record, message, thread });
+            }
           }
         );
         const label = name ? `"${name}"` : 'it';
         return {
           background: true,
           id,
-          note: `Subagent ${label} started in the background as ${id}. Keep working; when you need its findings call checkSubagent with id "${id}" (it also posts its own "kyto subagent" message).`,
+          note: `Subagent ${label} started in the background as ${id}. Keep working; when you need its findings call checkSubagent with id "${id}". If your turn ends before it finishes, that's fine — it posts its own "kyto subagent" message and its report comes back to you as a new turn in this thread, so you don't have to wait for it.`,
           success: true,
         };
       }
@@ -396,6 +422,81 @@ export function runSubagentTool({
   });
 
   return { checkSubagent, runSubagent };
+}
+
+/**
+ * Hand a finished background subagent's report back to the thread as a new turn,
+ * once the thread is quiet. Best effort throughout — a wake that fails must
+ * never surface as an error, since the subagent has already posted its own
+ * message and the report is not lost, only unread.
+ */
+async function wakeThread({
+  job,
+  message,
+  thread,
+}: {
+  job: SubagentJob;
+  message: Message;
+  thread: ThreadHandle;
+}): Promise<void> {
+  try {
+    const { getTurn } = await import('@/lib/agent/turns');
+    const deadline = Date.now() + WAKE_MAX_WAIT_MS;
+    while (getTurn({ threadId: thread.id })) {
+      if (Date.now() > deadline) {
+        logger.warn(
+          { id: job.id, threadId: thread.id },
+          '[subagent] gave up waiting for the thread to go quiet'
+        );
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, WAKE_POLL_MS));
+    }
+    const { runTurn } = await import('@/lib/agent');
+    logger.info(
+      { id: job.id, status: job.status, threadId: thread.id },
+      '[subagent] waking the thread with a background report'
+    );
+    await runTurn({ message: reportMessage({ job, message, thread }), thread });
+  } catch (error) {
+    logger.warn(
+      { err: errorMessage(error), id: job.id, threadId: thread.id },
+      '[subagent] failed to wake the thread'
+    );
+  }
+}
+
+/**
+ * The synthetic message a wake turn runs on. Authored by whoever asked for the
+ * subagent, so the turn is gated exactly as their own message would be — a
+ * background job must not become a way to act with someone else's permissions.
+ */
+function reportMessage({
+  job,
+  message,
+  thread,
+}: {
+  job: SubagentJob;
+  message: Message;
+  thread: ThreadHandle;
+}): Message {
+  const label = job.name ? `${job.id} ("${job.name}")` : job.id;
+  const body =
+    job.result?.success === true
+      ? `It reported:\n\n${job.result.report}`
+      : `It failed: ${job.result?.success === false ? job.result.error : 'unknown error'}`;
+  return {
+    attachments: [],
+    author: message.author,
+    id: `${WAKE_MESSAGE_PREFIX}${job.id}-${Date.now()}`,
+    isMention: false,
+    metadata: { dateSent: new Date() },
+    raw: {},
+    text: `[Automatic note, not written by a person: the background subagent ${label} you started earlier in this thread has finished. ${body}
+
+Reply in this thread with what this means for the task that was being worked on. It has already posted its own detailed message, so don't repeat the whole thing, and don't thank anyone or explain that you were woken up. If the findings don't actually need anything said, call skip instead of posting filler.]`,
+    threadId: thread.id,
+  };
 }
 
 // A subagent that ran its tools and then stopped without writing anything gives
