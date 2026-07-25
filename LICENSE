@@ -1,22 +1,62 @@
-MIT License
+Kyto Source-Available Licence
+Copyright (c) 2026 Devansh Awat. All rights reserved.
 
-Copyright (c) 2025 Anirudh Sriram and Devarsh (webdev03)
-Copyright (c) 2026 Devansh Awat
+Kyto's source is published so that it can be READ. People trust Kyto with their
+messages, their credentials and their repositories, and "you can check what it
+actually does" is a better answer to that trust than a promise. Being readable is
+not the same as being free to take, and this licence is deliberately narrower than
+an open-source one.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+1. WHAT YOU MAY DO
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+   You may view, read, and privately discuss this source code. You may quote
+   short excerpts for the purpose of commentary, security review, teaching, or
+   reporting a problem, with attribution.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+2. WHAT YOU MAY NOT DO
+
+   Without prior written permission from the copyright holder, you may not:
+
+   a. copy, reproduce, or redistribute this software or any substantial portion
+      of it, in source or compiled form;
+   b. run, host, deploy, or operate this software, or any work derived from it,
+      whether or not for a fee;
+   c. modify it, or create derivative works from it;
+   d. incorporate any part of it into another work;
+   e. sublicense, sell, rent, or otherwise transfer any rights in it;
+   f. use it to train, fine-tune, evaluate, or otherwise develop a machine
+      learning model.
+
+   No licence is granted by implication, estoppel, or otherwise. Making the
+   source publicly readable is not a grant of any of the rights withheld above.
+
+3. GORKIE-DERIVED CODE IS STILL MIT
+
+   Kyto began as a fork of gorkie, which was published under the MIT licence.
+   Code in this repository that originated in gorkie — including this
+   repository's history from before Kyto's rewrite — remains available under
+   those MIT terms, which are reproduced in ./LICENSE-gorkie-MIT. This licence
+   applies to Kyto's own code and cannot and does not withdraw permissions MIT
+   already granted for that code. Section 2 is not a claim over gorkie's work.
+
+4. THIRD-PARTY MATERIAL
+
+   This repository vendors third-party material that carries its own licences,
+   including the agent skills under ./.agents/skills/ and the dependencies
+   declared in the package manifests. Nothing here alters those licences, and
+   Section 2 does not apply to them.
+
+5. NO WARRANTY
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHOR OR COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE.
+
+6. PERMISSIONS
+
+   To ask for any of the rights withheld in Section 2, contact the copyright
+   holder. Permission that is not in writing has not been given.

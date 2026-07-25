@@ -4,13 +4,15 @@
 
 ### Open
 
-**Pick an open-source licence.** People asked how safe their creds are with
-kyto; one answer is going open source. Owner's position: stricter than AGPL —
-source visible for inspection, nobody may copy or use it. So a source-available
-"all rights reserved" notice rather than an OSI licence. Still needs a pass over
-the repo for anything that can't be published (prompts are fine, `.env` obviously
-isn't). See `docs/reference/security.md` for what the honest answer to the creds
-question is today.
+**Decide the gorkie-provenance question before making the repo public.** The
+licence is written (`LICENSE`, source-available/all-rights-reserved, per owner:
+readable but nobody may copy or use it) and the secrets audit is clean — see
+`docs/reference/publishing.md`. What is NOT settled: kyto forked MIT-licensed
+gorkie and still carries its whole history, so gorkie-derived code stays MIT
+(`LICENSE-gorkie-MIT`) and that carve-out can't be waved away. The harness is a
+ground-up rewrite so the surviving fraction may be ~zero, but nobody has measured
+it. Also: `.agents/skills/` vendors third-party skills with undocumented
+provenance — document or drop them.
 
 **"Thinking..." shows as plain text before the plan block appears**, and when
 the block does appear it already has thinking in it. Investigated: no such
