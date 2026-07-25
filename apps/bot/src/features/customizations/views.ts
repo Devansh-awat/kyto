@@ -9,6 +9,7 @@ import type {
 import { mrkdwn, plainText } from '@/harness';
 import { IDENTITY_TYPES, type IdentityType } from '@/lib/identity';
 import type { SlackBlock, SlackHomeView, SlackModalView } from '@/types/views';
+import type { ErasePreview } from './erase';
 
 const maxHomePromptLength = 600;
 const maxPromptLength = 3000;
@@ -18,7 +19,7 @@ const MINUTES_PER_HOUR = 60;
 const IDENTITY_LABELS: Record<IdentityType, string> = {
   normal: 'Cross-channel posts',
   reminder: 'Reminder DMs',
-  subagent: 'Subagent block',
+  subagent: 'Subagent plan cards',
 };
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -363,6 +364,7 @@ export function buildHomeView({
   isOwner = false,
   mcpServers = [],
   modelCredentials = [],
+  privacy,
   prompt,
   reminders = [],
   showUsageFooter = true,
@@ -370,6 +372,8 @@ export function buildHomeView({
 }: {
   /** False when the host has no BYOK_ENCRYPTION_KEY: hide the section entirely. */
   byokEnabled?: boolean;
+  /** What an erase would remove, so the section can be specific about it. */
+  privacy?: ErasePreview;
   /** The user's linked ChatGPT account, or null. Rendered under the BYOK gate. */
   chatgptAccount?: ChatgptAccount | null;
   identityProfiles?: IdentityProfile[];
@@ -548,6 +552,8 @@ export function buildHomeView({
     );
   }
 
+  blocks.push(...privacyBlocks(privacy));
+
   // Owner-only: how kyto presents itself per message type (name suffix + icon).
   if (isOwner) {
     blocks.push(
@@ -586,6 +592,82 @@ export function buildHomeView({
   }
 
   return { blocks, type: 'home' };
+}
+
+/**
+ * "Your data" — what kyto has kept that came out of your conversations, and the
+ * self-serve way to remove it. Everyone gets this section; the whole point is
+ * that withdrawing consent should not require asking the bot owner.
+ *
+ * Two buttons rather than one because they are genuinely different asks: forget
+ * what you TOLD it, versus also delete what you CONFIGURED (your API keys, your
+ * MCP servers). Someone withdrawing consent to data retention usually does not
+ * mean "and throw away my keys".
+ */
+function privacyBlocks(privacy: ErasePreview | undefined): SlackBlock[] {
+  const counts = privacy
+    ? [
+        `${privacy.privateMemories} saved ${privacy.privateMemories === 1 ? 'memory' : 'memories'}`,
+        privacy.promotedMemories > 0
+          ? `${privacy.promotedMemories} promoted workspace-wide`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : 'memories and a short-lived reasoning cache';
+  const blocks: SlackBlock[] = [
+    { type: 'divider' },
+    {
+      text: mrkdwn(
+        `*Your data*\nKyto stores two things derived from your conversations: memories it saved, and a cache of its own reasoning from your last few turns (kept about 30 days). It never stores a copy of your messages — it reads the Slack thread each turn. Currently: ${counts}.`
+      ),
+      type: 'section',
+    },
+    {
+      elements: [
+        {
+          action_id: 'home_forget_me',
+          confirm: {
+            confirm: plainText('Forget me'),
+            deny: plainText('Cancel'),
+            text: mrkdwn(
+              "Kyto will delete the memories you saved and its stored reasoning from your DM threads with it, and destroy your DM threads' sandbox workspaces. Your settings and API keys are kept. This cannot be undone."
+            ),
+            title: plainText('Forget what you told Kyto?'),
+          },
+          style: 'danger',
+          text: plainText('Forget me'),
+          type: 'button',
+        },
+        {
+          action_id: 'home_erase_everything',
+          confirm: {
+            confirm: plainText('Delete everything'),
+            deny: plainText('Cancel'),
+            text: mrkdwn(
+              'Everything above, PLUS your custom instructions, MCP servers, saved model keys and any linked ChatGPT account. Reminders and hosted sites are left alone — delete those individually above. This cannot be undone.'
+            ),
+            title: plainText('Delete all your Kyto data?'),
+          },
+          style: 'danger',
+          text: plainText('Delete everything'),
+          type: 'button',
+        },
+      ],
+      type: 'actions',
+    },
+  ];
+  if (privacy && privacy.promotedMemories > 0) {
+    blocks.push({
+      elements: [
+        mrkdwn(
+          `_${privacy.promotedMemories} of your memories were promoted to workspace-wide. Promotion hands custody to the bot owner, so only they can remove those — you'll be told which ones._`
+        ),
+      ],
+      type: 'context',
+    });
+  }
+  return blocks;
 }
 
 export function buildIdentityModal(

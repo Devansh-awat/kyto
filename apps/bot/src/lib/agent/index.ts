@@ -21,6 +21,7 @@ import {
 import { buildPrompt } from '@/lib/agent/prompt';
 import { createChunkRelay } from '@/lib/agent/relay';
 import { createReply } from '@/lib/agent/reply';
+import { isBareSkipText } from '@/lib/agent/skip-text';
 import {
   abortReasonOf,
   interruptTurn,
@@ -1161,22 +1162,6 @@ async function executeTurn(
 // purposes.
 function isVisibleText(text: string): boolean {
   return text.trim().length > 0;
-}
-
-// A model that means to stay quiet is supposed to CALL the `skip` tool. Some
-// write the word instead — and then the whole "reply" is the bare token, which
-// got posted to the thread as a message reading `skip`, followed by a usage
-// footer. Seen three times in a row on subagent wake turns, where "call skip
-// instead of posting filler" is exactly what the prompt asks for.
-//
-// Only an entire reply that is nothing but the token counts. Someone asking kyto
-// to "skip the first step" gets a reply containing the word, and that must post
-// normally — so this deliberately does NOT strip a trailing `skip` off real prose.
-const BARE_SKIP =
-  /^\s*(?:`{1,3})?\s*skip(?:\s*\(\s*\))?\s*[.!]?\s*(?:`{1,3})?\s*$/i;
-
-function isBareSkipText(text: string): boolean {
-  return BARE_SKIP.test(text);
 }
 
 // Fold an error's message + provider responseBody/data into one string so the

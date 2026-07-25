@@ -22,8 +22,14 @@ describe('BYOK secret encryption', () => {
   test('rejects a tampered payload', () => {
     const stored = encryptSecret(SECRET);
     const [version, iv, payload] = stored.split(':');
-    const flipped = `${payload?.slice(0, -2)}${payload?.at(-1)}${payload?.at(-2)}`;
-    expect(() => decryptSecret(`${version}:${iv}:${flipped}`)).toThrow(
+    // Substitute the last character for a DIFFERENT one rather than swapping the
+    // last two: base64 payloads end in two identical characters often enough
+    // (~1 in 64) that the swap was sometimes a no-op, and the test then failed
+    // because untampered ciphertext correctly decrypted.
+    const last = payload?.at(-1);
+    const tampered = `${payload?.slice(0, -1)}${last === 'A' ? 'B' : 'A'}`;
+    expect(payload).not.toBe(tampered);
+    expect(() => decryptSecret(`${version}:${iv}:${tampered}`)).toThrow(
       SecretCryptoError
     );
   });

@@ -143,6 +143,38 @@ export async function setMemoryGlobal({
 }
 
 /** Every memory, newest first — the dashboard's review list. */
+/**
+ * Everything this user saved, promoted or not — what a "what do you know about
+ * me" listing and a self-serve erase both need to reason about.
+ */
+export async function listMemoriesByAuthor(userId: string): Promise<Memory[]> {
+  return await db
+    .select()
+    .from(memories)
+    .where(eq(memories.createdBy, userId))
+    .orderBy(asc(memories.createdAt));
+}
+
+/**
+ * Delete this user's own PRIVATE memories, returning how many went.
+ *
+ * Promoted (global) memories are deliberately left alone: promotion transfers
+ * custody to the bot owner, and letting the original author still delete one
+ * would reopen the "get it promoted, then change it" hole the custody rule
+ * closes. The caller is expected to TELL the user which promoted memories remain
+ * so they can ask the owner — silently leaving data behind after someone asks to
+ * be forgotten would be the worse failure.
+ */
+export async function deletePrivateMemoriesByAuthor(
+  userId: string
+): Promise<number> {
+  const removed = await db
+    .delete(memories)
+    .where(and(eq(memories.createdBy, userId), eq(memories.isGlobal, false)))
+    .returning({ id: memories.id });
+  return removed.length;
+}
+
 export async function listAllMemories(): Promise<Memory[]> {
   return await db.select().from(memories).orderBy(desc(memories.createdAt));
 }

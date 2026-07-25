@@ -9,6 +9,7 @@ import {
 import { env } from '@/env';
 import { byokConfigured } from '@/lib/byok';
 import { slack } from '@/lib/chat';
+import { previewUserData } from './erase';
 import { buildHomeView } from './views';
 
 export async function publishHome({
@@ -25,6 +26,7 @@ export async function publishHome({
     reminders,
     modelCredentials,
     chatgptAccount,
+    privacy,
   ] = await Promise.all([
     getUserCustomization(userId),
     listMcpServers(userId).catch(() => []),
@@ -36,6 +38,9 @@ export async function publishHome({
     byokEnabled
       ? getChatgptAccount(userId).catch(() => undefined)
       : Promise.resolve(undefined),
+    // Best-effort: the "Your data" section still renders (with generic wording)
+    // if the counts can't be read, because the erase buttons must never vanish.
+    previewUserData(userId).catch(() => undefined),
   ]);
 
   await slack.webClient.views.publish({
@@ -47,6 +52,7 @@ export async function publishHome({
       isOwner,
       mcpServers,
       modelCredentials,
+      privacy,
       prompt: customization?.prompt ?? null,
       reminders,
       showUsageFooter: customization?.showUsageFooter ?? true,

@@ -141,14 +141,30 @@ Alongside that, Kyto relies on:
   dashboard is the only surface that displays memory bodies and it is behind
   `DASHBOARD_PASSWORD`.
 - **No training**: messages are never used to train a model.
-- **Withdrawal**: `thread_thinking` expires on its own within ~30 days, and
-  memories can be deleted by their author or by the owner from the dashboard.
+- **Withdrawal**: **self-serve, from the App Home "Your data" section.** Anyone
+  can press "Forget me" and Kyto immediately deletes the memories they saved, its
+  stored reasoning from their DM threads with it, and those threads' sandbox
+  workspaces. "Delete everything" additionally removes their custom instructions,
+  MCP servers, model keys and any linked ChatGPT account. Neither touches their
+  reminders or hosted sites — those are live things other people may rely on, and
+  they are already individually deletable on the same screen. Every erase DMs a
+  receipt itemising exactly what went, and a failed one says "assume nothing was
+  removed" rather than failing silently. Independently, `thread_thinking` still
+  expires on its own within ~30 days.
 
-**Known gap**: there is no self-serve "forget everything about me" action. A
-withdrawal request today means the owner deleting that person's memories on the
-dashboard and waiting out the thinking-cache window. The policy asks for
-"reasonable efforts", which this meets, but a user-facing command would be
-better.
+**Two things a self-serve erase deliberately does not reach**, both stated in the
+receipt rather than glossed over:
+
+- **Reasoning in shared channels.** `thread_thinking` is keyed by thread, not by
+  person, and a channel thread's reasoning is derived from everyone who was in it.
+  One member asking to be forgotten must not delete the rest of it, so only their
+  own DM channel with Kyto is erased. Channel reasoning ages out on the normal
+  ~30-day window.
+- **A memory that was promoted workspace-wide.** Promotion transfers custody to
+  the owner — that is what stops "get it promoted, then rewrite the body" — so the
+  original author can no longer delete it. Those are listed back **by title** so
+  they can ask the owner. Data left behind after someone asks to be forgotten is
+  never data they were not told about.
 
 ## Reporting
 

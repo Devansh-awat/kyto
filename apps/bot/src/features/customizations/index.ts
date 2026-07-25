@@ -41,6 +41,7 @@ import {
 import { IDENTITY_TYPES, resetIdentityCache } from '@/lib/identity';
 import logger from '@/lib/logger';
 import { toLogError } from '@/lib/utils/error';
+import { eraseUserData, summarize } from './erase';
 import {
   openedViewSchema,
   parseModalState,
@@ -204,6 +205,44 @@ bot.onAction('home_clear_prompt', async (event) => {
       );
     });
 });
+
+// Self-serve erase. Two buttons, same handler: `includeSettings` is the only
+// difference (see erase.ts for why they're separate asks). Both are already
+// behind Slack's own confirm dialog, which is the only confirmation there is —
+// App Home has nowhere to put an ephemeral, so the receipt is DM'd instead.
+const eraseHandler =
+  (includeSettings: boolean) => async (event: { user: { userId: string } }) => {
+    const userId = event.user.userId;
+    try {
+      const result = await eraseUserData({ includeSettings, userId });
+      await publishHome({ userId });
+      // The receipt matters as much as the deletion: it's how someone learns that
+      // shared-channel reasoning and promoted memories are NOT covered, which they
+      // can't tell from a button that just says "Forget me".
+      const thread = await bot.openDM(userId);
+      await thread.post({
+        markdown: `*Done — here's exactly what was removed.*\n\n${summarize(result)}`,
+      });
+    } catch (error: unknown) {
+      logger.error(
+        { ...toLogError(error), includeSettings, userId },
+        'Failed to erase user data'
+      );
+      // Never leave someone believing their data is gone when it isn't.
+      await bot
+        .openDM(userId)
+        .then((thread) =>
+          thread.post({
+            markdown:
+              "Something went wrong erasing your data, so *assume nothing was removed* and try again. If it keeps failing, tell the bot owner — don't just leave it.",
+          })
+        )
+        .catch(() => undefined);
+    }
+  };
+
+bot.onAction('home_forget_me', eraseHandler(false));
+bot.onAction('home_erase_everything', eraseHandler(true));
 
 bot.onAction('home_toggle_footer', async (event) => {
   // The button's value is the target state ('on'/'off'); fall back to reading

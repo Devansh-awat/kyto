@@ -12,11 +12,6 @@ the repo for anything that can't be published (prompts are fine, `.env` obviousl
 isn't). See `docs/reference/security.md` for what the honest answer to the creds
 question is today.
 
-**No self-serve "forget me".** Hack Club confirmed temporary storage is fine,
-but if someone withdraws consent the only route today is the owner deleting
-their memories on the dashboard and waiting out the ~30-day `thread_thinking`
-window. A user-facing command would be better.
-
 **"Thinking..." shows as plain text before the plan block appears**, and when
 the block does appear it already has thinking in it. Investigated: no such
 string exists anywhere in kyto, and the first plan chunk is already pulled
