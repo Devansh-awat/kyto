@@ -38,6 +38,7 @@ import { joinThreadTool } from './tools/join-thread';
 import { leaveThreadTool } from './tools/leave-thread';
 import { listThreadsTool } from './tools/list-threads';
 import {
+  deleteMemoryTool,
   editMemoryTool,
   fetchMemoryTool,
   saveMemoryTool,
@@ -137,11 +138,11 @@ export async function buildTools({
     bash: bashTool({
       background,
       getSandboxContext,
-      github: { isOwner, userId: authorUserId },
+      github: { isOwner, threadId: thread.id, userId: authorUserId },
     }),
     codeMode: codeModeTool({
       getSandboxContext,
-      github: { isOwner, userId: authorUserId },
+      github: { isOwner, threadId: thread.id, userId: authorUserId },
     }),
     readFile: readFileTool({ getSandboxContext }),
     writeFile: writeFileTool({ getSandboxContext }),
@@ -180,9 +181,10 @@ export async function buildTools({
     listSites: listSitesTool(),
     removeSite: removeSiteTool({ isOwner, userId: authorUserId }),
     skip: skipTool({ threadId: thread.id }),
-    saveMemory: saveMemoryTool({ authorUserId }),
-    fetchMemory: fetchMemoryTool(),
-    editMemory: editMemoryTool(),
+    saveMemory: saveMemoryTool({ authorUserId, isOwner }),
+    fetchMemory: fetchMemoryTool({ authorUserId, isOwner }),
+    editMemory: editMemoryTool({ authorUserId, isOwner }),
+    deleteMemory: deleteMemoryTool({ authorUserId, isOwner }),
     listThreads: listThreadsTool({ currentThreadId: thread.id }),
     readConversationHistory: readConversationHistoryTool({
       currentThreadId: thread.id,
@@ -300,6 +302,7 @@ export async function buildTools({
             tool: ghTool({
               getSandboxContext,
               isOwner,
+              threadId: thread.id,
               userId: authorUserId,
             }),
           },

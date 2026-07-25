@@ -18,7 +18,10 @@ export async function requestHints({
     resolveChannelName(rawChannelId),
     resolveWorkspaceName(),
     getUserCustomization(message.author.userId).catch(() => null),
-    listMemoryIndex().catch(() => []),
+    // Scoped to the person kyto is answering: their own memories plus whatever
+    // the owner has promoted to global. Someone else's private notes are never
+    // in this list, so they can't become instructions on a stranger's turn.
+    listMemoryIndex(message.author.userId).catch(() => []),
   ]);
   return {
     botUserId: slack.botUserId,
@@ -30,6 +33,7 @@ export async function requestHints({
     memories,
     messageId: message.id,
     ownerUserId: env.OWNER_USER_ID,
+    githubLogin: env.GH_LOGIN,
     workspace,
     threadId: thread.id,
     time: new Date().toISOString(),

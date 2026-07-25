@@ -1,36 +1,69 @@
-import { asc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, or } from 'drizzle-orm';
 import { db } from '../client';
 import { type Memory, memories } from '../schema';
 
 export type { Memory } from '../schema';
 
-// Title + summary of every memory, oldest first — the lightweight index injected
-// into the system prompt. The full body is fetched separately, on demand.
+// A memory is visible on someone's turn if they saved it, or if the owner has
+// promoted it to global. Nobody else's private notes are ever in scope — that
+// isolation is the whole point (see the schema comment).
+function visibleTo(userId: string) {
+  return or(eq(memories.createdBy, userId), eq(memories.isGlobal, true));
+}
+
+// Title + who saved it, for every memory visible on this turn — the lightweight
+// index injected into the system prompt. Bodies are fetched separately.
 export interface MemoryIndexEntry {
+  createdBy: string;
+  isGlobal: boolean;
   summary: string;
   title: string;
 }
 
-export async function listMemoryIndex(): Promise<MemoryIndexEntry[]> {
+export async function listMemoryIndex(
+  userId: string
+): Promise<MemoryIndexEntry[]> {
   return await db
-    .select({ summary: memories.summary, title: memories.title })
+    .select({
+      createdBy: memories.createdBy,
+      isGlobal: memories.isGlobal,
+      summary: memories.summary,
+      title: memories.title,
+    })
     .from(memories)
+    .where(visibleTo(userId))
     .orderBy(asc(memories.createdAt));
 }
 
-export async function getMemory(title: string): Promise<Memory | null> {
-  const [row] = await db
+/**
+ * Resolve a title to a memory this user can actually see. Their OWN memory wins
+ * over a global one with the same title — a user's private note is the more
+ * specific answer, and it also means promoting someone's memory can never
+ * silently shadow another person's.
+ */
+export async function getMemory({
+  title,
+  userId,
+}: {
+  title: string;
+  userId: string;
+}): Promise<Memory | null> {
+  const rows = await db
     .select()
     .from(memories)
-    .where(eq(memories.title, title))
-    .limit(1);
-  return row ?? null;
+    .where(and(eq(memories.title, title), visibleTo(userId)))
+    // Own row (createdBy === userId) sorts before a global one: `isGlobal`
+    // descending puts globals first, so order by it ascending instead and rely
+    // on the author match being the non-global row in the common case.
+    .orderBy(asc(memories.isGlobal))
+    .limit(2);
+  return rows.find((row) => row.createdBy === userId) ?? rows.at(0) ?? null;
 }
 
 /**
- * Create a new memory. Returns null if a memory with that title already exists
- * (the caller should edit it instead) — saves are create-only so an existing
- * memory is never silently clobbered.
+ * Save a new memory, private to `createdBy`. Returns null if that person
+ * already has one with this title (they should edit it instead) — saves are
+ * create-only so an existing memory is never silently clobbered.
  */
 export async function createMemory(input: {
   title: string;
@@ -41,17 +74,17 @@ export async function createMemory(input: {
   const [row] = await db
     .insert(memories)
     .values(input)
-    .onConflictDoNothing({ target: memories.title })
+    .onConflictDoNothing({ target: [memories.createdBy, memories.title] })
     .returning();
   return row ?? null;
 }
 
 /**
- * Update an existing memory's summary and/or body. Only the fields passed are
- * touched. Returns the updated row, or null if no memory has that title.
+ * Update one memory by id. The caller decides who may do this — a global
+ * memory belongs to the bot owner, a private one to its author.
  */
 export async function updateMemory(input: {
-  title: string;
+  id: number;
   summary?: string;
   body?: string;
 }): Promise<Memory | null> {
@@ -63,12 +96,53 @@ export async function updateMemory(input: {
     patch.body = input.body;
   }
   if (Object.keys(patch).length === 0) {
-    return await getMemory(input.title);
+    return await getMemoryById(input.id);
   }
   const [row] = await db
     .update(memories)
     .set(patch)
-    .where(eq(memories.title, input.title))
+    .where(eq(memories.id, input.id))
     .returning();
   return row ?? null;
+}
+
+export async function deleteMemory(id: number): Promise<Memory | null> {
+  const [row] = await db
+    .delete(memories)
+    .where(eq(memories.id, id))
+    .returning();
+  return row ?? null;
+}
+
+export async function getMemoryById(id: number): Promise<Memory | null> {
+  const [row] = await db
+    .select()
+    .from(memories)
+    .where(eq(memories.id, id))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * Promote a memory to global (or demote it back). Owner-only, enforced by the
+ * dashboard — this query layer has no notion of who is asking.
+ */
+export async function setMemoryGlobal({
+  id,
+  isGlobal,
+}: {
+  id: number;
+  isGlobal: boolean;
+}): Promise<Memory | null> {
+  const [row] = await db
+    .update(memories)
+    .set({ isGlobal, promotedAt: isGlobal ? new Date() : null })
+    .where(eq(memories.id, id))
+    .returning();
+  return row ?? null;
+}
+
+/** Every memory, newest first — the dashboard's review list. */
+export async function listAllMemories(): Promise<Memory[]> {
+  return await db.select().from(memories).orderBy(desc(memories.createdAt));
 }
