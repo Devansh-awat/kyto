@@ -8,6 +8,7 @@ import {
 import { tool } from 'ai';
 import { z } from 'zod';
 import { env } from '@/env';
+import { githubAuthHint } from '@/lib/github/diagnose';
 import { GITHUB_LOGIN, guardGithubCommand } from '@/lib/github/guard';
 import { disarmFetchedRepos } from '@/lib/sandbox/git-safety';
 import { errorMessage } from '@/lib/utils/error';
@@ -89,6 +90,13 @@ export function ghTool({
         });
         return {
           exitCode: result.exitCode,
+          // A revoked brokered token fails in ways that read like a missing
+          // repo or a broken sandbox; say what actually happened.
+          hint: githubAuthHint({
+            command,
+            exitCode: result.exitCode,
+            stderr: result.stderr,
+          }),
           stderr: truncate(result.stderr),
           stdout: truncate(result.stdout),
           success: result.exitCode === 0,

@@ -2,6 +2,7 @@ import nodePath from 'node:path/posix';
 import type { SandboxContext } from '@repo/ai';
 import { tool } from 'ai';
 import { z } from 'zod';
+import { githubAuthHint } from '@/lib/github/diagnose';
 import { guardGithubCommand } from '@/lib/github/guard';
 import { disarmFetchedRepos } from '@/lib/sandbox/git-safety';
 import { clamp } from '@/lib/utils/text';
@@ -114,6 +115,13 @@ export function bashTool({
       });
       return {
         exitCode: result.exitCode,
+        // git/gh reject a revoked brokered token in ways that look like a
+        // private repo or a broken environment; name the real cause.
+        hint: githubAuthHint({
+          command,
+          exitCode: result.exitCode,
+          stderr: result.stderr,
+        }),
         stderr: clip(result.stderr),
         stdout: clip(result.stdout),
       };

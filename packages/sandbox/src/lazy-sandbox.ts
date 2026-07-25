@@ -13,6 +13,21 @@ const GH_PLACEHOLDER = Buffer.from(
   'utf8'
 ).toString('base64');
 
+// There is no terminal in the sandbox, so a git command that decides it needs
+// credentials has nobody to ask. Without these it still TRIES, and the failure
+// comes back as `could not read Username for 'https://github.com': No such
+// device or address` — which reads like a broken environment and sent a whole
+// turn down the wrong path (it was actually a revoked token being rejected by
+// GitHub). Turning prompting off makes git fail immediately with the real
+// authentication error instead.
+//
+// Set on `this.env`, which run() merges into EVERY command, so a sandbox
+// resumed from before this existed picks it up too — unlike create-time envs.
+const GIT_NON_INTERACTIVE: Record<string, string> = {
+  GIT_ASKPASS: '/bin/echo',
+  GIT_TERMINAL_PROMPT: '0',
+};
+
 // Broker the GitHub token via E2B egress rules (e2b >= 2.28): the proxy rewrites
 // the Authorization header on outbound requests to GitHub, so the sandbox can
 // use gh/git as the token's identity but can NEVER read the token itself (no
@@ -126,8 +141,13 @@ export class LazySandbox {
     this.githubToken = githubToken;
     // gh/git see only the placeholder; auth happens at the network layer.
     this.env = githubToken
-      ? { GH_TOKEN: GH_PLACEHOLDER, GITHUB_TOKEN: GH_PLACEHOLDER, ...env }
-      : env;
+      ? {
+          ...GIT_NON_INTERACTIVE,
+          GH_TOKEN: GH_PLACEHOLDER,
+          GITHUB_TOKEN: GH_PLACEHOLDER,
+          ...env,
+        }
+      : { ...GIT_NON_INTERACTIVE, ...env };
     this.logger = logger;
     this.sessionId = sessionId;
     this.store = store;
