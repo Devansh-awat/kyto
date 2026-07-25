@@ -373,6 +373,10 @@ function showTask({
   return false;
 }
 
+// The overflow row, shown once the plan is already MAX_VISIBLE_TASKS long. It
+// is read by people scrolling a Slack thread, not by us reading a log, so it
+// says what it means: "Activity: 25 / Ran 25 additional activity items" told
+// nobody anything, and looked like a bug in a turn that had gone fine.
 function hiddenTaskUpdate({
   count,
   done,
@@ -383,10 +387,12 @@ function hiddenTaskUpdate({
   return {
     id: 'hidden-activity',
     output: done
-      ? `Ran ${count} additional activity item${count === 1 ? '' : 's'}.`
+      ? `${count} more step${count === 1 ? '' : 's'} ran and are not shown individually, to keep this list readable.`
       : undefined,
     status: done ? 'complete' : 'in_progress',
-    title: `Activity: ${count}`,
+    title: done
+      ? `${count} more step${count === 1 ? '' : 's'}`
+      : `${count} more step${count === 1 ? '' : 's'} (running)`,
     type: 'task_update',
   };
 }

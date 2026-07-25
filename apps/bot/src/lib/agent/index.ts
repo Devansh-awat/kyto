@@ -81,6 +81,12 @@ const SPEND_LIMIT_PATTERN =
 // the DigitalOcean tier.
 const HACKCLUB_OUTAGE_THRESHOLD = 1;
 
+// How many times a reply that hit MAX_OUTPUT_TOKENS mid-sentence may be resumed
+// before kyto stops and posts what it has. Three rounds is ~24k tokens of reply,
+// far past anything worth reading in Slack; the cap exists because a model that
+// keeps filling the budget exactly would otherwise continue forever.
+const MAX_CONTINUATIONS = 3;
+
 // DigitalOcean's BYOK rate limit is per ACCOUNT, not per model: when one rung
 // 429s "Rate limit exceeded", every other DigitalOcean rung 429s within seconds
 // — the whole roster went down that way in one turn, nine models deep, each
@@ -799,6 +805,42 @@ async function executeTurn(
           });
         }
 
+        // The model DID write a reply, but ran out of output budget partway
+        // through it. `length` means the sentence stopped where the token cap
+        // fell, not where the thought ended — observed as a turn that posted
+        // "here is the link and a summary of what i found:" and then nothing at
+        // all. Text had streamed, so the attempt counted as handled and the
+        // turn closed on a dangling colon.
+        //
+        // Note this is NOT the same as the `length` finish the nudge above
+        // handles: there the cap ate a tool call and no reply existed, here the
+        // cap ate the reply itself. Ask the same model to carry on from what the
+        // user was already shown, tools off so nothing can fire twice.
+        if (attemptText && attemptFinishReason === 'length') {
+          for (let round = 0; round < MAX_CONTINUATIONS; round += 1) {
+            let continuationFinish: string | undefined;
+            yield* continueTruncatedReply({
+              attempt: currentAttempt,
+              onFinish: (reason) => {
+                continuationFinish = reason;
+              },
+              onText: (text) => {
+                producedText = true;
+                errorStage = 'after_text';
+                streamedText = appendStreamedText(streamedText, text);
+              },
+              signal: AbortSignal.any([controller.signal, attemptAbort.signal]),
+              streamedText,
+              system: systemPrompt({ hints }),
+              task: messageText,
+            });
+            // Whatever it just wrote fit — the reply is complete.
+            if (continuationFinish !== 'length') {
+              break;
+            }
+          }
+        }
+
         // Reply text from THIS attempt, or a deliberate skip, counts as handled.
         // (Not the turn-level `producedText`: a continuation attempt inherits it
         // from the interrupted attempt, and would otherwise report success while
@@ -1162,6 +1204,73 @@ async function* synthesizeFinalAnswer({
       '[agent] synthesis nudge failed'
     );
   }
+}
+
+/**
+ * Resume a reply that MAX_OUTPUT_TOKENS cut off mid-sentence. Same model, tools
+ * off — the work is already done and the only thing missing is the rest of the
+ * prose, so nothing here can repeat a side effect. Bounded by MAX_CONTINUATIONS
+ * because a model that keeps producing exactly one cap's worth of text every
+ * round would otherwise never terminate.
+ */
+async function* continueTruncatedReply({
+  attempt,
+  onFinish,
+  onText,
+  signal,
+  streamedText,
+  system,
+  task,
+}: {
+  attempt: ModelAttempt;
+  onFinish: (reason: string) => void;
+  onText: (text: string) => void;
+  signal: AbortSignal;
+  streamedText: string;
+  system: string;
+  task: string;
+}): AsyncGenerator<string | StreamChunk> {
+  logger.info(
+    { model: attempt.model },
+    '[agent] reply hit the output cap mid-sentence; continuing it'
+  );
+  const prompt = `${task}\n\n${renderTruncation(streamedText)}`;
+  try {
+    const result = streamAttempt({
+      abortSignal: signal,
+      attempt,
+      holder: {},
+      prompt,
+      system,
+      tools: {},
+    });
+    yield* renderStream({
+      emitText: true,
+      knownTools: new Set<string>(),
+      onFinish,
+      onTextDelta: onText,
+      stream: result.fullStream,
+    });
+  } catch (error) {
+    logger.warn(
+      { err: errorMessage(error), model: attempt.model },
+      '[agent] truncated-reply continuation failed'
+    );
+  }
+}
+
+/** The tail the model must resume from, kept short — it only needs the seam. */
+const TRUNCATION_TAIL_CHARS = 2000;
+
+function renderTruncation(streamedText: string): string {
+  const tail = streamedText.trim().slice(-TRUNCATION_TAIL_CHARS);
+  return [
+    'IMPORTANT: you were cut off. You already did the work, and the user has ALREADY been shown the reply text below, which stops mid-thought because it hit the output limit:',
+    '',
+    tail,
+    '',
+    'Write ONLY the continuation, starting exactly where that stops. Do not repeat any of it, do not restate the task, do not re-introduce yourself, and do not apologise or mention being cut off. If it broke off mid-sentence, finish that sentence. Keep it short.',
+  ].join('\n');
 }
 
 /**
