@@ -78,6 +78,24 @@ async function addCanvasTab({
   }
 }
 
+// Slack's canonical permalink for a canvas. Worth a `files.info` round trip:
+// the /canvas/<id> URL a model composes by hand unfurls as a "Sign in to Slack"
+// card on an enterprise grid and often doesn't open the document at all.
+async function canvasLink(canvasId: string): Promise<string | undefined> {
+  try {
+    const info = filesInfoSchema.parse(
+      await slack.webClient.apiCall('files.info', { file: canvasId })
+    );
+    return info.ok ? info.file?.permalink : undefined;
+  } catch (error) {
+    logger.warn(
+      { error: errorMessage(error) },
+      '[canvas] permalink lookup failed'
+    );
+    return;
+  }
+}
+
 const filesListSchema = z.looseObject({
   error: z.string().optional(),
   files: z
@@ -155,14 +173,35 @@ export function canvasListTool({ thread }: { thread: Thread }) {
 }
 
 export function canvasWriteTool({ thread }: { thread: Thread }) {
+  // The last canvas this tool created or edited THIS TURN. A canvas is almost
+  // always created and then immediately filled in, and the edit call carries a
+  // whole document in `markdown` — big enough to hit maxOutputTokens and be
+  // truncated mid-argument, which drops the trailing fields. When that ate
+  // `canvasId`, every retry was refused for a missing id the model genuinely
+  // had, and it looped until the turn died with the canvas still holding
+  // placeholder text. Remembering the id closes that loop; putting `markdown`
+  // LAST in the schema (below) stops it being eaten in the first place.
+  let lastCanvasId: string | undefined;
+
   return tool({
     description:
-      'Create or edit a Slack canvas (a rich, persistent document). Use to capture meeting notes, decisions, specs, runbooks, or any long-lived structured content. Prefer this over long messages for content the team will return to.',
+      'Create or edit a Slack canvas (a rich, persistent document). Use to capture meeting notes, decisions, specs, runbooks, or any long-lived structured content. Prefer this over long messages for content the team will return to. When you share it afterwards, post the `link` this returns as a labelled markdown link ([Title](link)) — never paste a canvas URL you composed yourself, and never paste one bare.',
     inputSchema: z.object({
+      // Everything short comes FIRST and `markdown` comes LAST, deliberately:
+      // models emit JSON arguments in schema order, so if the call is truncated
+      // it loses the tail of the document rather than the id that identifies
+      // which document to write to.
       mode: z
         .enum(['create-channel', 'create-standalone', 'edit'])
         .describe(
           'create-channel: attach a canvas to the current channel. create-standalone: a free-floating canvas. edit: change an existing canvas (requires canvasId).'
+        ),
+      canvasId: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          'Canvas id to edit (required when mode is "edit"). Defaults to the last canvas you created or edited this turn.'
         ),
       title: z
         .string()
@@ -172,35 +211,32 @@ export function canvasWriteTool({ thread }: { thread: Thread }) {
         .describe(
           'Canvas title, shown as the tab/document name. Used by both create-standalone and create-channel; without it a channel canvas shows as "Untitled".'
         ),
+      editOperation: z
+        .enum(['replace', 'insert_at_end'])
+        .default('insert_at_end')
+        .describe('How to apply markdown when editing an existing canvas.'),
       markdown: z
         .string()
         .min(1)
         .max(100_000)
         .describe('Canvas body as Slack-flavored markdown.'),
-      canvasId: z
-        .string()
-        .min(1)
-        .optional()
-        .describe('Canvas id to edit (required when mode is "edit").'),
-      editOperation: z
-        .enum(['replace', 'insert_at_end'])
-        .default('insert_at_end')
-        .describe('How to apply markdown when editing an existing canvas.'),
     }),
     execute: async ({ mode, title, markdown, canvasId, editOperation }) => {
       try {
         const documentContent = { markdown, type: 'markdown' as const };
 
         if (mode === 'edit') {
-          if (!canvasId) {
+          const targetId = canvasId ?? lastCanvasId;
+          if (!targetId) {
             return {
-              error: 'canvasId is required to edit a canvas.',
+              error:
+                'canvasId is required to edit a canvas, and you have not created one this turn. Call canvasList to find the id, then pass it as canvasId.',
               success: false,
             };
           }
           const result = canvasResponseSchema.parse(
             await slack.webClient.apiCall('canvases.edit', {
-              canvas_id: canvasId,
+              canvas_id: targetId,
               changes: [
                 editOperation === 'replace'
                   ? { document_content: documentContent, operation: 'replace' }
@@ -217,10 +253,12 @@ export function canvasWriteTool({ thread }: { thread: Thread }) {
               success: false,
             };
           }
+          lastCanvasId = targetId;
           return {
-            canvasId,
+            canvasId: targetId,
+            link: await canvasLink(targetId),
             success: true,
-            summary: `Edited canvas ${canvasId}.`,
+            summary: `Edited canvas ${targetId}.`,
           };
         }
 
@@ -253,8 +291,12 @@ export function canvasWriteTool({ thread }: { thread: Thread }) {
                 title,
               })
             : false;
+          lastCanvasId = result.canvas_id ?? lastCanvasId;
           return {
             canvasId: result.canvas_id,
+            link: result.canvas_id
+              ? await canvasLink(result.canvas_id)
+              : undefined,
             success: true,
             summary: `Created a canvas${title ? ` "${title}"` : ''} in this channel${tabbed ? ' and added it as a tab' : ''}.`,
           };
@@ -272,8 +314,12 @@ export function canvasWriteTool({ thread }: { thread: Thread }) {
             success: false,
           };
         }
+        lastCanvasId = result.canvas_id ?? lastCanvasId;
         return {
           canvasId: result.canvas_id,
+          link: result.canvas_id
+            ? await canvasLink(result.canvas_id)
+            : undefined,
           success: true,
           summary: `Created canvas${title ? ` "${title}"` : ''}.`,
         };
