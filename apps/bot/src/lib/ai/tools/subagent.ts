@@ -333,7 +333,9 @@ export function runSubagentTool({
             record.status = result.success ? 'done' : 'failed';
             record.result = result;
             if (mayWake) {
-              void wakeThread({ job: record, message, thread });
+              wakeThread({ job: record, message, thread }).catch(
+                () => undefined
+              );
             }
           },
           (error: unknown) => {
@@ -344,7 +346,9 @@ export function runSubagentTool({
               '[subagent] background run failed'
             );
             if (mayWake) {
-              void wakeThread({ job: record, message, thread });
+              wakeThread({ job: record, message, thread }).catch(
+                () => undefined
+              );
             }
           }
         );

@@ -27,8 +27,12 @@ export function contextPrompt(hints: RequestHints): string {
     lines.push(`The message you're responding to has id ${hints.messageId}.`);
   }
   if (hints.githubLogin) {
+    // The gh tool says this too, but gh is DEFERRED — it isn't in the prompt
+    // until the model calls loadTools. Asked "check your GitHub profile
+    // readme", kyto had no gh tool loaded, so it answered from its idea of what
+    // an assistant is and flatly denied having an account. State it up front.
     lines.push(
-      `Your GitHub login profile is ${hints.githubLogin}. PRs, commits, and issue actions you run happen under this account.`
+      `You have a real GitHub account: github.com/${hints.githubLogin}. It is yours — your profile, your profile README, your repos, and any PR, commit, or issue you open is your own work under that name. Never say you don't have a GitHub account or that you're "just an AI with no profile". To actually look at or change anything there, load the gh tool.`
     );
   }
   lines.push(

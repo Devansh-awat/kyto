@@ -2,10 +2,33 @@
 
 ## When something is done, remove it from here
 
-- **[done, keep an eye on it] "Sign in with ChatGPT" is fully working** — OAuth link, token refresh, encrypted storage, the account-aware model picker, ChatGPT-first/shared-first routing, AND turns (Responses API via `@ai-sdk/openai` `.responses()`). The "why do I get more fallbacks than Codex does" problem was real and is fixed: `store:false` is now passed as `providerOptions.openai` (not only forced in `codexFetch`), so the SDK asks for `include: reasoning.encrypted_content` and stops replaying reasoning items by `rs_…` id — every multi-step tool turn used to die on step 2 with `404 Item with id 'rs_…' not found`. Also mirrors Codex's client headers and `reasoningSummary: 'auto'`. Watch for: Codex model slugs churn (the picker handles it, but a stale stored model 400s — `gpt-5` is invalid), and `CODEX_CLIENT_VERSION` (`packages/ai/src/providers/chatgpt.ts`) may need bumping over time.
+### Open
 
-- **"Shows something went wrong when it didn't, and the agent continues."** Needs a concrete example (permalink/screenshot) to fix the exact surface. Investigated 2026-07-17: the mid-stream provider `error` part does NOT render a plan card (only logs + falls back), and the terminal "_oops, something went wrong._" only posts after the whole fallback chain is exhausted. Most likely culprit is a recoverable TOOL error card (red) that's actually fine, or an `after_text` error when a 504 hit mid-stream and the continuation gave up. Point at a specific message before changing error rendering.
+**Pick an open-source licence.** People asked how safe their creds are with
+kyto; one answer is going open source. Needs a decision on which licence, and a
+pass over the repo for anything that can't be published (prompts are fine,
+`.env` obviously isn't). See `docs/reference/security.md` for what the honest
+answer to the creds question is today.
 
-- **Agent stops in the middle.** Partly mitigated: a provider dying mid-stream now raises `StreamInterruptedError` and the next model continues (`renderContinuation`). Remaining cause is provider latency/504s (see slowness). If it still happens on a specific turn, grab the thread id + timestamp so the journal (`[agent] attempt failed, falling back` / `turn failed`) can pin it.
+**No self-serve "forget me".** Hack Club confirmed temporary storage is fine,
+but if someone withdraws consent the only route today is the owner deleting
+their memories on the dashboard and waiting out the ~30-day `thread_thinking`
+window. A user-facing command would be better.
 
-- **Slowness — mostly the model/provider, not our bug** (measured 2026-07-17): single-step turns on the pinned primary run ~9–32s of raw model latency; multi-step turns are N× that (a 9-step turn took ~125s). Only ~5% of turns hit a 504 gateway timeout. Levers that are ours: fewer steps via `codeMode`/parallel tool batching (already prompted), a faster primary (owner's routing call in `.claude/MODELS.md`), or dropping `maxRetries` to 0 for the primary so a 504 fails over faster instead of retrying once (currently `maxRetries: 1` for every attempt).
+**"Thinking..." shows as plain text before the plan block appears**, and when
+the block does appear it already has thinking in it. Investigated: no such
+string exists anywhere in kyto, and the first plan chunk is already pulled
+before the stream opens, so this looks like Slack's own placeholder for an open
+`chatStream` that has not rendered yet. Needs confirming against a real thread
+before there's anything to fix.
+
+**Thinking cards render as a single line.** Worth confirming this is genuinely
+one line of reasoning (gpt-5.6 returns short `reasoningSummary` text, so it
+probably is) rather than longer thinking being truncated somewhere.
+
+**HackClub served opus-4.5 for a request.** A turn came back as
+`(Empty response: {'content': [], 'model': 'claude-opus-4-5-20251101'})`. Kyto
+never asks for 4.5 — it isn't in `LEADERBOARD_FALLBACK` — so the proxy resolved
+one of our slugs to it upstream. The placeholder text is already filtered and
+the empty response already falls back, so this is a "what is HackClub doing"
+question, not a kyto bug.
