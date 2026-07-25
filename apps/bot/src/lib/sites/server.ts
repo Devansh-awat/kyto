@@ -3,6 +3,7 @@ import { mkdir, readFile, stat } from 'node:fs/promises';
 import nodePath from 'node:path';
 import { promisify } from 'node:util';
 import { env } from '@/env';
+import { handleDashboard } from '@/lib/dashboard';
 import logger from '@/lib/logger';
 import { handleSlackProxy } from '@/lib/slack-proxy';
 import { isValidSiteName, resolveWithin, siteRoot, sitesRoot } from './paths';
@@ -121,6 +122,14 @@ export async function startSitesServer(): Promise<void> {
         const proxied = await handleSlackProxy(request, pathname);
         if (proxied) {
           return proxied;
+        }
+
+        // Owner dashboard (memory promotion, GitHub trust). Password-gated, and
+        // absent entirely when DASHBOARD_PASSWORD is unset. Also handled before
+        // the GET-only path below, since its actions are form posts.
+        const dashboard = await handleDashboard(request, pathname);
+        if (dashboard) {
+          return dashboard;
         }
 
         if (request.method !== 'GET' && request.method !== 'HEAD') {

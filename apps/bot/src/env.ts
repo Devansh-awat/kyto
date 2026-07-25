@@ -44,6 +44,13 @@ export const env = createEnv({
     // URL is always https:// (Nest terminates TLS).
     SITES_PUBLIC_HOST: z.string().default('kyto.devansh.hackclub.app'),
 
+    // Owner dashboard, mounted on the same host as the sites server at
+    // /_dashboard (see lib/dashboard). This password is the ONLY thing standing
+    // between the public internet and promoting a memory into everyone's system
+    // prompt or granting GitHub write trust, so the whole dashboard stays off
+    // unless it is set, and short passwords are rejected outright.
+    DASHBOARD_PASSWORD: z.string().min(12).optional(),
+
     E2B_API_KEY: z.string().min(1),
     AGENTMAIL_API_KEY: z.string().min(1).optional(),
     // GitHub CLI token for the `gh` tool (injected per-call into the sandbox,
