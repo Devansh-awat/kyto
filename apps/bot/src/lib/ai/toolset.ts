@@ -26,7 +26,12 @@ import {
   listSitesTool,
   removeSiteTool,
 } from './tools/deploy-site';
-import { checkInboxTool, replyEmailTool, sendEmailTool } from './tools/email';
+import {
+  checkInboxTool,
+  readEmailTool,
+  replyEmailTool,
+  sendEmailTool,
+} from './tools/email';
 import { deleteFileTool, fileStatTool } from './tools/files';
 import { focusModeTool } from './tools/focus';
 import { generateImageTool } from './tools/generate-image';
@@ -368,6 +373,10 @@ export async function buildTools({
           checkInbox: {
             summary: 'check kyto’s email inbox',
             tool: checkInboxTool({ apiKey: agentMailKey }),
+          },
+          readEmail: {
+            summary: 'read one email in full',
+            tool: readEmailTool({ apiKey: agentMailKey }),
           },
           replyEmail: {
             summary: 'reply to an email thread',
