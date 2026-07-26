@@ -68,7 +68,11 @@
         "users.profile:read",
         "users:read"
       ],
-      "user": ["chat:write", "pins:write"]
+      "user": [
+        "chat:write",
+        "im:write",
+        "pins:write"
+      ]
     },
     "pkce_enabled": false
   },
