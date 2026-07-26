@@ -78,6 +78,7 @@ import { searchSlackTool } from './tools/search-slack';
 import { searchWebTool } from './tools/search-web';
 import { editAsUserTool, sendAsUserTool } from './tools/send-as-user';
 import { skipTool } from './tools/skip';
+import { slackDocsTool } from './tools/slack-docs';
 import { slackScriptTool } from './tools/slack-script';
 import { runSubagentTool } from './tools/subagent';
 import { summarizeThreadTool } from './tools/summarize-thread';
@@ -280,6 +281,11 @@ export async function buildTools({
     canvasDelete: {
       summary: 'delete a Slack canvas',
       tool: canvasDeleteTool(),
+    },
+    slackDocs: {
+      summary:
+        'reference notes: Block Kit blocks/limits, canvas markdown (checkboxes), search modifiers',
+      tool: slackDocsTool(),
     },
     createChannel: {
       summary: 'create a Slack channel',

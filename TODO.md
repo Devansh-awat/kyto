@@ -90,9 +90,5 @@ I've investigated why the browser tool is failing, and it turns out the environm
 kyto  [5:29 PM]
 I can, however, confirm that the site is reachable via standard HTTP requests (it returns a 200 OK status).
 
-Add optional skill or something that goes into details on block kit and slack search, its optional as without it also model knows stuff. while writing this, search official docs so that its up to date. and also on canvas as with canvas i told it to put checkbox and it used emojis not the proper clickable checkbox
-
-there was a canvasid issue idk if you fixed it
-
 have kyto run daily once, being told to check mail and github incase any issues, responses or pr stuff in its repo or others(this should run in such a way that its visible in my dm from kyto)
 

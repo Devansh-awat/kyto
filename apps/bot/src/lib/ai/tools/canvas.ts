@@ -219,7 +219,9 @@ export function canvasWriteTool({ thread }: { thread: Thread }) {
         .string()
         .min(1)
         .max(100_000)
-        .describe('Canvas body as Slack-flavored markdown.'),
+        .describe(
+          'Canvas body as Slack-flavored markdown. Checklists MUST use `- [ ]` / `- [x]` (real clickable checkboxes) — never emoji squares. Mention people as `![](@U123)`, channels as `![](#C123)`. Load the slackDocs tool (topic "canvas") for the full syntax.'
+        ),
     }),
     execute: async ({ mode, title, markdown, canvasId, editOperation }) => {
       try {

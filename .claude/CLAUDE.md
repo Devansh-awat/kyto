@@ -54,7 +54,7 @@ The Vercel Chat SDK, the Pi framework, and `@ai-sdk/harness*` were removed in a 
 
 - **Sandbox tools** (`lib/ai/tools/sandbox.ts`): `bash`, `readFile`, `writeFile`, `editFile` run against `LazySandbox` — E2B `Sandbox.create` happens on the FIRST tool call that needs it, so chat-only turns cost zero E2B.
 
-- **Deferred tools**: uncommon tools (browser, email trio, canvasDelete, createChannel, setChannelTopic, bookmarkLink, pins, poll, mermaid, sendAsUser/editAsUser, gh, TTS, subagent, all MCP tools) are registered but hidden until the model calls the **`loadTools`** meta-tool. Enforced per step via `streamText`'s `prepareStep`/`activeTools` (`buildTools` returns `{tools, activeTools, close}`).
+- **Deferred tools**: uncommon tools (browser, email trio, canvasDelete, slackDocs, createChannel, setChannelTopic, bookmarkLink, pins, poll, mermaid, sendAsUser/editAsUser, gh, TTS, subagent, all MCP tools) are registered but hidden until the model calls the **`loadTools`** meta-tool. Enforced per step via `streamText`'s `prepareStep`/`activeTools` (`buildTools` returns `{tools, activeTools, close}`).
 
 - **Per-user MCP servers** (`lib/ai/mcp.ts`, `user_mcp_servers`): users add remote Streamable-HTTP MCP servers from **App Home**. A hand-rolled JSON-RPC client (initialize / tools/list / tools/call; SSE parsing) connects lazily per turn; listings cached 10 min per URL; tools namespaced `mcp_<server>_<tool>` and deferred behind `loadTools`. A dead server degrades only that turn's toolset. Local (user-machine) MCP servers are impossible over Slack by design.
 

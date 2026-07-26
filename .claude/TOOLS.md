@@ -90,6 +90,10 @@ The scheduler fires due reminders **concurrently** and guards **overlapping fire
 
 The owner exemption is a fact kyto must KNOW but not advertise: the tool result carries a `note` saying never to promise to ignore the owner and not to mention the exemption unprompted, and the success `summary` no longer claims "I'll only respond to your messages here". kyto had told a user exactly that in a thread the owner was in — a promise it cannot keep.
 
+## Slack reference docs
+
+`slackDocs` (deferred, `tools/slack-docs.ts`): curated reference notes the model loads before composing something non-trivial — `block-kit` (block types + limits, mrkdwn vs the `markdown` block, the "invented action_ids do nothing" warning), `canvas` (canvas markdown incl. `- [ ]` clickable checkboxes and `![](@U…)` mentions — added because kyto once drew emoji squares instead of real checkboxes), `search` (the full modifier set). Content is inline TS constants written from the official docs (docs.slack.dev, the search help article) 2026-07 — refresh there when Slack changes. `canvasWrite`'s `markdown` param description carries the checkbox rule inline so the common case doesn't require the load.
+
 ## Canvases and pins
 
 - `canvasList` takes an optional `channelId`; on `not_in_channel` it joins the public channel **silently** and retries.
