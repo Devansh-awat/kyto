@@ -7,13 +7,13 @@ import logger from '@/lib/logger';
 // cross-channel posts, reminder DMs). See the identity_profiles table + App
 // Home config.
 
-export type IdentityType = 'normal' | 'subagent' | 'reminder';
+// 'subagent' is gone: a subagent posts no message of its own, so an icon has
+// no surface there, and its card label is fixed ("kyto subagent" / "kyto
+// subagent {name}") — nothing configurable decorates a name. A stale
+// 'subagent' row in identity_profiles is simply never read.
+export type IdentityType = 'normal' | 'reminder';
 
-export const IDENTITY_TYPES: IdentityType[] = [
-  'normal',
-  'subagent',
-  'reminder',
-];
+export const IDENTITY_TYPES: IdentityType[] = ['normal', 'reminder'];
 
 const CACHE_TTL_MS = 30_000;
 

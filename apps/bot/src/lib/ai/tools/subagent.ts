@@ -12,7 +12,6 @@ import type { KytoBot, Message, StreamChunk, ThreadHandle } from '@/harness';
 import type { ChunkRelay } from '@/lib/agent/relay';
 import { requestHints } from '@/lib/ai/hints';
 import { renderStream } from '@/lib/ai/stream';
-import { resolveIdentity } from '@/lib/identity';
 import logger from '@/lib/logger';
 import { errorMessage } from '@/lib/utils/error';
 
@@ -166,16 +165,12 @@ export function runSubagentTool({
           // this tool needs toolset.ts's buildTools to give the subagent its own
           // full set (recursion is bounded by the depth cap above).
           const { buildTools } = await import('@/lib/ai/toolset');
-          // The subagent's label, used to title its cards in the parent's plan so
-          // its work is never mistaken for the main agent's. Name suffixes are
-          // gone (the name is always plain "kyto"), so the configured subagent
-          // identity contributes only an emoji icon, rendered inline in the card
-          // titles; an image-URL icon has nowhere to show in a card.
-          const identity = await resolveIdentity('subagent');
-          const baseName = identity.iconEmoji
-            ? `${identity.iconEmoji} kyto subagent`
-            : 'kyto subagent';
-          const label = name ? `${baseName} ${name}` : baseName;
+          // The subagent's label, used to title its cards in the parent's plan
+          // so its work is never mistaken for the main agent's. Fixed on
+          // purpose (owner's call): the name is only ever "kyto",
+          // "kyto subagent", or "kyto subagent {name}" — nothing configurable
+          // decorates it.
+          const label = name ? `kyto subagent ${name}` : 'kyto subagent';
           // This subagent's card-id namespace (see `namespaces`).
           namespaces += 1;
           const ns = `subagent-${namespaces}`;

@@ -19,7 +19,6 @@ const MINUTES_PER_HOUR = 60;
 const IDENTITY_LABELS: Record<IdentityType, string> = {
   normal: 'Replies & cross-channel posts',
   reminder: 'Reminder DMs',
-  subagent: 'Subagent plan cards (emoji only)',
 };
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
