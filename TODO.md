@@ -27,6 +27,12 @@ one line of reasoning (gpt-5.6 returns short `reasoningSummary` text, so it
 probably is) rather than longer thinking being truncated somewhere. Try again
 and look at the raw response.
 
+**Harness upgrades** (from the 2026-07-26 harness assessment,
+`docs/reference/harness.md`), in leverage order: (1) exact-match edit tool +
+automatic post-edit diagnostics (tsc/lint fed back to the model), (2) thread
+compaction instead of silent truncation past the fetch cap, (3) tests over the
+fallback walk / stream segmentation / carryover.
+
 ### Watch list
 
 **The ChatGPT account is parked until 2026-08-23.** The linked account is on a
