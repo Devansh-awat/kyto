@@ -5,15 +5,15 @@
 
 ### Open
 
-**Decide the gorkie-provenance question before making the repo public.** The
-licence is written (`LICENSE`, source-available/all-rights-reserved, per owner:
-readable but nobody may copy or use it) and the secrets audit is clean — see
-`docs/reference/publishing.md`. What is NOT settled: kyto forked MIT-licensed
-gorkie and still carries its whole history, so gorkie-derived code stays MIT
-(`LICENSE-gorkie-MIT`) and that carve-out can't be waved away. The harness is a
-ground-up rewrite so the surviving fraction may be ~zero, but nobody has measured
-it. Also: `.agents/skills/` vendors third-party skills with undocumented
-provenance — document or drop them.
+**Going public is now only blocked on two small licence checks.** The
+gorkie-provenance question is MEASURED (2026-07-26, blame-based, in
+`docs/reference/publishing.md`): ~16% of runtime source lines are still
+gorkie-derived, so the MIT carve-out stays — that decision is made. Skills
+provenance is documented (8 pinned in `skills-lock.json`, 2 first-party); two
+skills need their upstream licence confirmed or dropping before the flip
+(`ai-sdk` — GitHub reports "Other"; `thermo-nuclear-code-quality-review` —
+`cursor/plugins` has no detectable licence). Then rotate `GH_TOKEN` and re-run
+the secrets scan.
 
 **"Thinking..." shows as plain text before the plan block appears**, and when
 the block does appear it already has thinking in it. Investigated: no such

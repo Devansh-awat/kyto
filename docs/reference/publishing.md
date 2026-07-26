@@ -21,13 +21,29 @@ let anyone withdraw the permissions already granted for the original code. So:
   be inaccurate while gorkie's code and history are present.
 
 The current harness is a ground-up rewrite (the Vercel Chat SDK, the Pi framework
-and `@ai-sdk/harness*` are all gone), so how much gorkie code survives in the
-working tree may now be near zero. **Nobody has actually measured that**, and it is
-the one question that decides whether the MIT carve-out could ever be dropped. If
-it matters, the answer is a file-by-file provenance audit against
-`imdevarsh/gorkie-slack`, not a guess. **This is not legal advice** — the
-structure above is the conservative reading, and a lawyer should confirm it before
-relying on it commercially.
+and `@ai-sdk/harness*` are all gone), and the surviving fraction has now been
+**measured** (2026-07-26, `git blame` line-provenance: a line counts as
+gorkie-derived iff the commit that last touched it is reachable from
+`upstream/main`):
+
+- **Runtime source is ~16% gorkie-derived**: 4,054 of 24,976 lines —
+  3,279/20,076 in `apps/bot/src`, 775/4,900 across `packages/*/src`.
+- **The whole tree is ~49%**: 21,178 of 42,983 tracked text lines, because
+  scaffolding survives nearly wholesale — turbo/tsconfig/generator config,
+  `.vscode`/`.zed`, `plans/rewrite.md`, `README.md`, `TESTING.md`, cspell
+  tooling, `packages/logging`, the orphaned `packages/db` sandbox
+  schema/queries.
+- Files that are still substantially gorkie: `bot.ts` (101/113),
+  `agent/reply.ts` (172/213), `agent/turns.ts` (49/49), the whole
+  `lib/ai/stream/tasks/` directory, `features/assistant`, and several small
+  tools (`get-user`, `get-channel-info`, `list-threads`, `mermaid`).
+
+So the "may be near zero" hypothesis is **disproven**: the MIT carve-out is
+load-bearing and `LICENSE-gorkie-MIT` must stay. (Blame attributes an
+edited-in-place gorkie line to the kyto edit, so if anything this undercounts
+derivation.) **This is not legal advice** — the structure above is the
+conservative reading, and a lawyer should confirm it before relying on it
+commercially.
 
 Publishing to a public GitHub repo also makes the **whole history** public, not
 just the tip. Squashing it away would be the only way to avoid that, and it would
@@ -65,16 +81,34 @@ load-bearing documentation. Worth knowing it goes public, not worth removing.
 
 ## Third-party material
 
-`.agents/skills/` vendors skills that are not Devansh's work (`ai-sdk`,
-`chat-sdk`, `turborepo`, `ultracite`, and others). `LICENSE` §4 disclaims any
-claim over them, but if the repo goes public it would be better to either record
-each one's origin and licence or drop them from the tree — right now their
-provenance is undocumented.
+`.agents/skills/` vendors ten skills; `LICENSE` §4 disclaims any claim over the
+third-party ones. Provenance is recorded: eight were installed by the `skills`
+CLI and are pinned (source repo, path, content hash) in **`skills-lock.json`**;
+the other two are first-party. Upstream licences as of 2026-07-26:
+
+| skill | source | licence |
+| --- | --- | --- |
+| `ai-sdk` | `vercel/ai` | custom/unspecified per GitHub ("Other") — check its LICENSE before redistributing |
+| `chat-sdk` | `vercel/chat` | MIT |
+| `grill-with-docs` | `mattpocock/skills` | MIT |
+| `improve` | `shadcn/improve` | MIT (also stated in its frontmatter) |
+| `slack-agent` | `vercel-labs/slack-agent-skill` | Apache-2.0 (redistribution wants the notice) |
+| `thermo-nuclear-code-quality-review` | `cursor/plugins` | **no licence detected / repo not resolvable** — re-check or drop before publishing |
+| `turborepo` | `vercel/turborepo` | MIT |
+| `ultracite` | `haydenbleasel/ultracite` | MIT |
+| `coding-best-practices` | first-party (kyto-specific rules) | kyto's LICENSE |
+| `refactor` | first-party (kyto-specific cleanup style) | kyto's LICENSE |
+
+Before going public, the two flagged rows (`ai-sdk`, `thermo-nuclear-…`) need
+their licence confirmed or the skill dropped; the MIT/Apache ones are fine to
+keep with their lock-file attribution.
 
 ## Before flipping the repo public
 
 1. Rotate `GH_TOKEN` if it has ever been pasted into a chat, a transcript, or an
    issue. Publishing does not leak it, but publication is a good forcing function.
-2. Decide the gorkie-provenance question above, or keep the MIT carve-out as-is.
-3. Document or remove `.agents/skills/`.
+2. ~~Decide the gorkie-provenance question~~ **Measured (above): keep the MIT
+   carve-out — ~16% of runtime source is still gorkie-derived.**
+3. ~~Document `.agents/skills/`~~ **Done (above)** — but confirm-or-drop the two
+   flagged skills (`ai-sdk`, `thermo-nuclear-code-quality-review`).
 4. Re-run the secrets scan on whatever has landed since this audit.
