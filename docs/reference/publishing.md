@@ -81,7 +81,7 @@ load-bearing documentation. Worth knowing it goes public, not worth removing.
 
 ## Third-party material
 
-`.agents/skills/` vendors ten skills; `LICENSE` §4 disclaims any claim over the
+`.agents/skills/` vendors ten skills; `LICENSE` §5 disclaims any claim over the
 third-party ones. Provenance is recorded: eight were installed by the `skills`
 CLI and are pinned (source repo, path, content hash) in **`skills-lock.json`**;
 the other two are first-party. Upstream licences as of 2026-07-26:

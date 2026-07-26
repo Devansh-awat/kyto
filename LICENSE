@@ -5,7 +5,8 @@ Kyto's source is published so that it can be READ. People trust Kyto with their
 messages, their credentials and their repositories, and "you can check what it
 actually does" is a better answer to that trust than a promise. Being readable is
 not the same as being free to take, and this licence is deliberately narrower than
-an open-source one.
+an open-source one: you can study it and help improve it, but you cannot run or
+host it — not commercially, not non-commercially.
 
 1. WHAT YOU MAY DO
 
@@ -13,14 +14,37 @@ an open-source one.
    short excerpts for the purpose of commentary, security review, teaching, or
    reporting a problem, with attribution.
 
-2. WHAT YOU MAY NOT DO
+2. CONTRIBUTIONS ARE WELCOME
 
-   Without prior written permission from the copyright holder, you may not:
+   The restrictions in Section 3 are not meant to stop you from improving Kyto.
+   Solely for the purpose of preparing and submitting a contribution to the
+   canonical repository, you may:
+
+   a. fork the repository on its hosting platform and create branches;
+   b. modify the source; and
+   c. build and run the software locally, in a private, non-production
+      environment, only as far as needed to develop and test your change.
+
+   These permissions end where contribution ends. They do not allow hosting or
+   operating the software for yourself or others, keeping or using a modified
+   version for any purpose other than the contribution, or distributing the
+   software beyond the fork-and-pull-request flow.
+
+   By submitting a contribution (for example, a pull request), you grant the
+   copyright holder a perpetual, worldwide, irrevocable, royalty-free licence
+   to use, modify, distribute, sublicense, and relicense that contribution as
+   part of Kyto or otherwise. If you do not agree to that, do not submit.
+
+3. WHAT YOU MAY NOT DO
+
+   Except as Sections 1 and 2 allow, and without prior written permission from
+   the copyright holder, you may not:
 
    a. copy, reproduce, or redistribute this software or any substantial portion
       of it, in source or compiled form;
    b. run, host, deploy, or operate this software, or any work derived from it,
-      whether or not for a fee;
+      whether or not for a fee — including personal, internal, and
+      non-commercial hosting;
    c. modify it, or create derivative works from it;
    d. incorporate any part of it into another work;
    e. sublicense, sell, rent, or otherwise transfer any rights in it;
@@ -30,23 +54,23 @@ an open-source one.
    No licence is granted by implication, estoppel, or otherwise. Making the
    source publicly readable is not a grant of any of the rights withheld above.
 
-3. GORKIE-DERIVED CODE IS STILL MIT
+4. GORKIE-DERIVED CODE IS STILL MIT
 
    Kyto began as a fork of gorkie, which was published under the MIT licence.
    Code in this repository that originated in gorkie — including this
    repository's history from before Kyto's rewrite — remains available under
    those MIT terms, which are reproduced in ./LICENSE-gorkie-MIT. This licence
    applies to Kyto's own code and cannot and does not withdraw permissions MIT
-   already granted for that code. Section 2 is not a claim over gorkie's work.
+   already granted for that code. Section 3 is not a claim over gorkie's work.
 
-4. THIRD-PARTY MATERIAL
+5. THIRD-PARTY MATERIAL
 
    This repository vendors third-party material that carries its own licences,
    including the agent skills under ./.agents/skills/ and the dependencies
    declared in the package manifests. Nothing here alters those licences, and
-   Section 2 does not apply to them.
+   Section 3 does not apply to them.
 
-5. NO WARRANTY
+6. NO WARRANTY
 
    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -56,7 +80,7 @@ an open-source one.
    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
    SOFTWARE.
 
-6. PERMISSIONS
+7. PERMISSIONS
 
-   To ask for any of the rights withheld in Section 2, contact the copyright
+   To ask for any of the rights withheld in Section 3, contact the copyright
    holder. Permission that is not in writing has not been given.
