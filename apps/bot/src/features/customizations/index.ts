@@ -778,7 +778,6 @@ bot.onModalSubmit(
       for (const type of IDENTITY_TYPES) {
         await setIdentityProfile(type, {
           icon: event.values[`identity_${type}_icon`]?.trim() || null,
-          nameSuffix: event.values[`identity_${type}_suffix`]?.trim() || null,
         });
       }
       resetIdentityCache();
@@ -789,7 +788,7 @@ bot.onModalSubmit(
       );
       return {
         action: 'errors',
-        errors: { identity_normal_suffix: 'Could not save. Try again.' },
+        errors: { identity_normal_icon: 'Could not save. Try again.' },
       };
     }
     await publishHome({ userId: event.user.userId }).catch(() => undefined);

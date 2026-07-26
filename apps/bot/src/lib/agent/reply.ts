@@ -3,6 +3,7 @@ import {
   neutralizeBroadcast,
   type ThreadHandle as Thread,
 } from '@/harness';
+import { resolveIdentity } from '@/lib/identity';
 import logger from '@/lib/logger';
 
 // Slack rejects oversized messages (`msg_blocks_too_long`), so streamed prose is
@@ -48,8 +49,12 @@ export function createReply({
       if (!chunk) {
         continue;
       }
+      // The normal identity profile can restyle kyto's avatar on ordinary
+      // replies — icon only, the name stays plain "kyto". Cached 30s, and it
+      // never throws (resolveIdentity swallows load errors).
+      const { iconEmoji, iconUrl } = await resolveIdentity('normal');
       await thread
-        .post({ markdown: chunk })
+        .post({ iconEmoji, iconUrl, markdown: chunk })
         .then(() => {
           lastPostAt = Date.now();
         })

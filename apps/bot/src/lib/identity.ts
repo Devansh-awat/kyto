@@ -1,10 +1,11 @@
 import { getIdentityProfiles, type IdentityProfile } from '@repo/db/queries';
 import logger from '@/lib/logger';
 
-// kyto's per-message-type presentation. The base name is ALWAYS "kyto"; a
-// profile only adds an optional suffix and icon. Applied where kyto posts a
-// given kind of message (reminder DMs, the subagent's block, cross-channel
-// posts). See the identity_profiles table + App Home config.
+// kyto's per-message-type presentation. The name is ALWAYS plain "kyto" — a
+// profile only sets an optional icon (owner's call: no name suffixes, any
+// icon). Applied where kyto posts a given kind of message (normal replies,
+// cross-channel posts, reminder DMs). See the identity_profiles table + App
+// Home config.
 
 export type IdentityType = 'normal' | 'subagent' | 'reminder';
 
@@ -14,9 +15,11 @@ export const IDENTITY_TYPES: IdentityType[] = [
   'reminder',
 ];
 
-const BASE_NAME = 'kyto';
 const CACHE_TTL_MS = 30_000;
 
+// `username` is never set by resolveIdentity (the name stays "kyto"); it exists
+// for the owner-only per-post overrides in lib/post-identity.ts, which share
+// this shape.
 export interface ResolvedIdentity {
   iconEmoji?: string;
   iconUrl?: string;
@@ -61,7 +64,7 @@ function iconFields(icon: string | null): {
   return {};
 }
 
-/** The name + icon overrides for a message type, or {} when unset. */
+/** The icon override for a message type, or {} when unset. */
 export async function resolveIdentity(
   type: IdentityType
 ): Promise<ResolvedIdentity> {
@@ -70,9 +73,5 @@ export async function resolveIdentity(
   if (!profile) {
     return {};
   }
-  const suffix = profile.nameSuffix?.trim();
-  return {
-    ...iconFields(profile.icon),
-    ...(suffix ? { username: `${BASE_NAME} ${suffix}` } : {}),
-  };
+  return iconFields(profile.icon);
 }

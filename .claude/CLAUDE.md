@@ -101,7 +101,7 @@ Read it before touching a tool — Code Mode, Vision, Memory, the host-side tool
 
 ### Identity profiles
 
-`identity_profiles` table (`message_type` PK ∈ `normal`|`subagent`|`reminder`, `name_suffix`, `icon`). Owner-configured from an **App Home "Identity"** section. The base name is ALWAYS "kyto" (a suffix is appended); it can never be renamed. `resolveIdentity(type)` (`lib/identity.ts`, 30s cache) returns `{username?, iconEmoji?, iconUrl?}` — `icon` is a `:emoji:` code or an image URL. Applied to reminder posts and cross-channel `postMessage`; the `subagent` profile now only supplies the LABEL on a subagent's plan cards, since a subagent no longer posts a message of its own. Needs `chat:write.customize`.
+`identity_profiles` table (`message_type` PK ∈ `normal`|`subagent`|`reminder`, `icon`). Owner-configured from an **App Home "Identity"** section. **Icon only — name suffixes were removed entirely** (owner's call, 2026-07-26; the `name_suffix` column is dropped): the name is ALWAYS plain "kyto". `resolveIdentity(type)` (`lib/identity.ts`, 30s cache) returns icon fields only (`ResolvedIdentity.username` exists solely for `lib/post-identity.ts` overrides) — `icon` is a `:emoji:` code or an image URL. The `normal` icon applies to kyto's ordinary streamed replies (`createReply` posts) AND cross-channel `postMessage`; `reminder` to reminder posts; `subagent` renders inline in the subagent's plan-card titles when it's an emoji (an image URL has nowhere to show there). Needs `chat:write.customize`.
 
 ## Response style and the plan UI
 

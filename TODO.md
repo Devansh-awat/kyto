@@ -96,4 +96,3 @@ there was a canvasid issue idk if you fixed it
 
 have kyto run daily once, being told to check mail and github incase any issues, responses or pr stuff in its repo or others(this should run in such a way that its visible in my dm from kyto)
 
-no name suffix but change the pic for normal kyto too. 

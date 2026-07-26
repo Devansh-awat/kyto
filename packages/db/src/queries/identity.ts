@@ -9,17 +9,16 @@ export async function getIdentityProfiles(): Promise<IdentityProfile[]> {
 
 export async function setIdentityProfile(
   messageType: string,
-  values: { icon: string | null; nameSuffix: string | null }
+  values: { icon: string | null }
 ): Promise<void> {
   await db
     .insert(identityProfiles)
     .values({
       icon: values.icon,
       messageType,
-      nameSuffix: values.nameSuffix,
     })
     .onConflictDoUpdate({
-      set: { icon: values.icon, nameSuffix: values.nameSuffix },
+      set: { icon: values.icon },
       target: identityProfiles.messageType,
     });
 }

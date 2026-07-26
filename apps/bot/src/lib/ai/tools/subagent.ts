@@ -167,11 +167,14 @@ export function runSubagentTool({
           // full set (recursion is bounded by the depth cap above).
           const { buildTools } = await import('@/lib/ai/toolset');
           // The subagent's label, used to title its cards in the parent's plan so
-          // its work is never mistaken for the main agent's. The configured
-          // subagent identity still supplies the base name (App Home "Identity"),
-          // it just no longer decorates a message of its own.
+          // its work is never mistaken for the main agent's. Name suffixes are
+          // gone (the name is always plain "kyto"), so the configured subagent
+          // identity contributes only an emoji icon, rendered inline in the card
+          // titles; an image-URL icon has nowhere to show in a card.
           const identity = await resolveIdentity('subagent');
-          const baseName = identity.username ?? 'kyto subagent';
+          const baseName = identity.iconEmoji
+            ? `${identity.iconEmoji} kyto subagent`
+            : 'kyto subagent';
           const label = name ? `${baseName} ${name}` : baseName;
           // This subagent's card-id namespace (see `namespaces`).
           namespaces += 1;

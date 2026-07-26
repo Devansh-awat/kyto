@@ -73,7 +73,6 @@ async function fireReminder(bot: Chat, reminder: Reminder): Promise<void> {
       iconEmoji: identity.iconEmoji,
       iconUrl: identity.iconUrl,
       markdown: `${mention}${markdown}`,
-      username: identity.username,
     });
   } catch (error) {
     logger.warn(

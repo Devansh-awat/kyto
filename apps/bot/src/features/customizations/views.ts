@@ -17,9 +17,9 @@ const REMINDER_TEXT_MAX = 120;
 const MINUTES_PER_HOUR = 60;
 
 const IDENTITY_LABELS: Record<IdentityType, string> = {
-  normal: 'Cross-channel posts',
+  normal: 'Replies & cross-channel posts',
   reminder: 'Reminder DMs',
-  subagent: 'Subagent plan cards',
+  subagent: 'Subagent plan cards (emoji only)',
 };
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -565,7 +565,7 @@ export function buildHomeView({
           type: 'button',
         },
         text: mrkdwn(
-          "*Identity*\nAdd a name suffix and icon per message type. The base name is always “kyto”; you're only adding a suffix."
+          '*Identity*\nSet an icon per message type. The name is always plain “kyto” — only the avatar changes.'
         ),
         type: 'section',
       }
@@ -573,17 +573,8 @@ export function buildHomeView({
     const byType = new Map(identityProfiles.map((p) => [p.messageType, p]));
     for (const type of IDENTITY_TYPES) {
       const profile = byType.get(type);
-      const suffix = profile?.nameSuffix?.trim();
       const icon = profile?.icon?.trim();
-      const summary =
-        suffix || icon
-          ? [
-              suffix ? `name: kyto ${escapeSlackText(suffix)}` : null,
-              icon ? `icon: ${escapeSlackText(icon)}` : null,
-            ]
-              .filter(Boolean)
-              .join(' · ')
-          : '_default_';
+      const summary = icon ? `icon: ${escapeSlackText(icon)}` : '_default_';
       blocks.push({
         elements: [mrkdwn(`*${IDENTITY_LABELS[type]}* — ${summary}`)],
         type: 'context',
@@ -679,20 +670,6 @@ export function buildIdentityModal(
     const profile = byType.get(type);
     blocks.push(
       { text: mrkdwn(`*${IDENTITY_LABELS[type]}*`), type: 'section' },
-      {
-        block_id: `identity_${type}_suffix`,
-        element: {
-          action_id: 'suffix',
-          ...(profile?.nameSuffix ? { initial_value: profile.nameSuffix } : {}),
-          max_length: 40,
-          placeholder: plainText('e.g. subagent'),
-          type: 'plain_text_input',
-        },
-        hint: plainText('Appended after “kyto ”. Leave blank for none.'),
-        label: plainText('Name suffix'),
-        optional: true,
-        type: 'input',
-      },
       {
         block_id: `identity_${type}_icon`,
         element: {
