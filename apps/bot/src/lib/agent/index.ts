@@ -110,6 +110,17 @@ function isRateLimited({
   return status === TOO_MANY_REQUESTS || RATE_LIMIT_PATTERN.test(message);
 }
 
+// DigitalOcean also runs a PROMPT-level content filter ("Request blocked by
+// content filter: [BLOCKED]", a 403). It judges the request, not the model, so
+// the identical prompt 403s on every DO rung — observed as ten straight
+// "Thinking · fallback" cards before the turn escaped the tier. One filtered
+// DO attempt writes the tier off for the turn, exactly like the rate limit.
+const CONTENT_FILTER_PATTERN = /content filter/i;
+
+function isContentFiltered(message: string): boolean {
+  return CONTENT_FILTER_PATTERN.test(message);
+}
+
 // How long a single attempt may go with NO sign of progress before it's aborted
 // (see the STALL watchdog below — it's re-armed on every streamed text delta,
 // tool call, and tool result, so this is an IDLE budget, not a cap on total turn
@@ -409,6 +420,9 @@ async function executeTurn(
     // Set when a DigitalOcean rung returns a rate-limit 429 — the limit is on
     // the account, so the rest of that tier is spent for this turn too.
     let digitaloceanRateLimited = false;
+    // Set when DigitalOcean's content filter 403s the prompt — the same prompt
+    // goes to every DO rung, so they would all be blocked identically.
+    let digitaloceanContentFiltered = false;
     let attempt: ModelAttempt | undefined;
     // Set per attempt (the watchdog is armed inside the loop below), but the
     // toolset is built ONCE up front — so the tools get a stable indirection
@@ -479,7 +493,7 @@ async function executeTurn(
           !(
             failedKeys.has(`${candidate.provider}:${candidate.model}`) ||
             (skipHackclub && candidate.provider === HACKCLUB_PROVIDER) ||
-            (digitaloceanRateLimited &&
+            ((digitaloceanRateLimited || digitaloceanContentFiltered) &&
               candidate.provider === DIGITALOCEAN_PROVIDER)
           )
       );
@@ -702,12 +716,15 @@ async function executeTurn(
               spendLimitMessage = info.message;
             }
             // A DigitalOcean rate limit dooms every DigitalOcean rung: it is the
-            // account's limit, not the model's.
-            if (
-              currentAttempt.provider === DIGITALOCEAN_PROVIDER &&
-              isRateLimited(info)
-            ) {
-              digitaloceanRateLimited = true;
+            // account's limit, not the model's. Its content filter likewise
+            // judges the prompt, which every rung would get identically.
+            if (currentAttempt.provider === DIGITALOCEAN_PROVIDER) {
+              if (isRateLimited(info)) {
+                digitaloceanRateLimited = true;
+              }
+              if (isContentFiltered(info.message)) {
+                digitaloceanContentFiltered = true;
+              }
             }
           },
           stream: result.fullStream,
@@ -971,14 +988,18 @@ async function executeTurn(
         // Also catch a rate limit / spend limit that surfaced as a THROWN error
         // (not a stream error part) — same effect as onError: write off the tier
         // rather than walking the rest of it one doomed rung at a time.
-        if (
-          currentAttempt.provider === DIGITALOCEAN_PROVIDER &&
-          isRateLimited({
-            message: thrownErrorText(error),
-            status: errorStatus(error),
-          })
-        ) {
-          digitaloceanRateLimited = true;
+        if (currentAttempt.provider === DIGITALOCEAN_PROVIDER) {
+          if (
+            isRateLimited({
+              message: thrownErrorText(error),
+              status: errorStatus(error),
+            })
+          ) {
+            digitaloceanRateLimited = true;
+          }
+          if (isContentFiltered(thrownErrorText(error))) {
+            digitaloceanContentFiltered = true;
+          }
         }
         if (currentAttempt.provider === HACKCLUB_PROVIDER) {
           if (SPEND_LIMIT_PATTERN.test(thrownErrorText(error))) {
