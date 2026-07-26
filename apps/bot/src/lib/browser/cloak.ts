@@ -42,22 +42,33 @@ fi
 
 SEED=$(( ($$ % 90000) + 10000 ))
 ARGS="--remote-debugging-port=$CDP --no-sandbox --fingerprint=$SEED --fingerprint-platform=windows --user-data-dir=$HOME/.cloakbrowser-profile"
+wait_alive() {
+  i=0
+  while [ $i -lt 60 ]; do
+    alive && return 0
+    i=$((i + 1))
+    sleep 0.5
+  done
+  return 1
+}
+
 if command -v xvfb-run >/dev/null 2>&1; then
   nohup xvfb-run -a "$BIN" $ARGS >/tmp/cloak.log 2>&1 &
 else
   nohup "$BIN" $ARGS --headless=new >/tmp/cloak.log 2>&1 &
 fi
 
-i=0
-while [ $i -lt 60 ]; do
-  alive && break
-  i=$((i + 1))
-  sleep 0.5
-done
-if ! alive; then
-  echo "cloakbrowser: chromium did not come up"
-  tail -n 20 /tmp/cloak.log 2>/dev/null
-  exit 1
+# The Xvfb path can fail for its own reasons (a missing xauth once took the
+# whole tool down) — a headless stealth browser beats no browser, so retry
+# headless before giving up.
+if ! wait_alive; then
+  echo "cloakbrowser: xvfb launch failed, retrying headless" >>/tmp/cloak.log
+  nohup "$BIN" $ARGS --headless=new >>/tmp/cloak.log 2>&1 &
+  if ! wait_alive; then
+    echo "cloakbrowser: chromium did not come up"
+    tail -n 20 /tmp/cloak.log 2>/dev/null
+    exit 1
+  fi
 fi
 
 # Point agent-browser at the stealth Chromium instead of its own Chrome.

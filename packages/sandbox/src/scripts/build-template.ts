@@ -74,7 +74,10 @@ async function main(): Promise<void> {
           'sudo',
           // A real display for the stealth browser: some anti-bot checks flag
           // headless Chromium even with CloakBrowser's fingerprint patches.
+          // xauth is a hard runtime dependency of xvfb-run that
+          // noInstallRecommends leaves out ("xauth command not found").
           'xvfb',
+          'xauth',
         ],
         { noInstallRecommends: true }
       )
