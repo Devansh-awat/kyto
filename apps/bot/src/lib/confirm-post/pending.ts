@@ -28,8 +28,13 @@ export type PendingPost =
   | {
       kind: 'sendAsUser';
       requestedBy: string;
-      targetChannel: string;
+      // Either a channel to post into, or a user to DM as the owner. When
+      // targetUser is set, the IM channel is opened at send time with the
+      // owner's token — the confirm preview names the person, not a raw D-id.
+      targetChannel?: string;
+      targetUser?: string;
       text: string;
+      blocks?: unknown[];
       threadTs?: string;
       crossChannel: boolean;
       summary: string;
@@ -40,6 +45,7 @@ export type PendingPost =
       targetChannel: string;
       messageTs: string;
       text: string;
+      blocks?: unknown[];
       summary: string;
     };
 

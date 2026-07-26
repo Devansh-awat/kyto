@@ -2,14 +2,22 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { env } from '@/env';
 import type { ThreadHandle as Thread } from '@/harness';
+import { neutralizeBroadcast, neutralizeBroadcastDeep } from '@/harness';
 import { requestPostConfirmation } from '@/lib/confirm-post/request';
 import logger from '@/lib/logger';
 import { errorMessage } from '@/lib/utils/error';
+import { parseBlocks } from './post-message';
 
 const postMessageSchema = z.looseObject({
   error: z.string().optional(),
   ok: z.boolean(),
   ts: z.string().optional(),
+});
+
+const openDmSchema = z.looseObject({
+  channel: z.looseObject({ id: z.string() }).optional(),
+  error: z.string().optional(),
+  ok: z.boolean(),
 });
 
 /**
@@ -31,18 +39,45 @@ function checkOwner(
 }
 
 /**
+ * Open (or find) the owner's own DM with a user, using the owner's token — so
+ * the message lands in the owner↔user IM, not the app's bot DM.
+ */
+async function openOwnerDm(
+  userToken: string,
+  userId: string
+): Promise<{ channelId: string } | { error: string }> {
+  const response = await fetch('https://slack.com/api/conversations.open', {
+    body: JSON.stringify({ users: userId }),
+    headers: {
+      Authorization: `Bearer ${userToken}`,
+      'Content-Type': 'application/json; charset=utf-8',
+    },
+    method: 'POST',
+  });
+  const result = openDmSchema.parse(await response.json());
+  if (!(result.ok && result.channel?.id)) {
+    return { error: `Could not open a DM with <@${userId}>: ${result.error}` };
+  }
+  return { channelId: result.channel.id };
+}
+
+/**
  * Post AS the owner using their personal user token. Shared by the confirm
  * handler — sendAsUser never fires inline; every "speak as the owner" waits for
  * the owner's confirm click first (a prompt injection can ask, not press).
  */
 export async function executeSendAsUser({
   targetChannel,
+  targetUser,
   text,
+  blocks,
   threadTs,
   crossChannel,
 }: {
-  targetChannel: string;
+  targetChannel?: string;
+  targetUser?: string;
   text: string;
+  blocks?: unknown[];
   threadTs?: string;
   crossChannel: boolean;
 }): Promise<{ success: boolean; summary?: string; error?: string }> {
@@ -50,10 +85,22 @@ export async function executeSendAsUser({
   if (!gate.ok) {
     return { error: gate.error, success: false };
   }
+  let channel = targetChannel;
+  if (targetUser) {
+    const dm = await openOwnerDm(gate.userToken, targetUser);
+    if ('error' in dm) {
+      return { error: dm.error, success: false };
+    }
+    channel = dm.channelId;
+  }
+  if (!channel) {
+    return { error: 'No target channel or user to send to.', success: false };
+  }
   const response = await fetch('https://slack.com/api/chat.postMessage', {
     body: JSON.stringify({
-      channel: targetChannel,
+      channel,
       text,
+      ...(blocks ? { blocks } : {}),
       ...(!crossChannel && threadTs && { thread_ts: threadTs }),
     }),
     headers: {
@@ -71,14 +118,20 @@ export async function executeSendAsUser({
   }
   if (crossChannel) {
     logger.info(
-      { targetChannel },
-      '[sendAsUser] posted as owner to another channel'
+      { targetChannel: channel, targetUser },
+      '[sendAsUser] posted as owner outside the current channel'
     );
+  }
+  if (targetUser) {
+    return {
+      success: true,
+      summary: `Sent the DM as the owner to <@${targetUser}>.`,
+    };
   }
   return {
     success: true,
     summary: crossChannel
-      ? `Sent the message as the owner to <#${targetChannel}>.`
+      ? `Sent the message as the owner to <#${channel}>.`
       : 'Sent the message as the owner.',
   };
 }
@@ -88,17 +141,24 @@ export async function executeEditAsUser({
   targetChannel,
   messageTs,
   text,
+  blocks,
 }: {
   targetChannel: string;
   messageTs: string;
   text: string;
+  blocks?: unknown[];
 }): Promise<{ success: boolean; summary?: string; error?: string }> {
   const gate = checkOwner(env.OWNER_USER_ID ?? '');
   if (!gate.ok) {
     return { error: gate.error, success: false };
   }
   const response = await fetch('https://slack.com/api/chat.update', {
-    body: JSON.stringify({ channel: targetChannel, text, ts: messageTs }),
+    body: JSON.stringify({
+      channel: targetChannel,
+      text,
+      ts: messageTs,
+      ...(blocks ? { blocks } : {}),
+    }),
     headers: {
       Authorization: `Bearer ${gate.userToken}`,
       'Content-Type': 'application/json; charset=utf-8',
@@ -131,13 +191,15 @@ export function sendAsUserTool({
 }) {
   return tool({
     description:
-      'Send a message AS the owner (under their own name), not as the bot. Defaults to the current thread. Pass channelId to post a top-level message in a different channel. Only available when the owner triggered this turn. The owner must confirm via a button before it sends.',
+      'Send a message AS the owner (under their own name), not as the bot. Defaults to the current thread. Pass channelId to post a top-level message in a different channel, or userId to send a DM from the owner to that person. Pass `blocks` to send Block Kit from the owner (the text becomes the notification fallback). Only available when the owner triggered this turn. The owner must confirm via a button before it sends.',
     inputSchema: z.object({
       text: z
         .string()
         .min(1)
         .max(4000)
-        .describe('The message to post as the owner.'),
+        .describe(
+          'The message to post as the owner. With `blocks`, the notification fallback text.'
+        ),
       channelId: z
         .string()
         .min(1)
@@ -145,12 +207,34 @@ export function sendAsUserTool({
         .describe(
           'Target Slack channel id (e.g. C0123ABC) to post into as a top-level message. Defaults to the current thread.'
         ),
+      userId: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          "Target Slack user id (e.g. U0123ABC) to DM from the owner's account. Mutually exclusive with channelId."
+        ),
+      blocks: z
+        .string()
+        .optional()
+        .describe(
+          'Optional Block Kit payload: a JSON array of up to 50 blocks. Replaces the plain text body; `text` is still sent as the notification fallback.'
+        ),
     }),
-    execute: async ({ text, channelId }, { abortSignal }) => {
+    execute: async (
+      { text, channelId, userId, blocks: rawBlocks },
+      { abortSignal }
+    ) => {
       try {
         const gate = checkOwner(authorUserId);
         if (!gate.ok) {
           return { error: gate.error, success: false };
+        }
+        if (channelId && userId) {
+          return {
+            error: 'Pass channelId OR userId, not both.',
+            success: false,
+          };
         }
         const [platform, currentChannelId, threadTs] = thread.id.split(':');
         if (platform !== 'slack' || !currentChannelId) {
@@ -159,23 +243,44 @@ export function sendAsUserTool({
             success: false,
           };
         }
+        let blocks: unknown[] | undefined;
+        if (rawBlocks) {
+          const parsed = parseBlocks(rawBlocks);
+          if (parsed.error) {
+            return { error: parsed.error, success: false };
+          }
+          blocks = parsed.blocks;
+        }
         const crossChannel = Boolean(
-          channelId && channelId !== currentChannelId
+          userId || (channelId && channelId !== currentChannelId)
         );
-        const targetChannel = channelId ?? currentChannelId;
+        // Same broadcast rule as postMessage: a send that leaves the current
+        // channel never carries an @channel/@here ping, owner included.
+        const body = crossChannel ? neutralizeBroadcast(text) : text;
+        const safeBlocks =
+          crossChannel && blocks ? neutralizeBroadcastDeep(blocks) : blocks;
+        const targetChannel = userId
+          ? undefined
+          : (channelId ?? currentChannelId);
+        let summary = 'send as YOU in this thread';
+        if (userId) {
+          summary = `send as YOU in a DM to <@${userId}>`;
+        } else if (crossChannel && targetChannel) {
+          summary = `send as YOU to <#${targetChannel}>`;
+        }
         return await requestPostConfirmation({
           abortSignal,
           extendAttemptDeadline,
           ownerUserId: authorUserId,
           post: {
+            blocks: safeBlocks,
             crossChannel,
             kind: 'sendAsUser',
             requestedBy: authorUserId,
-            summary: crossChannel
-              ? `send as YOU to <#${targetChannel}>`
-              : 'send as YOU in this thread',
+            summary: blocks ? `${summary} (Block Kit)` : summary,
             targetChannel,
-            text,
+            targetUser: userId,
+            text: body,
             threadTs,
           },
           thread,
@@ -204,7 +309,7 @@ export function editAsUserTool({
 }) {
   return tool({
     description:
-      "Edit one of the owner's own messages (under their own name). Defaults to the current channel; pass channelId to edit a message in another channel. Only available when the owner triggered this turn. The owner must confirm via a button before the edit applies.",
+      "Edit one of the owner's own messages (under their own name). Defaults to the current channel; pass channelId to edit a message in another channel. Pass `blocks` to replace the message with Block Kit. Only available when the owner triggered this turn. The owner must confirm via a button before the edit applies.",
     inputSchema: z.object({
       messageTs: z
         .string()
@@ -224,8 +329,17 @@ export function editAsUserTool({
         .describe(
           'Slack channel id (e.g. C0123ABC) the message lives in. Defaults to the current channel.'
         ),
+      blocks: z
+        .string()
+        .optional()
+        .describe(
+          'Optional Block Kit payload: a JSON array of up to 50 blocks to replace the message content with; `text` becomes the notification fallback.'
+        ),
     }),
-    execute: async ({ messageTs, text, channelId }, { abortSignal }) => {
+    execute: async (
+      { messageTs, text, channelId, blocks: rawBlocks },
+      { abortSignal }
+    ) => {
       try {
         const gate = checkOwner(authorUserId);
         if (!gate.ok) {
@@ -238,12 +352,21 @@ export function editAsUserTool({
             success: false,
           };
         }
+        let blocks: unknown[] | undefined;
+        if (rawBlocks) {
+          const parsed = parseBlocks(rawBlocks);
+          if (parsed.error) {
+            return { error: parsed.error, success: false };
+          }
+          blocks = parsed.blocks;
+        }
         const targetChannel = channelId ?? currentChannelId;
         return await requestPostConfirmation({
           abortSignal,
           extendAttemptDeadline,
           ownerUserId: authorUserId,
           post: {
+            blocks,
             kind: 'editAsUser',
             messageTs,
             requestedBy: authorUserId,

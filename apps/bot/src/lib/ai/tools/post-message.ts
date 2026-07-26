@@ -1,5 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
+import { env } from '@/env';
 import {
   type KytoBot as Chat,
   neutralizeBroadcast,
@@ -74,7 +75,10 @@ function rawChannelOf(threadIdOrChannel: string): string {
   );
 }
 
-function parseBlocks(raw: string): { blocks?: unknown[]; error?: string } {
+export function parseBlocks(raw: string): {
+  blocks?: unknown[];
+  error?: string;
+} {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -106,7 +110,7 @@ export function postMessageTool({
   const currentChannel = rawChannelOf(currentThreadId);
   const permission = isOwner
     ? 'Post to another target. Type must be thread, channel, or user.'
-    : 'You may ONLY post into the current channel/thread (type thread or channel, the same channel you were mentioned in) — posting to a different channel or DMing another user is not allowed.';
+    : "You may post into the current channel/thread (type thread or channel, the same channel you were mentioned in) freely. A DM to a user (type user) is allowed ONLY with the owner's approval — it is held until the owner clicks Confirm, which can take a while or never come. Posting into a different channel is not allowed.";
   return tool({
     description: `Post a message. ${permission} Body is markdown; pass \`blocks\` to send Block Kit instead (the markdown body is then the notification fallback text). Broadcast pings (<!channel>/<!here>/<!everyone>) NEVER survive a post into a different channel or a DM — they are stripped to plain text there even for the owner, who can only broadcast in the channel kyto was invoked in.${
       isOwner
@@ -154,19 +158,20 @@ export function postMessageTool({
       { abortSignal }
     ) => {
       const target = type === 'user' ? undefined : rawChannelOf(id);
-      if (!isOwner) {
-        if (type === 'user') {
-          return {
-            error:
-              'Not allowed: you can only post into the current channel, not DM another user.',
-          };
-        }
-        if (target !== currentChannel) {
-          return {
-            error:
-              'Not allowed: you can only post into the channel you were mentioned in, not a different channel.',
-          };
-        }
+      if (!(isOwner || type === 'user') && target !== currentChannel) {
+        return {
+          error:
+            'Not allowed: you can only post into the channel you were mentioned in, not a different channel.',
+        };
+      }
+      // A non-owner's DM request is not refused — it is held for the OWNER to
+      // approve. Without a configured owner there is nobody to approve, so it
+      // stays impossible.
+      if (!isOwner && type === 'user' && !env.OWNER_USER_ID) {
+        return {
+          error:
+            'Not allowed: DMing a user requires owner approval, and no owner is configured.',
+        };
       }
       // Broadcast pings are owner-only AND here-only: a post that lands anywhere
       // other than the channel kyto was invoked in never notifies, even for the
@@ -204,17 +209,24 @@ export function postMessageTool({
       if (crossChannel) {
         const where =
           type === 'user' ? `a DM to <@${id}>` : `<#${target ?? id}>`;
+        // The confirm click always belongs to the OWNER — for a non-owner's DM
+        // request the button lands in the owner's DM (fallbackToDM), and the
+        // summary names who asked so the owner knows whose words these are.
+        const requestedFor =
+          authorUserId === env.OWNER_USER_ID
+            ? ''
+            : ` (requested by <@${authorUserId}>)`;
         return await requestPostConfirmation({
           abortSignal,
           extendAttemptDeadline,
-          ownerUserId: authorUserId,
+          ownerUserId: env.OWNER_USER_ID ?? authorUserId,
           post: {
             blocks,
             body,
             identity,
             kind: 'postMessage',
             requestedBy: authorUserId,
-            summary: `post to ${where}${blocks ? ' (Block Kit)' : ''}${identity?.username ? ` as "${identity.username}"` : ''}`,
+            summary: `post to ${where}${blocks ? ' (Block Kit)' : ''}${identity?.username ? ` as "${identity.username}"` : ''}${requestedFor}`,
             target: { id, type },
           },
           thread: bot.thread(currentThreadId),
