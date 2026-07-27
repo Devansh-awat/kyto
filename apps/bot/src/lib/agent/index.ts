@@ -1,5 +1,4 @@
 import {
-  GEMINI_PROVIDER,
   HACKCLUB_PROVIDER,
   LEADERBOARD_FALLBACK,
   MAX_STEPS,
@@ -14,12 +13,25 @@ import { LazySandbox } from '@repo/sandbox';
 import { env } from '@/env';
 import type { Message, StreamChunk, ThreadHandle } from '@/harness';
 import {
+  type GatheredResult,
+  renderCarryover,
+  renderContinuation,
+  renderObservations,
+  stableInput,
+} from '@/lib/agent/carryover';
+import {
   createRepetitionGuard,
   stripRepeatedLines,
 } from '@/lib/agent/degenerate';
 import { buildPrompt } from '@/lib/agent/prompt';
 import { createChunkRelay } from '@/lib/agent/relay';
 import { createReply } from '@/lib/agent/reply';
+import {
+  attemptKey,
+  buildFallbackQueue as buildQueue,
+  selectNextAttempt,
+} from '@/lib/agent/routing';
+import { createSegmenter, isVisibleText } from '@/lib/agent/segmentation';
 import { isBareSkipText } from '@/lib/agent/skip-text';
 import {
   abortReasonOf,
@@ -404,51 +416,25 @@ async function executeTurn(
     closeTools = built.close;
     const knownTools = new Set(Object.keys(built.tools));
 
-    // The order kyto falls back in once PRIMARY_ATTEMPT fails, by TIER:
-    //
-    //   1. the HackClub leaderboard in RANK order, BEST FIRST (opus-4.8 down);
-    //   2. the owner's Gemini key, the cheap last resort.
-    //
-    // Within each tier, LEADERBOARD_FALLBACK's own order decides.
-    //
-    // This used to pivot on the primary's index in LEADERBOARD_FALLBACK and walk
-    // "up" from it — logic inherited from `openrouter/auto`, which resolved to a
-    // real leaderboard rank. The pinned primary was a rung appended at the
-    // BOTTOM of that list, so "up" reversed the leaderboard and kyto fell back
-    // WORST FIRST: it landed on nvidia/nemotron (which looped "@devansh" a few
-    // hundred times into a public thread), and it would only ever have reached
-    // opus-4.8 after every junk rung failed. Keep the queue explicit and
-    // rank-ordered; do NOT reintroduce a pivot.
-    const buildFallbackQueue = (): ModelAttempt[] => {
-      const tier = (provider: string) =>
-        LEADERBOARD_FALLBACK.filter(
-          (candidate) => candidate.provider === provider
-        );
-      return [...tier(HACKCLUB_PROVIDER), ...tier(GEMINI_PROVIDER)];
-    };
     // The next of the user's OWN attempts (ChatGPT account / BYOK keys), or
     // undefined when they're spent.
     const nextOwnAttempt = (): ModelAttempt | undefined => ownQueue.shift();
     // The next SHARED service attempt: PRIMARY_ATTEMPT first, then the fallback
     // queue in tier order, skipping already-failed keys and any tier written off
-    // mid-walk. Undefined when the whole shared chain is exhausted.
+    // mid-walk. Undefined when the whole shared chain is exhausted. The queue
+    // order and the skip rule live in lib/agent/routing, where they have tests —
+    // this is where the worst regression in the project's history came from.
     const nextSharedAttempt = (): ModelAttempt | undefined => {
       if (!triedPrimary) {
         triedPrimary = true;
         return PRIMARY_ATTEMPT;
       }
-      const skipHackclub = hackclubBudgetExhausted || hackclubUnavailable;
-      fallbackQueue ??= buildFallbackQueue();
-      // A whole tier can go out MID-WALK (HackClub over budget or down), so the
-      // skip is applied at selection time rather than baked into the queue: no
-      // point retrying a dead proxy or a spent quota one rung at a time.
-      return fallbackQueue.find(
-        (candidate) =>
-          !(
-            failedKeys.has(`${candidate.provider}:${candidate.model}`) ||
-            (skipHackclub && candidate.provider === HACKCLUB_PROVIDER)
-          )
-      );
+      fallbackQueue ??= buildQueue(LEADERBOARD_FALLBACK);
+      return selectNextAttempt({
+        failedKeys,
+        queue: fallbackQueue,
+        skipHackclub: hackclubBudgetExhausted || hackclubUnavailable,
+      });
     };
     const routeNextAttempt = () => {
       if (routing.ownFirst) {
@@ -912,7 +898,7 @@ async function executeTurn(
           }
         }
         attempts.push({ attempt: currentAttempt, error });
-        failedKeys.add(`${currentAttempt.provider}:${currentAttempt.model}`);
+        failedKeys.add(attemptKey(currentAttempt));
         // Mark the user's key/account invalid only if the PROVIDER rejected it
         // (401/402/403) — a rate limit or an outage says nothing about it. Each
         // recorder no-ops unless the failed attempt is theirs.
@@ -1067,28 +1053,23 @@ async function executeTurn(
         pending = await nextRendered();
         continue;
       }
-      let sawText = false;
       // One plan block: task cards until reply text streams, then the next task
-      // card ends this block (left on `pending` for the next iteration).
+      // card ends this block (left on `pending` for the next iteration). The
+      // rule itself lives in lib/agent/segmentation, where it has tests.
+      const segmenter = createSegmenter();
       const segment = async function* (): AsyncGenerator<StreamChunk> {
         while (!pending.done) {
           const value = pending.value;
-          if (typeof value === 'string') {
-            // Only text the user will actually SEE ends this block. Models
-            // routinely emit whitespace-only fragments ("\n") between tool
-            // calls; those never reach Slack (createReply drops them), so
-            // splitting on them opened a new empty collapsible block for every
-            // stretch of tools — the "three plan blocks, no text in between"
-            // bug. A block now splits only after real prose has been written.
-            sawText ||= isVisibleText(value);
-            await reply?.append({ text: value, thread: turnThread });
+          const action = segmenter.next(value);
+          if (action === 'append') {
+            await reply?.append({ text: value as string, thread: turnThread });
             pending = await nextRendered();
             continue;
           }
-          if (sawText) {
+          if (action === 'split') {
             return;
           }
-          yield value;
+          yield value as StreamChunk;
           pending = await nextRendered();
         }
       };
@@ -1102,15 +1083,6 @@ async function executeTurn(
       await reply?.flush({ thread: turnThread });
     }
   }
-}
-
-// Does this text fragment produce anything the user will actually see? Reply
-// text is buffered by createReply and posted on blank-line boundaries, and a
-// whitespace-only buffer is never posted at all — so a whitespace fragment must
-// not be treated as "the model has replied" for plan-block or model-card
-// purposes.
-function isVisibleText(text: string): boolean {
-  return text.trim().length > 0;
 }
 
 // Fold an error's message + provider responseBody/data into one string so the
@@ -1158,31 +1130,6 @@ async function postUsageFooter({
       fallbackText: text,
     })
     .catch(() => undefined);
-}
-
-interface GatheredResult {
-  input: unknown;
-  output: unknown;
-  toolName: string;
-}
-
-// Bounds on the replayed carryover so a fallback prompt can't blow up context
-// (web-search results are large): keep the most recent results and clamp each.
-const CARRYOVER_MAX_RESULTS = 12;
-const CARRYOVER_OUTPUT_MAX = 1500;
-const CARRYOVER_INPUT_MAX = 400;
-
-function stableInput(input: unknown): string {
-  try {
-    return typeof input === 'string' ? input : JSON.stringify(input);
-  } catch {
-    return String(input);
-  }
-}
-
-function toCompactText(value: unknown, max: number): string {
-  const text = typeof value === 'string' ? value : stableInput(value);
-  return clamp(text, max) ?? text;
 }
 
 /**
@@ -1306,64 +1253,5 @@ function renderTruncation(streamedText: string): string {
     tail,
     '',
     'Write ONLY the continuation, starting exactly where that stops. Do not repeat any of it, do not restate the task, do not re-introduce yourself, and do not apologise or mention being cut off. If it broke off mid-sentence, finish that sentence. Keep it short.',
-  ].join('\n');
-}
-
-/**
- * Tell a fallback model that the turn is already IN PROGRESS in Slack: the
- * previous model streamed this text to the user before its provider died
- * mid-task. Without this the continuation model restates the whole answer and
- * the user reads it twice.
- */
-function renderContinuation(streamedText: string): string {
-  return [
-    'IMPORTANT: this turn is already in progress. The user has ALREADY been shown the following reply text, and the model writing it was cut off mid-task by a provider failure:',
-    '',
-    streamedText.trim(),
-    '',
-    'Pick up exactly where that left off and finish the job. Do NOT repeat what was already said, do not re-introduce yourself, and do not start the task over — continue it.',
-  ].join('\n');
-}
-
-// Render gathered tool results as a prompt block the fallback model can answer
-// from without re-running the tools. Most recent results win when over the cap.
-// Bounds on the tool observations persisted into the thinking store, kept
-// smaller than the carryover so reasoning + observations both fit the per-turn
-// thinking budget (MAX_TURN_CHARS). Keeps the most recent results.
-const OBSERVATION_MAX_RESULTS = 14;
-const OBSERVATION_OUTPUT_MAX = 1000;
-const OBSERVATION_INPUT_MAX = 300;
-
-/**
- * A compact record of what this turn's tools returned, persisted alongside the
- * reasoning so the NEXT turn can recall a fact kyto observed but never typed into
- * Slack (a decoded captcha, an OCR result, a computed value). Empty string when
- * the turn ran no tools.
- */
-function renderObservations(results: GatheredResult[]): string {
-  if (results.length === 0) {
-    return '';
-  }
-  return results
-    .slice(-OBSERVATION_MAX_RESULTS)
-    .map((result) => {
-      const input = toCompactText(result.input, OBSERVATION_INPUT_MAX);
-      const output = toCompactText(result.output, OBSERVATION_OUTPUT_MAX);
-      return `${result.toolName}(${input}) → ${output}`;
-    })
-    .join('\n');
-}
-
-function renderCarryover(results: GatheredResult[]): string {
-  const recent = results.slice(-CARRYOVER_MAX_RESULTS);
-  const lines = recent.map((result, index) => {
-    const input = toCompactText(result.input, CARRYOVER_INPUT_MAX);
-    const output = toCompactText(result.output, CARRYOVER_OUTPUT_MAX);
-    return `${index + 1}. ${result.toolName}(${input})\n${output}`;
-  });
-  return [
-    'A previous attempt already ran these tools and got these results. Use them to answer directly — do NOT re-run the same tools:',
-    '',
-    ...lines,
   ].join('\n');
 }

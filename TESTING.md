@@ -1,8 +1,8 @@
 # Testing
 
-Testing is manual for now.
+Mostly manual, with a unit-test layer over the parts that are pure.
 
-Kyto breaks in places that are hard to mock well: Slack Socket Mode, Slack message rendering, Harness/Pi session state, E2B sandbox reuse, sandbox skills, file uploads, and live tool output. Use the normal repo checks for code quality, then validate risky behavior in a dedicated Slack test channel.
+Kyto breaks in places that are hard to mock well: Slack Socket Mode, Slack message rendering, session state, E2B sandbox reuse, sandbox skills, file uploads, and live tool output. Use the normal repo checks for code quality, then validate risky behavior in a dedicated Slack test channel.
 
 ## Required Checks
 
@@ -11,7 +11,28 @@ Run these before handing off meaningful changes:
 ```bash
 bun run typecheck
 bun run check
+bun test
 ```
+
+## What IS unit-tested
+
+The rule is that the DECISION is testable even when the IO around it is not, so
+the pure half gets its own module and the agent loop calls into it. Do not
+inline one of these rules back into `lib/agent/index.ts` — a copy under test is
+a test of nothing.
+
+| Module | Guards |
+| --- | --- |
+| `lib/agent/routing.ts` | fallback queue order (HackClub best-first, then Gemini), tier write-off applied at selection time, `provider:model` keying. This is where the nemotron incident came from. |
+| `lib/agent/segmentation.ts` | when a turn cuts a new plan block; whitespace-only fragments must not split one. |
+| `lib/agent/carryover.ts` | what a fallback model is told about work already done — recency trimming, clamping, and the load-bearing prompt wording. |
+| `lib/agent/compaction-plan.ts` | which overflowed messages get summarized, and that the block always states its count. |
+| `lib/sandbox/diagnostics.ts` | the post-edit checkers, run for real against a local shell — including a genuine `tsc` type error. |
+| `lib/agent/degenerate.ts`, `skip-text.ts`, `relay.ts`, `github/command.ts`, `byok/crypto.ts` | repetition guard, bare-`skip` detection, chunk relay, GitHub command parsing, BYOK encryption. |
+
+`bun test` works from the repo root and from `apps/bot`. Keep it that way: a test
+that only passes in one of them usually means the module under test reached for
+the validated env (see `@repo/ai/providers/names`, which exists for exactly this).
 
 Run spelling when docs or prompts changed:
 

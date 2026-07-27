@@ -1,4 +1,5 @@
 import { keys } from '../keys';
+import { GEMINI_PROVIDER, HACKCLUB_PROVIDER } from './names';
 
 const env = keys();
 
@@ -7,8 +8,7 @@ const GEMINI_BASE_URL =
   env.GEMINI_BASE_URL ??
   'https://generativelanguage.googleapis.com/v1beta/openai/';
 
-export const GEMINI_PROVIDER = 'gemini';
-export const HACKCLUB_PROVIDER = 'hackclub';
+export { GEMINI_PROVIDER, HACKCLUB_PROVIDER } from './names';
 
 /** One model attempt: an OpenAI-compatible endpoint + model slug. */
 export interface ModelAttempt {

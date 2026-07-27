@@ -57,9 +57,12 @@
   breeds the hack collection (thought_signature tee, `top_p` pinning,
   `store:false` double-force, cache-control body rewriting). Each is correct;
   together they mean the abstraction is fighting us.
-- **Test coverage.** Four test files over a harness this behavior-rich:
-  segmentation, fallback ordering, and carryover invariants are guarded by
-  docs and vigilance, not CI.
+- ~~**Test coverage.**~~ **Largely closed 2026-07-27.** The fallback walk,
+  stream segmentation, carryover and compaction decisions were pulled out of
+  the agent loop into pure modules (`lib/agent/routing|segmentation|carryover|
+  compaction-plan`) and now have tests, as do the post-edit checkers. What is
+  still untested is the IO around them — the Slack stream, the relay race, the
+  attempt lifecycle itself.
 
 ## Net
 
@@ -70,10 +73,14 @@ orchestration, verification) it is a tier below all three coding agents.
 
 ## Highest-leverage upgrades, in order
 
-1. **Exact-match edit tool + automatic diagnostics feedback** — an edit tool
-   that fails loudly on ambiguity, and a cheap post-edit pass (tsc/linter in
-   the sandbox) whose errors are fed back to the model automatically.
-2. **Thread compaction** — summarize overflow context instead of dropping it
-   when a thread outgrows the fetch cap.
-3. **Tests over the crown jewels** — the fallback walk, stream segmentation,
-   and carryover, so regressions there are caught by CI instead of users.
+All three of the original items were done on 2026-07-27 (exact-match edit +
+post-edit diagnostics, thread compaction, tests over the crown jewels). What
+the assessment identified and nobody has touched yet:
+
+1. **Loop control** — a plan/approve checkpoint and budget-aware pacing, so
+   `MAX_STEPS=1000` is not the only governor besides the watchdog.
+2. **Orchestration depth** — more than one subagent level, and parallelism
+   that is not opt-in per call.
+3. **Provider-native paths** — the openai-compatible abstraction is now
+   carrying four separate workarounds; each is correct and together they mean
+   it is fighting us.
