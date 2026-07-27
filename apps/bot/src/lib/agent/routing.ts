@@ -1,6 +1,7 @@
 import type { ModelAttempt } from '@repo/ai';
 // From the env-free module on purpose: this file must stay importable (and so
 // testable) without a valid API-key environment.
+import { isGatewayStatus } from '@repo/ai/gateway-retry';
 import { GEMINI_PROVIDER, HACKCLUB_PROVIDER } from '@repo/ai/providers/names';
 
 // The order kyto falls back in. Split out of the agent loop because this is
@@ -15,10 +16,11 @@ export function attemptKey(attempt: ModelAttempt): string {
 /**
  * The queue walked once PRIMARY_ATTEMPT fails, by TIER:
  *
- *   1. the HackClub leaderboard in RANK order, BEST FIRST (opus-4.8 down);
+ *   1. the HackClub rungs, in list order (LEADERBOARD_FALLBACK — cheap K2-class
+ *      models, deliberately no longer the arena's expensive top end);
  *   2. the owner's Gemini key, the cheap last resort.
  *
- * Within each tier, the leaderboard's own order decides.
+ * Within each tier, the list's own order decides.
  *
  * This used to pivot on the primary's index in the leaderboard and walk "up"
  * from it — logic inherited from `openrouter/auto`, which resolved to a real
@@ -45,6 +47,24 @@ export function buildFallbackQueue(
  * down), and there is no point retrying a dead proxy or a spent quota one rung
  * at a time.
  */
+/**
+ * Does this failure mean the whole HackClub tier is unusable for this turn?
+ *
+ * Yes for a status the proxy reported that is about the PROXY — auth, rate
+ * limit, budget, a real 5xx from it — because every rung shares one proxy and
+ * one budget, so the next rung fails identically.
+ *
+ * No for `undefined` (a fault kyto raised itself: an empty response, a
+ * degenerate loop — those are about the MODEL) and no for a gateway status,
+ * which is a single lost request: measured 2026-07-27, the proxy 504s
+ * per-request, hitting opus-4.8 while kimi-k2.7 and glm-5.2 answered fine
+ * seconds either side. Condemning the tier on one of those is what used to send
+ * a live thread straight past every HackClub rung onto Gemini.
+ */
+export function condemnsHackclub(status: number | undefined): boolean {
+  return status !== undefined && !isGatewayStatus(status);
+}
+
 export function selectNextAttempt({
   failedKeys,
   queue,

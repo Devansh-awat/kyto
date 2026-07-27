@@ -3,6 +3,7 @@ import { mayHaveFetchedRepo } from '@repo/sandbox';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { disarmFetchedRepos } from '@/lib/sandbox/git-safety';
+import { clipOutput, fullOutputPath } from '@/lib/sandbox/output-clip';
 import { errorMessage } from '@/lib/utils/error';
 
 // There is no native background/detached-process concept in the sandbox
@@ -17,12 +18,30 @@ import { errorMessage } from '@/lib/utils/error';
 // The same registry backs the `bash` tool's AUTO-BACKGROUNDING: a foreground
 // command that runs longer than a minute is handed off here so the turn doesn't
 // freeze waiting on it (see sandbox.ts).
-const MAX_OUTPUT_CHARS = 8000;
-
-function truncate(text: string): string {
-  return text.length > MAX_OUTPUT_CHARS
-    ? `${text.slice(0, MAX_OUTPUT_CHARS)}\n…(truncated)`
-    : text;
+// A polled process is exactly where the OLD head-only cut hurt most: a long
+// build's verdict is its LAST line, and `…(truncated)` after the first 8k chars
+// threw it away while looking like the command had simply said that much. Both
+// ends are kept now, with the full text saved in the sandbox — see
+// lib/sandbox/output-clip.
+async function clipManaged(
+  text: string,
+  context: SandboxContext,
+  label: string
+): Promise<string> {
+  const preview = clipOutput(text);
+  if (!preview.truncated) {
+    return preview.text;
+  }
+  const path = fullOutputPath(label);
+  try {
+    await context.session.writeBinaryFile({
+      content: new TextEncoder().encode(text),
+      path,
+    });
+  } catch {
+    return preview.text;
+  }
+  return clipOutput(text, path).text;
 }
 
 // Single-quote a string for safe embedding as one argument to the outer shell.
@@ -201,12 +220,13 @@ export function backgroundProcessTools({
           return { error: `Unknown process id: ${id}`, success: false };
         }
         await disarmIfFinished(id, result);
+        const context = getSandboxContext();
         return {
           exitCode: result.exitCode,
           id,
           running: !result.finished,
-          stderr: truncate(result.stderr),
-          stdout: truncate(result.stdout),
+          stderr: await clipManaged(result.stderr, context, 'stderr'),
+          stdout: await clipManaged(result.stdout, context, 'stdout'),
           success: true,
         };
       } catch (error) {

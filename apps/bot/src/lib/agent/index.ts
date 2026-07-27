@@ -29,6 +29,7 @@ import { createReply } from '@/lib/agent/reply';
 import {
   attemptKey,
   buildFallbackQueue as buildQueue,
+  condemnsHackclub,
   selectNextAttempt,
 } from '@/lib/agent/routing';
 import { createSegmenter, isVisibleText } from '@/lib/agent/segmentation';
@@ -90,9 +91,16 @@ const SPEND_LIMIT_PATTERN =
 // This matters because the PRIMARY is itself a HackClub call: the model-level
 // faults kyto raises on its own — an empty response, tools-but-no-reply, a
 // degenerate loop — carry no status, and they say nothing about the proxy. If
-// they counted, one bad completion from the primary would write off the entire
-// HackClub leaderboard (opus-4.8 included) for that turn and drop the user
-// straight onto Gemini.
+// they counted, one bad completion from the primary would write off every
+// remaining HackClub rung for that turn and drop the user straight onto Gemini.
+//
+// A GATEWAY status is excluded for the same reason (`isGatewayStatus`). Measured
+// 2026-07-27: the proxy 504s per REQUEST, not per model and not tier-wide — a
+// probe caught opus-4.8 504 while kimi-k2.7 and glm-5.2 answered fine seconds
+// either side. So a 504 that survived the retries in gateway-retry.ts says
+// "we lost that request", not "the proxy is down", and condemning the tier on
+// one of them is how a single dropped request used to skip every HackClub rung
+// and land a live thread on gemini-3.1-flash-lite.
 const HACKCLUB_OUTAGE_THRESHOLD = 1;
 
 // How many times a reply that hit MAX_OUTPUT_TOKENS mid-sentence may be resumed
@@ -934,12 +942,14 @@ async function executeTurn(
           if (SPEND_LIMIT_PATTERN.test(thrownErrorText(error))) {
             hackclubBudgetExhausted = true;
             spendLimitMessage ??= thrownErrorText(error);
-          } else if (errorStatus(error) !== undefined) {
+          } else if (condemnsHackclub(errorStatus(error))) {
             // A non-budget HackClub failure that the PROXY reported (it has an
-            // HTTP status). Enough of these means the proxy is down, not just
-            // this one model, so bail off HackClub entirely. A model-level fault
-            // kyto raised itself (empty response, degenerate loop) has no status
-            // and must NOT condemn the tier — see HACKCLUB_OUTAGE_THRESHOLD.
+            // HTTP status) and that isn't a per-request gateway drop. Enough of
+            // these means the proxy is down, not just this one model, so bail
+            // off HackClub entirely. A model-level fault kyto raised itself
+            // (empty response, degenerate loop) has no status, and a 504 is a
+            // lost request rather than a dead tier — neither may condemn it.
+            // See HACKCLUB_OUTAGE_THRESHOLD.
             hackclubFailures += 1;
             if (hackclubFailures >= HACKCLUB_OUTAGE_THRESHOLD) {
               hackclubUnavailable = true;

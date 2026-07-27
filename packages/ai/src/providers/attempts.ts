@@ -110,60 +110,43 @@ export const subagentAttempts: ModelAttempt[] = [
 /** The subagent's primary model; undefined = no subagent model configured. */
 export const subagentAttempt: ModelAttempt | undefined = subagentAttempts[0];
 
-// The owner's arena leaderboard, best→worst, restricted to models reachable on
-// HackClub. Fable 5 (rank #1) is reachable (`anthropic/claude-fable-5`) but
-// deliberately excluded — ~2x opus-4.8's per-token cost, not worth it against
-// the daily HackClub spend cap. The agent tries PRIMARY_ATTEMPT first, then
-// walks this list in RANK ORDER, best first (buildFallbackQueue in the bot's
-// agent loop). Order matters: it is the order kyto actually falls back in.
+// The HackClub rungs kyto falls back to, and the whole list is CHEAP ON PURPOSE
+// (owner's call, 2026-07-27). It used to be the owner's arena top 19 in rank
+// order — opus-4.8, gpt-5.6-sol, sonnet-5 and the rest. Those are all GONE.
 //
-// EVERY RUNG MUST BE A MODEL GOOD ENOUGH TO HAND A LIVE THREAD TO. A fallback
-// is not a consolation prize — whichever rung answers IS kyto for that turn, in
-// public, in front of the same people. `nvidia/nemotron-3-ultra-550b-a55b` was
-// a rung until it degenerated into a token loop and streamed "@devansh" several
-// hundred times into a public thread; it is not coming back, and neither is
-// anything else that can't hold a multi-step tool conversation. Reachable on
-// the proxy is NOT the bar. (See also the repetition guard in the agent loop,
-// which now aborts an attempt that starts looping rather than posting it.)
+// Why: the primary is pinned kimi-k2.7-code at $0.73/M in, and the whole tier
+// shares ONE daily $3 cap. Falling back to opus-4.8 ($10/M in — 14x) meant a
+// transient proxy failure, which says nothing about the model, could spend a
+// large part of the day's budget on a single turn. The failures that actually
+// happen here are gateway 504s and dropped connections, not "kimi is too weak
+// for this" — so the right response is another model of the SAME class, not a
+// more expensive one.
 //
-// So the list is EXACTLY the owner's arena top 19 — nothing gets to be a rung
-// just for existing on the proxy. When the owner hands over a new leaderboard,
-// REPLACE this list with it; do not merge the old tail back in. That tail is
-// where the junk lives (the previous one trailed off into grok-build-0.1,
-// minimax-m2.7 and nemotron, all now gone).
+// EVERY RUNG MUST STILL BE A MODEL GOOD ENOUGH TO HAND A LIVE THREAD TO. Cheap
+// is a constraint, not the bar. A fallback is not a consolation prize —
+// whichever rung answers IS kyto for that turn, in public, in front of the same
+// people. `nvidia/nemotron-3-ultra-550b-a55b` was a rung until it degenerated
+// into a token loop and streamed "@devansh" several hundred times into a public
+// thread; it is not coming back, and neither is anything else that can't hold a
+// multi-step tool conversation. Reachable on the proxy is NOT the bar, and
+// "cheapest on the proxy" is not either. Both rungs below are K2-class coding
+// models verified `tools`-capable on ai.hackclub.com/proxy/v1/models.
+//
+// If a rung is ever added back, price it first: anything materially above the
+// primary's per-token cost belongs behind the Gemini key, not in front of it.
 //
 // The baishui proxy tail (jam06452.uk) stays disabled — its /models endpoint
 // answers but every completion fails ("upstream authentication failed" / "all
 // provider keys rate-limited or in cooldown"). Re-add rungs here only after
 // verifying a real completion succeeds.
-//
-// The arena ranks a model + a REASONING EFFORT ("High", "xHigh", "Thinking"),
-// but the proxy only has one slug per model — GPT 5.5 holds ranks 2/4/8/10 and
-// Opus 4.8 holds 3 and 14. Each model therefore appears ONCE here, at its BEST
-// rank. Every slug below was verified against ai.hackclub.com/proxy/v1/models.
 export const LEADERBOARD_FALLBACK: ModelAttempt[] = [
-  // Owner's arena top 19, in rank order. Rank #1 (Claude Fable 5) is reachable
-  // as `anthropic/claude-fable-5` and deliberately skipped — see above.
-  catalogAttempt('openai/gpt-5.6-sol'), // 2
-  catalogAttempt('anthropic/claude-opus-4.8'), // 3
-  catalogAttempt('openai/gpt-5.5'), // 4
-  catalogAttempt('anthropic/claude-sonnet-5'), // 5
-  catalogAttempt('anthropic/claude-opus-4.7'), // 6
-  catalogAttempt('z-ai/glm-5.2'), // 9
-  catalogAttempt('anthropic/claude-opus-4.6'), // 11
-  catalogAttempt('openai/gpt-5.4'), // 12
-  // Rank 13 (Grok 4.5) is listed on the proxy but NOT usable from this host:
-  // xAI hard-403s it, `permission-denied: The model grok-4.5 is not available
-  // in your region`. It would burn an attempt on every fallback, so it is not a
-  // rung. Re-add if the region block ever lifts (verify with a real completion).
-  catalogAttempt('anthropic/claude-sonnet-4.6'), // 15
-  catalogAttempt('z-ai/glm-5.1'), // 16
-  catalogAttempt('qwen/qwen3.7-plus'), // 17
-  catalogAttempt('google/gemini-3.1-pro-preview'), // 18
-  catalogAttempt('moonshotai/kimi-k2.7-code'), // 19
-  // Last resort: the owner's OWN Gemini key — walked after every HackClub rung,
-  // and reached immediately when HackClub is over budget or down. Empty if the
-  // key is unset. This is the ONLY tier left behind HackClub now that the
-  // DigitalOcean roster is gone, so keep a key configured.
+  // Kimi K2.6: the primary's own predecessor, and CHEAPER than it
+  // ($0.646/M in, $2.72/M out, 262k ctx). The closest thing to "the same model
+  // again" when a request to K2.7 was lost rather than refused.
+  catalogAttempt('moonshotai/kimi-k2.6'),
+  // MiniMax M3 ($0.30/M in, $1.20/M out, 1M ctx) — the cheapest rung that still
+  // holds a tool conversation, and the widest context of the three, so it is
+  // also the one most likely to survive a long thread the others would not.
+  catalogAttempt('minimax/minimax-m3'),
   ...geminiAttempts,
 ];

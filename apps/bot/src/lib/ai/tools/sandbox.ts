@@ -6,14 +6,13 @@ import { githubAuthHint } from '@/lib/github/diagnose';
 import { guardGithubCommand } from '@/lib/github/guard';
 import { fileDiagnostics } from '@/lib/sandbox/diagnostics';
 import { disarmFetchedRepos } from '@/lib/sandbox/git-safety';
+import { clipOutput, fullOutputPath } from '@/lib/sandbox/output-clip';
 import { clamp } from '@/lib/utils/text';
 import type { BackgroundProcessTools } from './background';
 
 // The model's workspace tools (replacing Pi's builtin bash/file tools). Every
 // tool runs in the lazy E2B sandbox: the first call materializes it, chat-only
 // turns never create one.
-
-const OUTPUT_MAX = 12_000;
 
 // A foreground bash command that runs longer than this is auto-moved to the
 // background so it can't freeze the whole turn (a turn blocks until bash
@@ -28,8 +27,31 @@ function resolvePath(context: SandboxContext, path: string): string {
   );
 }
 
-function clip(text: string): string {
-  return clamp(text, OUTPUT_MAX) ?? text;
+/**
+ * Clip one stream of command output, keeping a full copy in the sandbox so the
+ * model can filter what it wasn't shown (see lib/sandbox/output-clip). Saving
+ * is best-effort: if the write fails the clip still happens and the notice says
+ * the copy is missing, because losing the output entirely is the worse outcome.
+ */
+async function clipStream(
+  text: string,
+  context: SandboxContext,
+  label: string
+): Promise<string> {
+  const preview = clipOutput(text);
+  if (!preview.truncated) {
+    return preview.text;
+  }
+  const path = fullOutputPath(label);
+  try {
+    await context.session.writeBinaryFile({
+      content: new TextEncoder().encode(text),
+      path,
+    });
+  } catch {
+    return preview.text;
+  }
+  return clipOutput(text, path).text;
 }
 
 export function bashTool({
@@ -83,6 +105,7 @@ export function bashTool({
           abortSignal,
           background,
           command,
+          context,
           workingDirectory: resolvedDir,
         });
         // Only once it has actually finished — a still-running extraction gets
@@ -123,8 +146,8 @@ export function bashTool({
           exitCode: result.exitCode,
           stderr: result.stderr,
         }),
-        stderr: clip(result.stderr),
-        stdout: clip(result.stdout),
+        stderr: await clipStream(result.stderr, context, 'stderr'),
+        stdout: await clipStream(result.stdout, context, 'stdout'),
       };
     },
   });
@@ -134,11 +157,13 @@ async function runWithAutoBackground({
   abortSignal,
   background,
   command,
+  context,
   workingDirectory,
 }: {
   abortSignal?: AbortSignal;
   background: BackgroundProcessTools;
   command: string;
+  context: SandboxContext;
   workingDirectory?: string;
 }): Promise<
   Record<string, unknown> & { exitCode?: number; running?: boolean }
@@ -155,8 +180,8 @@ async function runWithAutoBackground({
   if (result.finished) {
     return {
       exitCode: result.exitCode,
-      stderr: clip(result.stderr),
-      stdout: clip(result.stdout),
+      stderr: await clipStream(result.stderr, context, 'stderr'),
+      stdout: await clipStream(result.stdout, context, 'stdout'),
     };
   }
   return {
@@ -164,8 +189,8 @@ async function runWithAutoBackground({
     id: started.id,
     note: `This command was still running after 60s, so it was moved to the background (handle "${started.id}") to keep the turn responsive — it is STILL RUNNING. Poll it with getProcessOutput("${started.id}") and stop it with killProcess("${started.id}"). Don't just re-run it. If you need its result before replying, keep working on other things and check back, or use the wait tool.`,
     running: true,
-    stderr: clip(result.stderr),
-    stdout: clip(result.stdout),
+    stderr: await clipStream(result.stderr, context, 'stderr'),
+    stdout: await clipStream(result.stdout, context, 'stdout'),
   };
 }
 
@@ -197,7 +222,12 @@ export function readFileTool({
           .slice(Math.max((startLine ?? 1) - 1, 0), endLine)
           .join('\n');
       }
-      return { content: clip(text), found: true };
+      // The complete file is already on disk — the notice points back at it
+      // (with startLine/endLine) instead of saving a second copy.
+      return {
+        content: clipOutput(text, resolvePath(context, path)).text,
+        found: true,
+      };
     },
   });
 }

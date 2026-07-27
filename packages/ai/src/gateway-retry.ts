@@ -58,7 +58,7 @@ export function isGatewayStatus(status: number): boolean {
   return GATEWAY_STATUSES.has(status);
 }
 
-export function gatewayRetryDelayMs(retry: number): number {
+function gatewayRetryDelayMs(retry: number): number {
   return RETRY_DELAY_MS[retry - 1] ?? RETRY_DELAY_MS.at(-1) ?? 0;
 }
 

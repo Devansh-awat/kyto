@@ -56,16 +56,16 @@ same 3072 dims). Fallback is HackClub then the owner's Gemini key, with nothing
 free in between — so watch how often `BudgetExhaustedError` actually shows up
 now that HackClub's daily $3 is the only shared tier.
 
-**HackClub's proxy 504s in bursts (reported to the HC AI team 2026-07-27).**
-Measured ~1 request in 6 for a few minutes, always ~5.4s in, same rate at any
-prompt size, reproducible with bare `curl` — so it is theirs, not ours. Kyto now
-replays a gateway status up to 2x (`gateway-retry.ts`), which should hide it
-entirely at that rate. Watch `[agent] gateway failure, retrying the same request`
-in the journal: if retries start EXHAUSTING, the burst is worse than 1-in-6 and
-the open question becomes whether a 504 should still trip
-`HACKCLUB_OUTAGE_THRESHOLD` and write off all 19 HackClub rungs — since the
-DigitalOcean tier went away, that write-off lands the turn on
-`gemini-3.1-flash-lite`.
+**HackClub's proxy 504s (reported to the HC AI team 2026-07-27).** Bursty, ~5.4s
+every time, size- and shape-independent, reproducible with bare `curl` — theirs,
+not ours. Three things now sit between it and a user: `gateway-retry.ts` replays
+a gateway status twice; a 504 no longer condemns the whole HackClub tier
+(`condemnsHackclub`); and the tier it falls back to is kimi-k2.6 then
+minimax-m3, both cheaper than the primary. Watch `[agent] gateway failure,
+retrying the same request` in the journal — retries EXHAUSTING means the burst is
+worse than measured. Also watch what the cheap rungs actually produce in public:
+they are now the only thing between the primary and Gemini, and nobody has read a
+k2.6 or m3 answer in a live thread yet.
 
 **Compaction is new and unproven in the wild (2026-07-27).** No thread has
 crossed 100 messages since it shipped. Check the first one that does: the
