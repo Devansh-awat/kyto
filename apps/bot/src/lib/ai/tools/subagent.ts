@@ -17,8 +17,8 @@ import { errorMessage } from '@/lib/utils/error';
 
 // A subagent is a headless copy of kyto: it shares the PARENT THREAD's sandbox
 // (so it sees the files/state the parent set up, and vice versa), the same full
-// toolset, pinned to a cheap model (Gemini flash-lite, else the best DigitalOcean
-// BYOK model). It runs the same multi-step tool loop as a normal turn
+// toolset, pinned to a cheap model (the owner's Gemini key, else a HackClub
+// rung — see subagentAttempts). It runs the same multi-step tool loop as a turn
 // (streamAttempt drives it) and returns its final text as a report to the parent.
 //
 // Its work is surfaced INSIDE THE PARENT TURN'S PLAN BLOCK, not as a message of
@@ -131,7 +131,7 @@ export function runSubagentTool({
       if (subagentAttempts.length === 0) {
         return {
           error:
-            'No subagent model is configured (needs GEMINI_API_KEY or OPENROUTER_API_KEY).',
+            'No subagent model is configured (the subagent roster is empty).',
           success: false,
         };
       }

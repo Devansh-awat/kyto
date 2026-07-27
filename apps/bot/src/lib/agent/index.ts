@@ -1,5 +1,4 @@
 import {
-  DIGITALOCEAN_PROVIDER,
   GEMINI_PROVIDER,
   HACKCLUB_PROVIDER,
   LEADERBOARD_FALLBACK,
@@ -59,10 +58,10 @@ import { clamp } from '@/lib/utils/text';
 import type { ActiveTurn, AgentErrorStage } from '@/types/agent';
 import type { AttemptFailure } from '@/types/attempts';
 
-// HackClub/OpenRouter daily-spend-limit rejection (also "insufficient credits").
-// Matched against stream error parts to fail over off HackClub for the turn.
+// HackClub daily-spend-limit rejection (also "insufficient credits"). Matched
+// against stream error parts to fail over off HackClub for the turn, i.e.
 // HackClub's shared budget is exhausted. Matches both shapes it has returned:
-// a 429 "Daily spending limit of $3 reached", and OpenRouter's own 403
+// a 429 "Daily spending limit of $3 reached", and the upstream 403
 // "Key limit exceeded (daily limit)". Both live in the response BODY, not the
 // error message — see deepErrorText.
 const SPEND_LIMIT_PATTERN =
@@ -73,15 +72,15 @@ const SPEND_LIMIT_PATTERN =
 // one proxy and one budget, so a rung that fails for a non-model reason (5xx,
 // connection error, rate limit) means the next rung fails identically. Trying a
 // second one only bought another "Thinking · fallback" card before the same
-// verdict. The DigitalOcean BYOK tier is a genuinely separate quota, so jump.
+// verdict. The owner's own Gemini key is a genuinely separate quota, so jump.
 //
 // Only a failure the PROXY reported counts (`errorStatus` found an HTTP status).
-// This matters now that the PRIMARY is itself a HackClub call: the model-level
+// This matters because the PRIMARY is itself a HackClub call: the model-level
 // faults kyto raises on its own — an empty response, tools-but-no-reply, a
 // degenerate loop — carry no status, and they say nothing about the proxy. If
 // they counted, one bad completion from the primary would write off the entire
-// HackClub leaderboard (opus-4.8 included) for that turn and dump the user on
-// the DigitalOcean tier.
+// HackClub leaderboard (opus-4.8 included) for that turn and drop the user
+// straight onto Gemini.
 const HACKCLUB_OUTAGE_THRESHOLD = 1;
 
 // How many times a reply that hit MAX_OUTPUT_TOKENS mid-sentence may be resumed
@@ -89,37 +88,6 @@ const HACKCLUB_OUTAGE_THRESHOLD = 1;
 // far past anything worth reading in Slack; the cap exists because a model that
 // keeps filling the budget exactly would otherwise continue forever.
 const MAX_CONTINUATIONS = 3;
-
-// DigitalOcean's BYOK rate limit is per ACCOUNT, not per model: when one rung
-// 429s "Rate limit exceeded", every other DigitalOcean rung 429s within seconds
-// — the whole roster went down that way in one turn, nine models deep, each
-// burning ~15s and a "Thinking · fallback" card before the identical verdict.
-// So the first rate-limited DigitalOcean attempt trips the whole tier for the
-// turn and kyto goes straight to the HackClub leaderboard. Only a RATE LIMIT
-// does this: a single model 5xx-ing says nothing about its siblings.
-const RATE_LIMIT_PATTERN = /rate limit/i;
-const TOO_MANY_REQUESTS = 429;
-
-function isRateLimited({
-  message,
-  status,
-}: {
-  message: string;
-  status?: number;
-}): boolean {
-  return status === TOO_MANY_REQUESTS || RATE_LIMIT_PATTERN.test(message);
-}
-
-// DigitalOcean also runs a PROMPT-level content filter ("Request blocked by
-// content filter: [BLOCKED]", a 403). It judges the request, not the model, so
-// the identical prompt 403s on every DO rung — observed as ten straight
-// "Thinking · fallback" cards before the turn escaped the tier. One filtered
-// DO attempt writes the tier off for the turn, exactly like the rate limit.
-const CONTENT_FILTER_PATTERN = /content filter/i;
-
-function isContentFiltered(message: string): boolean {
-  return CONTENT_FILTER_PATTERN.test(message);
-}
 
 // How long a single attempt may go with NO sign of progress before it's aborted
 // (see the STALL watchdog below — it's re-armed on every streamed text delta,
@@ -398,9 +366,9 @@ async function executeTurn(
     // consumed in order. routing.ownFirst decides whether these run before or
     // after kyto's shared service chain.
     const ownQueue = [...routing.own];
-    // The service query runs on PRIMARY_ATTEMPT (a pinned model on the owner's
-    // DigitalOcean BYOK quota). On failure we walk the fallback queue built by
-    // buildFallbackQueue. Models already tried are skipped via failedKeys.
+    // The service query runs on PRIMARY_ATTEMPT (a pinned model on HackClub).
+    // On failure we walk the fallback queue built by buildFallbackQueue. Models
+    // already tried are skipped via failedKeys.
     const failedKeys = new Set<string>();
     let triedPrimary = false;
     let fallbackQueue: ModelAttempt[] | undefined;
@@ -413,16 +381,10 @@ async function executeTurn(
     // Set when HackClub itself looks DOWN (repeated non-budget failures, e.g.
     // 5xx/connection errors), as opposed to just over budget. Every HackClub
     // rung would fail the same way, so once tripped we skip the rest of the
-    // HackClub leaderboard and go straight to DigitalOcean/Gemini instead of
-    // burning a dozen doomed attempts (the "lots of Thinking · fallback" bug).
+    // HackClub leaderboard and go straight to Gemini instead of burning a dozen
+    // doomed attempts (the "lots of Thinking · fallback" bug).
     let hackclubFailures = 0;
     let hackclubUnavailable = false;
-    // Set when a DigitalOcean rung returns a rate-limit 429 — the limit is on
-    // the account, so the rest of that tier is spent for this turn too.
-    let digitaloceanRateLimited = false;
-    // Set when DigitalOcean's content filter 403s the prompt — the same prompt
-    // goes to every DO rung, so they would all be blocked identically.
-    let digitaloceanContentFiltered = false;
     let attempt: ModelAttempt | undefined;
     // Set per attempt (the watchdog is armed inside the loop below), but the
     // toolset is built ONCE up front — so the tools get a stable indirection
@@ -444,32 +406,25 @@ async function executeTurn(
 
     // The order kyto falls back in once PRIMARY_ATTEMPT fails, by TIER:
     //
-    //   1. the rest of the DigitalOcean BYOK roster — strong, tool-capable, and
-    //      billed to the owner's own DigitalOcean quota, so a fallback is free;
-    //   2. the HackClub leaderboard in RANK order, BEST FIRST (opus-4.8 down);
-    //   3. the owner's Gemini key, the cheap last resort.
+    //   1. the HackClub leaderboard in RANK order, BEST FIRST (opus-4.8 down);
+    //   2. the owner's Gemini key, the cheap last resort.
     //
     // Within each tier, LEADERBOARD_FALLBACK's own order decides.
     //
     // This used to pivot on the primary's index in LEADERBOARD_FALLBACK and walk
     // "up" from it — logic inherited from `openrouter/auto`, which resolved to a
-    // real leaderboard rank. The pinned primary (minimax-m2.5) is a DigitalOcean
-    // rung appended at the BOTTOM of that list, so "up" reversed the leaderboard
-    // and kyto fell back WORST FIRST: with the DigitalOcean tier rate-limited it
-    // landed on nvidia/nemotron (which looped "@devansh" a few hundred times into
-    // a public thread), and it would only ever have reached opus-4.8 after every
-    // junk rung failed. Keep the queue explicit and rank-ordered; do NOT
-    // reintroduce a pivot.
+    // real leaderboard rank. The pinned primary was a rung appended at the
+    // BOTTOM of that list, so "up" reversed the leaderboard and kyto fell back
+    // WORST FIRST: it landed on nvidia/nemotron (which looped "@devansh" a few
+    // hundred times into a public thread), and it would only ever have reached
+    // opus-4.8 after every junk rung failed. Keep the queue explicit and
+    // rank-ordered; do NOT reintroduce a pivot.
     const buildFallbackQueue = (): ModelAttempt[] => {
       const tier = (provider: string) =>
         LEADERBOARD_FALLBACK.filter(
           (candidate) => candidate.provider === provider
         );
-      return [
-        ...tier(DIGITALOCEAN_PROVIDER),
-        ...tier(HACKCLUB_PROVIDER),
-        ...tier(GEMINI_PROVIDER),
-      ];
+      return [...tier(HACKCLUB_PROVIDER), ...tier(GEMINI_PROVIDER)];
     };
     // The next of the user's OWN attempts (ChatGPT account / BYOK keys), or
     // undefined when they're spent.
@@ -484,17 +439,14 @@ async function executeTurn(
       }
       const skipHackclub = hackclubBudgetExhausted || hackclubUnavailable;
       fallbackQueue ??= buildFallbackQueue();
-      // A whole tier can go out MID-WALK (HackClub over budget or down,
-      // DigitalOcean rate-limited), so the skips are applied at selection time
-      // rather than baked into the queue: no point retrying a dead proxy or a
-      // spent quota one rung at a time.
+      // A whole tier can go out MID-WALK (HackClub over budget or down), so the
+      // skip is applied at selection time rather than baked into the queue: no
+      // point retrying a dead proxy or a spent quota one rung at a time.
       return fallbackQueue.find(
         (candidate) =>
           !(
             failedKeys.has(`${candidate.provider}:${candidate.model}`) ||
-            (skipHackclub && candidate.provider === HACKCLUB_PROVIDER) ||
-            ((digitaloceanRateLimited || digitaloceanContentFiltered) &&
-              candidate.provider === DIGITALOCEAN_PROVIDER)
+            (skipHackclub && candidate.provider === HACKCLUB_PROVIDER)
           )
       );
     };
@@ -714,17 +666,6 @@ async function executeTurn(
             ) {
               hackclubBudgetExhausted = true;
               spendLimitMessage = info.message;
-            }
-            // A DigitalOcean rate limit dooms every DigitalOcean rung: it is the
-            // account's limit, not the model's. Its content filter likewise
-            // judges the prompt, which every rung would get identically.
-            if (currentAttempt.provider === DIGITALOCEAN_PROVIDER) {
-              if (isRateLimited(info)) {
-                digitaloceanRateLimited = true;
-              }
-              if (isContentFiltered(info.message)) {
-                digitaloceanContentFiltered = true;
-              }
             }
           },
           stream: result.fullStream,
@@ -985,22 +926,9 @@ async function executeTurn(
           error,
           userId: turnMessage.author.userId,
         });
-        // Also catch a rate limit / spend limit that surfaced as a THROWN error
-        // (not a stream error part) — same effect as onError: write off the tier
-        // rather than walking the rest of it one doomed rung at a time.
-        if (currentAttempt.provider === DIGITALOCEAN_PROVIDER) {
-          if (
-            isRateLimited({
-              message: thrownErrorText(error),
-              status: errorStatus(error),
-            })
-          ) {
-            digitaloceanRateLimited = true;
-          }
-          if (isContentFiltered(thrownErrorText(error))) {
-            digitaloceanContentFiltered = true;
-          }
-        }
+        // Also catch a spend limit that surfaced as a THROWN error (not a stream
+        // error part) — same effect as onError: write off the tier rather than
+        // walking the rest of it one doomed rung at a time.
         if (currentAttempt.provider === HACKCLUB_PROVIDER) {
           if (SPEND_LIMIT_PATTERN.test(thrownErrorText(error))) {
             hackclubBudgetExhausted = true;

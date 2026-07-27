@@ -12,10 +12,7 @@ export {
 export { type Persona, personas } from './prompts/presets';
 export {
   catalogAttempt,
-  DIGITALOCEAN_PROVIDER,
-  digitaloceanAttempts,
   GEMINI_PROVIDER,
-  geminiAttempt,
   HACKCLUB_PROVIDER,
   LEADERBOARD_FALLBACK,
   MAX_OUTPUT_TOKENS,

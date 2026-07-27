@@ -8,9 +8,8 @@ import {
   type ToolSet,
 } from 'ai';
 import {
-  DIGITALOCEAN_ONLY,
-  DIGITALOCEAN_PROVIDER,
   GEMINI_PROVIDER,
+  HACKCLUB_PROVIDER,
   MAX_OUTPUT_TOKENS,
   type ModelAttempt,
 } from './providers/attempts';
@@ -66,10 +65,9 @@ const MAX_SCAN_BYTES = 16_384;
  * Stream one model attempt: the whole multi-step agentic loop on a single
  * OpenAI-compatible endpoint. The per-instance `fetch` (no global patching —
  * the old interceptor died with Pi) tunes the request:
- *  - HackClub/DigitalOcean requests get `reasoning: { effort: 'medium' }` (the
- *    old Pi thinking level) — max_tokens comes from maxOutputTokens below,
- *    which defuses OpenRouter's pessimistic daily-spend projection;
- *  - DigitalOcean BYOK requests are pinned to the DigitalOcean provider;
+ *  - HackClub requests get `reasoning: { effort: 'medium' }` (the old Pi
+ *    thinking level) — max_tokens comes from maxOutputTokens below, which
+ *    defuses the proxy's pessimistic daily-spend projection;
  *  - every request gets 1-hour prompt-cache breakpoints (see addCacheControl);
  * and captures the resolved model slug into `holder` from a response clone.
  */
@@ -153,12 +151,10 @@ export function streamAttempt({
   return streamText({
     ...promptInput,
     abortSignal,
-    // Cap output on every metered path: HackClub (pessimistic spend projection),
-    // DigitalOcean (real tokens on the owner's account), and a user's own BYOK
-    // key (real tokens on THEIR account) — reasoning models otherwise burn
-    // unbounded thinking tokens on someone's bill.
-    ...(attempt.provider === 'hackclub' ||
-    attempt.provider === DIGITALOCEAN_PROVIDER ||
+    // Cap output on every metered path: HackClub (pessimistic spend projection)
+    // and a user's own BYOK key (real tokens on THEIR account) — reasoning
+    // models otherwise burn unbounded thinking tokens on someone's bill.
+    ...(attempt.provider === HACKCLUB_PROVIDER ||
     attempt.byokProvider !== undefined
       ? { maxOutputTokens: MAX_OUTPUT_TOKENS }
       : {}),
@@ -437,15 +433,15 @@ function tunedFetch({
   };
 }
 
-// Models whose DigitalOcean deployment REQUIRES an exact `top_p`, rejecting the
-// request outright otherwise: `{"error":{"message":"top_p must be 0.95 for this
+// Models whose deployment REQUIRES an exact `top_p`, rejecting the request
+// outright otherwise: `{"error":{"message":"top_p must be 0.95 for this
 // model","type":"invalid_request_error"}}` with a 400. The AI SDK sends no
-// `top_p` unless asked to, and this provider treats "absent" as wrong rather
-// than substituting its own default, so the rung was unusable from the day it
-// was added — visible only as a 400 in the journal partway down a fallback walk.
-const REQUIRED_TOP_P: Record<string, number> = {
-  'kimi-k2.6': 0.95,
-};
+// `top_p` unless asked to, and such a provider treats "absent" as wrong rather
+// than substituting its own default, so the rung is unusable from the day it is
+// added — visible only as a 400 in the journal partway down a fallback walk.
+// Keyed by model slug; empty today (the DigitalOcean roster that needed it is
+// gone), kept because the failure mode is invisible without it.
+const REQUIRED_TOP_P: Record<string, number> = {};
 
 function tuneBody(
   raw: string | undefined,
@@ -469,32 +465,17 @@ function tuneBody(
     ) {
       changed = true;
     }
-    // DigitalOcean BYOK: the OpenRouter key has $0 credit, so force the
-    // DigitalOcean provider — that's the free path billed to the owner's DO
-    // account. Without this, OpenRouter tries a paid provider and 402s.
-    if (attempt.provider === DIGITALOCEAN_PROVIDER) {
-      const existing =
-        typeof payload.provider === 'object' && payload.provider
-          ? (payload.provider as Record<string, unknown>)
-          : {};
-      payload.provider = { ...existing, only: [DIGITALOCEAN_ONLY] };
+    // Some deployments pin a sampling parameter and reject anything else —
+    // including OMITTING it, which is what the SDK does by default. See
+    // REQUIRED_TOP_P: a rung that needs this and doesn't get it 400s on every
+    // single turn, and the fallback walk silently skips straight past it.
+    const requiredTopP = REQUIRED_TOP_P[attempt.model];
+    if (requiredTopP !== undefined && payload.top_p !== requiredTopP) {
+      payload.top_p = requiredTopP;
       changed = true;
     }
-    // Some DigitalOcean deployments pin a sampling parameter and reject anything
-    // else — including OMITTING it, which is what the SDK does by default. See
-    // REQUIRED_TOP_P: without this, kimi-k2.6 (the LEAD rung of the DigitalOcean
-    // tier) 400'd on every single turn and the fallback walk silently skipped
-    // straight past its best free model.
-    if (attempt.provider === DIGITALOCEAN_PROVIDER) {
-      const requiredTopP = REQUIRED_TOP_P[attempt.model];
-      if (requiredTopP !== undefined && payload.top_p !== requiredTopP) {
-        payload.top_p = requiredTopP;
-        changed = true;
-      }
-    }
     if (
-      (attempt.provider === 'hackclub' ||
-        attempt.provider === DIGITALOCEAN_PROVIDER) &&
+      attempt.provider === HACKCLUB_PROVIDER &&
       payload.reasoning === undefined
     ) {
       payload.reasoning = { effort: 'medium' };

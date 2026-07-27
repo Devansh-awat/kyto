@@ -6,18 +6,9 @@ const HACKCLUB_BASE_URL = 'https://ai.hackclub.com/proxy/v1';
 const GEMINI_BASE_URL =
   env.GEMINI_BASE_URL ??
   'https://generativelanguage.googleapis.com/v1beta/openai/';
-const OPENROUTER_BASE_URL =
-  env.OPENROUTER_BASE_URL ?? 'https://openrouter.ai/api/v1';
 
 export const GEMINI_PROVIDER = 'gemini';
 export const HACKCLUB_PROVIDER = 'hackclub';
-// DigitalOcean models reached through OpenRouter BYOK (the owner's key). The
-// key holds $0 OpenRouter credit, so every attempt MUST force the DigitalOcean
-// provider (agent.ts injects `provider: { only: ['digitalocean'] }`) — that's
-// the free BYOK path, billed to the owner's DigitalOcean account on a separate
-// quota from HackClub. See DIGITALOCEAN_MODELS for the tool-capable roster.
-export const DIGITALOCEAN_PROVIDER = 'openrouter-do';
-export const DIGITALOCEAN_ONLY = 'digitalocean';
 
 /** One model attempt: an OpenAI-compatible endpoint + model slug. */
 export interface ModelAttempt {
@@ -43,23 +34,18 @@ export interface ModelAttempt {
 /**
  * The primary model for the main query: Kimi K2.7, pinned, served by
  * **HackClub** (`moonshotai/kimi-k2.7-code`, the only K2.7 slug HackClub
- * exposes) — owner's call. K2.7 on HackClub, K2.6 on DigitalOcean (see
- * DIGITALOCEAN_MODELS); the two are distinct fallback entries (`failedKeys` is
- * keyed on provider+model) so a DO-served K2.6 is still tried when this fails.
+ * exposes) — owner's call.
  *
- * COST NOTE, because this reverses an earlier decision: the primary used to be
- * a DigitalOcean BYOK model precisely so the main query billed the owner's DO
- * quota and HackClub's shared daily $3 cap was only ever touched on fallback.
- * With the primary on HackClub, **every turn now spends that daily cap** — which
- * is the intent (DigitalOcean was rate-limiting the roster). The DigitalOcean
- * roster is still the FIRST fallback tier (free, and no longer rate-limit-
- * blocked, since the primary no longer hammers it), and a HackClub budget/outage
- * failure still short-circuits straight to it.
+ * COST NOTE: **every turn spends HackClub's shared daily $3 cap**, so
+ * `BudgetExhaustedError` is reachable in ordinary use. There used to be a
+ * DigitalOcean tier (reached through an OpenRouter key with BYOK billing) that
+ * absorbed the primary and the first fallback rungs for free; that account is
+ * gone (2026-07-27), so HackClub is the only shared tier and the owner's own
+ * Gemini key is the last resort.
  *
  * A single pinned model (this replaced `openrouter/auto`, whose per-request
  * re-routing produced empty completions and long fallback cascades), so 1-hour
- * prompt caching (addCacheControl in agent.ts) sticks across a thread's turns —
- * which is what keeps K2.7 competitive on cost with the K2.6 it replaced.
+ * prompt caching (addCacheControl in agent.ts) sticks across a thread's turns.
  */
 export const PRIMARY_MODEL = 'moonshotai/kimi-k2.7-code';
 
@@ -101,67 +87,25 @@ const geminiAttempts: ModelAttempt[] = env.GEMINI_API_KEY
     }))
   : [];
 
-// DigitalOcean-served, TOOL-CAPABLE models (verified via OpenRouter BYOK with
-// `provider.only=digitalocean`), best→worst. gpt-oss-120b and kimi-k2.5 are
-// deliberately excluded — DigitalOcean's endpoints for them reject tool use,
-// which makes them useless for kyto's tool-driven loop. These are short BYOK
-// aliases (OpenRouter resolves `glm-5.2` → `z-ai/glm-5.2-…`); the `-fast`/
-// `-normal` proxy aliases in the owner's list are NOT valid OpenRouter ids.
-//
-// Kimi K2.6 LEADS this tier: it's the DigitalOcean-served K2.x (K2.7 is NOT on
-// DigitalOcean — `moonshotai/kimi-k2.7` is an invalid OpenRouter id and
-// `kimi-k2.7-code` has no DigitalOcean provider, verified), so K2.7 lives on
-// HackClub (the primary) and K2.6 is the DO counterpart. `glm-5.2` was dropped
-// from this tier for cost (owner's call — expensive on the DO account); it stays
-// on the HackClub leaderboard, which is a separate quota.
-const DIGITALOCEAN_MODELS = [
-  'kimi-k2.6',
-  'deepseek-v4-pro',
-  'qwen3.5-397b-a17b',
-  'minimax-m2.5',
-  'glm-5',
-  'deepseek-v4-flash',
-  'llama-4-maverick',
-  'mimo-v2.5-pro',
-] as const;
-
-export const digitaloceanAttempts: ModelAttempt[] = env.OPENROUTER_API_KEY
-  ? DIGITALOCEAN_MODELS.map((model) => ({
-      apiKey: env.OPENROUTER_API_KEY as string,
-      baseURL: OPENROUTER_BASE_URL,
-      model,
-      provider: DIGITALOCEAN_PROVIDER,
-    }))
-  : [];
-
 /**
- * The attempt the main query starts on: PRIMARY_MODEL, served by HackClub. No
- * key-dependent degradation any more — HackClub is always configured, whereas
- * the DigitalOcean path needs OPENROUTER_API_KEY.
+ * The attempt the main query starts on: PRIMARY_MODEL, served by HackClub.
+ * HackClub is always configured, so this never degrades on a missing key.
  */
 export const PRIMARY_ATTEMPT: ModelAttempt = catalogAttempt(PRIMARY_MODEL);
 
-/** Build a single direct-Gemini attempt, or undefined if no key is set. */
-export function geminiAttempt(model: string): ModelAttempt | undefined {
-  return env.GEMINI_API_KEY
-    ? {
-        apiKey: env.GEMINI_API_KEY,
-        baseURL: GEMINI_BASE_URL,
-        model,
-        provider: GEMINI_PROVIDER,
-      }
-    : undefined;
-}
-
-// The models a subagent runs on, best-value first: the cheap Gemini flash-lite
-// tier when the owner's key is set, then the DigitalOcean BYOK roster. A
-// subagent walks this list on failure OR on an empty report — the cheap tier
-// returns an empty completion often enough that a single pinned model made a
-// "herd" of subagents mostly report nothing back.
+// The models a subagent runs on, best-value first: the owner's own Gemini key
+// (cheap, and a quota separate from HackClub's shared daily cap), then a single
+// HackClub rung as the floor. A subagent walks this list on failure OR on an
+// empty report — the cheap tier returns an empty completion often enough that a
+// single pinned model made a "herd" of subagents mostly report nothing back.
+//
+// The HackClub rung is last on purpose: it spends the same shared budget the
+// main turn needs. It is here so the subagent tool still works with no Gemini
+// key at all (an empty list disables the tool outright).
 export const subagentAttempts: ModelAttempt[] = [
-  geminiAttempt('gemini-3.1-flash-lite'),
-  ...digitaloceanAttempts,
-].filter((attempt): attempt is ModelAttempt => attempt !== undefined);
+  ...geminiAttempts,
+  catalogAttempt(PRIMARY_MODEL),
+];
 
 /** The subagent's primary model; undefined = no subagent model configured. */
 export const subagentAttempt: ModelAttempt | undefined = subagentAttempts[0];
@@ -217,14 +161,9 @@ export const LEADERBOARD_FALLBACK: ModelAttempt[] = [
   catalogAttempt('qwen/qwen3.7-plus'), // 17
   catalogAttempt('google/gemini-3.1-pro-preview'), // 18
   catalogAttempt('moonshotai/kimi-k2.7-code'), // 19
-  // DigitalOcean via OpenRouter BYOK — strong, tool-capable models on a
-  // SEPARATE quota (billed to the owner's DigitalOcean account, not HackClub).
-  // buildFallbackQueue walks these BEFORE the HackClub rungs above (free, and
-  // the primary already lives here), so their position in this list only orders
-  // them against each other. Empty if OPENROUTER_API_KEY is unset.
-  ...digitaloceanAttempts,
-  // Last resort: the owner's OWN Gemini key — walked after every DigitalOcean
-  // and HackClub rung, and reached immediately when both of those tiers are
-  // out (DO rate limit + HackClub budget). Empty if the key is unset.
+  // Last resort: the owner's OWN Gemini key — walked after every HackClub rung,
+  // and reached immediately when HackClub is over budget or down. Empty if the
+  // key is unset. This is the ONLY tier left behind HackClub now that the
+  // DigitalOcean roster is gone, so keep a key configured.
   ...geminiAttempts,
 ];

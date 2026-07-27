@@ -37,7 +37,7 @@ export interface UserRouting {
   /**
    * May kyto spend the SHARED service budget after the user's own attempts fail?
    * Opt-in and OFF by default: a broken personal key/login must not silently bill
-   * the shared HackClub/DigitalOcean budget. Always true when the user has no own
+   * the shared HackClub budget. Always true when the user has no own
    * attempts at all (an ordinary service turn), and irrelevant when ownFirst is
    * false (the shared chain already runs first in that mode).
    */

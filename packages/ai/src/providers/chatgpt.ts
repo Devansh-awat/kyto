@@ -81,10 +81,10 @@ export function buildChatgptAuthUrl(input: {
  * short-lived OAuth token (already refreshed by the caller); `accountId` scopes
  * the request to the right account and is sent as a header the ChatGPT backend
  * expects. Deliberately carries NO `byokProvider`, so the metered-provider token
- * cap in agent.ts (built for HackClub/DigitalOcean) does not apply — the ChatGPT
+ * cap in agent.ts (built for HackClub) does not apply — the ChatGPT
  * backend is not always happy with an injected `max_tokens`. Prompt caching
  * still applies (harmless where unsupported); reasoning-effort injection does
- * not (it is gated to HackClub/DigitalOcean).
+ * not (it is gated to HackClub).
  */
 export function chatgptAttempt(input: {
   accountId?: string | null;

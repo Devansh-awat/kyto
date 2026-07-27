@@ -51,3 +51,6 @@ DigitalOcean's content filter 403ing the same prompt on every DO rung (321
 times in 5 days). One filtered attempt now writes off the DO tier for the turn
 (`digitaloceanContentFiltered`). Watch that storms are actually gone; the
 companion browser failure was a stale E2B template, rebuilt the same day.
+
+GET RID OF BYOK MY FREIND STOPED PROVIDING IT, GIT RID FROM HERE AND ANY OTHER APPS TOO.(not only this dir)
+do harness upgrades 

@@ -120,7 +120,7 @@ export function agentErrorMessage({
   const message = errorMessage(error);
   // Budget exhaustion is the real cause regardless of how far the turn got, so
   // it wins over the stage-based messages. Name the daily cap when the 429 text
-  // carried it. Deliberately does NOT explain OpenRouter's pessimistic limit
+  // carried it. Deliberately does NOT explain the proxy's pessimistic limit
   // accounting — just that the daily budget is spent.
   // The user's own key is the root cause and only they can fix it, so this wins
   // over the stage-based messages too. Deliberately does not quote the

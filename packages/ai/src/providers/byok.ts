@@ -90,7 +90,7 @@ export function isByokProviderId(value: string): value is ByokProviderId {
 
 /**
  * The provider string carried on a BYOK `ModelAttempt`. Namespaced so it can
- * never collide with a service provider (`hackclub`, `openrouter-do`, `gemini`)
+ * never collide with a service provider (`hackclub`, `gemini`)
  * in `failedKeys` or in a log — EXCEPT for Google, which is deliberately mapped
  * onto `GEMINI_PROVIDER` because Gemini's mandatory `thought_signature` replay
  * (see agent.ts) keys off exactly that string. A BYOK Gemini key needs it too.

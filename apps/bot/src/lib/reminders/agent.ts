@@ -56,7 +56,7 @@ export async function runReminderAgent(reminder: Reminder): Promise<string> {
   const attempt = subagentAttempt;
   if (!attempt) {
     throw new Error(
-      'No model is configured for agent reminders (needs GEMINI_API_KEY or OPENROUTER_API_KEY).'
+      'No model is configured for agent reminders (the subagent roster is empty).'
     );
   }
   const run = () => runAgent(reminder, attempt);
