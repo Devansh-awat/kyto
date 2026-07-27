@@ -597,6 +597,21 @@ async function executeTurn(
               '[agent] provider error inside attempt stream'
             );
           },
+          // A replayed gateway failure is invisible otherwise — the turn just
+          // takes longer. Logged so a proxy sliding from flaky to dead is
+          // readable in the journal before it starts costing fallbacks.
+          onGatewayRetry: ({ delayMs, retry, status }) => {
+            logger.warn(
+              {
+                attempt: attemptLog(currentAttempt),
+                delayMs,
+                retry,
+                status,
+                threadId,
+              },
+              '[agent] gateway failure, retrying the same request'
+            );
+          },
           prompt: attemptPrompt(isFallback),
           system: systemPrompt({ hints }),
           tools: built.tools,

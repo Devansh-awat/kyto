@@ -7,6 +7,7 @@ import {
   type ToolCallRepairFunction,
   type ToolSet,
 } from 'ai';
+import { fetchWithGatewayRetry, type GatewayRetryInfo } from './gateway-retry';
 import {
   GEMINI_PROVIDER,
   HACKCLUB_PROVIDER,
@@ -79,6 +80,7 @@ export function streamAttempt({
   images,
   getFreshImages,
   onError,
+  onGatewayRetry,
   prompt,
   system,
   tools,
@@ -103,6 +105,13 @@ export function streamAttempt({
    * failure that was impossible to attribute without a Slack transcript.
    */
   onError?: (error: unknown) => void;
+  /**
+   * Called when a step's request came back a gateway failure and is being sent
+   * again (see gateway-retry). Purely observational — the retry happens either
+   * way — but without it a proxy degrading from "flaky" to "down" looks like
+   * nothing more than turns getting slower.
+   */
+  onGatewayRetry?: (info: GatewayRetryInfo) => void;
   prompt: string;
   system: string;
   tools: ToolSet;
@@ -118,14 +127,22 @@ export function streamAttempt({
     ? createOpenAI({
         apiKey: attempt.apiKey,
         baseURL: attempt.baseURL,
-        fetch: codexFetch({ attempt, holder }) as unknown as typeof fetch,
+        fetch: codexFetch({
+          attempt,
+          holder,
+          onGatewayRetry,
+        }) as unknown as typeof fetch,
         // The ChatGPT account-scoping header; Authorization comes from apiKey.
         ...(attempt.headers ? { headers: attempt.headers } : {}),
       }).responses(attempt.model)
     : createOpenAICompatible({
         apiKey: attempt.apiKey,
         baseURL: attempt.baseURL,
-        fetch: tunedFetch({ attempt, holder }) as unknown as typeof fetch,
+        fetch: tunedFetch({
+          attempt,
+          holder,
+          onGatewayRetry,
+        }) as unknown as typeof fetch,
         // Extra per-attempt headers. Authorization is set from apiKey.
         ...(attempt.headers ? { headers: attempt.headers } : {}),
         name: attempt.provider,
@@ -310,9 +327,11 @@ type FetchLike = (
 function codexFetch({
   attempt,
   holder,
+  onGatewayRetry,
 }: {
   attempt: ModelAttempt;
   holder: ResolvedModelHolder;
+  onGatewayRetry?: (info: GatewayRetryInfo) => void;
 }): FetchLike {
   return async (input, init) => {
     const url = requestUrl(input);
@@ -344,24 +363,30 @@ function codexFetch({
       source as ConstructorParameters<typeof Headers>[0]
     );
     headers.delete('content-length');
-    return fetch(url, {
-      ...init,
-      body,
-      headers,
-      method:
-        init?.method ?? (input instanceof Request ? input.method : 'POST'),
-      signal:
-        init?.signal ?? (input instanceof Request ? input.signal : undefined),
-    });
+    return fetchWithGatewayRetry(
+      url,
+      {
+        ...init,
+        body,
+        headers,
+        method:
+          init?.method ?? (input instanceof Request ? input.method : 'POST'),
+        signal:
+          init?.signal ?? (input instanceof Request ? input.signal : undefined),
+      },
+      { onRetry: onGatewayRetry }
+    );
   };
 }
 
 function tunedFetch({
   attempt,
   holder,
+  onGatewayRetry,
 }: {
   attempt: ModelAttempt;
   holder: ResolvedModelHolder;
+  onGatewayRetry?: (info: GatewayRetryInfo) => void;
 }): FetchLike {
   // Gemini 3.x attaches an encrypted `thought_signature` to every function call
   // and REQUIRES it echoed back on the next turn, or it 400s ("Function call is
@@ -406,10 +431,9 @@ function tunedFetch({
         };
       }
     }
-    const response = await fetch(
-      callInput as Parameters<typeof fetch>[0],
-      callInit
-    );
+    const response = await fetchWithGatewayRetry(callInput, callInit, {
+      onRetry: onGatewayRetry,
+    });
     if (response.body && !holder.model && url.includes('/chat/completions')) {
       // clone() tees: the original streams to the SDK untouched; we scan the
       // copy in the background for the resolved model slug.
