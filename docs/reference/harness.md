@@ -32,11 +32,13 @@
 
 ## Where kyto's harness is behind
 
-- **Precision editing (biggest gap).** `writeFile`/`editFile` are coarse.
-  Claude Code's Edit demands an exact unique match and fails loudly; Codex has
-  the `apply_patch` diff contract; OpenCode feeds LSP diagnostics back into
-  the loop so the model SEES the type error it introduced. Kyto's model only
-  learns a change broke something if it thinks to run something.
+- ~~**Precision editing (biggest gap).**~~ **Closed 2026-07-27.** `editFile`
+  demands an exact, unique match and fails loudly, naming which of the usual
+  causes a miss was; and both `writeFile` and `editFile` now run a post-edit
+  check (per-file parse, plus project `tsc --noEmit` for TS/JS) whose errors
+  come back in the tool result, so the model sees what it broke without
+  thinking to look. See `.claude/TOOLS.md`. Still short of Codex's
+  `apply_patch` diff contract and of a real LSP.
 - **No compaction.** Context = re-read thread (capped) + 3-turn thinking
   cache. Outgrow the cap and the oldest context silently drops. Claude Code
   and Codex summarize/compact; kyto has nothing between "fits" and

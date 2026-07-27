@@ -4,6 +4,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { githubAuthHint } from '@/lib/github/diagnose';
 import { guardGithubCommand } from '@/lib/github/guard';
+import { fileDiagnostics } from '@/lib/sandbox/diagnostics';
 import { disarmFetchedRepos } from '@/lib/sandbox/git-safety';
 import { clamp } from '@/lib/utils/text';
 import type { BackgroundProcessTools } from './background';
@@ -208,7 +209,7 @@ export function writeFileTool({
 }) {
   return tool({
     description:
-      'Write a text file in the sandbox workspace (creates parent directories, overwrites existing content). Your reply — including this tool call — is capped at a few thousand tokens, so a single call CANNOT carry a very large file: content over roughly 400 lines gets cut off mid-argument. Write a big file in successive chunks instead — the first call with append:false, each following call with append:true.',
+      'Write a text file in the sandbox workspace (creates parent directories, overwrites existing content). Your reply — including this tool call — is capped at a few thousand tokens, so a single call CANNOT carry a very large file: content over roughly 400 lines gets cut off mid-argument. Write a big file in successive chunks instead — the first call with append:false, each following call with append:true. A whole-file write is checked afterwards (parse, and tsc for TypeScript) and any errors come back in `diagnostics` — fix them before moving on. Chunked appends are NOT checked, because the file is incomplete until the last one; check those yourself with bash.',
     inputSchema: z.object({
       append: z
         .boolean()
@@ -219,7 +220,7 @@ export function writeFileTool({
       content: z.string(),
       path: z.string(),
     }),
-    execute: async ({ append, content, path }) => {
+    execute: async ({ append, content, path }, { abortSignal }) => {
       const context = getSandboxContext();
       const resolved = resolvePath(context, path);
       const existing = append
@@ -232,14 +233,47 @@ export function writeFileTool({
         content: new TextEncoder().encode(next),
         path: resolved,
       });
+      // An append is a PARTIAL file by construction — checking it would report
+      // "unexpected end of file" on every chunk but the last, which trains the
+      // model to ignore diagnostics. Only whole-file writes are checked.
+      const diagnostics = append
+        ? undefined
+        : await fileDiagnostics({ abortSignal, context, path: resolved });
       return {
         appended: Boolean(append),
         bytes: next.length,
+        ...(diagnostics ? { diagnostics } : {}),
         path: resolved,
         written: true,
       };
     },
   });
+}
+
+/** Collapse every run of whitespace so two texts differing only in indentation
+ * or wrapping compare equal. */
+function squashWhitespace(value: string): string {
+  return value.replaceAll(/\s+/g, ' ').trim();
+}
+
+/**
+ * Why an exact match failed, in terms the model can act on. "not found" alone
+ * sends it into a guess-and-retry loop; nearly every real miss is one of three
+ * things, and naming which one turns a retry into a fix.
+ */
+function noMatchReason(text: string, oldString: string): string {
+  const base = 'oldString was not found in the file, so nothing was changed.';
+  if (text.includes('\r\n') && !oldString.includes('\r\n')) {
+    return `${base} The file uses CRLF line endings and your oldString uses LF — copy the text out of readFile instead of retyping it.`;
+  }
+  if (squashWhitespace(text).includes(squashWhitespace(oldString))) {
+    return `${base} The text IS there but the whitespace differs (indentation, tabs vs spaces, or a line break). Read the file and copy the region exactly as it appears.`;
+  }
+  const [firstLine] = oldString.split('\n');
+  if (firstLine && firstLine.trim().length > 0 && text.includes(firstLine)) {
+    return `${base} Its first line ("${clamp(firstLine.trim(), 80)}") does appear, so the mismatch is somewhere after it — re-read that region and copy it exactly.`;
+  }
+  return `${base} Read the file first and copy the exact region you mean to replace.`;
 }
 
 export function editFileTool({
@@ -249,14 +283,17 @@ export function editFileTool({
 }) {
   return tool({
     description:
-      'Edit a text file in the sandbox by exact string replacement. oldString must match the file contents exactly (including whitespace) and, unless replaceAll is true, exactly once.',
+      'Edit a text file in the sandbox by exact string replacement. oldString must match the file contents exactly (including whitespace) and, unless replaceAll is true, exactly once — a miss or an ambiguous match FAILS rather than guessing. After a successful edit the file is checked (parse, and tsc for TypeScript) and any errors come back in `diagnostics`; fix them before moving on.',
     inputSchema: z.object({
       newString: z.string(),
       oldString: z.string(),
       path: z.string(),
       replaceAll: z.boolean().optional(),
     }),
-    execute: async ({ newString, oldString, path, replaceAll }) => {
+    execute: async (
+      { newString, oldString, path, replaceAll },
+      { abortSignal }
+    ) => {
       const context = getSandboxContext();
       const resolved = resolvePath(context, path);
       const bytes = await context.session.readBinaryFile({ path: resolved });
@@ -266,11 +303,11 @@ export function editFileTool({
       const text = new TextDecoder().decode(bytes);
       const occurrences = text.split(oldString).length - 1;
       if (occurrences === 0) {
-        throw new Error('oldString was not found in the file.');
+        throw new Error(noMatchReason(text, oldString));
       }
       if (occurrences > 1 && !replaceAll) {
         throw new Error(
-          `oldString matches ${occurrences} times; make it unique or set replaceAll.`
+          `oldString matches ${occurrences} times in ${resolved}, so this edit is ambiguous and was NOT applied. Include more surrounding lines to make it unique, or set replaceAll:true if you really mean all ${occurrences}.`
         );
       }
       const updated = replaceAll
@@ -280,7 +317,16 @@ export function editFileTool({
         content: new TextEncoder().encode(updated),
         path: resolved,
       });
-      return { path: resolved, replaced: occurrences };
+      const diagnostics = await fileDiagnostics({
+        abortSignal,
+        context,
+        path: resolved,
+      });
+      return {
+        ...(diagnostics ? { diagnostics } : {}),
+        path: resolved,
+        replaced: occurrences,
+      };
     },
   });
 }
