@@ -27,11 +27,13 @@ one line of reasoning (gpt-5.6 returns short `reasoningSummary` text, so it
 probably is) rather than longer thinking being truncated somewhere. Try again
 and look at the raw response.
 
-**Harness upgrades** (from the 2026-07-26 harness assessment,
-`docs/reference/harness.md`), in leverage order: (1) exact-match edit tool +
-automatic post-edit diagnostics (tsc/lint fed back to the model), (2) thread
-compaction instead of silent truncation past the fetch cap, (3) tests over the
-fallback walk / stream segmentation / carryover.
+**Next harness upgrades** — the original three (edit + diagnostics, thread
+compaction, tests over the crown jewels) are done as of 2026-07-27. What the
+assessment named and nobody has touched: (1) loop control — a plan/approve
+checkpoint and budget-aware pacing, since `MAX_STEPS=1000` leaves the watchdog
+as the only real governor; (2) orchestration depth — more than one subagent
+level, parallelism not opt-in per call; (3) provider-native paths, because the
+openai-compatible abstraction is now carrying four separate workarounds.
 
 ### Watch list
 
@@ -46,11 +48,16 @@ came back `(Empty response: {'content': [], 'model': 'claude-opus-4-5…'})`.
 Kyto already filters the placeholder and falls back; whether HackClub remaps
 slugs upstream is their question. Watch whether it recurs.
 
-**Fallback storms (2026-07-26)**: the ~10-deep "Thinking · fallback" walks were
-DigitalOcean's content filter 403ing the same prompt on every DO rung (321
-times in 5 days). One filtered attempt now writes off the DO tier for the turn
-(`digitaloceanContentFiltered`). Watch that storms are actually gone; the
-companion browser failure was a stale E2B template, rebuilt the same day.
+**The DigitalOcean tier is gone (2026-07-27)** — the account behind it stopped
+being provided, so the whole `openrouter-do` tier, its key, and both of its
+write-offs were deleted from kyto, and the same dead key was removed from
+`stardance-archive` (its `gemini` embedder now calls Google directly; same model,
+same 3072 dims). Fallback is HackClub then the owner's Gemini key, with nothing
+free in between — so watch how often `BudgetExhaustedError` actually shows up
+now that HackClub's daily $3 is the only shared tier.
 
-GET RID OF BYOK MY FREIND STOPED PROVIDING IT, GIT RID FROM HERE AND ANY OTHER APPS TOO.(not only this dir)
-do harness upgrades 
+**Compaction is new and unproven in the wild (2026-07-27).** No thread has
+crossed 100 messages since it shipped. Check the first one that does: the
+`<earlier_in_this_thread>` block should carry real decisions, and the summarizer
+runs on the Gemini subagent key — if that key is ever unset the block degrades to
+a bare count, which is intended but worth seeing once.
