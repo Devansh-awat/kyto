@@ -1,5 +1,6 @@
 import { bot } from '@/bot';
 import { stopAllTurns } from '@/lib/agent';
+import { startSummaryReaper } from '@/lib/agent/compaction';
 import { startThinkingReaper } from '@/lib/agent/thinking';
 import { buildAllowlist } from '@/lib/allowed-users';
 import { slack } from '@/lib/chat';
@@ -32,6 +33,8 @@ try {
   startSandboxReaper();
   // Reap thread reasoning older than the retention window.
   startThinkingReaper();
+  // Same window, same reason, for compacted thread history.
+  startSummaryReaper();
   const botProfile = slack.botUserId
     ? await slack.webClient.users
         .info({ user: slack.botUserId })

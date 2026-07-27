@@ -110,12 +110,13 @@ Both are enforced at execute time against the requesting Slack user, in `gh`,
 Kyto does **not** persist a verbatim transcript. Thread history is read live
 from Slack per turn and is not written to the database.
 
-Two kinds of *derived* text are persisted, and both can paraphrase message
+A few kinds of *derived* text are persisted, and they can paraphrase message
 content:
 
 | Store | What | Retention |
 | --- | --- | --- |
 | `thread_thinking` | Kyto's own reasoning and tool observations from the last few turns of a thread | ~30 days, daily reaper |
+| `thread_summaries` | Kyto's own compacted digest of the part of a thread too old to fit in its prompt | ~30 days, daily reaper |
 | `memories` | Notes Kyto wrote after solving something | Until deleted |
 | `thread_sandboxes` | A sandbox id per thread (no message content) | Sandbox reaped after 7 days idle |
 
@@ -143,23 +144,24 @@ Alongside that, Kyto relies on:
 - **No training**: messages are never used to train a model.
 - **Withdrawal**: **self-serve, from the App Home "Your data" section.** Anyone
   can press "Forget me" and Kyto immediately deletes the memories they saved, its
-  stored reasoning from their DM threads with it, and those threads' sandbox
-  workspaces. "Delete everything" additionally removes their custom instructions,
+  stored reasoning and compacted history from their DM threads with it, and those
+  threads' sandbox workspaces. "Delete everything" additionally removes their custom instructions,
   MCP servers, model keys and any linked ChatGPT account. Neither touches their
   reminders or hosted sites — those are live things other people may rely on, and
   they are already individually deletable on the same screen. Every erase DMs a
   receipt itemising exactly what went, and a failed one says "assume nothing was
-  removed" rather than failing silently. Independently, `thread_thinking` still
-  expires on its own within ~30 days.
+  removed" rather than failing silently. Independently, `thread_thinking` and
+  `thread_summaries` still expire on their own within ~30 days.
 
 **Two things a self-serve erase deliberately does not reach**, both stated in the
 receipt rather than glossed over:
 
-- **Reasoning in shared channels.** `thread_thinking` is keyed by thread, not by
-  person, and a channel thread's reasoning is derived from everyone who was in it.
-  One member asking to be forgotten must not delete the rest of it, so only their
-  own DM channel with Kyto is erased. Channel reasoning ages out on the normal
-  ~30-day window.
+- **Reasoning and compacted history in shared channels.** `thread_thinking` and
+  `thread_summaries` are keyed by thread, not by person, and a channel thread's
+  reasoning and digest are derived from everyone who was in it. One member asking
+  to be forgotten must not delete the rest of it, so only their own DM channel
+  with Kyto is erased. Channel-derived text ages out on the normal ~30-day
+  window.
 - **A memory that was promoted workspace-wide.** Promotion transfers custody to
   the owner — that is what stops "get it promoted, then rewrite the body" — so the
   original author can no longer delete it. Those are listed back **by title** so

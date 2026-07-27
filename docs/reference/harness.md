@@ -39,10 +39,13 @@
   come back in the tool result, so the model sees what it broke without
   thinking to look. See `.claude/TOOLS.md`. Still short of Codex's
   `apply_patch` diff contract and of a real LSP.
-- **No compaction.** Context = re-read thread (capped) + 3-turn thinking
-  cache. Outgrow the cap and the oldest context silently drops. Claude Code
-  and Codex summarize/compact; kyto has nothing between "fits" and
-  "truncated".
+- ~~**No compaction.**~~ **Closed 2026-07-27.** Overflow past the replay cap
+  is folded into a running per-thread summary (`thread_summaries`) injected
+  as `<earlier_in_this_thread>`, incrementally and on the cheap subagent
+  key. The block always states how many messages it stands in for, even when
+  summarizing failed, so the model is never silently handed the tail of a
+  conversation as if it were the whole thing. Still bounded: past
+  `MAX_COMPACTION_MESSAGES` the very oldest messages are not fetched at all.
 - **Blunt loop control.** `MAX_STEPS=1000` means the real governor is the
   watchdog + degenerate guard. No plan/approve checkpoint, no budget-aware
   pacing, no steering a runaway-but-productive loop short of interrupting.

@@ -3,6 +3,7 @@ import {
   mrkdwnToMarkdown,
   type ThreadHandle as Thread,
 } from '@/harness';
+import { compactOverflow } from '@/lib/agent/compaction';
 import { isFocusAllowed } from '@/lib/agent/focus';
 import { annotateMentions } from '@/lib/agent/mentions';
 import { recallThinking, renderThinking } from '@/lib/agent/thinking';
@@ -10,8 +11,19 @@ import { slack } from '@/lib/chat';
 import { isHiddenFromBot, rawSlackText } from '@/lib/utils/message';
 
 // We never persist a session, so the whole Slack thread is the agent's only
-// memory. Cap how many prior messages we replay to bound prompt size.
+// memory. Cap how many prior messages we replay VERBATIM to bound prompt size.
 const MAX_THREAD_MESSAGES = 100;
+// How far back we look beyond that cap. Everything between this and the verbatim
+// window is compacted into a summary (see lib/agent/compaction) instead of being
+// dropped on the floor, which is what used to happen: the model was handed the
+// tail of a conversation with no indication it had a beginning, and cheerfully
+// contradicted decisions made earlier in the same thread.
+//
+// Bounded, not unlimited: `fetchMessages` pages until this many are in hand, so
+// a bigger number is real Slack API work on every turn. 4x the replay window
+// covers any thread anyone has actually held with kyto; past it the very oldest
+// messages are still lost, and the block's count says how many were kept.
+const MAX_COMPACTION_MESSAGES = 400;
 // The bot's Slack username is a leftover gorkie-era handle; label its own
 // authored messages as kyto so it doesn't think "gorkie" spoke (mirrors the
 // same special-case in annotateMentions).
@@ -52,13 +64,14 @@ export async function buildPrompt(
     : '';
 
   let history = '';
+  let compacted = '';
   if (thread) {
     // Focus mode: drop messages from non-focused users so kyto genuinely never
     // sees what other people said in a focused thread (not just declines to
     // reply). Its own messages and the owner's are always kept.
     const focusState = await thread.state.catch(() => null);
     const fetched = await slack
-      .fetchMessages(thread.id, { limit: MAX_THREAD_MESSAGES })
+      .fetchMessages(thread.id, { limit: MAX_COMPACTION_MESSAGES })
       .catch(() => undefined);
     const prior = (fetched?.messages ?? []).filter(
       (entry): entry is Message =>
@@ -68,8 +81,27 @@ export async function buildPrompt(
           isMe: entry.author.isMe === true,
         })
     );
-    if (prior.length > 0) {
-      const rendered = await Promise.all(prior.map(renderMessage));
+    // Split AFTER filtering, so a focused thread's window is 100 messages kyto
+    // may actually see rather than 100 slots partly spent on hidden ones.
+    const replayed = prior.slice(-MAX_THREAD_MESSAGES);
+    const overflow = prior.slice(
+      0,
+      Math.max(prior.length - replayed.length, 0)
+    );
+    if (overflow.length > 0) {
+      const rendered = await Promise.all(
+        overflow.map(async (entry) => ({
+          id: entry.id,
+          rendered: await renderMessage(entry),
+        }))
+      );
+      compacted = await compactOverflow({
+        overflow: rendered,
+        threadId: thread.id,
+      });
+    }
+    if (replayed.length > 0) {
+      const rendered = await Promise.all(replayed.map(renderMessage));
       history = [
         'Conversation so far in this Slack thread (oldest first):',
         ...rendered,
@@ -80,7 +112,10 @@ export async function buildPrompt(
   }
 
   const conversation = history ? `${history}\n${current}` : current;
-  const body = thinking ? `${thinking}\n\n${conversation}` : conversation;
+  const withEarlier = compacted
+    ? `${compacted}\n\n${conversation}`
+    : conversation;
+  const body = thinking ? `${thinking}\n\n${withEarlier}` : withEarlier;
 
   return customizationPrompt
     ? [

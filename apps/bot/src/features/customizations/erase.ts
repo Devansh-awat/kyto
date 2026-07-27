@@ -3,6 +3,7 @@ import {
   clearUserCustomization,
   deleteChatgptAccount,
   deletePrivateMemoriesByAuthor,
+  deleteSummariesForChannel,
   deleteThinkingForChannel,
   deleteUserModelCredential,
   getUserCustomization,
@@ -49,6 +50,8 @@ export interface EraseResult {
     memories: number;
     modelKeys: number;
     sandboxes: number;
+    /** DM threads whose compacted history (lib/agent/compaction) was deleted. */
+    summarizedThreads: number;
     thinkingThreads: number;
   };
 }
@@ -125,6 +128,7 @@ export async function eraseUserData({
     });
 
   let thinkingThreads = 0;
+  let summarizedThreads = 0;
   let sandboxes = 0;
   if (dmChannelId) {
     thinkingThreads = await deleteThinkingForChannel(dmChannelId).catch(
@@ -132,6 +136,18 @@ export async function eraseUserData({
         logger.error(
           { err: errorMessage(error), userId },
           '[erase] failed to delete thread thinking'
+        );
+        return 0;
+      }
+    );
+    // A compacted thread summary is the same class of derived text as the
+    // reasoning cache — kyto's own paraphrase of what was said — so it goes on
+    // the same terms and by the same channel-scoped rule.
+    summarizedThreads = await deleteSummariesForChannel(dmChannelId).catch(
+      (error: unknown) => {
+        logger.error(
+          { err: errorMessage(error), userId },
+          '[erase] failed to delete thread summaries'
         );
         return 0;
       }
@@ -149,7 +165,14 @@ export async function eraseUserData({
       };
 
   logger.info(
-    { ...settings, memoryCount, sandboxes, thinkingThreads, userId },
+    {
+      ...settings,
+      memoryCount,
+      sandboxes,
+      summarizedThreads,
+      thinkingThreads,
+      userId,
+    },
     '[erase] user erased their own data'
   );
 
@@ -159,6 +182,7 @@ export async function eraseUserData({
       ...settings,
       memories: memoryCount,
       sandboxes,
+      summarizedThreads,
       thinkingThreads,
     },
   };
@@ -237,6 +261,7 @@ export function summarize(result: EraseResult): string {
   const lines = [
     `• ${removed.memories} saved ${removed.memories === 1 ? 'memory' : 'memories'} deleted`,
     `• reasoning cache cleared for ${removed.thinkingThreads} of your DM ${removed.thinkingThreads === 1 ? 'thread' : 'threads'}`,
+    `• compacted history deleted for ${removed.summarizedThreads} of your DM ${removed.summarizedThreads === 1 ? 'thread' : 'threads'}`,
     `• ${removed.sandboxes} sandbox ${removed.sandboxes === 1 ? 'workspace' : 'workspaces'} destroyed`,
   ];
   if (removed.customInstructions) {
@@ -246,7 +271,7 @@ export function summarize(result: EraseResult): string {
   }
   // Never let this read as a clean sweep when it isn't.
   lines.push(
-    "• kyto's reasoning in SHARED channels is keyed by thread, not by person, and is derived from everyone who was in it — it isn't deleted here, and ages out on its own within about 30 days"
+    "• kyto's reasoning and compacted history in SHARED channels are keyed by thread, not by person, and derived from everyone who was in it — they aren't deleted here, and age out on their own within about 30 days"
   );
   if (result.promotedMemories.length > 0) {
     lines.push(
