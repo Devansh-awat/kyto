@@ -32,9 +32,17 @@ export interface ModelAttempt {
 }
 
 /**
- * The primary model for the main query: Kimi K2.7, pinned, served by
- * **HackClub** (`moonshotai/kimi-k2.7-code`, the only K2.7 slug HackClub
- * exposes) — owner's call.
+ * The primary model for the main query: Qwen3.7 Plus, pinned, served by
+ * **HackClub** — owner's call (2026-07-28). It replaced
+ * `moonshotai/kimi-k2.7-code`, and it is cheaper on both sides
+ * ($0.32/M in vs $0.73, $1.28/M out vs $3.50) with ~4x the context window
+ * (1M vs 262k), verified `tools`-capable on ai.hackclub.com/proxy/v1/models.
+ *
+ * The context window is not incidental. HackClub aborts an upstream request
+ * that has not returned response HEADERS within 5s and turns it into a 504
+ * (`UPSTREAM_HEADER_TIMEOUT_MS`, hackclub/ai `src/routes/proxy/v1/general.ts`,
+ * added 2026-05-24) — so the slower a model is to produce its first byte, the
+ * more of kyto's turns die at the proxy. See MODELS.md.
  *
  * COST NOTE: **every turn spends HackClub's shared daily $3 cap**, so
  * `BudgetExhaustedError` is reachable in ordinary use. There used to be a
@@ -47,7 +55,7 @@ export interface ModelAttempt {
  * re-routing produced empty completions and long fallback cascades), so 1-hour
  * prompt caching (addCacheControl in agent.ts) sticks across a thread's turns.
  */
-export const PRIMARY_MODEL = 'moonshotai/kimi-k2.7-code';
+export const PRIMARY_MODEL = 'qwen/qwen3.7-plus';
 
 // Cap output tokens on HackClub requests. OpenRouter enforces the daily spend
 // limit PESSIMISTICALLY: with no `max_tokens` it assumes the model could emit
@@ -114,8 +122,8 @@ export const subagentAttempt: ModelAttempt | undefined = subagentAttempts[0];
 // (owner's call, 2026-07-27). It used to be the owner's arena top 19 in rank
 // order — opus-4.8, gpt-5.6-sol, sonnet-5 and the rest. Those are all GONE.
 //
-// Why: the primary is pinned kimi-k2.7-code at $0.73/M in, and the whole tier
-// shares ONE daily $3 cap. Falling back to opus-4.8 ($10/M in — 14x) meant a
+// Why: the primary is a pinned cheap model, and the whole tier shares ONE daily
+// $3 cap. Falling back to opus-4.8 ($10/M in — 30x the primary) meant a
 // transient proxy failure, which says nothing about the model, could spend a
 // large part of the day's budget on a single turn. The failures that actually
 // happen here are gateway 504s and dropped connections, not "kimi is too weak
@@ -129,8 +137,9 @@ export const subagentAttempt: ModelAttempt | undefined = subagentAttempts[0];
 // into a token loop and streamed "@devansh" several hundred times into a public
 // thread; it is not coming back, and neither is anything else that can't hold a
 // multi-step tool conversation. Reachable on the proxy is NOT the bar, and
-// "cheapest on the proxy" is not either. Both rungs below are K2-class coding
-// models verified `tools`-capable on ai.hackclub.com/proxy/v1/models.
+// "cheapest on the proxy" is not either. Both rungs below hold a multi-step
+// tool conversation and are verified `tools`-capable on
+// ai.hackclub.com/proxy/v1/models.
 //
 // If a rung is ever added back, price it first: anything materially above the
 // primary's per-token cost belongs behind the Gemini key, not in front of it.
@@ -140,13 +149,17 @@ export const subagentAttempt: ModelAttempt | undefined = subagentAttempts[0];
 // provider keys rate-limited or in cooldown"). Re-add rungs here only after
 // verifying a real completion succeeds.
 export const LEADERBOARD_FALLBACK: ModelAttempt[] = [
-  // Kimi K2.6: the primary's own predecessor, and CHEAPER than it
-  // ($0.646/M in, $2.72/M out, 262k ctx). The closest thing to "the same model
-  // again" when a request to K2.7 was lost rather than refused.
-  catalogAttempt('moonshotai/kimi-k2.6'),
-  // MiniMax M3 ($0.30/M in, $1.20/M out, 1M ctx) — the cheapest rung that still
-  // holds a tool conversation, and the widest context of the three, so it is
-  // also the one most likely to survive a long thread the others would not.
+  // MiniMax M3 ($0.30/M in, $1.20/M out, 1M ctx) — marginally cheaper than the
+  // primary and the same context class, so a fallback costs nothing extra and
+  // cannot fail on a long thread the primary was holding. It also measured
+  // clean where the old primary did not: 200/200 successes against
+  // kimi-k2.7-code's 99/100, same probe, same minute (2026-07-28).
   catalogAttempt('minimax/minimax-m3'),
+  // Kimi K2.6 ($0.646/M in, $2.72/M out, 262k ctx). It is ~2x the primary's
+  // per-token cost — the only rung here that is — so it sits BEHIND M3 rather
+  // than being dropped: it is a different model family from both the primary
+  // and M3, which is the point of a third rung, and 2x a cheap number is still
+  // cheap. If the daily cap starts running out, this is the first rung to cut.
+  catalogAttempt('moonshotai/kimi-k2.6'),
   ...geminiAttempts,
 ];
