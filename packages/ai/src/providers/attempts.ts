@@ -80,9 +80,21 @@ export function catalogAttempt(model: string): ModelAttempt {
 // empty response with ZERO requests metered on the Google AI Studio dashboard
 // (rejected before generation, likely tier-gated) — the HackClub-proxied slug
 // is a different request path and is allowed above/below instead.
+//
+// `gemini-3.5-flash-lite` leads (owner's call, 2026-07-29, replacing
+// `gemini-3.1-flash-lite`): newer, and verified against this key on 2026-07-29
+// — 200 with a real `tool_calls` response, first byte in well under the 5s that
+// matters upstream. There is NO `gemini-3.6-flash-lite`; the 2026-07-21 release
+// was 3.6 Flash + 3.5 Flash-Lite, so `gemini-3.6-flash` is the 3.6 rung and it
+// verified the same way.
+//
+// AI Studio's free tier meters flash-lite at ~15 requests/minute. That is per
+// MINUTE, not per turn, and an agentic turn makes one request per step — so a
+// long tool loop on this rung can pace into a 429. It sits below the HackClub
+// tier for that reason, not above it.
 const GEMINI_MODELS = [
-  'gemini-3.1-flash-lite',
-  'gemini-3-flash-preview',
+  'gemini-3.5-flash-lite',
+  'gemini-3.6-flash',
   'gemini-2.5-flash',
 ] as const;
 
