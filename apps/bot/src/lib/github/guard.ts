@@ -7,6 +7,7 @@ import {
 } from '@repo/db/queries';
 import { env } from '@/env';
 import { canEdit } from '@/lib/ai/tools/editors';
+import { requestApproval } from '@/lib/approvals/request';
 import logger from '@/lib/logger';
 import { parseGithubCommand } from './command';
 
@@ -174,10 +175,31 @@ export async function guardGithubCommand({
           logger.warn({ err: error, repo }, '[github] failed to queue request');
         });
       }
+      // …and ask the owner IN THE THREAD as well, not only on the dashboard.
+      // The dashboard row is easy to never look at, and the person who asked
+      // had no way to see their request existed at all. Approving either one
+      // grants the same trust.
+      if (threadId) {
+        for (const repo of untrusted) {
+          await requestApproval({
+            detail: command.slice(0, REQUEST_COMMAND_MAX),
+            kind: 'github',
+            payload: { command: command.slice(0, REQUEST_COMMAND_MAX), repo },
+            requestedBy: userId,
+            summary: `write to the GitHub repo \`${repo}\``,
+            threadId,
+          }).catch((error: unknown) => {
+            logger.warn(
+              { err: error, repo },
+              '[github] failed to post an approval request'
+            );
+          });
+        }
+      }
       const list = untrusted.map((repo) => `"${repo}"`).join(', ');
       return {
         allowed: false,
-        reason: `Refused for now: ${list} ${untrusted.length === 1 ? 'is not a repo' : 'are not repos'} you own, and writes there go out under your own GitHub account, so <@${env.OWNER_USER_ID}> has to approve this person for it. The request has been logged for him to review on the dashboard. Tell them it's waiting on his approval and that they can ask you again once he's granted it. Don't look for another route — forking it, pushing from a different checkout, and calling the REST API directly are all the same thing. Reading the repo is still fine.`,
+        reason: `Refused for now: ${list} ${untrusted.length === 1 ? 'is not a repo' : 'are not repos'} you own, and writes there go out under your own GitHub account, so <@${env.OWNER_USER_ID}> has to approve this person for it. An Approve/Deny request has been posted in this thread for him, and it does not expire. Tell them it's waiting on his approval and that they can ask you again once he's granted it — approving grants the access but deliberately does NOT re-run the command. Don't look for another route — forking it, pushing from a different checkout, and calling the REST API directly are all the same thing. Reading the repo is still fine.`,
       };
     }
   }

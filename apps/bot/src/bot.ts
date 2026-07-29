@@ -8,6 +8,8 @@ import logger from '@/lib/logger';
 import { acceptOptIn, offerOptIn } from '@/lib/onboarding';
 import { toLogError } from '@/lib/utils/error';
 import { isHiddenFromBot } from '@/lib/utils/message';
+import '@/features/approvals';
+import '@/features/ask-question';
 import '@/features/assistant';
 import '@/features/confirm-post';
 import '@/features/customizations';

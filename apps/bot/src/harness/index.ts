@@ -1,6 +1,7 @@
 export { KytoBot } from './bot';
 export { SlackHarness } from './harness';
 export {
+  hasBroadcastToken,
   healMarkdown,
   mrkdwnToMarkdown,
   neutralizeBroadcast,

@@ -71,6 +71,20 @@ const BROADCAST_TOKEN = /<!(channel|here|everyone)(?:\|[^<>]*)?>/g;
 const SUBTEAM_TOKEN = /<!subteam\^[^<>|]+(?:\|([^<>]*))?>/g;
 
 /**
+ * Did the author actually ask to ping a whole channel or user group?
+ *
+ * Used to tell "this message would have notified everyone and we defanged it"
+ * apart from an ordinary message, so the first case can be offered to the owner
+ * as a real decision instead of being silently downgraded while the model
+ * believes it pinged the room.
+ */
+export function hasBroadcastToken(text: string): boolean {
+  BROADCAST_TOKEN.lastIndex = 0;
+  SUBTEAM_TOKEN.lastIndex = 0;
+  return BROADCAST_TOKEN.test(text) || SUBTEAM_TOKEN.test(text);
+}
+
+/**
  * Strip broadcast pings from text so it can no longer notify a whole channel or
  * user group. Used to gate `@channel`/`@here`/`@everyone` to the owner only.
  */

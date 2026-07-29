@@ -3,11 +3,13 @@ import { z } from 'zod';
 import { env } from '@/env';
 import {
   type KytoBot as Chat,
+  hasBroadcastToken,
   neutralizeBroadcast,
   neutralizeBroadcastDeep,
   type PostContent,
   restoreAnnotatedMentions,
 } from '@/harness';
+import { requestApproval } from '@/lib/approvals/request';
 import { slack } from '@/lib/chat';
 import { requestPostConfirmation } from '@/lib/confirm-post/request';
 import { type ResolvedIdentity, resolveIdentity } from '@/lib/identity';
@@ -120,7 +122,7 @@ export function postMessageTool({
   const currentChannel = rawChannelOf(currentThreadId);
   const permission = isOwner
     ? 'Post to another target. Type must be thread, channel, or user.'
-    : "You may post into the current channel/thread (type thread or channel, the same channel you were mentioned in) freely. A DM to a user (type user) is allowed ONLY with the owner's approval — it is held until the owner clicks Confirm, which can take a while or never come. Posting into a different channel is not allowed.";
+    : "You may post into the current channel/thread (type thread or channel, the same channel you were mentioned in) freely. A DM to a user (type user) is held until the owner clicks Confirm, which can take a while or never come. Posting into a DIFFERENT channel is queued for the owner's approval — it is posted in this thread with Approve/Deny buttons, never expires, and nothing is sent unless they approve. Say it is waiting; do not claim it was sent, and do not look for another way to send it.";
   return tool({
     description: `Post a message. ${permission} Body is markdown; pass \`blocks\` to send Block Kit instead (the markdown body is then the notification fallback text). Broadcast pings (<!channel>/<!here>/<!everyone>) NEVER survive a post into a different channel or a DM — they are stripped to plain text there even for the owner, who can only broadcast in the channel kyto was invoked in.${
       isOwner
@@ -168,10 +170,17 @@ export function postMessageTool({
       { abortSignal }
     ) => {
       const target = type === 'user' ? undefined : rawChannelOf(id);
-      if (!(isOwner || type === 'user') && target !== currentChannel) {
+      const crossChannelForNonOwner =
+        !(isOwner || type === 'user') && target !== currentChannel;
+      // A non-owner asking to post into a DIFFERENT channel used to be refused
+      // flat, with no way to appeal it and nothing said to anybody. It is now
+      // queued for the owner instead — publicly, in this thread, so the person
+      // who asked can see the request exists. Still impossible without an
+      // owner: there would be nobody to decide.
+      if (crossChannelForNonOwner && !env.OWNER_USER_ID) {
         return {
           error:
-            'Not allowed: you can only post into the channel you were mentioned in, not a different channel.',
+            'Not allowed: you can only post into the channel you were mentioned in, and no owner is configured to approve otherwise.',
         };
       }
       // A non-owner's DM request is not refused — it is held for the OWNER to
@@ -197,14 +206,66 @@ export function postMessageTool({
       const body = allowBroadcast ? restored : neutralizeBroadcast(restored);
 
       let blocks: unknown[] | undefined;
+      // The blocks exactly as the model wrote them, kept for a broadcast the
+      // owner might approve — that approval is a decision to let the pings
+      // through, so the neutralized copy would be the wrong thing to send.
+      let rawParsedBlocks: unknown[] | undefined;
       if (rawBlocks) {
         const parsed = parseBlocks(rawBlocks);
         if (parsed.error) {
           return { error: parsed.error };
         }
+        rawParsedBlocks = parsed.blocks;
         blocks = allowBroadcast
           ? parsed.blocks
           : neutralizeBroadcastDeep(parsed.blocks);
+      }
+
+      // A non-owner's post into another channel: queue it and move on. The
+      // stored payload carries the ALREADY-NEUTRALIZED body, so approving it
+      // sends what the owner read on the card — not a broadcast the model
+      // slipped in.
+      if (crossChannelForNonOwner) {
+        const { message: queued } = await requestApproval({
+          detail: message,
+          kind: 'post',
+          payload: {
+            ...(blocks ? { blocks } : {}),
+            body,
+            targetId: id,
+            targetType: type,
+          },
+          requestedBy: authorUserId,
+          summary: `post into <#${target}>`,
+          threadId: currentThreadId,
+        });
+        return { pending: true, summary: queued };
+      }
+
+      // A broadcast that the gate above stripped, asked for by someone who is
+      // allowed to post here. Rather than silently sending a defanged message
+      // and letting the model believe it pinged everyone, offer the real thing
+      // to the owner. Only if the model actually wrote a broadcast token.
+      if (
+        !allowBroadcast &&
+        env.OWNER_USER_ID &&
+        target === currentChannel &&
+        hasBroadcastToken(message)
+      ) {
+        const { message: queued } = await requestApproval({
+          detail: message,
+          kind: 'broadcast',
+          payload: {
+            ...(rawParsedBlocks ? { blocks: rawParsedBlocks } : {}),
+            body: restored,
+            targetId: id,
+            targetType: type,
+          },
+          requestedBy: authorUserId,
+          summary: 'post here and ping the whole channel',
+          threadId: currentThreadId,
+        });
+        return { pending: true, summary: queued };
       }
 
       // Owner-only: wear a custom name/icon or mirror a person/bot. A non-owner
