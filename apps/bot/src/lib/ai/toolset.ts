@@ -442,6 +442,33 @@ export async function buildTools({
   const active = new Set(Object.keys(core));
   active.add('loadTools');
 
+  // Deferral is a trade: a deferred tool's schema stays out of the cached
+  // prefix, but reaching it costs an extra round trip (loadTools, then the call
+  // itself) — and the round trip is billed at full price while the schema would
+  // have been a cached read. Which way that trade lands is an empirical
+  // question nobody has data for, so every turn now records what was loaded,
+  // what was actually CALLED, and what was loaded and then never used. Read it
+  // back with `journalctl -u kyto.service | grep '\[tools\] turn summary'`:
+  // a deferred tool that is always loaded and always used should be promoted
+  // into `core`; a core tool that never appears in `coreUsed` should be
+  // deferred.
+  const usage = new Map<string, number>();
+  const loadedNames = new Set<string>();
+  let loadToolsCalls = 0;
+  const trackUse = <T extends Tool>(name: string, entry: T): T => {
+    const original = entry.execute;
+    if (typeof original !== 'function') {
+      return entry;
+    }
+    return {
+      ...entry,
+      execute: (input: never, options: never) => {
+        usage.set(name, (usage.get(name) ?? 0) + 1);
+        return original(input, options);
+      },
+    } as T;
+  };
+
   const loadTools = tool({
     description: `Load additional tools by name before using them (their schemas stay out of the prompt until needed). Available:\n${catalog || '- (none)'}`,
     inputSchema: z.object({
@@ -451,12 +478,14 @@ export async function buildTools({
         .describe('Deferred tool names to load.'),
     }),
     execute: ({ tools: names }) => {
+      loadToolsCalls += 1;
       const loaded: string[] = [];
       const unknown: string[] = [];
       for (const name of names) {
         if (deferred[name]) {
           active.add(name);
           loaded.push(name);
+          loadedNames.add(name);
         } else {
           unknown.push(name);
         }
@@ -472,16 +501,40 @@ export async function buildTools({
   });
 
   const tools: ToolSet = {
-    ...core,
+    ...Object.fromEntries(
+      Object.entries(core).map(([name, entry]) => [name, trackUse(name, entry)])
+    ),
     loadTools,
     ...Object.fromEntries(
-      Object.entries(deferred).map(([name, entry]) => [name, entry.tool])
+      Object.entries(deferred).map(([name, entry]) => [
+        name,
+        trackUse(name, entry.tool),
+      ])
     ),
   };
 
+  const coreNames = new Set(Object.keys(core));
+
   return {
     activeTools: () => [...active],
-    close: mcp.close,
+    close: async () => {
+      const called = [...usage.keys()];
+      logger.info(
+        {
+          coreUsed: called.filter((name) => coreNames.has(name)),
+          loadToolsCalls,
+          loaded: [...loadedNames],
+          // Loaded and then never called: pure waste — a round trip and a schema
+          // paid for nothing. A name that shows up here repeatedly means the
+          // catalog description is misleading the model.
+          loadedUnused: [...loadedNames].filter((name) => !usage.has(name)),
+          loadedUsed: [...loadedNames].filter((name) => usage.has(name)),
+          userId: authorUserId,
+        },
+        '[tools] turn summary'
+      );
+      await mcp.close();
+    },
     drainImages: () => pendingImages.splice(0),
     tools,
   };
