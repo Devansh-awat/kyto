@@ -55,7 +55,11 @@ export function createReply({
       // never throws (resolveIdentity swallows load errors).
       const { iconEmoji, iconUrl } = await resolveIdentity('normal');
       await thread
-        .post({ iconEmoji, iconUrl, markdown: chunk })
+        // `post` denies broadcasts by default; the owner's streamed reply is
+        // one of the two paths allowed to opt in (this thread IS the channel
+        // kyto was invoked in). `take` has already neutralized the chunk when
+        // allowBroadcast is false, so this is belt and braces either way.
+        .post({ allowBroadcast, iconEmoji, iconUrl, markdown: chunk })
         .then(() => {
           lastPostAt = Date.now();
         })

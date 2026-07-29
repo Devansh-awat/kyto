@@ -27,11 +27,19 @@ interface PostTarget {
 export async function executePostMessage(
   bot: Chat,
   {
+    allowBroadcast = false,
     target,
     body,
     blocks,
     identity: override,
   }: {
+    /**
+     * Whether this post may carry a real @channel/@here ping. Only the caller
+     * knows — the gate is "owner AND the channel kyto was invoked in" — and
+     * `ThreadHandle.post` strips broadcasts unless told otherwise, so an
+     * omitted flag fails CLOSED.
+     */
+    allowBroadcast?: boolean;
     target: PostTarget;
     body: string;
     blocks?: unknown[];
@@ -43,6 +51,7 @@ export async function executePostMessage(
   const identity = override ?? (await resolveIdentity('normal'));
   const content: PostContent = {
     ...(blocks ? { blocks, fallbackText: body } : { markdown: body }),
+    allowBroadcast,
     iconEmoji: identity.iconEmoji,
     iconUrl: identity.iconUrl,
     username: identity.username,
@@ -240,6 +249,10 @@ export function postMessageTool({
       }
 
       return await executePostMessage(bot, {
+        // Same-channel owner post: the only postMessage that may really ping.
+        // A cross-channel/DM post never reaches here — it goes through the
+        // confirm gate above, where allowBroadcast is left off.
+        allowBroadcast,
         blocks,
         body,
         identity,

@@ -59,6 +59,15 @@ export interface PostFile {
 
 /** Everything `thread.post` accepts. A plain string means markdown. */
 export interface PostContent {
+  /**
+   * Let `<!channel>`/`<!here>`/`<!everyone>`/`<!subteam^…>` through as REAL
+   * pings. Off by default: `ThreadHandle.post` strips them from every post
+   * unless the caller says otherwise, so a path nobody thought of as "the model
+   * talking" (a reminder body, an upload title) cannot notify a whole channel.
+   * Set it only where the broadcast gate has already been checked — owner, and
+   * in the channel kyto was invoked in.
+   */
+  allowBroadcast?: boolean;
   blocks?: unknown[];
   fallbackText?: string;
   files?: PostFile[];

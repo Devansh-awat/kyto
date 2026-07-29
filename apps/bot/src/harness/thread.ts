@@ -6,6 +6,7 @@ import {
 } from '@repo/db/queries';
 import type { Logger } from '@repo/logging/logger';
 import type { SlackHarness } from './harness';
+import { neutralizeBroadcast, neutralizeBroadcastDeep } from './markdown';
 import type {
   Author,
   ChannelMetadata,
@@ -30,6 +31,27 @@ const CONTROL_MENTION =
 
 function hasControlMention(text: string | undefined): boolean {
   return text !== undefined && CONTROL_MENTION.test(text);
+}
+
+/**
+ * Neutralize broadcast tokens in every part of a post that Slack reads as text.
+ *
+ * Field-by-field rather than a blanket deep walk: `files[].data` is binary, and
+ * `neutralizeBroadcastDeep` would happily turn a Uint8Array into a plain object
+ * on its way through. Blocks DO get the deep walk — a token smuggled into a
+ * block's text notifies exactly like message text.
+ */
+function stripBroadcasts(post: PostContent): PostContent {
+  return {
+    ...post,
+    ...(post.blocks
+      ? { blocks: neutralizeBroadcastDeep(post.blocks) as unknown[] }
+      : {}),
+    ...(post.fallbackText
+      ? { fallbackText: neutralizeBroadcast(post.fallbackText) }
+      : {}),
+    ...(post.markdown ? { markdown: neutralizeBroadcast(post.markdown) } : {}),
+  };
 }
 
 // Short-lived cache so chatty channels don't hit Postgres for every message
@@ -74,8 +96,21 @@ export class ThreadHandle {
 
   async post(content: PostContent | string): Promise<SentMessage> {
     const { channel, threadTs } = this.location;
-    const post: PostContent =
+    const raw: PostContent =
       typeof content === 'string' ? { markdown: content } : content;
+    // Broadcast pings are DENIED BY DEFAULT, here, at the one place every post
+    // goes through. Callers that are genuinely allowed to notify a channel (the
+    // owner's streamed reply, an owner's same-channel postMessage) opt in.
+    //
+    // It used to be the other way round — each caller remembered to call
+    // neutralizeBroadcast — and the ones that forgot were exactly the paths
+    // nobody thinks of as "the model talking": a REMINDER (its text, and an
+    // agent reminder's entire generated body, are model-authored and reminders
+    // can be created by anyone), and the `title` on a mermaid diagram or an
+    // uploadFile. `post` renders a control mention as a section+mrkdwn block
+    // specifically so it resolves into a real ping, so those paths notified
+    // the whole channel with nothing in front of them.
+    const post = raw.allowBroadcast ? raw : stripBroadcasts(raw);
 
     if (post.files?.length) {
       return await this.postFiles({ channel, post, threadTs });
@@ -144,11 +179,22 @@ export class ThreadHandle {
     };
   }
 
+  /**
+   * Show a message only `user` can see.
+   *
+   * Returns where it actually landed. That matters for anything that later
+   * wants to REPLACE what it posted: an ephemeral is edited through the
+   * interaction's `response_url` with `replace_original`, but the DM fallback
+   * is an ordinary message, where `replace_original` does nothing and the
+   * update lands as a SECOND message — leaving the original sitting there with
+   * its buttons still live. Callers that update themselves need to know which
+   * one they got.
+   */
   async postEphemeral(
     user: Author | string,
     text: string,
     options: { fallbackToDM?: boolean; blocks?: unknown[] } = {}
-  ): Promise<void> {
+  ): Promise<{ channel?: string; delivery: 'ephemeral' | 'dm'; ts?: string }> {
     const userId = typeof user === 'string' ? user : user.userId;
     const { channel, threadTs } = this.location;
     const blocks = options.blocks;
@@ -160,6 +206,7 @@ export class ThreadHandle {
         ...(threadTs ? { thread_ts: threadTs } : {}),
         user: userId,
       } as Parameters<typeof this.adapter.webClient.chat.postEphemeral>[0]);
+      return { delivery: 'ephemeral' };
     } catch (error) {
       if (!options.fallbackToDM) {
         throw error;
@@ -171,11 +218,12 @@ export class ThreadHandle {
       if (!dmChannel) {
         throw error;
       }
-      await this.adapter.webClient.chat.postMessage({
+      const sent = await this.adapter.webClient.chat.postMessage({
         channel: dmChannel,
         ...(blocks ? { blocks } : {}),
         text,
       });
+      return { channel: dmChannel, delivery: 'dm', ts: sent.ts };
     }
   }
 
