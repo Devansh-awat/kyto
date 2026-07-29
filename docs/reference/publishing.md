@@ -133,16 +133,16 @@ upstream `NOTICE`, so §4(d) does not apply. `coding-best-practices` and
    `thermo-nuclear-code-quality-review` was dropped.**
 4. ~~Vendor each remaining upstream `LICENSE`~~ **Done (2026-07-29)** — see
    "Third-party material" above. No licence work is outstanding.
-5. **BLOCKER — scrub the netic API key from history.** The 2026-07-29 rescan
-   (24 commits since this audit) found no kyto credential anywhere, but it did
-   find a **third party's** API key for `netic.hackclub.app`, pasted into a
-   Slack thread by a friend and copied into `TODO.md`. It was removed from the
-   tip in `b171084`, so a scan of the working tree misses it — but it is intact
-   in ~15 reachable commits from `f4d39d5` onward, and publishing makes those
-   public. It answered 401 on every completion when probed on 2026-07-29, but
-   "dead when I checked" is not a reason to publish someone else's credential.
-   Scrub it (`git filter-repo --replace-text`) and force-push before the flip,
-   and tell whoever owns it. Do not paste a live key into a tracked file again.
+5. ~~Scrub the netic API key from history~~ **Not required — the key's owner
+   consented (2026-07-29).** The rescan (24 commits since this audit) found no
+   kyto credential anywhere, but it did find a **third party's** API key for
+   `netic.hackclub.app` in `TODO.md`, intact in ~15 reachable commits from
+   `f4d39d5` even though `b171084` removed it from the tip. Netic confirmed the
+   key is already revoked and is fine being public, so no history rewrite is
+   needed. **This was luck, not process**: a live third-party secret was one
+   `b171084`-that-never-happened away from being published. Do not paste a
+   credential — yours or anyone's — into a tracked file again; the working-tree
+   scan would not have caught it.
 6. Update `packages/ai/src/prompts/slack.ts` in the same commit as the
    visibility flip — it currently tells users kyto is private with no public
    repo to share, which becomes a lie the moment the repo is public.
