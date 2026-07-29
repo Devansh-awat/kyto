@@ -12,6 +12,7 @@ import type { KytoBot, Message, ThreadHandle } from '@/harness';
 import type { ChunkRelay } from '@/lib/agent/relay';
 import { buildMcpTools } from '@/lib/ai/mcp';
 import logger from '@/lib/logger';
+import { askQuestionTool } from './tools/ask-question';
 import { backgroundProcessTools } from './tools/background';
 import { browserTool } from './tools/browser';
 import {
@@ -310,6 +311,11 @@ export async function buildTools({
     poll: {
       summary: 'post an interactive poll',
       tool: pollTool({ thread }),
+    },
+    askQuestion: {
+      summary:
+        'ask named people a multiple-choice question in this thread and wait for their answer',
+      tool: askQuestionTool({ extendAttemptDeadline, thread }),
     },
     mermaid: {
       summary: 'render a mermaid diagram as an image',
