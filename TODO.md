@@ -16,10 +16,15 @@ software contains components from Vercel's AI SDK, licensed under Apache License
 
 Remaining before the flip: **vendor each vendored skill's upstream `LICENSE`
 into its directory** (only `slack-agent` has one; a `skills-lock.json` entry is
-attribution, not the notice MIT and Apache-2.0 actually require), rotate
-`GH_TOKEN`, re-run the secrets scan, and update
+attribution, not the notice MIT and Apache-2.0 actually require), re-run the
+secrets scan over what has landed since 2026-07-26, and update
 `packages/ai/src/prompts/slack.ts` — it still tells users kyto is private with no
 public repo, which becomes false the moment the repo is public.
+
+Rotating `GH_TOKEN` is NOT one of these, though it was listed as one. Publishing
+cannot leak it: no credential is in the tree or in history, and Slack messages
+are not in the repo (no verbatim transcript is persisted). Rotate it on its own
+schedule if it was ever pasted into a thread or a log.
 
 **"Thinking..." shows as plain text before the plan block appears**, and when
 the block does appear it already has thinking in it. Investigated: no such

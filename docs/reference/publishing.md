@@ -114,8 +114,14 @@ recipients the licence text; a repo name and a content hash in
 
 ## Before flipping the repo public
 
-1. Rotate `GH_TOKEN` if it has ever been pasted into a chat, a transcript, or an
-   issue. Publishing does not leak it, but publication is a good forcing function.
+1. ~~Rotate `GH_TOKEN`~~ **Not a publication task — moved out of this list.** It
+   was filed here as a "forcing function", which reads as though publishing
+   might expose it. It cannot: no credential is in the working tree or in
+   history, and Slack messages are not in the repo at all (no verbatim
+   transcript is persisted; `thread_thinking`, `thread_summaries` and `memories`
+   live in local Postgres). Rotate it if it was ever pasted into a thread, a
+   journal line or an issue — that exposure exists today and is unaffected by
+   the repo's visibility either way.
 2. ~~Decide the gorkie-provenance question~~ **Measured (above): keep the MIT
    carve-out — ~16% of runtime source is still gorkie-derived.**
 3. ~~Document `.agents/skills/`~~ ~~confirm-or-drop the two flagged skills~~
