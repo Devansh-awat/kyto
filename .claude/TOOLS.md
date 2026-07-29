@@ -107,6 +107,37 @@ The owner exemption is a fact kyto must KNOW but not advertise: the tool result 
 
 `deploySite`/`removeSite`/`listSites` publish static sites at `https://<host>/<name>/` (default host `kyto.devansh.hackclub.app`). Code in `lib/sites/`. The host **never executes site code** — building/testing happen in the E2B sandbox; only static output is copied out (`resolveWithin` path containment). Both tools take an optional `page` sub-path (`docs/intro`), served at `/<name>/<page>/`, validated by `isValidPagePath`; a page deploy atomically swaps only that sub-path. The server starts from `apps/bot/src/index.ts` (`startSitesServer`) and serves **plain HTTP** by default (it sits behind Nest's TLS-terminating proxy; serving HTTPS there → 502); `SITES_TLS=true` for a self-signed cert standalone. Config: `SITES_ENABLED`, `SITES_PORT` (8080), `SITES_TLS`, `SITES_ROOT` (`/var/kytosites`), `SITES_PUBLIC_HOST`.
 
+## Asking people questions (`askQuestion`)
+
+Deferred. Posts a PUBLIC message in the current thread with option buttons and
+WAITS (up to 10 min) for an answer, then returns it.
+
+- **Public, not ephemeral** (owner's call): an ephemeral vanishes on reload,
+  can't be answered later, and hides from the room that a decision is pending.
+- **Gated to the addressed people.** Only the `askUserIds` may answer; anyone
+  else clicking is told so ephemerally rather than ignored (a dead-looking
+  button reads as a bug). This is what makes it a question and not a poll.
+- Single or `multiSelect` (toggle, then Done). Optional `allowOther` adds an
+  "Other…" button opening a modal; the modal re-reads state from the message it
+  came from rather than trusting its payload.
+- It waits for **everyone** asked, not the fastest, and extends the attempt
+  watchdog (`extendAttemptDeadline`) so a deliberate pause is not a stall. On
+  timeout the model is told nobody answered, not to re-ask this turn, and not
+  to invent an answer.
+- State lives in the message's Slack metadata (like `poll`), so a restart leaves
+  a working message. The waiting turn is in-memory — a turn doesn't survive a
+  restart either.
+
+## Approvals (`lib/approvals/`)
+
+Not a tool the model calls — a gate the tools go through. `approval_requests` is
+persisted, posted publicly in the thread, and never expires. Reached by: a
+non-owner's cross-CHANNEL `postMessage`, a broadcast ping that would otherwise
+be silently stripped, and a third-party GitHub write. The turn does not block;
+the model is told the action is queued and carries on. Security rules are in
+CLAUDE.md — read them before adding a new `ApprovalKind`, and never add one for
+`sendAsUser`/`editAsUser`.
+
 ## Ownership & edit permission (reminders + sites)
 
 Things kyto creates on someone's behalf and can later change carry an access list, so a bystander in a public thread can't rewrite someone's reminder or take down their site. The rule, shared by both: **the creator, anyone the creator named as an editor, and the bot owner.** The core prompt tells the model the rule, and that a refusal is not to be worked around.
