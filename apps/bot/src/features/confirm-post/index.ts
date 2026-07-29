@@ -64,13 +64,18 @@ bot.onAction(CONFIRM_SEND_ACTION, async (event) => {
     );
     await respondToInteraction(
       event.raw,
-      result.success ? `:white_check_mark: ${detail}` : `:x: ${detail}`
+      result.success ? `:white_check_mark: ${detail}` : `:x: ${detail}`,
+      event.value
     );
   } catch (error) {
     const message = errorMessage(error);
     settle({ decision: 'confirmed', detail: message, ok: false });
     logger.warn(toLogError(error), '[confirm-post] send failed');
-    await respondToInteraction(event.raw, `:x: Failed to send: ${message}`);
+    await respondToInteraction(
+      event.raw,
+      `:x: Failed to send: ${message}`,
+      event.value
+    );
   }
 });
 
@@ -83,6 +88,7 @@ bot.onAction(CONFIRM_CANCEL_ACTION, async (event) => {
   claimed?.settle({ decision: 'denied' });
   await respondToInteraction(
     event.raw,
-    ":heavy_multiplication_x: Cancelled — I won't send it."
+    ":heavy_multiplication_x: Cancelled — I won't send it.",
+    event.value
   );
 });

@@ -1,5 +1,6 @@
 import type { ThreadHandle } from '@/harness';
 import { mrkdwn, plainText } from '@/harness/views';
+import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
 import { toLogError } from '@/lib/utils/error';
 import {
@@ -114,11 +115,22 @@ export async function requestPostConfirmation({
   thread: ThreadHandle;
 }): Promise<ConfirmResult> {
   const { id, wait } = stashPendingPost(post);
-  await thread.postEphemeral(
+  const delivered = await thread.postEphemeral(
     ownerUserId,
     `Confirm before I send: ${post.summary}`,
     { blocks: confirmBlocks(id, post), fallbackToDM: true }
   );
+  // Remember a DM-delivered prompt so the button handler can EDIT it instead of
+  // replying beside it. `replace_original` only works on a message Slack owns
+  // through the interaction; on an ordinary DM it silently does nothing, so the
+  // outcome arrived as a second message and the original stayed put with its
+  // Confirm button still clickable.
+  if (delivered.delivery === 'dm' && delivered.channel && delivered.ts) {
+    rememberPromptMessage(id, {
+      channel: delivered.channel,
+      ts: delivered.ts,
+    });
+  }
 
   // Tell the attempt watchdog this deliberate pause isn't a stall (same as the
   // `wait` tool), so a slow decision doesn't get the turn killed mid-wait.
@@ -135,11 +147,13 @@ export async function requestPostConfirmation({
     };
     const timer = setTimeout(() => {
       discardPendingPost(id);
+      promptMessages.delete(id);
       finish(null);
     }, CONFIRM_WAIT_MS);
     const onAbort = () => {
       clearTimeout(timer);
       discardPendingPost(id);
+      promptMessages.delete(id);
       finish(null);
     };
     abortSignal?.addEventListener('abort', onAbort, { once: true });
@@ -155,11 +169,51 @@ export async function requestPostConfirmation({
 
 const interactionSchema = { response_url: '' };
 
-/** Replace the ephemeral confirm message with a result, via its response_url. */
+// Confirm prompts that were delivered as a real DM (the ephemeral fallback),
+// keyed by pending-post id, so the outcome can edit that message rather than
+// pile up beside it. Cleared when claimed; a leftover row is bounded by the
+// pending post's own lifetime.
+const promptMessages = new Map<string, { channel: string; ts: string }>();
+
+function rememberPromptMessage(
+  id: string,
+  location: { channel: string; ts: string }
+): void {
+  promptMessages.set(id, location);
+}
+
+/**
+ * Show the outcome in place of the confirm prompt.
+ *
+ * Two delivery shapes, two mechanisms: a true ephemeral is replaced through the
+ * interaction's `response_url`, and a DM-fallback message is edited with
+ * `chat.update`. Using `replace_original` on the latter is a no-op — which is
+ * how a confirmed post ended up with the result posted BESIDE a prompt whose
+ * buttons were still live.
+ */
 export async function respondToInteraction(
   raw: unknown,
-  text: string
+  text: string,
+  pendingId?: string
 ): Promise<void> {
+  const dmPrompt = pendingId ? promptMessages.get(pendingId) : undefined;
+  if (dmPrompt) {
+    promptMessages.delete(pendingId as string);
+    try {
+      await slack.webClient.chat.update({
+        blocks: [{ text: mrkdwn(text), type: 'section' }],
+        channel: dmPrompt.channel,
+        text,
+        ts: dmPrompt.ts,
+      });
+      return;
+    } catch (error) {
+      logger.warn(
+        toLogError(error),
+        '[confirm-post] failed to update the DM prompt; falling back to response_url'
+      );
+    }
+  }
   const responseUrl = (raw as Partial<typeof interactionSchema> | undefined)
     ?.response_url;
   if (!responseUrl) {
