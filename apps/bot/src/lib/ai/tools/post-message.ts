@@ -6,6 +6,7 @@ import {
   neutralizeBroadcast,
   neutralizeBroadcastDeep,
   type PostContent,
+  restoreAnnotatedMentions,
 } from '@/harness';
 import { slack } from '@/lib/chat';
 import { requestPostConfirmation } from '@/lib/confirm-post/request';
@@ -179,7 +180,12 @@ export function postMessageTool({
       // being allowed to @channel a room kyto isn't part of the conversation in
       // — the owner can send that ping from the channel itself if they mean it.
       const allowBroadcast = isOwner && target === currentChannel;
-      const body = allowBroadcast ? message : neutralizeBroadcast(message);
+      // Un-annotate mentions the same way the streamed reply does, so a person
+      // named in a posted message actually gets pinged (see
+      // restoreAnnotatedMentions). Runs BEFORE the broadcast strip, which can
+      // then still neutralize anything the model wrote.
+      const restored = restoreAnnotatedMentions(message);
+      const body = allowBroadcast ? restored : neutralizeBroadcast(restored);
 
       let blocks: unknown[] | undefined;
       if (rawBlocks) {

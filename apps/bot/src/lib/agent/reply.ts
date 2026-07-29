@@ -1,6 +1,7 @@
 import {
   healMarkdown,
   neutralizeBroadcast,
+  restoreAnnotatedMentions,
   type ThreadHandle as Thread,
 } from '@/harness';
 import { resolveIdentity } from '@/lib/identity';
@@ -116,7 +117,13 @@ export function createReply({
       rest = rest ? `\`\`\`${fence}\n${rest}` : '';
     }
     buffer = rest;
-    return heal(allowBroadcast ? chunk : neutralizeBroadcast(chunk));
+    // restoreAnnotatedMentions first: the model writes mentions in the
+    // annotated form it was SHOWN (`@name (Uxxx)`), which Slack renders as inert
+    // text. Turning it back into `<@Uxxx>` here is what makes a mention ping.
+    // Broadcast neutralization still runs after, so this cannot smuggle one in
+    // (it only ever produces `<@ID>`, never a `<!channel>` control token).
+    const restored = restoreAnnotatedMentions(chunk);
+    return heal(allowBroadcast ? restored : neutralizeBroadcast(restored));
   }
 
   return {

@@ -82,6 +82,45 @@ export function neutralizeBroadcast(text: string): string {
     );
 }
 
+// Inbound, the agent is shown every mention ANNOTATED — `<@U085KKYFA6Q>` is
+// rewritten to `@devansh (U085KKYFA6Q)` so the model can read who is who
+// (see lib/agent/mentions). Models then reasonably copy that exact form back
+// when they want to mention someone, and Slack renders it as literal text: the
+// person is named but never pinged. Observed twice in one thread — "@devansh
+// (U085KKYFA6Q):" and "@gork2 (U09NCF07DP1)" — both reported as "failed to
+// mention me properly".
+//
+// So the annotation is REVERSED on the way out. Bounded to one line and to a
+// real Slack id shape (U/W/B + 4+ upper-alnum) so ordinary prose that happens to
+// end in a parenthesis can't be swallowed; the display name is discarded because
+// `<@ID>` renders the current one.
+const ANNOTATED_MENTION = /@[^\n]{1,80}?\s*\(([UWB][A-Z0-9]{4,})\)/g;
+
+/**
+ * Turn the annotated mentions the model was SHOWN back into real Slack mention
+ * tokens, so a mention the model wrote actually pings. Fenced code is left
+ * alone: an id inside a code block is being quoted, not addressed.
+ */
+export function restoreAnnotatedMentions(text: string): string {
+  const lines = text.split('\n');
+  let inFence = false;
+  return lines
+    .map((line) => {
+      if (FENCE.test(line)) {
+        inFence = !inFence;
+        return line;
+      }
+      if (inFence) {
+        return line;
+      }
+      return line.replace(
+        ANNOTATED_MENTION,
+        (_whole, id: string) => `<@${id}>`
+      );
+    })
+    .join('\n');
+}
+
 /**
  * The same strip, applied to every string inside a Block Kit payload. A block's
  * `text` notifies exactly like message text does, so a broadcast token smuggled

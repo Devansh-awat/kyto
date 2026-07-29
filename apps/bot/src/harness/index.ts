@@ -6,6 +6,7 @@ export {
   neutralizeBroadcast,
   neutralizeBroadcastDeep,
   openFenceLanguage,
+  restoreAnnotatedMentions,
 } from './markdown';
 export { ThreadHandle } from './thread';
 export type {

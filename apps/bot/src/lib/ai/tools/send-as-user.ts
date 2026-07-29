@@ -2,7 +2,11 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { env } from '@/env';
 import type { ThreadHandle as Thread } from '@/harness';
-import { neutralizeBroadcast, neutralizeBroadcastDeep } from '@/harness';
+import {
+  neutralizeBroadcast,
+  neutralizeBroadcastDeep,
+  restoreAnnotatedMentions,
+} from '@/harness';
 import { requestPostConfirmation } from '@/lib/confirm-post/request';
 import logger from '@/lib/logger';
 import { errorMessage } from '@/lib/utils/error';
@@ -256,7 +260,11 @@ export function sendAsUserTool({
         );
         // Same broadcast rule as postMessage: a send that leaves the current
         // channel never carries an @channel/@here ping, owner included.
-        const body = crossChannel ? neutralizeBroadcast(text) : text;
+        // Un-annotate mentions so a person named in the message is really
+        // pinged (see restoreAnnotatedMentions); the broadcast strip still runs
+        // after it on a cross-channel send.
+        const restored = restoreAnnotatedMentions(text);
+        const body = crossChannel ? neutralizeBroadcast(restored) : restored;
         const safeBlocks =
           crossChannel && blocks ? neutralizeBroadcastDeep(blocks) : blocks;
         const targetChannel = userId
