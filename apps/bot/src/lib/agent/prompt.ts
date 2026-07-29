@@ -105,25 +105,53 @@ export async function buildPrompt(
       history = [
         'Conversation so far in this Slack thread (oldest first):',
         ...rendered,
-        '',
-        'The latest message, which you must respond to:',
       ].join('\n');
     }
   }
 
-  const conversation = history ? `${history}\n${current}` : current;
-  const withEarlier = compacted
-    ? `${compacted}\n\n${conversation}`
-    : conversation;
-  const body = thinking ? `${thinking}\n\n${withEarlier}` : withEarlier;
+  // The label that introduces the new message. Kept with `current` rather than
+  // appended to `history`, because the thinking block now sits BETWEEN them —
+  // and a "the latest message is next" line followed by a page of last turn's
+  // reasoning reads as if the reasoning were the message.
+  const latest = history
+    ? `The latest message, which you must respond to:\n${current}`
+    : current;
 
-  return customizationPrompt
-    ? [
-        '<user_instructions>',
-        customizationPrompt,
-        '</user_instructions>',
-        '',
-        body,
-      ].join('\n')
-    : body;
+  // ORDER IS LOAD-BEARING, for prompt caching (see addCacheControl in
+  // packages/ai/src/agent.ts — the breakpoint lands on the last user message,
+  // which is this whole string).
+  //
+  // Cheapest → most volatile, so the cacheable prefix is as long as possible:
+  //
+  //   user_instructions   changes only when the user edits them
+  //   compacted           changes once per COMPACT_BATCH of overflow
+  //   history             append-only until the thread passes MAX_THREAD_MESSAGES
+  //   thinking            CHANGES EVERY TURN (last turn's reasoning is appended)
+  //   current             the new message
+  //
+  // The thinking block used to come FIRST. It is up to THINKING_BUDGET_CHARS of
+  // text that is different on every single turn, so putting it at the front
+  // invalidated the cached prefix at byte ~0 and the entire replayed thread was
+  // re-billed at full price every turn — on a $3/day shared cap. Moving it below
+  // the history costs nothing (the model reads the whole prompt either way) and
+  // makes system + instructions + history a stable prefix that actually caches.
+  //
+  // Do NOT move a volatile block back above `history`.
+  const body = [
+    customizationPrompt
+      ? [
+          '<user_instructions>',
+          customizationPrompt,
+          '</user_instructions>',
+        ].join('\n')
+      : '',
+    compacted,
+    history,
+    thinking,
+    latest,
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+
+  return body;
 }

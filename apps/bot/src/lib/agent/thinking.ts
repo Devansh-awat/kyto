@@ -4,6 +4,12 @@ import {
   pruneThreadThinking,
   saveThreadThinking,
 } from '@repo/db/queries';
+import {
+  THINKING_BUDGET_CHARS as DEFAULT_THINKING_BUDGET_CHARS,
+  MAX_TURN_CHARS,
+  renderThinking as renderThinkingBlock,
+  tail,
+} from '@/lib/agent/thinking-render';
 import logger from '@/lib/logger';
 
 // Kyto's memory of a conversation is the Slack thread itself (buildPrompt
@@ -22,19 +28,14 @@ import logger from '@/lib/logger';
 // RETENTION_MS so this stays a recent train of thought, not a permanent
 // transcript.
 
-// The model carries its FULL reasoning across turns, the way it carries reasoning
-// across tool calls WITHIN a turn: the end of a turn is just another boundary, so
-// the next turn is shown every earlier turn's thinking, oldest dropped only when
-// the whole block would exceed the budget below (a stand-in for "max input
-// tokens"). ~60k chars ≈ 15k tokens — generous, but capped so a long thread's
-// thinking can't crowd out the replayed Slack history or blow the context.
-const THINKING_BUDGET_CHARS = numericEnv('THINKING_BUDGET_CHARS', 60_000);
-// Per-turn safety cap on ONE turn's whole record (reasoning + observations), so a
-// single pathological turn can't eat the entire budget. Normal turns are far
-// under this and keep their full thinking; only a runaway is trimmed, from the
-// FRONT (the tail is where the turn worked out what was going on). Well below the
-// budget, so at least a couple of recent turns always fit.
-const MAX_TURN_CHARS = 20_000;
+// The model carries its reasoning across turns, the way it carries reasoning
+// across tool calls WITHIN a turn: the end of a turn is just another boundary.
+// How much of each past turn survives — and the whole block's ceiling — is
+// decided by thinking-render.ts, which is pure and has tests.
+const THINKING_BUDGET_CHARS = numericEnv(
+  'THINKING_BUDGET_CHARS',
+  DEFAULT_THINKING_BUDGET_CHARS
+);
 // Hard cap on how many turns are kept on disk, so a very long-lived thread's row
 // stays bounded regardless of the char budget. Rendering trims further to fit.
 const MAX_STORED_TURNS = 40;
@@ -131,55 +132,10 @@ export function startThinkingReaper(): void {
 }
 
 /**
- * The block buildPrompt injects. Framed hard, because the failure mode of
- * showing a model its own past reasoning is that it narrates or re-litigates it
- * instead of moving on.
+ * The block buildPrompt injects. The decay rules and the framing live in
+ * thinking-render.ts (pure, tested); this only supplies the env-overridable
+ * budget.
  */
 export function renderThinking(turns: string[]): string {
-  const selected = selectWithinBudget(turns, THINKING_BUDGET_CHARS);
-  if (selected.length === 0) {
-    return '';
-  }
-  const rendered = selected.map((turn, index) => {
-    const ago = selected.length - index;
-    const label = ago === 1 ? 'your previous turn' : `${ago} turns ago`;
-    return `[${label}]\n${turn}`;
-  });
-  return [
-    '<your_previous_thinking>',
-    'Your own private reasoning AND what your tools returned in earlier turns in THIS thread, oldest first. Nobody in Slack can see it — Slack only kept what you said out loud, so this is the only way you still have your train of thought and the facts your tools uncovered (a value you computed, a captcha you decoded, an OCR result) but never typed into a message.',
-    'Use it to pick up where you left off: what you already tried, ruled out, were part-way through, or found. Do NOT narrate it, quote it, or apologise for it — it is a memory, not something the user said.',
-    '',
-    ...rendered,
-    '</your_previous_thinking>',
-  ].join('\n');
-}
-
-function tail(text: string, max: number): string {
-  if (text.length <= max) {
-    return text;
-  }
-  return `…${text.slice(-max)}`;
-}
-
-// Given all stored turns (oldest→newest), keep the NEWEST that fit the char
-// budget and return them oldest-first. At least the most recent turn is always
-// kept, even if it alone exceeds the budget (it never does — per-turn is capped
-// well below it).
-function selectWithinBudget(turns: string[], budget: number): string[] {
-  const kept: string[] = [];
-  let used = 0;
-  for (let index = turns.length - 1; index >= 0; index -= 1) {
-    const turn = turns[index];
-    if (turn === undefined) {
-      continue;
-    }
-    const cost = turn.length + 2;
-    if (used + cost > budget && kept.length > 0) {
-      break;
-    }
-    kept.push(turn);
-    used += cost;
-  }
-  return kept.reverse();
+  return renderThinkingBlock(turns, THINKING_BUDGET_CHARS);
 }
