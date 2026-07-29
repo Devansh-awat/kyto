@@ -65,6 +65,59 @@ export function condemnsHackclub(status: number | undefined): boolean {
   return status !== undefined && !isGatewayStatus(status);
 }
 
+// Errors that mean the PROMPT WE BUILT is malformed, not that a model or a
+// provider failed. The AI SDK raises these before a single byte goes on the
+// wire, so they are identical for every rung in the queue.
+//
+// Matched by the SDK's own global marker symbol first (`Symbol.for` is shared
+// across package copies, and two @ai-sdk/provider versions are installed, so
+// `instanceof` is not reliable here), falling back to the error name.
+const PROMPT_ERROR_NAMES = [
+  'AI_InvalidPromptError',
+  'AI_InvalidMessageRoleError',
+  'AI_MessageConversionError',
+] as const;
+
+const PROMPT_ERROR_MARKERS = PROMPT_ERROR_NAMES.map((name) =>
+  Symbol.for(`vercel.ai.error.${name}`)
+);
+
+/**
+ * Is this failure OURS — a prompt kyto assembled that the SDK refuses to send?
+ *
+ * Falling back on one of these is pure waste: observed 2026-07-28, an
+ * `Invalid prompt: The messages do not match the ModelMessage[] schema` burned
+ * kimi-k2.7-code → kimi-k2.6 → minimax-m3 in 28 SECONDS, failing identically at
+ * each rung because none of them ever saw a request. A malformed prompt is
+ * malformed for every model, so the walk cannot rescue it and only spends three
+ * rungs of the shared daily cap proving that. The turn should fail once, loudly,
+ * with a message that names it as a bug in kyto rather than a model outage.
+ *
+ * Deliberately NARROW: only errors raised during prompt construction qualify. A
+ * provider that rejects a prompt at ITS end (a 400 over the wire) is a normal
+ * per-model failure and must keep falling back — another model may well accept
+ * it.
+ */
+export function isPromptConstructionError(error: unknown): boolean {
+  for (let cause = error, depth = 0; cause && depth < 5; depth += 1) {
+    if (typeof cause !== 'object') {
+      break;
+    }
+    const record = cause as Record<PropertyKey, unknown>;
+    if (PROMPT_ERROR_MARKERS.some((marker) => record[marker] === true)) {
+      return true;
+    }
+    if (
+      typeof record.name === 'string' &&
+      (PROMPT_ERROR_NAMES as readonly string[]).includes(record.name)
+    ) {
+      return true;
+    }
+    cause = record.cause;
+  }
+  return false;
+}
+
 export function selectNextAttempt({
   failedKeys,
   queue,

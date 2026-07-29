@@ -58,6 +58,48 @@ function imagePart(image: ImageInput) {
   };
 }
 
+/**
+ * Keep only images the SDK's `ModelMessage[]` schema will actually accept.
+ *
+ * `filePartSchema` requires `mediaType` to be a string and `data` to be one of
+ * string / Uint8Array / ArrayBuffer / Buffer. A part that misses either is
+ * rejected during prompt construction — BEFORE any request goes out — as
+ * `Invalid prompt: The messages do not match the ModelMessage[] schema`, which
+ * takes the WHOLE TURN down. Because nothing was ever sent, the failure is
+ * identical on every rung: one bad attachment used to burn three models in 28
+ * seconds (observed 2026-07-28) and still answer nobody.
+ *
+ * One unusable image must degrade to "that image was skipped", never to a dead
+ * turn — so the invalid parts are dropped here and reported to the caller
+ * instead of being handed to the SDK. The prompt text still describes the
+ * attachment and its sandbox path, so the model can read the file with a tool.
+ */
+function usableImages(
+  images: ImageInput[],
+  onDropped?: (dropped: ImageInput[]) => void
+): ImageInput[] {
+  const kept: ImageInput[] = [];
+  const dropped: ImageInput[] = [];
+  for (const image of images) {
+    const data: unknown = image?.bytes;
+    const dataOk =
+      typeof data === 'string' ||
+      data instanceof Uint8Array ||
+      data instanceof ArrayBuffer;
+    const mediaTypeOk =
+      typeof image?.mediaType === 'string' && image.mediaType.length > 0;
+    if (dataOk && mediaTypeOk) {
+      kept.push(image);
+    } else {
+      dropped.push(image);
+    }
+  }
+  if (dropped.length > 0) {
+    onDropped?.(dropped);
+  }
+  return kept;
+}
+
 const MODEL_FIELD = /"model"\s*:\s*"([^"]+)"/;
 // The resolved slug appears in the first SSE chunk; don't scan forever.
 const MAX_SCAN_BYTES = 16_384;
@@ -79,6 +121,7 @@ export function streamAttempt({
   holder,
   images,
   getFreshImages,
+  onDroppedImages,
   onError,
   onGatewayRetry,
   prompt,
@@ -98,6 +141,12 @@ export function streamAttempt({
    * user message so the model actually sees them on the next step.
    */
   getFreshImages?: () => ImageInput[];
+  /**
+   * Called with any images dropped for being unrepresentable as an SDK file
+   * part (see usableImages). Silence here would turn "kyto ignored my
+   * screenshot" into an unexplainable one-off.
+   */
+  onDroppedImages?: (dropped: ImageInput[]) => void;
   /**
    * Called for every error the SDK swallows into the stream. Without it the SDK
    * default is `console.error`, which dumped an unstructured AI SDK stack blob
@@ -150,7 +199,7 @@ export function streamAttempt({
   // Attachment images ride in the user turn (put BEFORE the text so the cache
   // breakpoint still lands on the trailing text block). With none, keep the
   // plain string prompt so the default path is byte-identical to before.
-  const initialImages = images ?? [];
+  const initialImages = usableImages(images ?? [], onDroppedImages);
   const promptInput =
     initialImages.length > 0
       ? {
@@ -215,7 +264,13 @@ export function streamAttempt({
             if (activeTools) {
               result.activeTools = activeTools() as never[] | undefined;
             }
-            const fresh = getFreshImages?.() ?? [];
+            // Same filter as the initial images: prepareStep's messages are not
+            // re-validated by the SDK, so a bad part here dies later and less
+            // legibly, in prompt CONVERSION rather than validation.
+            const fresh = usableImages(
+              getFreshImages?.() ?? [],
+              onDroppedImages
+            );
             if (fresh.length > 0) {
               const label = fresh
                 .map((image) => image.path ?? 'image')

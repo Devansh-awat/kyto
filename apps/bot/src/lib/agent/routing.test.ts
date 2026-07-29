@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import type { ModelAttempt } from '@repo/ai';
-import { attemptKey, buildFallbackQueue, selectNextAttempt } from './routing';
+import {
+  attemptKey,
+  buildFallbackQueue,
+  isPromptConstructionError,
+  selectNextAttempt,
+} from './routing';
 
 function hackclub(model: string): ModelAttempt {
   return {
@@ -125,5 +130,50 @@ describe('attemptKey', () => {
     // The same slug served by two providers is two distinct rungs; keying on
     // model alone would write both off together.
     expect(attemptKey(hackclub('kimi'))).not.toBe(attemptKey(gemini('kimi')));
+  });
+});
+
+describe('isPromptConstructionError', () => {
+  // The failure this exists for: a prompt kyto assembled that the SDK refused
+  // to send. Every rung fails identically and instantly, so walking the queue
+  // spends the shared daily cap and answers nobody.
+  test('recognises the SDK marker symbol', () => {
+    const error = new Error('Invalid prompt: The messages do not match…');
+    (error as unknown as Record<PropertyKey, unknown>)[
+      Symbol.for('vercel.ai.error.AI_InvalidPromptError')
+    ] = true;
+    expect(isPromptConstructionError(error)).toBe(true);
+  });
+
+  test('recognises the error name when the marker is missing', () => {
+    // Two @ai-sdk/provider copies are installed, so `instanceof` and even the
+    // marker can miss; the name is the fallback.
+    const error = new Error('Invalid prompt');
+    error.name = 'AI_InvalidPromptError';
+    expect(isPromptConstructionError(error)).toBe(true);
+  });
+
+  test('digs through the cause chain', () => {
+    const inner = new Error('conversion failed');
+    inner.name = 'AI_MessageConversionError';
+    expect(
+      isPromptConstructionError(new Error('wrapped', { cause: inner }))
+    ).toBe(true);
+  });
+
+  test('a provider rejecting the prompt over the wire still falls back', () => {
+    // A 400 from ONE provider says nothing about the next one — this must stay
+    // a normal per-model failure.
+    const error = new Error('400 invalid_request_error: bad prompt');
+    error.name = 'AI_APICallError';
+    expect(isPromptConstructionError(error)).toBe(false);
+  });
+
+  test('ignores non-errors and self-referential causes', () => {
+    expect(isPromptConstructionError(undefined)).toBe(false);
+    expect(isPromptConstructionError('AI_InvalidPromptError')).toBe(false);
+    const loop = new Error('loop') as Error & { cause?: unknown };
+    loop.cause = loop;
+    expect(isPromptConstructionError(loop)).toBe(false);
   });
 });

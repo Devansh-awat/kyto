@@ -30,6 +30,7 @@ import {
   attemptKey,
   buildFallbackQueue as buildQueue,
   condemnsHackclub,
+  isPromptConstructionError,
   selectNextAttempt,
 } from '@/lib/agent/routing';
 import { createSegmenter, isVisibleText } from '@/lib/agent/segmentation';
@@ -594,6 +595,23 @@ async function executeTurn(
           // raw to stderr by its default console.error handler, unattributed.
           getFreshImages: built.drainImages,
           images: attachmentImages,
+          // An image the SDK's schema would reject is dropped rather than
+          // allowed to invalidate the whole prompt. Log it: silently ignoring
+          // someone's screenshot is confusing enough to be worth a line.
+          onDroppedImages: (dropped) => {
+            logger.warn(
+              {
+                attempt: attemptLog(currentAttempt),
+                images: dropped.map((image) => ({
+                  bytes: typeof image?.bytes,
+                  mediaType: image?.mediaType,
+                  path: image?.path,
+                })),
+                threadId,
+              },
+              '[agent] dropped unusable image(s) from the prompt'
+            );
+          },
           onError: (error) => {
             logger.error(
               {
@@ -922,6 +940,22 @@ async function executeTurn(
         }
         attempts.push({ attempt: currentAttempt, error });
         failedKeys.add(attemptKey(currentAttempt));
+        // The prompt kyto BUILT is malformed — the SDK refused it before any
+        // request went out, so every remaining rung would fail identically and
+        // instantly. Stop the walk here rather than spending the shared daily
+        // cap proving a bug in our own prompt assembly three more times.
+        if (isPromptConstructionError(error)) {
+          logger.error(
+            {
+              attempt: attemptLog(currentAttempt),
+              err: errorMessage(error),
+              errorDetail: clamp(deepErrorText(error), ERROR_LOG_MAX_LENGTH),
+              threadId,
+            },
+            '[agent] prompt construction failed; this is a kyto bug, not a model failure — not falling back'
+          );
+          throw error;
+        }
         // Mark the user's key/account invalid only if the PROVIDER rejected it
         // (401/402/403) — a rate limit or an outage says nothing about it. Each
         // recorder no-ops unless the failed attempt is theirs.
@@ -1189,7 +1223,7 @@ async function* synthesizeFinalAnswer({
     results.length > 0
       ? `\n\n${renderCarryover(results)}`
       : '\n\n(No tool results were captured.)';
-  const prompt = `${task}${gathered}\n\nYou already did the work above but never answered. Write the final reply to the user now, from those results. Do not mention this instruction.`;
+  const prompt = `${task}${gathered}\n\nYou already did the work above but never answered. Write the final reply to the user now, from those results. Do not mention this instruction.\n\n${NO_TOOLS_NOTICE}`;
   try {
     const result = streamAttempt({
       abortSignal: signal,
@@ -1270,12 +1304,25 @@ async function* continueTruncatedReply({
 /** The tail the model must resume from, kept short — it only needs the seam. */
 const TRUNCATION_TAIL_CHARS = 2000;
 
+/**
+ * Both wrap-up calls below run with `tools: {}` on purpose — the work is already
+ * done and nothing may fire a second time. But the system prompt still describes
+ * a full toolset, so a model that isn't TOLD spends the whole call trying to use
+ * it: an observed turn burned its budget on "getFile isn't available… loadTools
+ * isn't available either… No tools available? That's strange", reasoning about a
+ * broken environment instead of writing the two sentences it was asked for.
+ */
+const NO_TOOLS_NOTICE =
+  'You have NO TOOLS for this message — every tool has been switched off deliberately, and that is not an error or a broken environment. Do not try to call one, do not comment on their absence, and do not plan work that would need one. Answer from what is already in front of you; if something is genuinely missing, say so in one short sentence and stop.';
+
 function renderTruncation(streamedText: string): string {
   const tail = streamedText.trim().slice(-TRUNCATION_TAIL_CHARS);
   return [
     'IMPORTANT: you were cut off. You already did the work, and the user has ALREADY been shown the reply text below, which stops mid-thought because it hit the output limit:',
     '',
     tail,
+    '',
+    NO_TOOLS_NOTICE,
     '',
     'Write ONLY the continuation, starting exactly where that stops. Do not repeat any of it, do not restate the task, do not re-introduce yourself, and do not apologise or mention being cut off. If it broke off mid-sentence, finish that sentence. Keep it short.',
   ].join('\n');
