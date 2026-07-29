@@ -28,8 +28,18 @@ import {
 const RECURRING_JOB_NOTE = `
 
 <recurring_job>
-You are running as a recurring background job, not a live chat turn: there is no chat history, nobody to ask a follow-up question, and no memory of previous runs. Do the work, then let your final reply be exactly the message that should be posted — no preamble, no meta-commentary about being a scheduled job. Slack search (searchSlack) will not work here, as it needs a live user interaction to authorize it; prefer readConversationHistory, searchWeb, or bash.
+You are running as a recurring background job, not a live chat turn: there is no chat history, nobody to ask a follow-up question, and no memory of previous runs.
+
+NOBODY IS WATCHING THIS RUN. Do not ask questions, do not offer choices, and do not wait for confirmation — there is nobody there to answer, and a question posted here just reads as the job failing. If something needs doing and you are allowed to do it, DO IT, then say what you did. If you genuinely cannot proceed, say what blocked you and what you need — as a statement, not a question.
+
+ALWAYS leave a report. Even a run where nothing happened should say so ("checked X, nothing new since the last run") — that is the useful outcome, not silence. Your final reply is posted verbatim as the message, so write it as the message: no preamble, no meta-commentary about being a scheduled job.
+
+Slack search (searchSlack) will not work here, as it needs a live user interaction to authorize it; prefer readConversationHistory, searchWeb, or bash.
 </recurring_job>`;
+
+// Asked of the same model, tools off, when a run did work but wrote nothing.
+const REPORT_NUDGE =
+  'You ran the job above but never wrote the message. Write it now, from what you just did: what you checked, what you found, and anything you changed. You have NO TOOLS for this message — that is deliberate, not an error, so do not try to call one or comment on their absence. Write only the message that should be posted.';
 
 /** The reminder's owner, as the author of the synthetic message driving it. */
 function syntheticMessage(reminder: Reminder, threadId: string): Message {
@@ -63,6 +73,44 @@ export async function runReminderAgent(reminder: Reminder): Promise<string> {
   return reminder.threadId
     ? await withThreadSandbox(reminder.threadId, run)
     : await run();
+}
+
+/**
+ * Second chance at the message: same model, no tools, "write the report you
+ * skipped". Best-effort — a failure here just falls through to the caller's
+ * placeholder, which is still better than the run being silent.
+ */
+async function synthesizeReport({
+  attempt,
+  hints,
+  reminder,
+}: {
+  attempt: NonNullable<typeof subagentAttempt>;
+  hints: Awaited<ReturnType<typeof requestHints>>;
+  reminder: Reminder;
+}): Promise<string | undefined> {
+  try {
+    const result = streamAttempt({
+      attempt,
+      holder: {},
+      prompt: `${reminder.text}\n\n${REPORT_NUDGE}`,
+      system: `${subagentSystemPrompt({ hints })}${RECURRING_JOB_NOTE}`,
+      tools: {},
+    });
+    let text = '';
+    for await (const part of result.fullStream) {
+      if (part.type === 'text-delta') {
+        text += part.text;
+      }
+    }
+    return text.trim() || undefined;
+  } catch (error) {
+    logger.warn(
+      { err: error, reminderId: reminder.id },
+      '[reminders] report nudge failed'
+    );
+    return;
+  }
 }
 
 async function runAgent(
@@ -131,7 +179,20 @@ async function runAgent(
       return reply;
     }
     if (toolCalls > 0) {
-      return '_(Completed scheduled actions with no additional message.)_';
+      // The job did real work and then said nothing, which used to post
+      // "(Completed scheduled actions with no additional message.)" — a line
+      // that tells its reader precisely nothing about what happened. Ask the
+      // same model to write the report it skipped, tools off so no side effect
+      // can fire a second time. Same nudge the live agent loop uses.
+      const nudged = await synthesizeReport({ attempt, hints, reminder });
+      if (nudged) {
+        return nudged;
+      }
+      logger.warn(
+        { reminderId: reminder.id },
+        '[reminders] agent job did work but produced no report, even after a nudge'
+      );
+      return '_(Ran the scheduled job — it completed its actions but did not write a report.)_';
     }
     throw new Error('Agent reminder produced an empty response.');
   } finally {
