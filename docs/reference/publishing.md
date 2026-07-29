@@ -88,20 +88,29 @@ the other two are first-party. Upstream licences as of 2026-07-26:
 
 | skill | source | licence |
 | --- | --- | --- |
-| `ai-sdk` | `vercel/ai` | custom/unspecified per GitHub ("Other") — check its LICENSE before redistributing |
+| `ai-sdk` | `vercel/ai` | Apache-2.0 (GitHub's "Other" was wrong; redistribution wants the notice) |
 | `chat-sdk` | `vercel/chat` | MIT |
 | `grill-with-docs` | `mattpocock/skills` | MIT |
 | `improve` | `shadcn/improve` | MIT (also stated in its frontmatter) |
 | `slack-agent` | `vercel-labs/slack-agent-skill` | Apache-2.0 (redistribution wants the notice) |
-| `thermo-nuclear-code-quality-review` | `cursor/plugins` | **no licence detected / repo not resolvable** — re-check or drop before publishing |
 | `turborepo` | `vercel/turborepo` | MIT |
 | `ultracite` | `haydenbleasel/ultracite` | MIT |
 | `coding-best-practices` | first-party (kyto-specific rules) | kyto's LICENSE |
 | `refactor` | first-party (kyto-specific cleanup style) | kyto's LICENSE |
 
-Before going public, the two flagged rows (`ai-sdk`, `thermo-nuclear-…`) need
-their licence confirmed or the skill dropped; the MIT/Apache ones are fine to
-keep with their lock-file attribution.
+`thermo-nuclear-code-quality-review` (`cursor/plugins`) was **dropped**
+(2026-07-29): its README claimed MIT but the repo carries no LICENSE file and
+GitHub detected none, so the claim was unverifiable and redistributing it would
+have meant shipping something with no grant behind it. It was a code-review
+skill with nothing else depending on it, so dropping cost less than waiting on
+an upstream clarification that might never come. Do not re-add it without a
+LICENSE file upstream.
+
+**A lock-file entry is attribution, not compliance.** MIT requires its copyright
+notice be included *in all copies*, and Apache-2.0 §4 requires handing
+recipients the licence text; a repo name and a content hash in
+`skills-lock.json` is neither. Only `slack-agent` currently ships its upstream
+`LICENSE`. Vendor the rest next to their `SKILL.md` before publishing.
 
 ## Before flipping the repo public
 
@@ -109,6 +118,12 @@ keep with their lock-file attribution.
    issue. Publishing does not leak it, but publication is a good forcing function.
 2. ~~Decide the gorkie-provenance question~~ **Measured (above): keep the MIT
    carve-out — ~16% of runtime source is still gorkie-derived.**
-3. ~~Document `.agents/skills/`~~ **Done (above)** — but confirm-or-drop the two
-   flagged skills (`ai-sdk`, `thermo-nuclear-code-quality-review`).
-4. Re-run the secrets scan on whatever has landed since this audit.
+3. ~~Document `.agents/skills/`~~ ~~confirm-or-drop the two flagged skills~~
+   **Both resolved (2026-07-29): `ai-sdk` is Apache-2.0 and stays;
+   `thermo-nuclear-code-quality-review` was dropped.**
+4. Vendor each remaining upstream `LICENSE` into its skill directory — see
+   "Third-party material" above. This is the last outstanding licence task.
+5. Re-run the secrets scan on whatever has landed since this audit.
+6. Update `packages/ai/src/prompts/slack.ts` in the same commit as the
+   visibility flip — it currently tells users kyto is private with no public
+   repo to share, which becomes a lie the moment the repo is public.

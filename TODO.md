@@ -5,18 +5,21 @@
 
 ### Open
 
-**Going public is now only blocked on ONE licence check.** The gorkie-provenance
-question is MEASURED (2026-07-26, blame-based, in `docs/reference/publishing.md`):
-~16% of runtime source lines are still gorkie-derived, so the MIT carve-out
-stays — that decision is made. Skills provenance: `ai-sdk` is RESOLVED
-(2026-07-29) — it comes from `vercel/ai`, which is **Apache-2.0**; GitHub
-reporting "Other" was wrong. Redistributable with the notice "This software
-contains components from Vercel's AI SDK, licensed under Apache License 2.0.
-Copyright 2023 Vercel, Inc." Still open: `thermo-nuclear-code-quality-review`
-(`cursor/plugins`) — its README says "MIT" but the repo has **no LICENSE file**
-and GitHub detects none, so the claim is unverifiable. Either ask the
-maintainers for a LICENSE file or drop the skill before the flip. Then rotate
-`GH_TOKEN` and re-run the secrets scan.
+**Going public: every licence QUESTION is answered; one mechanical task is left.**
+Gorkie provenance is MEASURED (2026-07-26, blame-based, in
+`docs/reference/publishing.md`): ~16% of runtime source is gorkie-derived, so the
+MIT carve-out stays. `ai-sdk` is RESOLVED (2026-07-29) — `vercel/ai` is
+**Apache-2.0**; GitHub's "Other" was wrong. Redistribute with the notice "This
+software contains components from Vercel's AI SDK, licensed under Apache License
+2.0. Copyright 2023 Vercel, Inc." `thermo-nuclear-code-quality-review` was
+**dropped** (2026-07-29) — unverifiable licence, nothing depended on it.
+
+Remaining before the flip: **vendor each vendored skill's upstream `LICENSE`
+into its directory** (only `slack-agent` has one; a `skills-lock.json` entry is
+attribution, not the notice MIT and Apache-2.0 actually require), rotate
+`GH_TOKEN`, re-run the secrets scan, and update
+`packages/ai/src/prompts/slack.ts` — it still tells users kyto is private with no
+public repo, which becomes false the moment the repo is public.
 
 **"Thinking..." shows as plain text before the plan block appears**, and when
 the block does appear it already has thinking in it. Investigated: no such
