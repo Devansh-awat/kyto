@@ -109,8 +109,12 @@ LICENSE file upstream.
 **A lock-file entry is attribution, not compliance.** MIT requires its copyright
 notice be included *in all copies*, and Apache-2.0 §4 requires handing
 recipients the licence text; a repo name and a content hash in
-`skills-lock.json` is neither. Only `slack-agent` currently ships its upstream
-`LICENSE`. Vendor the rest next to their `SKILL.md` before publishing.
+`skills-lock.json` is neither. **Done (2026-07-29)**: every third-party skill now
+ships its upstream `LICENSE` beside its `SKILL.md`, fetched from the upstream
+default branch. Neither Apache-2.0 skill (`ai-sdk`, `slack-agent`) has an
+upstream `NOTICE`, so §4(d) does not apply. `coding-best-practices` and
+`refactor` carry none because they are first-party and covered by kyto's own
+`LICENSE`. **Any skill added later must bring its `LICENSE` with it.**
 
 ## Before flipping the repo public
 
@@ -127,9 +131,18 @@ recipients the licence text; a repo name and a content hash in
 3. ~~Document `.agents/skills/`~~ ~~confirm-or-drop the two flagged skills~~
    **Both resolved (2026-07-29): `ai-sdk` is Apache-2.0 and stays;
    `thermo-nuclear-code-quality-review` was dropped.**
-4. Vendor each remaining upstream `LICENSE` into its skill directory — see
-   "Third-party material" above. This is the last outstanding licence task.
-5. Re-run the secrets scan on whatever has landed since this audit.
+4. ~~Vendor each remaining upstream `LICENSE`~~ **Done (2026-07-29)** — see
+   "Third-party material" above. No licence work is outstanding.
+5. **BLOCKER — scrub the netic API key from history.** The 2026-07-29 rescan
+   (24 commits since this audit) found no kyto credential anywhere, but it did
+   find a **third party's** API key for `netic.hackclub.app`, pasted into a
+   Slack thread by a friend and copied into `TODO.md`. It was removed from the
+   tip in `b171084`, so a scan of the working tree misses it — but it is intact
+   in ~15 reachable commits from `f4d39d5` onward, and publishing makes those
+   public. It answered 401 on every completion when probed on 2026-07-29, but
+   "dead when I checked" is not a reason to publish someone else's credential.
+   Scrub it (`git filter-repo --replace-text`) and force-push before the flip,
+   and tell whoever owns it. Do not paste a live key into a tracked file again.
 6. Update `packages/ai/src/prompts/slack.ts` in the same commit as the
    visibility flip — it currently tells users kyto is private with no public
    repo to share, which becomes a lie the moment the repo is public.
