@@ -3,6 +3,7 @@ import type { StreamChunk } from '@/harness';
 import logger from '@/lib/logger';
 import { deepErrorText, errorStatus } from '@/lib/utils/error';
 import { clamp } from '@/lib/utils/text';
+import { createInlineReasoningSplitter } from './inline-reasoning';
 import { renderTask } from './tasks';
 
 const MAX_VISIBLE_TASKS = 45;
@@ -114,6 +115,12 @@ export async function* renderStream({
   let hiddenTaskCount = 0;
   let skipped = false;
   let droppedTextDeltas = 0;
+  // Reasoning that arrived inline in the TEXT stream (see inline-reasoning.ts),
+  // rather than in the provider's reasoning channel. Handed to onReasoning at
+  // the end of the stream so the next turn still gets it, exactly like a
+  // properly-separated reasoning block.
+  const inlineReasoning = createInlineReasoningSplitter();
+  let inlineReasoningText = '';
   // What this attempt emitted, so the caller can log why a turn ended the way it
   // did (silent completion vs. provider death mid-task) without a transcript.
   const tally: StreamTally = {
@@ -145,16 +152,25 @@ export async function* renderStream({
     }
     switch (part.type) {
       case 'text-delta': {
+        // Some upstreams don't separate reasoning into its own channel: the
+        // model wraps it in `<think>…</think>` and it arrives here, as content.
+        // Route it to the thinking record instead of the reply — a public
+        // thread once got several messages of raw deliberation before the
+        // answer. See inline-reasoning.ts.
+        const split = inlineReasoning.push(part.text ?? '');
+        if (split.reasoning) {
+          inlineReasoningText += split.reasoning;
+        }
         // A skipped turn intentionally produces no reply, and some providers
         // emit placeholder garbage (e.g. "(Empty response: ...)") in this slot
         // when the model returned only a thinking block — never forward either.
-        if (part.text && !skipped && !isPlaceholderText(part.text)) {
-          tally.textChars += part.text.length;
-          await onTextDelta?.(part.text);
+        if (split.text && !skipped && !isPlaceholderText(split.text)) {
+          tally.textChars += split.text.length;
+          await onTextDelta?.(split.text);
           if (emitText) {
-            yield part.text;
+            yield split.text;
           }
-        } else if (part.text) {
+        } else if (split.text) {
           droppedTextDeltas += 1;
         }
         break;
@@ -336,6 +352,32 @@ export async function* renderStream({
       default:
         break;
     }
+  }
+  // Release anything the splitter was still holding. An unterminated `<think>`
+  // ends up here as reasoning, which is the safe classification: the model was
+  // cut off mid-thought and that is not an answer.
+  {
+    const rest = inlineReasoning.flush();
+    inlineReasoningText += rest.reasoning;
+    if (rest.text && !skipped && !isPlaceholderText(rest.text)) {
+      tally.textChars += rest.text.length;
+      await onTextDelta?.(rest.text);
+      if (emitText) {
+        yield rest.text;
+      }
+    }
+  }
+  const inlineTrimmed = inlineReasoningText.trim();
+  if (inlineTrimmed) {
+    // Keep it for the next turn like any other reasoning block, and say so in
+    // the journal — a model routing its thinking through the text channel is
+    // worth noticing, not silently papering over.
+    tally.reasoningParts += 1;
+    onReasoning?.(inlineTrimmed);
+    logger.warn(
+      { ...context, chars: inlineTrimmed.length },
+      '[stream] model emitted reasoning inline in its text; kept it out of the reply'
+    );
   }
   if (hiddenTaskCount > 0) {
     yield hiddenTaskUpdate({ count: hiddenTaskCount, done: true });
