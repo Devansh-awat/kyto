@@ -244,6 +244,16 @@ async function executeTurn(
   let usageFooter:
     | { outputTokens: number; tokensPerSecond: number }
     | undefined;
+  // The answering attempt's prompt-token split, logged on `turn complete`. Kept
+  // separate from usageFooter: the footer is a user-facing opt-out, this is
+  // operational (is the 1h cache actually being hit?) and always recorded.
+  let turnUsage:
+    | {
+        cacheReadTokens?: number;
+        cacheWriteTokens?: number;
+        inputTokens?: number;
+      }
+    | undefined;
 
   const cleanup = async (): Promise<void> => {
     revokeProxyToken(slackProxySecret);
@@ -277,6 +287,12 @@ async function executeTurn(
     logger.info(
       {
         attempt: attemptLog(activeAttempt),
+        // `cacheReadTokens` high and `inputTokens` low across a thread's turns
+        // means the 1h breakpoints are landing; a read of 0 on a repeat turn in
+        // the same thread means caching is broken (usually a volatile block that
+        // moved above the history — see the prompt-order note in CLAUDE.md).
+        // Absent entirely = the provider reported no cache detail.
+        cache: cacheLog(turnUsage),
         durationMs: Date.now() - turnStart,
         failedAttempts: failedAttemptsLog(attempts),
         outputTokens: usageFooter?.outputTokens,
@@ -907,14 +923,22 @@ async function executeTurn(
           attempt: currentAttempt,
           userId: turnMessage.author.userId,
         });
-        // Capture usage for the footer (best-effort; never fails the turn).
-        if (attemptText) {
+        // Capture usage for the footer (best-effort; never fails the turn), and
+        // the cache split for the journal — prompt caching is the thing keeping
+        // HackClub's $3/day affordable, and until this was recorded there was no
+        // way to tell a working cache from a silently broken one except the bill.
+        {
           const usage = await Promise.resolve(result.usage).catch(
             () => undefined
           );
+          turnUsage = {
+            cacheReadTokens: usage?.inputTokenDetails?.cacheReadTokens,
+            cacheWriteTokens: usage?.inputTokenDetails?.cacheWriteTokens,
+            inputTokens: usage?.inputTokens,
+          };
           const outputTokens = usage?.outputTokens ?? usage?.totalTokens;
           const elapsedSeconds = (Date.now() - attemptStart) / 1000;
-          if (outputTokens && elapsedSeconds > 0) {
+          if (attemptText && outputTokens && elapsedSeconds > 0) {
             usageFooter = {
               outputTokens,
               tokensPerSecond: outputTokens / elapsedSeconds,
@@ -1110,6 +1134,33 @@ async function executeTurn(
 // spend-limit pattern can match text (e.g. "Daily spending limit of $3 reached")
 // that lives in responseBody rather than the error message.
 const thrownErrorText = deepErrorText;
+
+/**
+ * The prompt-token split for one turn, as a log field — or undefined when the
+ * provider reported no cache detail at all, so a missing `cache` in the journal
+ * reads as "the provider said nothing", not "nothing was cached".
+ */
+function cacheLog(
+  usage:
+    | {
+        cacheReadTokens?: number;
+        cacheWriteTokens?: number;
+        inputTokens?: number;
+      }
+    | undefined
+) {
+  if (
+    usage?.cacheReadTokens === undefined &&
+    usage?.cacheWriteTokens === undefined
+  ) {
+    return;
+  }
+  return {
+    input: usage.inputTokens,
+    read: usage.cacheReadTokens ?? 0,
+    write: usage.cacheWriteTokens ?? 0,
+  };
+}
 
 function attemptLog(attempt: ModelAttempt | undefined) {
   return attempt
