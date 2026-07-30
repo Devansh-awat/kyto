@@ -27,6 +27,14 @@ House style beyond Biome: explicit types where they aid clarity, `unknown` over 
 > area you're editing, tell the user and offer to fold it in. Remove resolved
 > items from `TODO.md` in the same commit.
 
+> **Delegate the reading to subagents; keep the editing yourself.** Searching a
+> big surface (which files touch X, where was Y discussed, does this pattern
+> repeat) burns the main context on output you only need the conclusion of — hand
+> those to a subagent and act on its answer. Do the edits, the judgement calls,
+> and the security-sensitive reasoning in the main thread, where the full project
+> context lives. Run independent investigations in parallel rather than in
+> sequence. Never delegate away a decision this file says is load-bearing.
+
 > **Explain your work in the reply, in detail.** The owner reads the chat, not the
 > diff — a terse "fixed it" is not a report. For each thing you changed: what the
 > symptom was, the ROOT CAUSE (why it went wrong, not just which line), what you
@@ -160,18 +168,13 @@ A user adds their own provider key from **App Home "Model keys"**; their turns r
 
 ### Sign in with ChatGPT (OAuth)
 
-A user links their own ChatGPT account (Plus/Pro/Team) from **App Home**; their turns run on that subscription. Provider + PKCE/attempt builders in `packages/ai/src/providers/chatgpt.ts` (`CHATGPT_PROVIDER = 'chatgpt-oauth'`); OAuth/routing in `apps/bot/src/lib/chatgpt/`; storage in `user_chatgpt_accounts`. **Wire-level detail (Responses API branch, `store:false` contract, Codex headers, `MAX_OUTPUT_TOKENS` exemption) is in [`.claude/MODELS.md`](./MODELS.md); read it before touching the attempt.** Load-bearing here:
-
-- **Gated on `BYOK_ENCRYPTION_KEY`** — the OAuth tokens are stored encrypted with the SAME AES-256-GCM scheme as a BYOK key; the public read path omits the blob (`getChatgptAccount`), only `getChatgptAccountSecret` returns it. `chatgptConfigured()` === `byokConfigured()`.
-- **Manual code paste + host-side exchange**, because OpenAI's Codex client only registers a `localhost:1455` redirect a server bot can't listen on. Tokens refresh before each turn in `resolveChatgptRouting`. Full flow in MODELS.md.
-- **Ordering choice (per user)**: `chatgpt_first` (default true) runs the account BEFORE kyto's shared models; `service_fallback` (default false) governs whether the shared chain may run at all when own-first. `recordChatgptOutcome` marks the login invalid ONLY on a hard 401/402/403 — a 429 is a quota, handled by the parking rule above.
-- **Model MUST be a real Codex catalog slug** (`listChatgptModels` fetches `GET /models?client_version=<v>`, filtered to public/api-supported): `gpt-5.5`/`gpt-5.6-*` work, plain `gpt-5` 400s.
+A user links their own ChatGPT account (Plus/Pro/Team) from **App Home**; their turns run on that subscription. Provider + PKCE/attempt builders in `packages/ai/src/providers/chatgpt.ts` (`CHATGPT_PROVIDER = 'chatgpt-oauth'`); OAuth/routing in `apps/bot/src/lib/chatgpt/`; storage in `user_chatgpt_accounts`. Two things to know here: it is **gated on `BYOK_ENCRYPTION_KEY`** (the OAuth tokens use the same AES-256-GCM scheme, and the public read path omits the blob — `chatgptConfigured()` === `byokConfigured()`), and linking is a **manual code paste** because OpenAI's Codex client only registers a `localhost:1455` redirect a server bot can't listen on. **Everything else — the Responses API branch, the `store:false` contract, Codex headers, the `MAX_OUTPUT_TOKENS` exemption, per-user ordering, quota parking, the model-slug rule — is in [`.claude/MODELS.md`](./MODELS.md). Read it before touching the attempt.**
 
 **Every routing failure above is readable from `journalctl -u kyto.service`** — the turn's lifecycle lines and what each one tells you are in MODELS.md ("Turn logging").
 
 ## Sandbox / E2B — lazy, and persistent per thread
 
-Config in `packages/sandbox/src/config.ts`. E2B is the execution backend for the `bash`/file tools and the host tools that opt in (`browser`, `deploySite`, `getFile`, `uploadFile`).
+Config in `packages/sandbox/src/config.ts`. E2B backs the `bash`/file tools and the host tools that opt in (`browser`, `deploySite`, `getFile`, `uploadFile`).
 - **Lazy** (`LazySandbox`): the real `Sandbox.create` is deferred until a tool touches it, so chat-only turns cost zero E2B.
 - **Persistent per thread**: `destroy()` **pauses** rather than kills, the thread's `sandbox_id` is remembered in `thread_sandboxes`, and the next turn calls `Sandbox.connect(id)` (auto-resumes, ~450ms) for the same filesystem. This makes a **`bash` recurring reminder** useful (write/test a script, then schedule it) and is what `wait`'s `pauseSandbox` leans on.
   - Persistence is opt-in via the injected **`SandboxStore`** (`load`/`save`/`clear`) so `packages/sandbox` stays DB-free. The bot's impl is `lib/sandbox/store.ts` (`threadSandboxStore`); a `LazySandbox` without a store is ephemeral.

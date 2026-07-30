@@ -40,3 +40,12 @@
 ## Turn logging
 
 Every failure mode above is readable from `journalctl -u kyto.service`. Lifecycle lines in order: `[agent] turn started` → `routed turn` → `attempt started` → `[stream] attempt stream ended` (the `StreamTally`: textChars, toolCalls, finishReasons, errors) → `attempt handled the turn` / `attempt failed, falling back` → `turn complete` / `turn failed` (durationMs + `failedAttempts` = the whole walk). `streamAttempt`'s `onError` must stay — without it the SDK dumps a raw unattributed stack. `errorStatus()`/`deepErrorText()` dig the status/body out of the wrapped `AI_RetryError`/`APICallError` chain.
+
+## Sign in with ChatGPT (OAuth) — the account side
+
+Moved out of CLAUDE.md to hold its 40k budget; the summary there points here.
+
+- **Gated on `BYOK_ENCRYPTION_KEY`** — the OAuth tokens are stored encrypted with the SAME AES-256-GCM scheme as a BYOK key; the public read path omits the blob (`getChatgptAccount`), only `getChatgptAccountSecret` returns it. `chatgptConfigured()` === `byokConfigured()`.
+- **Manual code paste + host-side exchange**, because OpenAI's Codex client only registers a `localhost:1455` redirect a server bot can't listen on. `startChatgptLink` mints PKCE+state (10-min TTL, per user); the user pastes the dead-callback URL back; `completeChatgptLink` verifies state and exchanges. Tokens refresh before each turn in `resolveChatgptRouting`.
+- **Ordering choice (per user)**: `chatgpt_first` (default true) runs the account BEFORE kyto's shared models; `service_fallback` (default false) governs whether the shared chain may run at all when own-first. `recordChatgptOutcome` marks the login invalid ONLY on a hard 401/402/403 — a 429 is a quota, handled by the parking rule above.
+- **Model MUST be a real Codex catalog slug** (`listChatgptModels` fetches `GET /models?client_version=<v>`, filtered to public/api-supported): `gpt-5.5`/`gpt-5.6-*` work, plain `gpt-5` 400s.
