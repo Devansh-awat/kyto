@@ -66,13 +66,10 @@
         "search:read.users",
         "team:read",
         "users.profile:read",
-        "users:read"
+        "users:read",
+        "users:read.email"
       ],
-      "user": [
-        "chat:write",
-        "im:write",
-        "pins:write"
-      ]
+      "user": ["chat:write", "im:write", "pins:write"]
     },
     "pkce_enabled": false
   },
