@@ -1,10 +1,13 @@
-import { SKIP_TOOL_NAME } from '@repo/ai';
 import type { TextStreamPart, ToolSet } from 'ai';
 import type { StreamChunk } from '@/harness';
 import logger from '@/lib/logger';
 import { deepErrorText, errorStatus } from '@/lib/utils/error';
 import { clamp } from '@/lib/utils/text';
 import { createInlineReasoningSplitter } from './inline-reasoning';
+import {
+  type ClosedReasoning,
+  createReasoningTracker,
+} from './reasoning-tracker';
 import { renderTask } from './tasks';
 
 const MAX_VISIBLE_TASKS = 45;
@@ -101,17 +104,10 @@ export async function* renderStream({
   // surface that phantom call/result as a visible activity task. Track their ids
   // so the matching tool-result/tool-error is dropped too.
   const phantomToolCallIds = new Set<string>();
-  const reasoning = new Map<string, string>();
-  // Each reasoning block gets its OWN unique task id. Providers reuse the same
-  // `part.id` (often "0") for the reasoning of every step, so keying the task on
-  // it collapsed all thinking into ONE row that stayed pinned wherever it first
-  // appeared — which is why the plan looked like "all thinking, then all tools"
-  // even when the model genuinely thinks between tool calls. A per-block counter
-  // gives each stretch of reasoning a distinct row that lands in stream order,
-  // so the plan reads thinking → tool → thinking → tool. `openReasoning` maps the
-  // provider's (possibly reused) part id to the unique task id while it's open.
-  let reasoningCounter = 0;
-  const openReasoning = new Map<string, string>();
+  // Which stretch of reasoning is open and what it has collected. The two rules
+  // it enforces — a card id per BLOCK, and every block closed — are in
+  // reasoning-tracker.ts, where they have tests.
+  const reasoningTracker = createReasoningTracker();
   const visibleTaskIds = new Set<string>();
   let hiddenTaskCount = 0;
   let skipped = false;
@@ -132,228 +128,259 @@ export async function* renderStream({
     toolCalls: 0,
     toolResults: 0,
   };
-  for await (const part of stream) {
-    if (part.type === 'finish-step' || part.type === 'finish') {
-      const reason = (part as { finishReason?: string }).finishReason;
-      if (reason) {
-        tally.finishReasons.push(reason);
-        onFinish?.(reason);
-      }
+
+  /**
+   * Render a finished block: attach the thinking to its card and keep the text
+   * for the next turn.
+   *
+   * EVERY exit path has to run this for whatever is still open. A block left open
+   * is a task card stuck on `in_progress`, and a plan message stopped with a
+   * non-terminal task renders that row as broken once it collapses — plus the
+   * thinking it held never reaches `onReasoning`, so the next turn loses it.
+   */
+  function* renderClosed(
+    closed: ClosedReasoning | undefined
+  ): Generator<string | StreamChunk> {
+    if (!closed) {
+      return;
     }
-    if (part.type === 'error') {
-      const error = (part as { error?: unknown }).error;
-      const message = clamp(deepErrorText(error), ERROR_LOG_MAX_LENGTH) ?? '';
-      const status = errorStatus(error);
-      tally.errors.push(message);
-      logger.error(
-        { ...context, err: message, status },
-        '[stream] provider error mid-stream'
-      );
-      onError?.({ error, message, status });
+    if (closed.text) {
+      onReasoning?.(closed.text);
     }
-    switch (part.type) {
-      case 'text-delta': {
-        // Some upstreams don't separate reasoning into its own channel: the
-        // model wraps it in `<think>…</think>` and it arrives here, as content.
-        // Route it to the thinking record instead of the reply — a public
-        // thread once got several messages of raw deliberation before the
-        // answer. See inline-reasoning.ts.
-        const split = inlineReasoning.push(part.text ?? '');
-        if (split.reasoning) {
-          inlineReasoningText += split.reasoning;
-        }
-        // A skipped turn intentionally produces no reply, and some providers
-        // emit placeholder garbage (e.g. "(Empty response: ...)") in this slot
-        // when the model returned only a thinking block — never forward either.
-        if (split.text && !skipped && !isPlaceholderText(split.text)) {
-          tally.textChars += split.text.length;
-          await onTextDelta?.(split.text);
-          if (emitText) {
-            yield split.text;
-          }
-        } else if (split.text) {
-          droppedTextDeltas += 1;
-        }
-        break;
-      }
-      case 'reasoning-start': {
-        tally.reasoningParts += 1;
-        // A fresh unique row per reasoning block, so consecutive stretches of
-        // thinking don't collapse onto one another (providers reuse part.id).
-        const id = `reasoning-${reasoningCounter++}`;
-        openReasoning.set(part.id, id);
-        // Text is collected for EVERY reasoning block, including one whose plan
-        // card is hidden (the visible-task budget is a UI limit; a thought kyto
-        // had is still a thought it should remember next turn — see onReasoning).
-        reasoning.set(id, '');
-        if (!showTask({ id, visibleTaskIds })) {
-          hiddenTaskCount += 1;
-          yield hiddenTaskUpdate({ count: hiddenTaskCount, done: false });
-          break;
-        }
-        yield {
-          id,
-          status: 'in_progress',
-          title: 'Thinking',
-          type: 'task_update',
-        };
-        break;
-      }
-      case 'reasoning-delta': {
-        const id = openReasoning.get(part.id);
-        if (id) {
-          reasoning.set(id, (reasoning.get(id) ?? '') + part.text);
-        }
-        break;
-      }
-      case 'reasoning-end': {
-        const id = openReasoning.get(part.id);
-        openReasoning.delete(part.id);
-        if (!id) {
-          break;
-        }
-        const text = reasoning.get(id)?.trim();
-        reasoning.delete(id);
-        if (text) {
-          onReasoning?.(text);
-        }
-        if (!visibleTaskIds.has(id)) {
-          break;
-        }
-        yield {
-          id,
-          output: text ? clamp(text, REASONING_OUTPUT_MAX_LENGTH) : undefined,
-          status: 'complete',
-          title: 'Thinking',
-          type: 'task_update',
-        };
-        break;
-      }
-      case 'tool-call': {
-        // Drop hallucinated calls to tools we never registered: hide them from
-        // the UI entirely (the model still gets the harness's not-found result
-        // and recovers on the next step).
-        if (knownTools && !knownTools.has(part.toolName.trim())) {
-          phantomToolCallIds.add(part.toolCallId);
-          logger.warn(
-            { input: part.input, toolName: part.toolName },
-            '[tool] ignored hallucinated tool call'
-          );
-          break;
-        }
-        toolInputs.set(part.toolCallId, part.input);
-        tally.toolCalls += 1;
-        onToolActivity?.();
-        logger.info(
-          {
-            input: part.input,
-            toolCallId: part.toolCallId,
-            toolName: part.toolName,
-          },
-          '[tool] called'
-        );
-        const rendered = renderTask({
-          input: part.input,
-          phase: 'request',
-          toolName: part.toolName,
-        });
-        if (!showTask({ id: part.toolCallId, visibleTaskIds })) {
-          hiddenTaskCount += 1;
-          yield hiddenTaskUpdate({ count: hiddenTaskCount, done: false });
-          break;
-        }
-        yield {
-          details: rendered.details,
-          id: part.toolCallId,
-          status: 'in_progress',
-          title: rendered.title,
-          type: 'task_update',
-        };
-        break;
-      }
-      case 'tool-result': {
-        if (phantomToolCallIds.has(part.toolCallId)) {
-          phantomToolCallIds.delete(part.toolCallId);
-          break;
-        }
-        tally.toolResults += 1;
-        if (part.toolName === SKIP_TOOL_NAME) {
-          skipped = true;
-          onSkip?.();
-        } else {
-          onToolResult?.({
-            input: toolInputs.get(part.toolCallId),
-            output: part.output,
-            toolName: part.toolName,
-          });
-        }
-        const input = toolInputs.get(part.toolCallId);
-        logger.info(
-          {
-            input,
-            output: part.output,
-            toolCallId: part.toolCallId,
-            toolName: part.toolName,
-          },
-          '[tool] completed'
-        );
-        const rendered = renderTask({
-          input,
-          output: part.output,
-          phase: 'response',
-          toolName: part.toolName,
-        });
-        toolInputs.delete(part.toolCallId);
-        if (!visibleTaskIds.has(part.toolCallId)) {
-          break;
-        }
-        yield {
-          id: part.toolCallId,
-          output: rendered.output,
-          status: 'complete',
-          title: rendered.title,
-          type: 'task_update',
-        };
-        break;
-      }
-      case 'tool-error': {
-        if (phantomToolCallIds.has(part.toolCallId)) {
-          phantomToolCallIds.delete(part.toolCallId);
-          break;
-        }
-        const input = toolInputs.get(part.toolCallId);
-        logger.warn(
-          {
-            error: part.error,
-            input,
-            toolCallId: part.toolCallId,
-            toolName: part.toolName,
-          },
-          '[tool] failed'
-        );
-        const rendered = renderTask({
-          input,
-          output: part.error,
-          phase: 'error',
-          toolName: part.toolName,
-        });
-        toolInputs.delete(part.toolCallId);
-        if (!visibleTaskIds.has(part.toolCallId)) {
-          break;
-        }
-        yield {
-          id: part.toolCallId,
-          output: rendered.output,
-          status: 'error',
-          title: rendered.title,
-          type: 'task_update',
-        };
-        break;
-      }
-      default:
-        break;
+    if (!visibleTaskIds.has(closed.id)) {
+      return;
+    }
+    yield {
+      id: closed.id,
+      output: closed.text
+        ? clamp(closed.text, REASONING_OUTPUT_MAX_LENGTH)
+        : undefined,
+      status: 'complete',
+      title: 'Thinking',
+      type: 'task_update',
+    };
+  }
+
+  /** Close every block still open, so no card is left spinning. */
+  function* closeAllReasoning(): Generator<string | StreamChunk> {
+    for (const closed of reasoningTracker.closeAll()) {
+      yield* renderClosed(closed);
     }
   }
+
+  try {
+    for await (const part of stream) {
+      if (part.type === 'finish-step' || part.type === 'finish') {
+        const reason = (part as { finishReason?: string }).finishReason;
+        if (reason) {
+          tally.finishReasons.push(reason);
+          onFinish?.(reason);
+        }
+      }
+      if (part.type === 'error') {
+        const error = (part as { error?: unknown }).error;
+        const message = clamp(deepErrorText(error), ERROR_LOG_MAX_LENGTH) ?? '';
+        const status = errorStatus(error);
+        tally.errors.push(message);
+        logger.error(
+          { ...context, err: message, status },
+          '[stream] provider error mid-stream'
+        );
+        onError?.({ error, message, status });
+      }
+      switch (part.type) {
+        case 'text-delta': {
+          // Some upstreams don't separate reasoning into its own channel: the
+          // model wraps it in `<think>…</think>` and it arrives here, as content.
+          // Route it to the thinking record instead of the reply — a public
+          // thread once got several messages of raw deliberation before the
+          // answer. See inline-reasoning.ts.
+          const split = inlineReasoning.push(part.text ?? '');
+          if (split.reasoning) {
+            inlineReasoningText += split.reasoning;
+          }
+          // A skipped turn intentionally produces no reply, and some providers
+          // emit placeholder garbage (e.g. "(Empty response: ...)") in this slot
+          // when the model returned only a thinking block — never forward either.
+          if (split.text && !skipped && !isPlaceholderText(split.text)) {
+            tally.textChars += split.text.length;
+            await onTextDelta?.(split.text);
+            if (emitText) {
+              yield split.text;
+            }
+          } else if (split.text) {
+            droppedTextDeltas += 1;
+          }
+          break;
+        }
+        case 'reasoning-start': {
+          tally.reasoningParts += 1;
+          // Opening under an id that is STILL open (the provider reuses
+          // "reasoning-0" for everything) hands back the block that was there;
+          // close it, or its card spins forever and its thinking is lost.
+          const { id, orphaned } = reasoningTracker.open(part.id);
+          yield* renderClosed(orphaned);
+          // Text is collected for EVERY reasoning block, including one whose plan
+          // card is hidden (the visible-task budget is a UI limit; a thought kyto
+          // had is still a thought it should remember next turn — see onReasoning).
+          if (!showTask({ id, visibleTaskIds })) {
+            hiddenTaskCount += 1;
+            yield hiddenTaskUpdate({ count: hiddenTaskCount, done: false });
+            break;
+          }
+          yield {
+            id,
+            status: 'in_progress',
+            title: 'Thinking',
+            type: 'task_update',
+          };
+          break;
+        }
+        case 'reasoning-delta': {
+          reasoningTracker.delta(part.id, part.text);
+          break;
+        }
+        case 'reasoning-end': {
+          yield* renderClosed(reasoningTracker.close(part.id));
+          break;
+        }
+        case 'tool-call': {
+          // Drop hallucinated calls to tools we never registered: hide them from
+          // the UI entirely (the model still gets the harness's not-found result
+          // and recovers on the next step).
+          if (knownTools && !knownTools.has(part.toolName.trim())) {
+            phantomToolCallIds.add(part.toolCallId);
+            logger.warn(
+              { input: part.input, toolName: part.toolName },
+              '[tool] ignored hallucinated tool call'
+            );
+            break;
+          }
+          toolInputs.set(part.toolCallId, part.input);
+          tally.toolCalls += 1;
+          onToolActivity?.();
+          logger.info(
+            {
+              input: part.input,
+              toolCallId: part.toolCallId,
+              toolName: part.toolName,
+            },
+            '[tool] called'
+          );
+          const rendered = renderTask({
+            input: part.input,
+            phase: 'request',
+            toolName: part.toolName,
+          });
+          if (!showTask({ id: part.toolCallId, visibleTaskIds })) {
+            hiddenTaskCount += 1;
+            yield hiddenTaskUpdate({ count: hiddenTaskCount, done: false });
+            break;
+          }
+          yield {
+            details: rendered.details,
+            id: part.toolCallId,
+            status: 'in_progress',
+            title: rendered.title,
+            type: 'task_update',
+          };
+          break;
+        }
+        case 'tool-result': {
+          if (phantomToolCallIds.has(part.toolCallId)) {
+            phantomToolCallIds.delete(part.toolCallId);
+            break;
+          }
+          tally.toolResults += 1;
+          // Kept as a literal, not @repo/ai's SKIP_TOOL_NAME: importing that pulls
+          // the provider/env chain into this module and takes its tests with it.
+          if (part.toolName === 'skip') {
+            skipped = true;
+            onSkip?.();
+          } else {
+            onToolResult?.({
+              input: toolInputs.get(part.toolCallId),
+              output: part.output,
+              toolName: part.toolName,
+            });
+          }
+          const input = toolInputs.get(part.toolCallId);
+          logger.info(
+            {
+              input,
+              output: part.output,
+              toolCallId: part.toolCallId,
+              toolName: part.toolName,
+            },
+            '[tool] completed'
+          );
+          const rendered = renderTask({
+            input,
+            output: part.output,
+            phase: 'response',
+            toolName: part.toolName,
+          });
+          toolInputs.delete(part.toolCallId);
+          if (!visibleTaskIds.has(part.toolCallId)) {
+            break;
+          }
+          yield {
+            id: part.toolCallId,
+            output: rendered.output,
+            status: 'complete',
+            title: rendered.title,
+            type: 'task_update',
+          };
+          break;
+        }
+        case 'tool-error': {
+          if (phantomToolCallIds.has(part.toolCallId)) {
+            phantomToolCallIds.delete(part.toolCallId);
+            break;
+          }
+          const input = toolInputs.get(part.toolCallId);
+          logger.warn(
+            {
+              error: part.error,
+              input,
+              toolCallId: part.toolCallId,
+              toolName: part.toolName,
+            },
+            '[tool] failed'
+          );
+          const rendered = renderTask({
+            input,
+            output: part.error,
+            phase: 'error',
+            toolName: part.toolName,
+          });
+          toolInputs.delete(part.toolCallId);
+          if (!visibleTaskIds.has(part.toolCallId)) {
+            break;
+          }
+          yield {
+            id: part.toolCallId,
+            output: rendered.output,
+            status: 'error',
+            title: rendered.title,
+            type: 'task_update',
+          };
+          break;
+        }
+        default:
+          break;
+      }
+    }
+  } catch (error) {
+    // The stream died or was aborted mid-thought. Finish the open cards on the
+    // way out — the plan message is already in Slack, so a row left spinning
+    // stays visible after the failure — then let the caller route the error.
+    yield* closeAllReasoning();
+    throw error;
+  }
+  // A provider that ended without its own `reasoning-end` (or a step whose
+  // flush never ran) leaves the last block open on the SUCCESS path too.
+  yield* closeAllReasoning();
   // Release anything the splitter was still holding. An unterminated `<think>`
   // ends up here as reasoning, which is the safe classification: the model was
   // cut off mid-thought and that is not an answer.
