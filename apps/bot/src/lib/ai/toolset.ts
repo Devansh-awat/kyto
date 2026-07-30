@@ -2,6 +2,7 @@ import nodePath from 'node:path/posix';
 import {
   type ImageInput,
   type SandboxContext,
+  SKIP_TOOL_NAME,
   subagentAttempt,
 } from '@repo/ai';
 import { listMcpServers } from '@repo/db/queries';
@@ -196,7 +197,9 @@ export async function buildTools({
     }),
     listSites: listSitesTool(),
     removeSite: removeSiteTool({ isOwner, userId: authorUserId }),
-    skip: skipTool({ threadId: thread.id }),
+    // Keyed off the constant: the stop condition that makes a skip terminal
+    // matches on this exact name (see streamAttempt).
+    [SKIP_TOOL_NAME]: skipTool({ threadId: thread.id }),
     saveMemory: saveMemoryTool({ authorUserId, isOwner }),
     fetchMemory: fetchMemoryTool({ authorUserId, isOwner }),
     editMemory: editMemoryTool({ authorUserId, isOwner }),

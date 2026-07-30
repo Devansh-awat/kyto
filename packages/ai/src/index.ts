@@ -2,6 +2,7 @@ export {
   type ImageInput,
   MAX_STEPS,
   type ResolvedModelHolder,
+  SKIP_TOOL_NAME,
   streamAttempt,
 } from './agent';
 export {

@@ -1,3 +1,4 @@
+import { SKIP_TOOL_NAME } from '@repo/ai';
 import type { TextStreamPart, ToolSet } from 'ai';
 import type { StreamChunk } from '@/harness';
 import logger from '@/lib/logger';
@@ -276,7 +277,7 @@ export async function* renderStream({
           break;
         }
         tally.toolResults += 1;
-        if (part.toolName === 'skip') {
+        if (part.toolName === SKIP_TOOL_NAME) {
           skipped = true;
           onSkip?.();
         } else {

@@ -1,6 +1,7 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import {
+  hasToolCall,
   type ModelMessage,
   stepCountIs,
   streamText,
@@ -23,6 +24,21 @@ import { CHATGPT_PROVIDER } from './providers/chatgpt';
 // attempt is the wall-clock watchdog (AGENT_ATTEMPT_TIMEOUT_MS) plus the
 // degenerate-loop guard, not this counter — so it's set high and overridable.
 export const MAX_STEPS = Number(process.env.AGENT_MAX_STEPS) || 1000;
+
+/**
+ * The tool that means "this turn is over, say nothing". Its RESULT used to just
+ * feed back into the loop like any other, so a model that decided not to answer
+ * kept getting asked what to do next: observed as 5+ Thinking→`skip`→Thinking
+ * cycles on one message that wasn't even addressed to kyto, only stoppable with
+ * `@kyto!stop`, and each cycle billed the shared daily cap for a message kyto
+ * had already decided to ignore.
+ *
+ * A skip is terminal by definition, so it's a stop condition, not a tool result.
+ * Named here (not passed in per call site) because every attempt that offers the
+ * tool must honour it — a new call site forgetting the flag would re-open the
+ * loop — and `hasToolCall` simply never fires for a toolset without it.
+ */
+export const SKIP_TOOL_NAME = 'skip';
 
 /**
  * Filled in as the attempt runs: `model` is the concrete slug OpenRouter's
@@ -293,7 +309,10 @@ export function streamAttempt({
           },
         }
       : {}),
-    stopWhen: stepCountIs(MAX_STEPS),
+    // Either bound ends the attempt: the step ceiling, or a deliberate skip
+    // (see SKIP_TOOL_NAME — without this the "no reply" decision was made over
+    // and over on the same message).
+    stopWhen: [stepCountIs(MAX_STEPS), hasToolCall(SKIP_TOOL_NAME)],
     system,
     tools,
   });
