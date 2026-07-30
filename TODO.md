@@ -5,6 +5,52 @@
 
 ### Open
 
+**Move the GitHub write gate to the HTTP layer** — owner's call, 2026-07-29
+("yeah move gaurd to http layer"), and it was never recorded or built. The
+trigger was the owner's own question: "if you get a shell into kyto, you can use
+its gh and do stuff right? … remote shell are not easy to stop, you block sshx
+one will use tmate". He is right, and the token being unextractable does not
+help: the E2B egress rule staples `Authorization` onto EVERY github.com request
+out of the sandbox, so any process in the box — kyto tool or not — is already
+authenticated as `kyto-agent`. `guardGithubCommand` only ever sees strings that
+came through a kyto TOOL, so sshx/tmate, a shell script, or `sh -c 'g''h …'`
+never meets it.
+
+The intended shape: kyto's own host-side proxy in front of GitHub (the pattern
+`lib/slack-proxy/` already proves), enforcing on the PARSED request —
+`POST /repos/o/n/pulls` is unambiguous where a shell string is not. Reads pass,
+writes checked against `github_repos`/`github_trust`, every request logged with
+thread + user for attribution.
+
+**Blocking constraint, measured 2026-07-30:** E2B rules can only INJECT HEADERS
+(`SandboxNetworkTransform` is `{ headers }`) — they cannot redirect a host. So
+the proxy cannot be slipped in transparently. It needs all three of: stop
+brokering the token; point the sandbox at the proxy (`GH_HOST`,
+`git config url.<proxy>.insteadOf`); and **`denyOut` the real GitHub hosts** so a
+shell can't bypass the proxy by curling github.com directly. That last part is
+the owner's "credentials XOR open network" idea arriving by necessity, and it is
+the piece that needs a decision: a deny-list only for GitHub hosts is cheap, but
+a full deny-by-default allowlist (the version that actually kills remote shells)
+would also break the browser tool, arbitrary `fetch`, and npm/pypi from
+unexpected hosts. **Decide the blast radius before building it.**
+
+Adjacent, from the same conversation and also unrecorded:
+- A **GitHub App minting per-turn installation tokens** scoped to the repos the
+  guard would allow is the durable answer — it also fixes the "kyto has ONE
+  GitHub identity" problem that got the PAT revoked in the first place.
+- A **hard wall-clock ceiling per sandbox**, independent of activity. The reaper
+  is activity-based, so a sandbox kept warm never ages out (the owner's own "if
+  you get kyto to use wait and not pause sandbox?").
+- DONE 2026-07-30: `runBackgroundProcess` was a fourth, ungated shell —
+  `runBackgroundProcess("gh pr create …")` walked past the ownership check that
+  the identical `bash` command hits. Now gated at start time, and refused
+  outright when there is no principal to attribute the write to.
+
+**Reduce the system prompt.** Asked 2026-07-28 ("maybe reduce system prompt
+too", in the same message as the Qwen pin and the caching work) and never
+attempted — the other three parts of that message shipped. Measure the assembled
+prompt first; it is paid on every turn of every thread against the shared $3/day.
+
 **Going public: every licence QUESTION is answered; one mechanical task is left.**
 Gorkie provenance is MEASURED (2026-07-26, blame-based, in
 `docs/reference/publishing.md`): ~16% of runtime source is gorkie-derived, so the
@@ -33,11 +79,6 @@ before the stream opens, so this looks like Slack's own placeholder for an open
 `chatStream` that has not rendered yet. Needs confirming against a real thread
 before there's anything to fix. Ideally show a real loading message instead.
 
-**Thinking cards render as a single line.** Worth confirming this is genuinely
-one line of reasoning (gpt-5.6 returns short `reasoningSummary` text, so it
-probably is) rather than longer thinking being truncated somewhere. Try again
-and look at the raw response.
-
 **Next harness upgrades** — the original three (edit + diagnostics, thread
 compaction, tests over the crown jewels) are done as of 2026-07-27. What the
 assessment named and nobody has touched: (1) loop control — a plan/approve
@@ -45,10 +86,6 @@ checkpoint and budget-aware pacing, since `MAX_STEPS=1000` leaves the watchdog
 as the only real governor; (2) orchestration depth — more than one subagent
 level, parallelism not opt-in per call; (3) provider-native paths, because the
 openai-compatible abstraction is now carrying four separate workarounds.
-
-**`.claude/CLAUDE.md` is ~47k chars, over its own stated 40k budget.** It says
-to keep it to the durable what-and-why and delete post-mortem narrative. Needs a
-pass; nothing in it is wrong, there is just too much of it.
 
 **The duplicate confirm-post acceptance message is only half explained.** The
 DM-fallback path definitely misbehaved — `replace_original` does nothing on an
@@ -59,6 +96,14 @@ remaining possibility is the confirm going to BOTH the thread and the DM, which
 the current code shouldn't do.
 
 ### Watch list
+
+**HCAI's own FAQ says coding agents are banned.** From the HC AI support thread
+the owner pasted 2026-07-28: "we recommend DeepSeek V4 for most tasks … and GLM
+5.2 for advanced coding (remember all coding agents are banned in HCAI)". kyto is
+an agent that writes and runs code, and HackClub is its PRIMARY tier plus the
+whole shared fallback chain. Nobody flagged it at the time. Not a bug — a
+standing account risk worth knowing about, since losing that account takes the
+primary and every cheap rung with it.
 
 **The netic (`netic.hackclub.app`) key is DEAD as supplied (checked 2026-07-29).**
 `GET /v1/models` answers 200 over https and lists all seven slugs
@@ -104,7 +149,10 @@ catalogue in nine days — don't hard-code a `:free` slug as a permanent rung.
 instructions + compacted + history is a stable append-only prefix. If anyone
 adds a new block, it goes below `history` or the cache breaks again silently —
 the only symptom is the bill.
-about caching can we check logs to see if its being cached. PLS DO THIS
+Caching IS now measurable (2026-07-30): `turn complete` logs
+`cache: { input, read, write }` from the answering attempt. Nothing logged it
+before, so a broken cache would only have shown up on the bill. Read high +
+input low across a thread's turns = the breakpoints are landing.
 
 **The ChatGPT account is parked until 2026-08-23.** The linked account is on a
 FREE plan and its quota is spent; the 429 named that reset date, which is now
@@ -145,46 +193,19 @@ a bare count, which is intended but worth seeing once.
 
 ### New bugs (from the 2026-07-29 paste — distilled from raw transcripts)
 
-**`skip` triggers a re-thinking loop.** When a message isn't addressed to kyto,
-it correctly calls `skip` — but then thinks AGAIN about the same message and
-skips again, several times in a row (observed 5+ Thinking→`skip`→Thinking cycles
-on one message where devansh was addressing @gorkie_new/@borkie/@coolton2, not
-kyto). A `skip` should END the turn; the loop wastes the whole daily budget on a
-message kyto already decided to ignore. Likely: the skip tool result re-enters
-the agent loop instead of terminating it, OR the same message re-arrives as a new
-event (the other bots replying in-thread each re-trigger kyto). Check
-`isBareSkipText` / the `skip` tool handler and whether `shouldIgnore` re-fires per
-sibling-bot message. This is the highest-cost item here. And it needed a @kyto!stop to prevent endless use.
-**Subagent no longer gets its own card with its own name — regression.** It used
-to render as a separate card labelled with the subagent's name; owner liked that
-and wants it back ("was this changed recently cuz it was diff earlier. i liked
-the old way"). Note this rubs against the 2026-07-26 identity change that fixed
-subagent labels to "kyto subagent {name}" — reconcile: the owner wants the
-distinct CARD, the label rule can stay. Check `subagent.ts` card rendering vs how
-`runSubagent`/`checkSubagent` stream into the plan.
-
 **Status narration lands in the Thinking card instead of reasoning.** A turn's
 Thinking card showed "9089 out of 9999 codes done already! Let me run the
 server-side exploits test…" and "50 more steps running" — i.e. plan/status text,
 not the model's actual reasoning, and the real reasoning wasn't shown. Owner:
-"it does not show its reasoning but this." Look at how `onReasoning` /
-`reasoning-start` chunks are classified vs visible text, and whether narration is
-being mis-routed into the reasoning stream (possibly interacts with the inline
-`<think>` splitter added 2026-07-29).
+"it does not show its reasoning but this."
 
-**Collapsed Thinking blocks show "something went wrong".** Some Thinking cards,
-when collapsed, render a "something went wrong" state. Check Slack's task-card
-docs and `lib/ai/stream/` — likely a task card left in a non-terminal/error state
-when a block closes (possibly the same rotation/segmentation seam as the
-single-line Thinking item above). Confirm against a real thread and grab the raw
-`chatStream` chunks.
+Audited 2026-07-30 and NOT reproduced from the code: kyto never classifies
+anything as reasoning. It arrives pre-separated in the provider's own
+`reasoning_content` channel, and the inline `<think>` splitter only moves text
+the model itself tagged. Two candidates left, both needing a real thread:
+(a) the model genuinely wrote that as its reasoning, which is a prompt/model
+issue, not a routing one; (b) the card was TRUNCATED to its last fragment — that
+one is plausibly already fixed, since an unclosed reasoning block used to leave
+the card with no output at all (see the `reasoning-tracker` fix, same date).
+Next time it happens, grab the raw `fullStream` parts, not the rendered card.
 
-**`cloakbrowser` (the browser tool) is broken in the sandbox.** During a security
-test it never produced output: `node` timed out, Xvfb display setup fought itself
-("There's already an Xvfb running", `pkill -f Xvfb`, `/tmp/.X99-lock` left
-behind), and kyto fell back to curl. The browser tool needs a working headless
-display in the E2B template. Check `build:template` (it's supposed to install
-`agent-browser` + browser deps) and how the browser tool starts/reuses Xvfb —
-starting a second Xvfb on an occupied display is the visible symptom.
-
-someone uninstalled kyto, ive updated the both user and bot tokens. 

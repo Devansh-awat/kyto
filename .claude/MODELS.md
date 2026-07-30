@@ -49,3 +49,13 @@ Moved out of CLAUDE.md to hold its 40k budget; the summary there points here.
 - **Manual code paste + host-side exchange**, because OpenAI's Codex client only registers a `localhost:1455` redirect a server bot can't listen on. `startChatgptLink` mints PKCE+state (10-min TTL, per user); the user pastes the dead-callback URL back; `completeChatgptLink` verifies state and exchanges. Tokens refresh before each turn in `resolveChatgptRouting`.
 - **Ordering choice (per user)**: `chatgpt_first` (default true) runs the account BEFORE kyto's shared models; `service_fallback` (default false) governs whether the shared chain may run at all when own-first. `recordChatgptOutcome` marks the login invalid ONLY on a hard 401/402/403 — a 429 is a quota, handled by the parking rule above.
 - **Model MUST be a real Codex catalog slug** (`listChatgptModels` fetches `GET /models?client_version=<v>`, filtered to public/api-supported): `gpt-5.5`/`gpt-5.6-*` work, plain `gpt-5` 400s.
+
+## BYOK — a user's own model key (the routing half)
+
+Moved out of CLAUDE.md to hold its 40k budget; the secrets-handling half stays there.
+
+- **`BYOK_ENCRYPTION_KEY` (min 32 chars) gates the whole feature** (and Sign in with ChatGPT). Unset = no App Home section, no per-user routing — secrets are never stored in the clear. Stretched with scrypt into an AES-256-GCM key (`lib/byok/crypto.ts`). **Changing it makes every stored secret unreadable**; users must re-add.
+- **`packages/db` never sees a plaintext key.** `listUserModelCredentials` omits the ciphertext column; only `listUserModelCredentialSecrets` returns it. A key is never logged, put in a prompt/sandbox env, or in a modal's `private_metadata`; the UI shows only a `…tail` preview.
+- **Service fallback is OFF by default, per key** (`service_fallback`): if every one of a user's keys fails and they haven't opted in, the turn ends with `ByokExhaustedError`. Opting in on ANY key unlocks the service chain.
+- A key is marked **invalid only on a 401/402/403** (`recordByokOutcome`) — a 429/5xx says nothing; marked valid when it completes a turn; checked with a real 1-token completion when saved.
+- `generateImage` stays on the **service** provider even on a BYOK turn (a chat-completions key can't serve images).

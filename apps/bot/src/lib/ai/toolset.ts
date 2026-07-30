@@ -140,7 +140,12 @@ export async function buildTools({
 
   // Background-process trio shares one in-turn handle map; built before `core`
   // so the bash tool can share it and auto-background a command that runs long.
-  const background = backgroundProcessTools({ getSandboxContext });
+  // It gets the same `github` principal as the other shells: a detached command
+  // outlives the turn, so its GitHub write has to be authorized at START time.
+  const background = backgroundProcessTools({
+    getSandboxContext,
+    github: { isOwner, threadId: thread.id, userId: authorUserId },
+  });
 
   const core: ToolSet = {
     bash: bashTool({

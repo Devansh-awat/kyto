@@ -2,9 +2,42 @@ import type { SandboxContext } from '@repo/ai';
 import { mayHaveFetchedRepo } from '@repo/sandbox';
 import { tool } from 'ai';
 import { z } from 'zod';
+import { parseGithubCommand } from '@/lib/github/command';
+import { guardGithubCommand } from '@/lib/github/guard';
 import { disarmFetchedRepos } from '@/lib/sandbox/git-safety';
 import { clipOutput, fullOutputPath } from '@/lib/sandbox/output-clip';
 import { errorMessage } from '@/lib/utils/error';
+
+/**
+ * The GitHub ownership gate for a backgrounded command, or undefined to proceed.
+ *
+ * A detached command outlives the turn that started it, so there is no principal
+ * to check LATER — it has to be checked here, at start time, against the person
+ * whose turn this is. Where there is no such person (a reminder job runs with no
+ * principal at all) a mutating GitHub command is REFUSED rather than allowed:
+ * kyto has one GitHub identity, and an unattended context cannot consent to a
+ * write on somebody's behalf.
+ */
+async function guardBackgroundGithub({
+  command,
+  github,
+}: {
+  command: string;
+  github?: { isOwner: boolean; threadId: string; userId: string };
+}): Promise<string | undefined> {
+  if (!github) {
+    return parseGithubCommand(command).mutating
+      ? 'Not allowed: this context has no user to attribute a GitHub write to, so a mutating GitHub command cannot run in the background here. Run it in the foreground of a real turn.'
+      : undefined;
+  }
+  const guard = await guardGithubCommand({
+    command,
+    isOwner: github.isOwner,
+    threadId: github.threadId,
+    userId: github.userId,
+  });
+  return guard.allowed === false ? guard.reason : undefined;
+}
 
 // There is no native background/detached-process concept in the sandbox
 // (session.run is a single blocking call), so this is built on top of it with a
@@ -69,8 +102,16 @@ const POLL_STEPS_MS = [250, 500, 1000, 2000];
 // bash tool uses) is inferred from the return below — see the exported type.
 export function backgroundProcessTools({
   getSandboxContext,
+  github,
 }: {
   getSandboxContext: () => SandboxContext;
+  /**
+   * The principal this turn acts for, so a backgrounded command is gated on
+   * repo ownership like any other shell. Omitted only where there is no
+   * principal to check (a reminder job): a command with no `github` is NOT
+   * exempt — see the guard call in `runBackgroundProcess`.
+   */
+  github?: { isOwner: boolean; threadId: string; userId: string };
 }) {
   const processes = new Map<string, BackgroundProcess>();
   // Commands still to be checked for a repo they may have fetched; a detached
@@ -191,6 +232,14 @@ export function backgroundProcessTools({
       command: z.string().min(1),
     }),
     execute: async ({ command }) => {
+      // This is a SHELL, so it gets the same GitHub ownership gate as bash, gh
+      // and codeMode — gating three of four shells is theatre, and this was the
+      // ungated one: `runBackgroundProcess("gh pr create …")` walked straight
+      // past the repo-ownership check that the identical `bash` command hits.
+      const guard = await guardBackgroundGithub({ command, github });
+      if (guard) {
+        return { error: guard, success: false };
+      }
       try {
         const started = await startManaged(command);
         if ('error' in started) {
