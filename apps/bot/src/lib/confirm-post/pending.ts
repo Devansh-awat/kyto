@@ -1,27 +1,33 @@
 import { randomUUID } from 'node:crypto';
 import type { ResolvedIdentity } from '@/lib/identity';
 
-// A post that is about to go out but is waiting for the OWNER to physically
-// click "Confirm & send" or "Cancel" in an ephemeral message. Cross-channel
-// posts and any post/edit made AS the owner are held here rather than executed
-// inline, so a prompt injection can get as far as *asking* for the post but
-// never actually send it — only a human click can. The requesting tool call
-// BLOCKS on `wait` until the owner clicks (or it times out), so the model
-// learns the real outcome instead of guessing. The store is in-memory and
-// short-lived (the same philosophy as the rest of harness/kv.ts): a
-// confirmation that does not survive a restart just times out, and the owner
-// re-asks.
+// A post that is about to go out but is waiting for a human to physically click
+// "Confirm & send" or "Cancel" in an ephemeral message. Cross-channel posts, any
+// post/edit made AS the owner, and any post wearing a real person's face are held
+// here rather than executed inline, so a prompt injection can get as far as
+// *asking* for the post but never actually send it — only a human click can. The
+// requesting tool call BLOCKS on `wait` until that click (or it times out), so the
+// model learns the real outcome instead of guessing. The store is in-memory and
+// short-lived (the same philosophy as the rest of harness/kv.ts): a confirmation
+// that does not survive a restart just times out, and the asker re-asks.
+//
+// WHICH human is fixed here, when the request is MADE, and re-checked at click
+// time (`approverUserId`) — never taken from whoever clicked. Normally the owner;
+// for a post wearing someone's name and picture it is THAT PERSON, since consent
+// to be impersonated is theirs to give (owner's call, 2026-07-30).
 
 export type PendingPost =
   | {
       kind: 'postMessage';
       requestedBy: string;
+      /** Whose click sends this. Defaults to the owner; see the note above. */
+      approverUserId?: string;
       target: { type: 'thread' | 'channel' | 'user'; id: string };
       body: string;
       blocks?: unknown[];
       // Per-post identity override (custom name/icon, or a mirrored person/bot).
       // Carried through the confirm gate so the sent post wears the same face the
-      // owner saw described in the confirmation.
+      // approver saw described in the confirmation.
       identity?: ResolvedIdentity;
       summary: string;
     }
@@ -49,7 +55,7 @@ export type PendingPost =
       summary: string;
     };
 
-/** How the owner resolved a pending post. `null` means it timed out / aborted. */
+/** How the approver resolved a pending post. `null` = timed out / aborted. */
 export type ConfirmOutcome =
   | { decision: 'confirmed'; ok: boolean; detail: string }
   | { decision: 'denied' };
@@ -79,7 +85,7 @@ function sweep(): void {
 
 /**
  * Register a pending post. Returns the id to embed in the buttons and a `wait`
- * promise that resolves when the owner clicks (`ConfirmOutcome`) or when the
+ * promise that resolves when the approver clicks (`ConfirmOutcome`) or when the
  * post is discarded on timeout/abort (`null`).
  */
 export function stashPendingPost(post: PendingPost): {
@@ -104,6 +110,20 @@ export function stashPendingPost(post: PendingPost): {
   const id = randomUUID();
   pending.set(id, { expiresAt: Date.now() + CONFIRM_WAIT_MS, post, settle });
   return { id, wait };
+}
+
+/**
+ * Read a pending post WITHOUT claiming it, so a click can be checked against the
+ * row's approver before it consumes the row — a stranger pressing the button must
+ * not burn the confirmation the real approver still has to answer. Returns null
+ * for an unknown or expired id (left for `takePendingPost` to settle).
+ */
+export function peekPendingPost(id: string): PendingPost | null {
+  const entry = pending.get(id);
+  if (!entry || entry.expiresAt <= Date.now()) {
+    return null;
+  }
+  return entry.post;
 }
 
 /**

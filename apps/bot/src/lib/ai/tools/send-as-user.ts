@@ -279,7 +279,7 @@ export function sendAsUserTool({
         return await requestPostConfirmation({
           abortSignal,
           extendAttemptDeadline,
-          ownerUserId: authorUserId,
+          approverUserId: authorUserId,
           post: {
             blocks: safeBlocks,
             crossChannel,
@@ -372,7 +372,7 @@ export function editAsUserTool({
         return await requestPostConfirmation({
           abortSignal,
           extendAttemptDeadline,
-          ownerUserId: authorUserId,
+          approverUserId: authorUserId,
           post: {
             blocks,
             kind: 'editAsUser',

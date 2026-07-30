@@ -272,9 +272,20 @@ export function postMessageTool({
       // (who can only post same-channel) must not be able to post under someone
       // else's name — that is the impersonation vector. Overrides are ignored
       // for them; kyto's normal identity applies.
-      const identity = isOwner
+      const override = isOwner
         ? await resolvePostIdentity({ asIcon, asName, asUser })
         : undefined;
+      const identity = override?.identity;
+      // Wearing a REAL PERSON's name and picture needs THEIR yes, not the
+      // owner's (owner's call, 2026-07-30) — it is their reputation on the
+      // message. So the confirm click is theirs, and a post that would otherwise
+      // have gone out instantly (same channel) now waits for it too: the
+      // instant path was the one place kyto could impersonate someone with
+      // nobody but the requester having agreed to it.
+      const mirrored =
+        override?.mirroredUserId === authorUserId
+          ? undefined
+          : override?.mirroredUserId;
 
       // A post that leaves the current channel (a different channel, or a DM to
       // someone) is only reachable by the owner, and now never fires inline: it
@@ -282,27 +293,35 @@ export function postMessageTool({
       // gate that a prompt injection cannot forge — it can request the post but
       // can't press the button. Same-channel replies still post immediately.
       const crossChannel = type === 'user' || target !== currentChannel;
-      if (crossChannel) {
-        const where =
-          type === 'user' ? `a DM to <@${id}>` : `<#${target ?? id}>`;
-        // The confirm click always belongs to the OWNER — for a non-owner's DM
+      if (crossChannel || mirrored) {
+        let where = 'this channel';
+        if (crossChannel) {
+          where = type === 'user' ? `a DM to <@${id}>` : `<#${target ?? id}>`;
+        }
+        // Who is asked, and why. Normally the OWNER — for a non-owner's DM
         // request the button lands in the owner's DM (fallbackToDM), and the
-        // summary names who asked so the owner knows whose words these are.
+        // summary names who asked so they know whose words these are. For an
+        // impersonated post it is the person whose face it wears instead.
         const requestedFor =
           authorUserId === env.OWNER_USER_ID
             ? ''
             : ` (requested by <@${authorUserId}>)`;
+        const asWhom = identity?.username ? ` as "${identity.username}"` : '';
+        const askedBecause = mirrored
+          ? ` — <@${authorUserId}> asked me to send it under your name and picture`
+          : '';
         return await requestPostConfirmation({
           abortSignal,
+          approverUserId: mirrored ?? env.OWNER_USER_ID ?? authorUserId,
           extendAttemptDeadline,
-          ownerUserId: env.OWNER_USER_ID ?? authorUserId,
           post: {
+            ...(mirrored ? { approverUserId: mirrored } : {}),
             blocks,
             body,
             identity,
             kind: 'postMessage',
             requestedBy: authorUserId,
-            summary: `post to ${where}${blocks ? ' (Block Kit)' : ''}${identity?.username ? ` as "${identity.username}"` : ''}${requestedFor}`,
+            summary: `post to ${where}${blocks ? ' (Block Kit)' : ''}${asWhom}${requestedFor}${askedBecause}`,
             target: { id, type },
           },
           thread: bot.thread(currentThreadId),

@@ -11,7 +11,7 @@ import {
   stashPendingPost,
 } from './pending';
 
-/** What the tool hands back to the model once the owner has (or hasn't) acted. */
+/** What the tool hands back once the approver has (or hasn't) acted. */
 export type ConfirmResult =
   | { success: true; summary: string }
   | { success: false; denied?: boolean; error?: string; summary?: string };
@@ -31,10 +31,17 @@ function preview(text: string): string {
 
 function confirmBlocks(id: string, post: PendingPost): unknown[] {
   const bodyPreview = post.kind === 'postMessage' ? post.body : post.text;
+  // A person asked to lend their face gets a different headline: they are not
+  // approving kyto's outbound post in general, they are deciding whether a
+  // message may go out under their name and picture.
+  const heading =
+    post.kind === 'postMessage' && post.identity && post.approverUserId
+      ? ':bust_in_silhouette: *This would go out as YOU — is that ok?*'
+      : ':lock: *Confirm before I send this*';
   return [
     {
       type: 'section',
-      text: mrkdwn(`:lock: *Confirm before I send this*\n${post.summary}`),
+      text: mrkdwn(`${heading}\n${post.summary}`),
     },
     ...(bodyPreview.trim()
       ? [
@@ -76,47 +83,58 @@ function outcomeToResult(
       ? { success: true, summary: outcome.detail }
       : { error: outcome.detail, success: false };
   }
+  // Named rather than "the owner": for an impersonated post the decision was
+  // someone else's, and the model must not tell the thread the owner refused.
+  const who =
+    post.kind === 'postMessage' && post.approverUserId
+      ? `<@${post.approverUserId}>`
+      : 'the owner';
   if (outcome?.decision === 'denied') {
     return {
       denied: true,
       success: false,
-      summary: `The owner denied this — I did NOT ${post.summary}. Do not retry it; acknowledge that they declined.`,
+      summary: `${who} denied this — I did NOT ${post.summary}. Do not retry it; acknowledge that they declined.`,
     };
   }
   return {
     success: false,
     summary: aborted
-      ? `Interrupted before the owner responded — I did NOT ${post.summary}.`
-      : `The owner did not respond within ${Math.round(
+      ? `Interrupted before ${who} responded — I did NOT ${post.summary}.`
+      : `${who} did not respond within ${Math.round(
           CONFIRM_WAIT_MS / 60_000
         )} minutes — I did NOT ${post.summary}. You can ask them again.`,
   };
 }
 
 /**
- * Hold an outward-facing post (cross-channel, or as the owner), show the owner
- * an ephemeral Confirm/Cancel button in the current thread, and BLOCK until
- * they choose (or the wait times out / the turn aborts). Returns the real
- * outcome so the model can say it sent it, that the owner declined, or that
- * nobody answered — never a premature "waiting…". Nothing is sent here; the
- * button handler performs the send and reports back through the pending row.
+ * Hold an outward-facing post (cross-channel, as the owner, or wearing someone
+ * else's face), show its APPROVER an ephemeral Confirm/Cancel button in the
+ * current thread, and BLOCK until they choose (or the wait times out / the turn
+ * aborts). Returns the real outcome so the model can say it sent it, that they
+ * declined, or that nobody answered — never a premature "waiting…". Nothing is
+ * sent here; the button handler performs the send and reports back through the
+ * pending row.
+ *
+ * `approverUserId` is the owner for everything except an impersonated post, where
+ * it is the person being impersonated. Whoever it is, it is stored on the row and
+ * re-checked when the button is clicked.
  */
 export async function requestPostConfirmation({
   abortSignal,
+  approverUserId,
   extendAttemptDeadline,
-  ownerUserId,
   post,
   thread,
 }: {
   abortSignal?: AbortSignal;
+  approverUserId: string;
   extendAttemptDeadline?: (extraMs: number) => void;
-  ownerUserId: string;
   post: PendingPost;
   thread: ThreadHandle;
 }): Promise<ConfirmResult> {
   const { id, wait } = stashPendingPost(post);
   const delivered = await thread.postEphemeral(
-    ownerUserId,
+    approverUserId,
     `Confirm before I send: ${post.summary}`,
     { blocks: confirmBlocks(id, post), fallbackToDM: true }
   );

@@ -10,6 +10,13 @@ import logger from '@/lib/logger';
 // OWNER-ONLY (enforced by the caller): wearing another member's name and avatar
 // is an impersonation vector, so only the bot owner may use it, and cross-channel
 // posts still pass through the confirm-click gate before they send.
+//
+// When the face belongs to a REAL PERSON, `mirroredUserId` names them, and the
+// caller sends the confirm click to THEM instead of the owner (owner's call,
+// 2026-07-30): the person whose name and picture go on the message is the one
+// with something to lose, so they are the one who gets to say yes. There is
+// nobody to ask for a made-up `asName`/`asIcon`, a plain-text name, or a BOT, so
+// those keep the owner's gate.
 
 const MENTION = /^<@([UWB][A-Z0-9]+)(?:\|[^>]*)?>$/;
 const RAW_ID = /^[UWB][A-Z0-9]+$/;
@@ -81,6 +88,17 @@ function iconFields(icon: string): { iconEmoji?: string; iconUrl?: string } {
   return {};
 }
 
+/** A resolved override, plus the real person (if any) whose face it wears. */
+export interface PostIdentity {
+  identity: ResolvedIdentity;
+  /**
+   * The Slack user id `asUser` mirrored, when it named a real PERSON. Whoever
+   * this is must consent before the post goes out — see the header comment. Unset
+   * for a bot, a plain-text name, or a fully invented asName/asIcon.
+   */
+  mirroredUserId?: string;
+}
+
 /**
  * Build the identity a post should wear from the model-supplied overrides.
  * Returns undefined when nothing was asked for, so the caller keeps kyto's
@@ -96,15 +114,20 @@ export async function resolvePostIdentity({
   asUser?: string;
   asName?: string;
   asIcon?: string;
-}): Promise<ResolvedIdentity | undefined> {
+}): Promise<PostIdentity | undefined> {
   if (!(asUser || asName || asIcon)) {
     return;
   }
   let identity: ResolvedIdentity = {};
+  let mirroredUserId: string | undefined;
   if (asUser) {
     const id = idOf(asUser);
     if (id) {
       identity = await lookupProfile(id);
+      // A `B…` id is a bot: no human behind it to ask, so it stays owner-gated.
+      if (!id.startsWith('B')) {
+        mirroredUserId = id;
+      }
     } else {
       // A plain name, not an id/mention — use it as the display name directly
       // (no avatar to copy).
@@ -120,7 +143,8 @@ export async function resolvePostIdentity({
     identity.iconEmoji = fields.iconEmoji;
     identity.iconUrl = fields.iconUrl;
   }
-  return identity.username || identity.iconUrl || identity.iconEmoji
-    ? identity
-    : undefined;
+  if (!(identity.username || identity.iconUrl || identity.iconEmoji)) {
+    return;
+  }
+  return { identity, ...(mirroredUserId ? { mirroredUserId } : {}) };
 }
