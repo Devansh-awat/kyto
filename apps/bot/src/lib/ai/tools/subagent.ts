@@ -9,9 +9,9 @@ import {
 import { tool } from 'ai';
 import { z } from 'zod';
 import type { KytoBot, Message, StreamChunk, ThreadHandle } from '@/harness';
-import type { ChunkRelay } from '@/lib/agent/relay';
 import { requestHints } from '@/lib/ai/hints';
 import { renderStream } from '@/lib/ai/stream';
+import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
 import { errorMessage } from '@/lib/utils/error';
 
@@ -21,19 +21,21 @@ import { errorMessage } from '@/lib/utils/error';
 // rung — see subagentAttempts). It runs the same multi-step tool loop as a turn
 // (streamAttempt drives it) and returns its final text as a report to the parent.
 //
-// Its work is surfaced INSIDE THE PARENT TURN'S PLAN BLOCK, not as a message of
-// its own: every card it produces — Prompt, Model, the same interleaved
-// thinking/tool cards a real turn shows (shared renderStream), and its Response —
-// is pushed through the turn's ChunkRelay and rendered among the parent's own
-// cards, titled with the subagent's label so whose work it is stays obvious.
-// Its report goes to the parent model as the tool result, and the parent speaks.
+// Its work is surfaced as ITS OWN streamed plan message, posted under kyto's bot
+// but NAMED for the subagent ("kyto subagent", or "kyto subagent {name}"), so the
+// run reads as a distinct agent doing distinct work. EVERYTHING lives inside that
+// one collapsible plan — a Prompt card (FULL task, unclamped), a Model card per
+// attempt, the same interleaved thinking/tool cards a real turn shows (shared
+// renderStream, in stream order), then a Response card holding its full report.
+// NOTHING goes in the message body, so the subagent never speaks: its report goes
+// to the parent model as the tool result, and the parent is the only voice.
 //
-// It used to post its own streamed "kyto subagent" Slack message. That put the
-// subagent's answer in the thread as a SECOND voice alongside kyto's, which read
-// as kyto answering twice — and for a background subagent the wake turn then
-// restated the same findings a third time. Owner's call: the run stays visible in
-// the plan, the talking is the main agent's job. Do NOT reintroduce a separate
-// message here.
+// This run was briefly folded into the PARENT's plan block instead (a ChunkRelay,
+// cards prefixed with the label), to stop the subagent's answer reading as kyto
+// answering twice. Owner's call, 2026-07-30: the distinct card is what they want
+// back — keeping the report out of the body is what stops the double voice, not
+// merging the cards. The LABEL rule stays fixed (nothing configurable decorates
+// it) and the subagent still has no icon of its own.
 //
 // Recursion is capped via AsyncLocalStorage. Only ONE level deep: a subagent may
 // NOT spawn a further subagent (a runaway recursive spawn is a real cost/time
@@ -78,16 +80,11 @@ interface SubagentJob {
 
 export function runSubagentTool({
   bot,
-  chunkRelay,
   getSandboxContext,
   message,
   thread,
 }: {
   bot: KytoBot;
-  // Where this subagent's cards are rendered: the parent turn's plan block. When
-  // absent (a reminder job, or the nested toolset of a subagent that can't spawn
-  // one anyway) the run is simply not visualised — the report still comes back.
-  chunkRelay?: ChunkRelay;
   // The PARENT turn's sandbox context — the subagent runs in the SAME sandbox,
   // so it shares the parent's files/workspace rather than booting its own.
   getSandboxContext: () => SandboxContext;
@@ -98,11 +95,6 @@ export function runSubagentTool({
   // between runSubagent (which registers) and checkSubagent (which collects).
   const jobs = new Map<string, SubagentJob>();
   let counter = 0;
-  // Every subagent this turn gets its own card-id namespace. renderStream mints
-  // ids like `reasoning-0` and the parent turn uses `model-0` — without a prefix
-  // a subagent's cards would land ON TOP of the parent's, and two concurrent
-  // subagents on top of each other.
-  let namespaces = 0;
 
   const runSubagent = tool({
     description:
@@ -165,15 +157,12 @@ export function runSubagentTool({
           // this tool needs toolset.ts's buildTools to give the subagent its own
           // full set (recursion is bounded by the depth cap above).
           const { buildTools } = await import('@/lib/ai/toolset');
-          // The subagent's label, used to title its cards in the parent's plan
+          // The subagent's label: the display name on its own streamed message,
           // so its work is never mistaken for the main agent's. Fixed on
           // purpose (owner's call): the name is only ever "kyto",
           // "kyto subagent", or "kyto subagent {name}" — nothing configurable
-          // decorates it.
+          // decorates it, and there is no icon override.
           const label = name ? `kyto subagent ${name}` : 'kyto subagent';
-          // This subagent's card-id namespace (see `namespaces`).
-          namespaces += 1;
-          const ns = `subagent-${namespaces}`;
 
           let close: (() => Promise<void>) | undefined;
           let ranTools = false;
@@ -192,45 +181,29 @@ export function runSubagentTool({
             close = built.close;
             const knownTools = new Set(Object.keys(built.tools));
 
-            // Every card the subagent produces goes into the PARENT turn's plan
-            // block via the relay, id-namespaced so it can't collide with the
-            // parent's own cards and titled with the subagent's label so the two
-            // are never confused. It renders like a real turn: a Prompt card (FULL
-            // task, unclamped), a Model card per attempt, the SAME interleaved
-            // thinking/tool cards a normal turn shows (shared renderStream, in
-            // stream order), then a Response card holding its FULL final report.
+            // The cards of the subagent's OWN plan message. Its ids live in that
+            // message alone, so they need no namespacing — a concurrent subagent
+            // (or the parent) is streaming into a different message entirely.
             const card = (
               id: string,
               title: string,
               status: 'complete' | 'error' | 'in_progress',
               output?: string
             ): StreamChunk => ({
-              id: `${ns}-${id}`,
+              id,
               output: status === 'in_progress' ? '' : (output ?? ''),
               status,
-              title: `${label} · ${title}`,
+              title,
               type: 'task_update',
             });
 
-            // Relay a chunk that came out of the shared renderStream (a tool or
-            // thinking card): same namespacing and labelling as `card`, applied to
-            // the ids and titles renderStream chose for itself. Only task cards
-            // are relayed — a `markdown_text` chunk is message BODY, and the
-            // subagent has no message of its own to put a body in.
-            const relayRendered = (chunk: string | StreamChunk): void => {
-              if (typeof chunk === 'string' || chunk.type !== 'task_update') {
-                return;
-              }
-              chunkRelay?.push({
-                ...chunk,
-                id: `${ns}-${chunk.id}`,
-                title: `${label} · ${chunk.title}`,
-              });
-            };
-
-            async function runSubagentStream(): Promise<void> {
-              chunkRelay?.push(card('prompt', 'Prompt', 'in_progress'));
-              chunkRelay?.push(card('prompt', 'Prompt', 'complete', task));
+            // Yielded into the subagent's own `slack.stream`, so a card lands as
+            // it happens rather than in one lump at the end.
+            async function* subagentChunks(): AsyncGenerator<
+              string | StreamChunk
+            > {
+              yield card('prompt', 'Prompt', 'in_progress');
+              yield card('prompt', 'Prompt', 'complete', task);
               // Walk the subagent roster. The cheap pinned tier returns an empty
               // completion often enough that a single model left a whole "herd"
               // of subagents reporting nothing back, so an attempt that produces
@@ -239,7 +212,7 @@ export function runSubagentTool({
               for (const [index, attempt] of subagentAttempts.entries()) {
                 const modelTaskId = `model-${index}`;
                 const modelTitle = index > 0 ? 'Model · fallback' : 'Model';
-                chunkRelay?.push(card(modelTaskId, modelTitle, 'in_progress'));
+                yield card(modelTaskId, modelTitle, 'in_progress');
                 try {
                   const result = streamAttempt({
                     abortSignal,
@@ -251,10 +224,11 @@ export function runSubagentTool({
                     system,
                     tools: built.tools,
                   });
-                  // No emitText: the subagent's prose is NOT posted as a message.
-                  // It's captured here, shown as the Response card below, and
-                  // returned to the parent model, which is what speaks.
-                  for await (const chunk of renderStream({
+                  // No emitText: the subagent's prose is NOT streamed into the
+                  // message body — it stays inside the collapsible plan (the
+                  // Response card below) and goes to the parent model, which is
+                  // the only voice in the thread.
+                  yield* renderStream({
                     knownTools,
                     onTextDelta: (text) => {
                       report += text;
@@ -263,16 +237,20 @@ export function runSubagentTool({
                       ranTools = true;
                     },
                     stream: result.fullStream,
-                  })) {
-                    relayRendered(chunk);
-                  }
-                  chunkRelay?.push(
-                    card(modelTaskId, modelTitle, 'complete', attempt.model)
+                  });
+                  yield card(
+                    modelTaskId,
+                    modelTitle,
+                    'complete',
+                    attempt.model
                   );
                 } catch (error) {
                   lastError = error;
-                  chunkRelay?.push(
-                    card(modelTaskId, modelTitle, 'error', errorMessage(error))
+                  yield card(
+                    modelTaskId,
+                    modelTitle,
+                    'error',
+                    errorMessage(error)
                   );
                 }
                 // A model that ran tools but wrote nothing leaves the parent with
@@ -296,20 +274,25 @@ export function runSubagentTool({
               }
               const finalReport = report.trim();
               if (finalReport || ranTools) {
-                chunkRelay?.push(card('response', 'Response', 'in_progress'));
-                chunkRelay?.push(
-                  card(
-                    'response',
-                    'Response',
-                    'complete',
-                    finalReport ||
-                      '(Completed actions with no additional message.)'
-                  )
+                yield card('response', 'Response', 'in_progress');
+                yield card(
+                  'response',
+                  'Response',
+                  'complete',
+                  finalReport ||
+                    '(Completed actions with no additional message.)'
                 );
               }
             }
 
-            await runSubagentStream();
+            // The subagent's own message: named for it, plan-mode, and nothing in
+            // the body. Streamed live, so the cards fill in as it works.
+            await slack.stream(thread.id, subagentChunks(), {
+              recipientTeamId: slack.teamId ?? '',
+              recipientUserId: message.author.userId,
+              taskDisplayMode: 'plan',
+              username: label,
+            });
 
             report = report.trim();
             if (report) {

@@ -24,7 +24,6 @@ import {
   stripRepeatedLines,
 } from '@/lib/agent/degenerate';
 import { buildPrompt } from '@/lib/agent/prompt';
-import { createChunkRelay } from '@/lib/agent/relay';
 import { createReply } from '@/lib/agent/reply';
 import {
   attemptKey,
@@ -246,14 +245,7 @@ async function executeTurn(
     | { outputTokens: number; tokensPerSecond: number }
     | undefined;
 
-  // Task cards from outside the model stream — a subagent's run — rendered into
-  // this turn's plan block. Closed at turn end so a background subagent that
-  // outlives the turn stops pushing into a plan nobody is draining any more; its
-  // report still comes back as a wake turn.
-  const chunkRelay = createChunkRelay();
-
   const cleanup = async (): Promise<void> => {
-    chunkRelay.close();
     revokeProxyToken(slackProxySecret);
     await closeTools?.().catch(() => undefined);
     await sandboxSession.destroy().catch(() => undefined);
@@ -416,7 +408,6 @@ async function executeTurn(
     // drives deferred-tool visibility via prepareStep.
     const built = await buildTools({
       bot,
-      chunkRelay,
       extendAttemptDeadline: (extraMs) => extendDeadline?.(extraMs),
       getSandboxContext: () => sandboxContext,
       message: turnMessage,
@@ -1069,40 +1060,11 @@ async function executeTurn(
       message: turnMessage,
       thread: turnThread,
     })[Symbol.asyncIterator]();
-    // A pulled-but-unconsumed model-stream promise. When a relayed subagent card
-    // wins the race below, this promise MUST be kept rather than re-requested —
-    // calling next() twice on the same iterator would drop a chunk on the floor.
-    let sourcePull: Promise<IteratorResult<string | StreamChunk>> | undefined;
-    // Take the next thing to render from either the model stream or the subagent
-    // relay, whichever produces first. Relayed cards are checked before sleeping
-    // so a burst that arrived while we were committed to the model stream drains
-    // in order.
-    const nextRendered = async (): Promise<
-      IteratorResult<string | StreamChunk>
-    > => {
-      const relayed = chunkRelay.take();
-      if (relayed) {
-        return { done: false, value: relayed };
-      }
-      sourcePull ??= source.next();
-      const winner = await Promise.race([
-        sourcePull.then((result) => ({ kind: 'source' as const, result })),
-        chunkRelay.wait().then(() => ({ kind: 'relay' as const })),
-      ]);
-      if (winner.kind === 'source') {
-        sourcePull = undefined;
-        return winner.result;
-      }
-      const pushed = chunkRelay.take();
-      // A wake with nothing behind it means the relay closed; fall through to the
-      // model stream, which is the only thing that can end the turn.
-      if (!pushed) {
-        const result = await sourcePull;
-        sourcePull = undefined;
-        return result;
-      }
-      return { done: false, value: pushed };
-    };
+    // The model stream is the only source of this turn's cards: a subagent
+    // streams its OWN plan message (see tools/subagent.ts), so nothing races
+    // against this iterator.
+    const nextRendered = (): Promise<IteratorResult<string | StreamChunk>> =>
+      source.next();
     let pending = await nextRendered();
     while (!pending.done) {
       // Reply text before any plan block of this segment (a pure-text turn, or

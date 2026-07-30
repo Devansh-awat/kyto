@@ -104,7 +104,7 @@ catalogue in nine days — don't hard-code a `:free` slug as a permanent rung.
 instructions + compacted + history is a stable append-only prefix. If anyone
 adds a new block, it goes below `history` or the cache breaks again silently —
 the only symptom is the bill.
-about caching can we check logs to see if its being cached
+about caching can we check logs to see if its being cached. PLS DO THIS
 
 **The ChatGPT account is parked until 2026-08-23.** The linked account is on a
 FREE plan and its quota is spent; the 429 named that reset date, which is now
@@ -154,8 +154,7 @@ message kyto already decided to ignore. Likely: the skip tool result re-enters
 the agent loop instead of terminating it, OR the same message re-arrives as a new
 event (the other bots replying in-thread each re-trigger kyto). Check
 `isBareSkipText` / the `skip` tool handler and whether `shouldIgnore` re-fires per
-sibling-bot message. This is the highest-cost item here.
-
+sibling-bot message. This is the highest-cost item here. And it needed a @kyto!stop to prevent endless use.
 **Subagent no longer gets its own card with its own name — regression.** It used
 to render as a separate card labelled with the subagent's name; owner liked that
 and wants it back ("was this changed recently cuz it was diff earlier. i liked
@@ -187,3 +186,5 @@ behind), and kyto fell back to curl. The browser tool needs a working headless
 display in the E2B template. Check `build:template` (it's supposed to install
 `agent-browser` + browser deps) and how the browser tool starts/reuses Xvfb —
 starting a second Xvfb on an occupied display is the visible symptom.
+
+someone uninstalled kyto, ive updated the both user and bot tokens. 
