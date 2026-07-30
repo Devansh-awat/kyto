@@ -2,6 +2,7 @@ import { CommandExitError, Sandbox } from '@e2b/code-interpreter';
 import type { Logger } from '@repo/logging/logger';
 import { ALL_TRAFFIC, type SandboxNetworkOpts } from 'e2b';
 import { sandboxConfig as config } from './config';
+import { DISPLAY_INSTALL_COMMAND } from './display';
 import { GIT_HARDEN_COMMAND } from './git-safety';
 
 // gh/git need SOME token value to act authenticated; the real one is injected
@@ -234,6 +235,17 @@ export class LazySandbox {
         this.logger.warn(
           { err: errorText(error), sandboxId: sandbox.sandboxId },
           '[sandbox] git hardening failed'
+        );
+      });
+    // Install the shared-display helper. Writing a file, not starting a server:
+    // a chat-only turn pays nothing, and the first thing that needs a headful
+    // browser gets one display that every later caller reuses (see display.ts).
+    await sandbox.commands
+      .run(DISPLAY_INSTALL_COMMAND, { cwd: this.workDir, timeoutMs: 15_000 })
+      .catch((error: unknown) => {
+        this.logger.warn(
+          { err: errorText(error), sandboxId: sandbox.sandboxId },
+          '[sandbox] display helper install failed'
         );
       });
     if (!this.bootstrapCommand) {

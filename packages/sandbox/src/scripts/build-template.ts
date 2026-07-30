@@ -73,11 +73,14 @@ async function main(): Promise<void> {
           'jq',
           'sudo',
           // A real display for the stealth browser: some anti-bot checks flag
-          // headless Chromium even with CloakBrowser's fingerprint patches.
-          // xauth is a hard runtime dependency of xvfb-run that
-          // noInstallRecommends leaves out ("xauth command not found").
+          // headless Chromium even with CloakBrowser's fingerprint patches. The
+          // display itself is started by `kyto-display` (see display.ts), which
+          // needs Xvfb present here. procps gives it pgrep, which is how it tells
+          // a live server from a stale lock file; xauth is xvfb-run's dependency,
+          // kept for any script that still reaches for it.
           'xvfb',
           'xauth',
+          'procps',
         ],
         { noInstallRecommends: true }
       )

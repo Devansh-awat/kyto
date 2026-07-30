@@ -1,4 +1,5 @@
 export { sandboxConfig } from './config';
+export { DISPLAY_INSTALL_COMMAND, SANDBOX_DISPLAY } from './display';
 export {
   GIT_HARDEN_COMMAND,
   type GitSanitizeResult,

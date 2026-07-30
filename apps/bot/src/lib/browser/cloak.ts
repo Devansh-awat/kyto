@@ -34,11 +34,12 @@ if [ ! -x "$BIN" ]; then
   exit 1
 fi
 
-# Some sites detect headless even through the C++ patches, so prefer a real
-# display via Xvfb and only fall back to headless when it cannot be installed.
-if ! command -v xvfb-run >/dev/null 2>&1; then
-  sudo apt-get install -y -qq xvfb >/dev/null 2>&1 || true
-fi
+# Some sites detect headless even through the C++ patches, so run HEADFUL on the
+# sandbox's ONE shared display (kyto-display, installed at materialization —
+# idempotent, and it clears the stale lock that used to make every later start
+# fail). Previously this wrapped Chromium in \`xvfb-run -a\`, a throwaway display
+# per launch that a model-written script's own Xvfb then fought over.
+DISPLAY_ID="$(kyto-display 2>>/tmp/cloak.log)"
 
 SEED=$(( ($$ % 90000) + 10000 ))
 ARGS="--remote-debugging-port=$CDP --no-sandbox --fingerprint=$SEED --fingerprint-platform=windows --user-data-dir=$HOME/.cloakbrowser-profile"
@@ -52,17 +53,17 @@ wait_alive() {
   return 1
 }
 
-if command -v xvfb-run >/dev/null 2>&1; then
-  nohup xvfb-run -a "$BIN" $ARGS >/tmp/cloak.log 2>&1 &
+if [ -n "$DISPLAY_ID" ]; then
+  nohup env DISPLAY="$DISPLAY_ID" "$BIN" $ARGS >>/tmp/cloak.log 2>&1 &
 else
-  nohup "$BIN" $ARGS --headless=new >/tmp/cloak.log 2>&1 &
+  nohup "$BIN" $ARGS --headless=new >>/tmp/cloak.log 2>&1 &
 fi
 
-# The Xvfb path can fail for its own reasons (a missing xauth once took the
+# The display path can fail for its own reasons (a missing xauth once took the
 # whole tool down) — a headless stealth browser beats no browser, so retry
 # headless before giving up.
 if ! wait_alive; then
-  echo "cloakbrowser: xvfb launch failed, retrying headless" >>/tmp/cloak.log
+  echo "cloakbrowser: headful launch failed, retrying headless" >>/tmp/cloak.log
   nohup "$BIN" $ARGS --headless=new >>/tmp/cloak.log 2>&1 &
   if ! wait_alive; then
     echo "cloakbrowser: chromium did not come up"
