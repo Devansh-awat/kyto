@@ -14,7 +14,11 @@ import { slack } from '@/lib/chat';
 import { requestPostConfirmation } from '@/lib/confirm-post/request';
 import { type ResolvedIdentity, resolveIdentity } from '@/lib/identity';
 import { resolvePostIdentity } from '@/lib/post-identity';
-import { toRawSlackChannelId } from '@/lib/slack/ids';
+import {
+  isRawSlackChannelId,
+  toRawSlackChannelId,
+  toRawSlackUserId,
+} from '@/lib/slack/ids';
 
 interface PostTarget {
   id: string;
@@ -170,6 +174,22 @@ export function postMessageTool({
       { abortSignal }
     ) => {
       const target = type === 'user' ? undefined : rawChannelOf(id);
+      // Reject a wrong-shaped id BEFORE it can be queued and confirmed. The model
+      // sometimes passes a message timestamp (`1785…`) as a "channel", or a DM
+      // channel id as a "user" — either sails through the gate below and only
+      // fails deep in the Web API as `channel_not_found`, sometimes after the
+      // approver has already clicked Confirm. Fail here with actionable text so
+      // the model can correct the id instead of the human seeing a dead confirm.
+      if (type === 'user' && !toRawSlackUserId(id)) {
+        return {
+          error: `"${id}" is not a Slack user id, so it can't be a DM target. To DM someone pass their user id (U…/W… or an <@mention>) with type "user". To reply inside an existing DM or channel thread, use type "thread" with a slack:CHANNEL:TS id.`,
+        };
+      }
+      if (target !== undefined && !isRawSlackChannelId(target)) {
+        return {
+          error: `"${id}" is not a Slack channel/thread id — it looks like a message timestamp. Pass a channel id (C…/G…/D…), an <#channel> mention, or a slack:CHANNEL[:TS] thread id.`,
+        };
+      }
       const crossChannelForNonOwner =
         !(isOwner || type === 'user') && target !== currentChannel;
       // A non-owner asking to post into a DIFFERENT channel used to be refused

@@ -32,6 +32,16 @@ export function toRawSlackChannelId(id: string): string {
   return id.startsWith('slack:') ? (id.split(':')[1] ?? id) : id;
 }
 
+/**
+ * True only for a bare raw Slack channel id (C…/G…/D…). Used to reject a value
+ * that is really a message TIMESTAMP (`1785…`) or a user id before it reaches
+ * the Web API, where the mistake surfaces as a cryptic `channel_not_found` —
+ * sometimes only AFTER a human has clicked Confirm on a queued post.
+ */
+export function isRawSlackChannelId(id: string): boolean {
+  return RAW_SLACK_CHANNEL_ID.test(id);
+}
+
 // Normalize the many shapes a channel reference arrives in (a Chat SDK id, a raw
 // `C123` id, a `<#C123|name>` mention, or a bare `#C123`) into a Chat SDK
 // `slack:CHANNEL` id. Throws only when the value can't be a Slack channel at all.
