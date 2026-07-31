@@ -66,7 +66,12 @@ import {
   slackHelperInstall,
   slackProxyEnv,
 } from '@/lib/slack-proxy';
-import { deepErrorText, errorMessage, errorStatus } from '@/lib/utils/error';
+import {
+  deepErrorText,
+  describeMalformedPrompt,
+  errorMessage,
+  errorStatus,
+} from '@/lib/utils/error';
 import { clamp } from '@/lib/utils/text';
 import type { ActiveTurn, AgentErrorStage } from '@/types/agent';
 import type { AttemptFailure } from '@/types/attempts';
@@ -965,6 +970,9 @@ async function executeTurn(
               attempt: attemptLog(currentAttempt),
               err: errorMessage(error),
               errorDetail: clamp(deepErrorText(error), ERROR_LOG_MAX_LENGTH),
+              // Which message is malformed (roles + content SHAPE, no text) —
+              // this is the line that says WHY assembly failed.
+              promptShape: describeMalformedPrompt(error),
               threadId,
             },
             '[agent] prompt construction failed; this is a kyto bug, not a model failure — not falling back'
