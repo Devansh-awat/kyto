@@ -61,6 +61,26 @@ export async function resolveUserProfile(
   };
 }
 
+/**
+ * A human label for a Slack user id — real name, else display name, else the
+ * raw id. For surfaces (the dashboard) that would otherwise show a bare `U…`.
+ */
+export async function resolveUserName(userId: string): Promise<string> {
+  const profile = await resolveUserProfile(userId).catch(() => undefined);
+  return profile?.realName || profile?.displayName || userId;
+}
+
+/** Resolve many user ids to labels at once, as a `{ id → label }` map. */
+export async function resolveUserNames(
+  userIds: string[]
+): Promise<Map<string, string>> {
+  const unique = [...new Set(userIds)];
+  const entries = await Promise.all(
+    unique.map(async (id) => [id, await resolveUserName(id)] as const)
+  );
+  return new Map(entries);
+}
+
 export async function resolveChannelName(
   channelId: string
 ): Promise<string | undefined> {

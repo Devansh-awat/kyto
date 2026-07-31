@@ -12,6 +12,7 @@ import {
 } from '@repo/db/queries';
 import { env } from '@/env';
 import logger from '@/lib/logger';
+import { resolveUserNames } from '@/lib/slack/names';
 import { loginPage, memoryPage, overviewPage } from './render';
 import {
   clearCookie,
@@ -64,7 +65,14 @@ async function overview(csrf: string): Promise<Response> {
     listGithubRequests('pending'),
     listGithubTrust(),
   ]);
-  return html(overviewPage({ csrf, memories, requests, trust }));
+  // Resolve every Slack id on the page to a real name so a grant reads as a
+  // person, not a `U…`. Best-effort: an unresolvable id falls back to itself.
+  const names = await resolveUserNames([
+    ...memories.map((memory) => memory.createdBy),
+    ...requests.map((request) => request.userId),
+    ...trust.map((row) => row.userId),
+  ]).catch(() => undefined);
+  return html(overviewPage({ csrf, memories, names, requests, trust }));
 }
 
 /** Every mutation funnels through here: live session + matching CSRF token. */
@@ -263,7 +271,10 @@ export async function handleDashboard(
           status: 404,
         });
       }
-      return html(memoryPage({ csrf: session.csrf, memory }));
+      const names = await resolveUserNames([memory.createdBy]).catch(
+        () => undefined
+      );
+      return html(memoryPage({ csrf: session.csrf, memory, names }));
     }
     return new Response('Not found', { headers: HTML_HEADERS, status: 404 });
   } catch (error) {

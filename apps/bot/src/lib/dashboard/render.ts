@@ -78,20 +78,35 @@ function hidden(csrf: string): string {
   return `<input type="hidden" name="csrf" value="${escapeHtml(csrf)}">`;
 }
 
-function memoryCard(memory: Memory): string {
+// A resolved `{ userId → display name }` map. The dashboard shows the name and
+// keeps the raw id alongside in muted text, so a grant is still auditable by id.
+type Names = Map<string, string>;
+
+function userLabel(userId: string, names?: Names): string {
+  const name = names?.get(userId);
+  return name && name !== userId
+    ? `${escapeHtml(name)} <span class="muted">(${escapeHtml(userId)})</span>`
+    : escapeHtml(userId);
+}
+
+function memoryCard(memory: Memory, names?: Names): string {
   const tag = memory.isGlobal
     ? '<span class="tag global">global</span>'
     : '<span class="tag">private</span>';
   return `<div class="card"><div class="row">
   <div><a href="/_dashboard/memory/${memory.id}">${escapeHtml(memory.title)}</a> ${tag}
     <div class="muted">${escapeHtml(memory.summary)}</div>
-    <div class="muted">saved by ${escapeHtml(memory.createdBy)} · ${memory.createdAt.toISOString().slice(0, 10)}</div>
+    <div class="muted">saved by ${userLabel(memory.createdBy, names)} · ${memory.createdAt.toISOString().slice(0, 10)}</div>
   </div></div></div>`;
 }
 
-function requestCard(request: GithubRequest, csrf: string): string {
+function requestCard(
+  request: GithubRequest,
+  csrf: string,
+  names?: Names
+): string {
   return `<div class="card">
-  <div><strong>${escapeHtml(request.repo)}</strong> <span class="muted">requested by ${escapeHtml(request.userId)} · ${request.createdAt.toISOString().slice(0, 16).replace('T', ' ')}</span></div>
+  <div><strong>${escapeHtml(request.repo)}</strong> <span class="muted">requested by ${userLabel(request.userId, names)} · ${request.createdAt.toISOString().slice(0, 16).replace('T', ' ')}</span></div>
   <pre>${escapeHtml(request.command)}</pre>
   <div class="actions">
     <form method="post" action="/_dashboard/github/request/${request.id}/approve">${hidden(csrf)}
@@ -103,9 +118,9 @@ function requestCard(request: GithubRequest, csrf: string): string {
   </div></div>`;
 }
 
-function trustRow(trust: GithubTrust, csrf: string): string {
+function trustRow(trust: GithubTrust, csrf: string, names?: Names): string {
   const scope = trust.allRepos ? 'all repos' : trust.repos.join(', ') || 'none';
-  return `<tr><td>${escapeHtml(trust.userId)}</td><td class="muted">${escapeHtml(scope)}</td>
+  return `<tr><td>${userLabel(trust.userId, names)}</td><td class="muted">${escapeHtml(scope)}</td>
   <td><form method="post" action="/_dashboard/github/trust/${encodeURIComponent(trust.userId)}/revoke">${hidden(csrf)}
     <button class="danger" type="submit">Revoke</button></form></td></tr>`;
 }
@@ -115,11 +130,13 @@ export function overviewPage({
   memories,
   requests,
   trust,
+  names,
 }: {
   csrf: string;
   memories: Memory[];
   requests: GithubRequest[];
   trust: GithubTrust[];
+  names?: Names;
 }): string {
   const pending = memories.filter((memory) => !memory.isGlobal);
   const global = memories.filter((memory) => memory.isGlobal);
@@ -133,14 +150,14 @@ export function overviewPage({
 ${
   requests.length === 0
     ? '<p class="muted">Nothing waiting.</p>'
-    : requests.map((request) => requestCard(request, csrf)).join('')
+    : requests.map((request) => requestCard(request, csrf, names)).join('')
 }
 
 <h2>GitHub trust (${trust.length})</h2>
 ${
   trust.length === 0
     ? '<p class="muted">Nobody is trusted to write to repos kyto does not own.</p>'
-    : `<table><tr><th>User</th><th>Scope</th><th></th></tr>${trust.map((row) => trustRow(row, csrf)).join('')}</table>`
+    : `<table><tr><th>User</th><th>Scope</th><th></th></tr>${trust.map((row) => trustRow(row, csrf, names)).join('')}</table>`
 }
 <div class="actions">
   <form method="post" action="/_dashboard/github/trust">${hidden(csrf)}
@@ -153,14 +170,14 @@ ${
 ${
   pending.length === 0
     ? '<p class="muted">Nothing to review.</p>'
-    : pending.map(memoryCard).join('')
+    : pending.map((memory) => memoryCard(memory, names)).join('')
 }
 
 <h2>Global memories (${global.length})</h2>
 ${
   global.length === 0
     ? '<p class="muted">None promoted yet.</p>'
-    : global.map(memoryCard).join('')
+    : global.map((memory) => memoryCard(memory, names)).join('')
 }`
   );
 }
@@ -168,15 +185,17 @@ ${
 export function memoryPage({
   csrf,
   memory,
+  names,
 }: {
   csrf: string;
   memory: Memory;
+  names?: Names;
 }): string {
   return page(
     memory.title,
     `<p class="muted"><a href="/_dashboard">&larr; back</a></p>
 <h1>${escapeHtml(memory.title)} ${memory.isGlobal ? '<span class="tag global">global</span>' : '<span class="tag">private</span>'}</h1>
-<p class="muted">saved by ${escapeHtml(memory.createdBy)} · ${memory.createdAt.toISOString().replace('T', ' ').slice(0, 16)}${
+<p class="muted">saved by ${userLabel(memory.createdBy, names)} · ${memory.createdAt.toISOString().replace('T', ' ').slice(0, 16)}${
       memory.promotedAt
         ? ` · promoted ${memory.promotedAt.toISOString().slice(0, 10)}`
         : ''
