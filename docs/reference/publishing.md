@@ -1,9 +1,13 @@
 # Publishing the source
 
-Kyto's source is published so it can be **read**, not taken: see [`LICENSE`](../../LICENSE)
-(source-available, all rights reserved) and [`LICENSE-gorkie-MIT`](../../LICENSE-gorkie-MIT).
-This page records the pre-publication audit and the things that constrain it, so
-the next person deciding whether to make the repo public is not re-deriving it.
+Kyto is licensed **AGPL-3.0** (owner's call, 2026-07-31 — it replaced the earlier
+source-available/all-rights-reserved licence): see [`LICENSE`](../../LICENSE) for
+the full text, [`NOTICE`](../../NOTICE) for the copyright and third-party
+attributions, and [`LICENSE-gorkie-MIT`](../../LICENSE-gorkie-MIT) for the
+gorkie-derived carve-out. AGPL is strong copyleft: run a modified Kyto as a
+network service and you must offer users your modified source. This page records
+the pre-publication audit and the things that constrain it, so the next person
+deciding whether to make the repo public is not re-deriving it.
 
 ## The licence is not a clean slate
 
@@ -14,9 +18,11 @@ still contains gorkie's full history — the initial commit is gorkie's, and
 MIT permits relicensing a derivative work under stricter terms, but it does **not**
 let anyone withdraw the permissions already granted for the original code. So:
 
-- Kyto's own code is all-rights-reserved (`LICENSE`).
+- Kyto's own code is AGPL-3.0 (`LICENSE`). AGPL can incorporate MIT code (MIT is
+  permissive and GPL/AGPL-compatible), so the combined work ships under AGPL.
 - Gorkie-derived code, and the pre-rewrite history, stays MIT (`LICENSE-gorkie-MIT`),
-  and that notice must be retained.
+  and that notice must be retained — the MIT grant on that code cannot be
+  withdrawn, so anyone may still extract those portions under MIT.
 - A blanket "nobody may copy or use any of this" over the whole repository would
   be inaccurate while gorkie's code and history are present.
 
