@@ -8,6 +8,7 @@ import {
   type ToolCallRepairFunction,
   type ToolSet,
 } from 'ai';
+import { addCacheControl } from './cache-control';
 import { fetchWithGatewayRetry, type GatewayRetryInfo } from './gateway-retry';
 import {
   GEMINI_PROVIDER,
@@ -592,62 +593,6 @@ function tuneBody(
   } catch {
     return null;
   }
-}
-
-// A 1-hour cache breakpoint. Anthropic (and OpenRouter's passthrough to it)
-// accept `ttl: '1h'` to extend the default 5-minute ephemeral cache to an hour,
-// so the big system+tools prefix stays cached across a thread's sporadic turns
-// (not just within one multi-step loop). Providers without extended TTL ignore
-// the field; a bare `{ type: 'ephemeral' }` would just fall back to 5 minutes.
-const CACHE_CONTROL = { ttl: '1h', type: 'ephemeral' } as const;
-
-// Attach the cache breakpoint to a message's last text block, converting a
-// string body to the content-array form OpenRouter expects. Leaves
-// non-text/assistant/tool messages untouched (only called on system and user
-// messages, whose content the SDK sends as plain strings).
-function markCacheBreakpoint(message: Record<string, unknown>): boolean {
-  const content = message.content;
-  if (typeof content === 'string') {
-    if (content.length === 0) {
-      return false;
-    }
-    message.content = [
-      { cache_control: CACHE_CONTROL, text: content, type: 'text' },
-    ];
-    return true;
-  }
-  if (Array.isArray(content) && content.length > 0) {
-    const last = content.at(-1);
-    if (last && typeof last === 'object') {
-      (last as Record<string, unknown>).cache_control = CACHE_CONTROL;
-      return true;
-    }
-  }
-  return false;
-}
-
-// Two breakpoints, both on stable content: the last system message (caches the
-// tools + system prefix — the big constant chunk) and the last user message
-// (extends the cached prefix over the replayed thread history). Within a
-// multi-step tool loop these two stay fixed, so every step reads the cached
-// prefix instead of re-billing it. Anthropic allows up to 4 breakpoints; two is
-// safe. Providers without explicit caching ignore the field.
-function addCacheControl(payload: Record<string, unknown>): boolean {
-  const messages = payload.messages;
-  if (!Array.isArray(messages)) {
-    return false;
-  }
-  const reversed = [...messages].reverse() as Record<string, unknown>[];
-  let changed = false;
-  const lastSystem = reversed.find((m) => m.role === 'system');
-  if (lastSystem && markCacheBreakpoint(lastSystem)) {
-    changed = true;
-  }
-  const lastUser = reversed.find((m) => m.role === 'user');
-  if (lastUser && lastUser !== lastSystem && markCacheBreakpoint(lastUser)) {
-    changed = true;
-  }
-  return changed;
 }
 
 function requestUrl(input: string | URL | Request): string {
