@@ -69,7 +69,7 @@
         "users:read",
         "users:read.email"
       ],
-      "user": ["chat:write", "im:write", "pins:write"]
+      "user": ["chat:write", "im:write", "pins:write", "search:read"]
     },
     "pkce_enabled": false
   },
