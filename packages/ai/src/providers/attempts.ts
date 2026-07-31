@@ -161,17 +161,18 @@ export const subagentAttempt: ModelAttempt | undefined = subagentAttempts[0];
 // provider keys rate-limited or in cooldown"). Re-add rungs here only after
 // verifying a real completion succeeds.
 export const LEADERBOARD_FALLBACK: ModelAttempt[] = [
-  // DeepSeek V4 Flash (today's 0731 retrain) — TRIAL rung, owner's call
-  // 2026-07-31. Cheaper than the primary on both sides ($0.14/M in, $0.28/M out
-  // vs $0.32/$1.28) and reportedly stronger at tool-calling, but it is a public
-  // BETA and, crucially, a reasoning model whose thinking can push time-to-first
-  // -byte past HackClub's 5s header timeout. It runs here WITH thinking on (the
-  // default `reasoning: { effort: 'medium' }` every HackClub attempt gets) so we
-  // can see in the journal whether it clears the 5s gate the way qwen does or
-  // 504s — as the TOP fallback it answers real threads when the primary drops,
-  // and if it times out kyto simply falls through to M3 below. Promote to primary
-  // only once its live output and TTFB are proven. Verified proxied as
-  // `deepseek/deepseek-v4-flash-0731` on ai.hackclub.com/proxy/v1/models.
+  // DeepSeek V4 Flash (the 0731 retrain) — kept as a rung but currently DEAD on
+  // this proxy, and therefore NOT promotable to primary despite being stronger
+  // on benchmarks (owner's finding, 2026-07-31). Every attempt so far 404s with
+  // "No endpoints available matching your guardrail restrictions and data
+  // policy" — i.e. OpenRouter (which backs HackClub's proxy) has no provider for
+  // this model that satisfies HackClub's account-level data policy. That is a
+  // toggle on HackClub's OpenRouter privacy settings, not something kyto can fix
+  // in code and not a timeout; it will keep 404ing (fast, no gateway-retry,
+  // immediate fall-through to M3) until HackClub enables a matching provider.
+  // The moment a real 200 shows in the journal, revisit promoting it to primary.
+  // Verified LISTED as `deepseek/deepseek-v4-flash-0731` on
+  // ai.hackclub.com/proxy/v1/models, but listed != runnable.
   catalogAttempt('deepseek/deepseek-v4-flash-0731'),
   // MiniMax M3 ($0.30/M in, $1.20/M out, 1M ctx) — marginally cheaper than the
   // primary and the same context class, so a fallback costs nothing extra and
