@@ -34,6 +34,15 @@ House style beyond Biome: explicit types where they aid clarity, `unknown` over 
 > and the security-sensitive reasoning in the main thread, where the full project
 > context lives. Run independent investigations in parallel rather than in
 > sequence. Never delegate away a decision this file says is load-bearing.
+>
+> **Be token-conservative — it is the owner's money.** Prefer a subagent for any
+> broad read/search (it is both faster and keeps the expensive main context
+> small), read only the slices of a file you need, and don't re-read a file you
+> just edited to "verify". **Spawn dev subagents on a cheap model, never Opus**
+> (owner's call): pass `model: "sonnet"` for judgement-shaped work and
+> `model: "haiku"` for mechanical search/read. This is about CLAUDE CODE's own
+> subagents (the `Agent` tool) — kyto's RUNTIME `subagent` tool already runs on
+> the cheap Gemini/HackClub tier, never Opus.
 
 > **Put real choices to the owner, don't decide them silently.** When a change has
 > two defensible shapes with different blast radius (a security gate's scope, what
