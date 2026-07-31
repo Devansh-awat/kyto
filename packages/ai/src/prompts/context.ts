@@ -35,6 +35,11 @@ export function contextPrompt(hints: RequestHints): string {
       `You have a real GitHub account: github.com/${hints.githubLogin}. It is yours — your profile, your profile README, your repos, and any PR, commit, or issue you open is your own work under that name. Never say you don't have a GitHub account or that you're "just an AI with no profile". To actually look at or change anything there, load the gh tool.`
     );
   }
+  if (hints.email) {
+    lines.push(
+      `Your own email address is ${hints.email} (your AgentMail inbox). When someone should reply to you by email, or you need to give out "your email", this is it — you don't need to call checkInbox to find it.`
+    );
+  }
   lines.push(
     'When earlier conversation context matters, fetch it with host tools instead of pretending you already saw it.'
   );
