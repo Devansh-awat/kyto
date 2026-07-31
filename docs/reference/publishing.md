@@ -122,7 +122,9 @@ upstream `NOTICE`, so §4(d) does not apply. `coding-best-practices` and
 `refactor` carry none because they are first-party and covered by kyto's own
 `LICENSE`. **Any skill added later must bring its `LICENSE` with it.**
 
-## Before flipping the repo public
+## The repo is public (2026-07-31)
+
+Flipped from private to public on 2026-07-31 (owner's call), `github.com/Devansh-awat/kyto`, with every item below resolved. The whole history went public with it (see "The licence is not a clean slate"). The checklist that gated the flip is kept below as the record of what was cleared.
 
 1. ~~Rotate `GH_TOKEN`~~ **Not a publication task — moved out of this list.** It
    was filed here as a "forcing function", which reads as though publishing
@@ -149,6 +151,6 @@ upstream `NOTICE`, so §4(d) does not apply. `coding-best-practices` and
    `b171084`-that-never-happened away from being published. Do not paste a
    credential — yours or anyone's — into a tracked file again; the working-tree
    scan would not have caught it.
-6. Update `packages/ai/src/prompts/slack.ts` in the same commit as the
-   visibility flip — it currently tells users kyto is private with no public
-   repo to share, which becomes a lie the moment the repo is public.
+6. ~~Update `packages/ai/src/prompts/slack.ts` in the same commit as the
+   visibility flip~~ **Done (2026-07-31)** — the prompt now points users at
+   `github.com/Devansh-awat/kyto` and states the AGPL network-service term.
