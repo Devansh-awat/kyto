@@ -70,6 +70,12 @@ type SubagentResult =
 // (same lifetime model as the bash background-process trio: the handle map lives
 // for this turn's tool closure only).
 interface SubagentJob {
+  // Set once checkSubagent has handed this job's finished report back to the
+  // model IN the live turn. wakeThread checks it right before posting, so a
+  // report the model already collected and used isn't delivered a SECOND time as
+  // a fresh "background subagent finished" turn (the job.then wake fires
+  // independently of checkSubagent — nothing coordinated them before this flag).
+  collected?: boolean;
   id: string;
   name?: string;
   promise: Promise<SubagentResult>;
@@ -422,6 +428,9 @@ export function runSubagentTool({
           success: true,
         };
       }
+      // The model is collecting this finished report in-turn, so it will use it
+      // in its reply — don't also deliver it later as a background wake.
+      job.collected = true;
       return {
         error: job.result?.success === false ? job.result.error : undefined,
         id,
@@ -464,6 +473,17 @@ async function wakeThread({
         return;
       }
       await new Promise((resolve) => setTimeout(resolve, WAKE_POLL_MS));
+    }
+    // The thread went quiet — but if the model already collected this report via
+    // checkSubagent during that turn, it's been used in the reply, so waking with
+    // it again would post a duplicate. Re-check the claim right before acting
+    // (not at attach time — checkSubagent usually runs while we're still polling).
+    if (job.collected) {
+      logger.info(
+        { id: job.id, threadId: thread.id },
+        '[subagent] report already collected in-turn; skipping background wake'
+      );
+      return;
     }
     const { runTurn } = await import('@/lib/agent');
     logger.info(
