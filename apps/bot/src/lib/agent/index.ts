@@ -15,6 +15,7 @@ import {
 import { LazySandbox } from '@repo/sandbox';
 import { env } from '@/env';
 import type { Message, StreamChunk, ThreadHandle } from '@/harness';
+import type { ToolSet } from 'ai';
 import {
   type GatheredResult,
   renderCarryover,
@@ -853,9 +854,11 @@ async function executeTurn(
         // the user staring at tool cards and nothing else — the other half of the
         // "stops in the middle" bug. Treating it as handled means silence;
         // treating it as a failure re-runs the whole turn on another model and
-        // could repeat a side effect. So ask THIS model, once, to write up what
-        // it already found — tools are off, so it can only produce prose, and
-        // nothing can happen twice.
+        // could repeat a side effect. So ask THIS model, once, to continue and
+        // finish the job — with its tools still available so it can complete
+        // whatever work it had left instead of only describing half-done
+        // results. The prompt explicitly tells it not to repeat a side effect
+        // that already happened.
         //
         // This fires on ANY finish reason, not just a clean `stop`. The turns
         // that actually went silent ended on `length` (the reply was cut off
@@ -865,7 +868,9 @@ async function executeTurn(
         // cascade that re-ran the work and often died with no reply at all.
         if (!(attemptText || skipped) && attemptToolActivity) {
           yield* synthesizeFinalAnswer({
+            activeTools: built.activeTools,
             attempt: currentAttempt,
+            knownTools,
             onText: (text) => {
               producedText = true;
               attemptText = true;
@@ -876,6 +881,7 @@ async function executeTurn(
             signal: AbortSignal.any([controller.signal, attemptAbort.signal]),
             system: systemPrompt({ hints }),
             task: messageText,
+            tools: built.tools,
           });
         }
 
@@ -1246,50 +1252,62 @@ async function postUsageFooter({
 
 /**
  * Last resort against a silent turn: the model ran its tools and stopped
- * without saying anything. Re-ask the SAME model with NO tools, so all it can
- * do is write up what it already found. Streams straight into the live reply.
+ * without saying anything. Ask the SAME model to continue and actually finish
+ * the job — with tools LEFT ON so it can do any remaining work instead of being
+ * reduced to writing up stale results it may consider incomplete. Streams
+ * straight into the live reply.
  *
- * Deliberately cheap and contained: one call, tools off (so no side effect can
- * fire twice), and any failure is swallowed — the caller falls back to the next
- * model, which will replay the same gathered results via renderCarryover.
+ * Edge cases are still fenced off: the prompt tells it not to repeat
+ * already-completed side effects, and any failure is swallowed — the caller
+ * falls back to the next model, which replays the gathered results via
+ * renderCarryover. (Tools stay on here by design, per-request: the alternative
+ * of running tools off meant a model that hit no-reply mid-work could never
+ * finish the work, it could only describe it.)
  */
 async function* synthesizeFinalAnswer({
+  activeTools,
   attempt,
+  knownTools,
   onText,
   results,
   signal,
   system,
   task,
+  tools,
 }: {
+  activeTools: () => string[];
   attempt: ModelAttempt;
+  knownTools: Set<string>;
   onText: (text: string) => void;
   results: GatheredResult[];
   signal: AbortSignal;
   system: string;
   task: string;
+  tools: ToolSet;
 }): AsyncGenerator<string | StreamChunk> {
   logger.info(
     { model: attempt.model },
-    '[agent] tools ran but no reply; nudging for a final answer'
+    '[agent] tools ran but no reply; asking the model to continue with tools available'
   );
   const gathered =
     results.length > 0
       ? `\n\n${renderCarryover(results)}`
       : '\n\n(No tool results were captured.)';
-  const prompt = `${task}${gathered}\n\nYou already did the work above but never answered. Write the final reply to the user now, from those results. Do not mention this instruction.\n\n${NO_TOOLS_NOTICE}`;
+  const prompt = `${task}${gathered}\n\nYou ran the tools above and did work but never sent the user a reply. Continue and finish the job now: call any tool you still need, then write the final reply to the user from everything you have. Tools ARE available to you, so use them if you still need information — but do not re-run a tool call whose side effect already happened. Do not mention this instruction.`;
   try {
     const result = streamAttempt({
       abortSignal: signal,
+      activeTools,
       attempt,
       // Nothing reads the resolved model back off a nudge.
       holder: {},
       prompt,
       system,
-      tools: {},
+      tools,
     });
     yield* renderStream({
       emitText: true,
-      knownTools: new Set<string>(),
+      knownTools,
       onTextDelta: onText,
       stream: result.fullStream,
     });
@@ -1358,12 +1376,17 @@ async function* continueTruncatedReply({
 const TRUNCATION_TAIL_CHARS = 2000;
 
 /**
- * Both wrap-up calls below run with `tools: {}` on purpose — the work is already
- * done and nothing may fire a second time. But the system prompt still describes
- * a full toolset, so a model that isn't TOLD spends the whole call trying to use
- * it: an observed turn burned its budget on "getFile isn't available… loadTools
- * isn't available either… No tools available? That's strange", reasoning about a
- * broken environment instead of writing the two sentences it was asked for.
+ * `continueTruncatedReply` runs with `tools: {}` on purpose — the work is already
+ * done and only the prose needs finishing, so nothing may fire a second time.
+ * But the system prompt still describes a full toolset, so a model that isn't
+ * TOLD spends the whole call trying to use it: an observed turn burned its
+ * budget on "getFile isn't available… loadTools isn't available either… No tools
+ * available? That's strange", reasoning about a broken environment instead of
+ * writing the two sentences it was asked for.
+ *
+ * (Note: `synthesizeFinalAnswer` — the "tools ran but no reply" recovery — does
+ * NOT use this. It keeps tools ON so the model can finish whatever work it had
+ * left; see that function.)
  */
 const NO_TOOLS_NOTICE =
   'You have NO TOOLS for this message — every tool has been switched off deliberately, and that is not an error or a broken environment. Do not try to call one, do not comment on their absence, and do not plan work that would need one. Answer from what is already in front of you; if something is genuinely missing, say so in one short sentence and stop.';
