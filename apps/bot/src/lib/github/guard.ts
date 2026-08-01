@@ -118,9 +118,47 @@ export async function guardGithubCommand({
       targets.add(repo);
     }
   }
+  return await guardGithubTargets({
+    commandText: command,
+    creates: parsed.creates,
+    isOwner,
+    repos: [...targets],
+    threadId,
+    userId,
+  });
+}
+
+/**
+ * The pure gate half of the guard: given a mutating request's resolved repo
+ * TARGETS (and which of them are being CREATED), apply ownership + trust and
+ * return a refusal or a claim. Both the shell path (guardGithubCommand, which
+ * parses a command string) and the host-side GitHub proxy (which parses an HTTP
+ * request) funnel through here, so the security decision — and the wording an
+ * injection reads on refusal — lives in exactly one place.
+ *
+ * `commandText` is the human-readable action ("git push", "POST /repos/o/n/pulls")
+ * recorded on a queued third-party request and shown to the owner.
+ */
+export async function guardGithubTargets({
+  commandText,
+  creates,
+  isOwner,
+  repos,
+  threadId,
+  userId,
+}: {
+  commandText: string;
+  creates: string[];
+  isOwner: boolean;
+  repos: string[];
+  threadId?: string;
+  userId: string;
+}): Promise<GithubGuard> {
+  const targets = new Set(repos.map((repo) => repo.toLowerCase()));
   if (targets.size === 0) {
     return ALLOW_NOOP;
   }
+  const command = commandText;
 
   const claims = await getGithubRepos([...targets]).catch((error: unknown) => {
     logger.warn({ err: error }, '[github] failed to read repo claims');
@@ -212,7 +250,7 @@ export async function guardGithubCommand({
   );
   const toClaim = [
     ...new Set([
-      ...parsed.creates,
+      ...creates.map((repo) => repo.toLowerCase()),
       ...unclaimed.filter((repo) => inKytoNamespace(repo)),
     ]),
   ];
