@@ -76,6 +76,30 @@ sandbox lifetime (vs per-shell-command), which matches the already-single-user
 -per-thread sandbox but is a real change; and the proxy must proxy git
 smart-HTTP (upload-pack/receive-pack), not just REST.
 
+**DECISION 2026-08-01 (owner, ask-question): build option 1 — stop-brokering +
+host-side proxy, NO egress deny.** Accepted the one-principal-per-sandbox trust
+shift. Build plan for the focused pass:
+1. `apps/bot/src/lib/github-proxy/index.ts` — `handleGithubProxy(req, pathname)`
+   mounted at `/_ghapi/` on the sites Bun.serve (beside `handleSlackProxy`).
+   Per-turn token stores `{userId, isOwner, threadId, expiry}` (not a bare bool)
+   so it can feed the guard. Classify method+path (writes = POST/PUT/PATCH/DELETE
+   to /repos/.., /user/repos, /orgs/.., graphql `mutation`; else read) → run the
+   HTTP-shaped equivalent of guard.ts's two gates → forward to real
+   api.github.com/github.com/codeload.github.com with the real PAT attached
+   host-side → on 2xx call `claim()`. Must handle git smart-HTTP
+   (info/refs?service=git-upload-pack / git-receive-pack), not just REST.
+2. `packages/sandbox/src/lazy-sandbox.ts` — stop calling `githubNetwork()` / drop
+   the `network: githubToken ? …` line and the placeholder GH_TOKEN env; keep
+   GIT_ASKPASS/GIT_TERMINAL_PROMPT. Add an idempotent bootstrap step (new
+   `github-proxy-client.ts`, same slot as GIT_HARDEN_COMMAND) that sets `GH_HOST`
+   + `git config --global url."<proxy>/".insteadOf` for github/api/codeload, fed
+   the per-turn proxy token via per-command env (Slack-proxy pattern).
+3. Preserve every guard invariant (ownership→trust→claim-on-success-only,
+   github_requests queueing, dead-PAT falls open to anonymous public reads).
+4. TEST live: sandbox has NO real token (`echo $GH_TOKEN` = placeholder), gh/git
+   route through the proxy, a third-party write is gated + queued, a public read
+   works. Remove this whole TODO block once shipped.
+
 Adjacent, from the same conversation and also unrecorded:
 - A **GitHub App minting per-turn installation tokens** scoped to the repos the
   guard would allow is the durable answer — it also fixes the "kyto has ONE
