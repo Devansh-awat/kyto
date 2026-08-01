@@ -11,7 +11,37 @@ import {
 import { renderTask } from './tasks';
 
 const MAX_VISIBLE_TASKS = 45;
+// Reasoning ("Thinking") cards get their OWN visibility budget, separate from
+// tool-call cards. They used to share one 45-slot set, so a turn with many tool
+// calls exhausted the budget on tool cards and every later THINKING block was
+// folded into the generic "N more steps" counter instead of shown — the model's
+// reasoning vanished behind a step count on exactly the long turns where it
+// matters most. A separate budget means tool activity can never starve it.
+const MAX_VISIBLE_REASONING = 45;
 const REASONING_OUTPUT_MAX_LENGTH = 2800;
+
+// Opt-in raw-stream dump for diagnosing the Thinking card (e.g. "N more steps"
+// showing where reasoning should be). Set KYTO_LOG_FULLSTREAM=1 and restart to
+// log every fullStream part's type + a text snippet to the journal, so a real
+// turn's parts can be read back (`journalctl -u kyto.service | grep fullStream`).
+// Off by default — it is verbose and per-part.
+const LOG_FULLSTREAM = process.env.KYTO_LOG_FULLSTREAM === '1';
+const FULLSTREAM_SNIPPET_MAX = 240;
+
+// A short, safe text snippet from any stream part for the diagnostic log above.
+function fullStreamSnippet(part: { type: string } & Record<string, unknown>) {
+  let text: string | undefined;
+  if (typeof part.text === 'string') {
+    text = part.text;
+  } else if (typeof part.toolName === 'string') {
+    text = `tool:${part.toolName}`;
+  }
+  return {
+    id: typeof part.id === 'string' ? part.id : undefined,
+    text: text ? clamp(text, FULLSTREAM_SNIPPET_MAX) : undefined,
+    type: part.type,
+  };
+}
 // How much of a provider error body to keep in the log. Enough to see the real
 // upstream message (rate limit, context length, budget) without dumping a whole
 // request body into the journal.
@@ -109,6 +139,8 @@ export async function* renderStream({
   // reasoning-tracker.ts, where they have tests.
   const reasoningTracker = createReasoningTracker();
   const visibleTaskIds = new Set<string>();
+  // Reasoning cards' own visibility budget (see MAX_VISIBLE_REASONING).
+  const visibleReasoningIds = new Set<string>();
   let hiddenTaskCount = 0;
   let skipped = false;
   let droppedTextDeltas = 0;
@@ -147,7 +179,7 @@ export async function* renderStream({
     if (closed.text) {
       onReasoning?.(closed.text);
     }
-    if (!visibleTaskIds.has(closed.id)) {
+    if (!visibleReasoningIds.has(closed.id)) {
       return;
     }
     yield {
@@ -170,6 +202,17 @@ export async function* renderStream({
 
   try {
     for await (const part of stream) {
+      if (LOG_FULLSTREAM) {
+        logger.info(
+          {
+            ...context,
+            part: fullStreamSnippet(
+              part as { type: string } & Record<string, unknown>
+            ),
+          },
+          '[stream] fullStream part'
+        );
+      }
       if (part.type === 'finish-step' || part.type === 'finish') {
         const reason = (part as { finishReason?: string }).finishReason;
         if (reason) {
@@ -223,7 +266,13 @@ export async function* renderStream({
           // Text is collected for EVERY reasoning block, including one whose plan
           // card is hidden (the visible-task budget is a UI limit; a thought kyto
           // had is still a thought it should remember next turn — see onReasoning).
-          if (!showTask({ id, visibleTaskIds })) {
+          if (
+            !showTask({
+              id,
+              max: MAX_VISIBLE_REASONING,
+              visibleIds: visibleReasoningIds,
+            })
+          ) {
             hiddenTaskCount += 1;
             yield hiddenTaskUpdate({ count: hiddenTaskCount, done: false });
             break;
@@ -272,7 +321,13 @@ export async function* renderStream({
             phase: 'request',
             toolName: part.toolName,
           });
-          if (!showTask({ id: part.toolCallId, visibleTaskIds })) {
+          if (
+            !showTask({
+              id: part.toolCallId,
+              max: MAX_VISIBLE_TASKS,
+              visibleIds: visibleTaskIds,
+            })
+          ) {
             hiddenTaskCount += 1;
             yield hiddenTaskUpdate({ count: hiddenTaskCount, done: false });
             break;
@@ -428,16 +483,18 @@ function isPlaceholderText(text: string): boolean {
 
 function showTask({
   id,
-  visibleTaskIds,
+  visibleIds,
+  max,
 }: {
   id: string;
-  visibleTaskIds: Set<string>;
+  visibleIds: Set<string>;
+  max: number;
 }): boolean {
-  if (visibleTaskIds.has(id)) {
+  if (visibleIds.has(id)) {
     return true;
   }
-  if (visibleTaskIds.size < MAX_VISIBLE_TASKS) {
-    visibleTaskIds.add(id);
+  if (visibleIds.size < max) {
+    visibleIds.add(id);
     return true;
   }
   return false;

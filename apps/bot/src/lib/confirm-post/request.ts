@@ -76,8 +76,7 @@ function confirmBlocks(id: string, post: PendingPost): unknown[] {
 function outcomeToResult(
   outcome: ConfirmOutcome | null,
   post: PendingPost,
-  aborted: boolean,
-  approverUserId: string
+  aborted: boolean
 ): ConfirmResult {
   if (outcome?.decision === 'confirmed') {
     return outcome.ok
@@ -91,20 +90,10 @@ function outcomeToResult(
       ? `<@${post.approverUserId}>`
       : 'the owner';
   if (outcome?.decision === 'denied') {
-    // When the person who ASKED is also the approver (the usual "owner asks
-    // kyto to post" case), they already saw the cancellation on the confirm
-    // prompt itself — its buttons are replaced in place with the outcome. So
-    // "acknowledge that they declined" makes the model post a SECOND, public
-    // copy of the same notice — the duplicate the owner reported. Only ask it to
-    // announce when the requester ISN'T the approver, and so has no other way to
-    // learn the post was declined.
-    const requesterIsApprover = post.requestedBy === approverUserId;
     return {
       denied: true,
       success: false,
-      summary: requesterIsApprover
-        ? `I did NOT ${post.summary}. You already saw this on the confirm prompt, so do not post another message about it, and do not retry.`
-        : `${who} denied this — I did NOT ${post.summary}. Do not retry it; acknowledge that they declined.`,
+      summary: `${who} denied this — I did NOT ${post.summary}. Do not retry it; acknowledge that they declined.`,
     };
   }
   return {
@@ -193,12 +182,7 @@ export async function requestPostConfirmation({
     });
   });
 
-  return outcomeToResult(
-    outcome,
-    post,
-    Boolean(abortSignal?.aborted),
-    approverUserId
-  );
+  return outcomeToResult(outcome, post, Boolean(abortSignal?.aborted));
 }
 
 const interactionSchema = { response_url: '' };
