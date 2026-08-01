@@ -35,6 +35,20 @@ a full deny-by-default allowlist (the version that actually kills remote shells)
 would also break the browser tool, arbitrary `fetch`, and npm/pypi from
 unexpected hosts. **Decide the blast radius before building it.**
 
+**DECISION 2026-08-01 (owner, via ask-question): GitHub-hosts-only deny.**
+`denyOut` just the GitHub hosts (github.com, api.github.com, codeload.github.com,
+*.githubusercontent.com), point the sandbox at kyto's proxy (`GH_HOST` + `git
+config url.<proxy>.insteadOf`), and stop brokering the token. Everything else
+keeps open egress, so browser/fetch/npm/pypi are untouched — blast radius ≈ zero.
+This closes the GitHub-token hole (a shell can no longer curl github.com as
+kyto-agent) but deliberately does NOT try to kill remote shells in general.
+Answering the owner's inline question above: "only inject a token allowing kyto
+to make its own repos" is roughly what the per-turn GitHub-App token (below)
+buys; the cheaper first step is simply to stop brokering the PAT and force all
+GitHub through the parsed-request proxy. STILL TO BUILD — not done in this pass
+(a host-side GitHub proxy + egress rewiring + tests is a standalone build); the
+decision above unblocks it.
+
 Adjacent, from the same conversation and also unrecorded:
 - A **GitHub App minting per-turn installation tokens** scoped to the repos the
   guard would allow is the durable answer — it also fixes the "kyto has ONE
@@ -52,27 +66,13 @@ too", in the same message as the Qwen pin and the caching work) and never
 attempted — the other three parts of that message shipped. Measure the assembled
 prompt first; it is paid on every turn of every thread against the shared $3/day.
 
-**Going public: every licence QUESTION is answered; one mechanical task is left.**
-Gorkie provenance is MEASURED (2026-07-26, blame-based, in
-`docs/reference/publishing.md`): ~16% of runtime source is gorkie-derived, so the
-MIT carve-out stays. `ai-sdk` is RESOLVED (2026-07-29) — `vercel/ai` is
-**Apache-2.0**; GitHub's "Other" was wrong. Redistribute with the notice "This
-software contains components from Vercel's AI SDK, licensed under Apache License
-2.0. Copyright 2023 Vercel, Inc." `thermo-nuclear-code-quality-review` was
-**dropped** (2026-07-29) — unverifiable licence, nothing depended on it.
-
-Licence work is DONE (2026-07-29): every third-party skill now ships its upstream
-`LICENSE`. Secrets rescan is DONE: no kyto credential anywhere. The netic
-third-party key in history is NOT a blocker — Netic confirmed it is revoked and
-consented to it being public. Remaining before the flip is only: update
-`packages/ai/src/prompts/slack.ts` (it still says kyto is private with no public
-repo — false the moment the repo is public), done in the SAME commit as the
-visibility change.
-
-Rotating `GH_TOKEN` is NOT a publication task. Publishing cannot leak it: no
-credential is in the tree, and Slack messages are not in the repo. Rotate it on
-its own schedule if it was ever pasted into a thread or a log.
-so whats this one mechanical task?
+**Going public — DONE.** The "one mechanical task" was the `slack.ts` prompt
+update (it used to say kyto was private with no public repo). That already
+shipped: `prompts/slack.ts` now says kyto is open-source AGPL-3.0 and points
+users at `github.com/Devansh-awat/kyto`, and the repo went public (commit
+`0a0d1a6`). Nothing left here. (Rotating `GH_TOKEN` was never a publication task
+— no credential is in the tree — so it isn't blocking anything; rotate it on its
+own schedule only if it was ever pasted into a thread or log.)
 
 **"Thinking..." shows as plain text before the plan block appears**, and when
 the block does appear it already has thinking in it. Investigated: no such
@@ -167,6 +167,30 @@ just now • i	Qwen3.7 Plus	83,948 in / 1,787 out	$0.023293	OK · 35s
 according to me, everything should be cached apart from tool output, all its reasoning, etc should be cached. check how other agent harnesses do it. 
 
 LOOK AT IF CACHING WORKED
+
+**Findings 2026-08-01 (claude), and why the deepseek promotion is the fix.**
+Checked OpenRouter's prompt-caching docs (the authority for the HackClub proxy).
+Two different mechanisms by provider:
+- **Qwen/Alibaba = EXPLICIT caching, 5-MINUTE write TTL**, breakpoints required.
+  The ~22.8k that stayed cached is almost exactly the system+tools prefix
+  (breakpoint A). The moving history-tail breakpoint (B) was NOT producing hits
+  on qwen — qwen's explicit cache is limited (5-min TTL; and Alibaba lists it as
+  unsupported on some snapshot endpoints), and our `ttl:'1h'` is ignored there.
+  So on qwen only the system prefix reliably cached and the ~60k tail re-billed
+  each step — exactly the pattern in the activity dump above.
+- **DeepSeek = AUTOMATIC caching (0.1x read multiplier)** — it caches the growing
+  prefix itself, no breakpoints needed. Now that `deepseek-v4-flash` is PRIMARY,
+  the common path auto-caches the whole system+history+prior-tool-results prefix
+  across steps and only the newest tool output is uncached — which is the "cache
+  everything except tool output" behaviour asked for. So the promotion is the
+  single biggest caching lever, not just a model swap.
+The explicit two-breakpoint code (`cache-control.ts`) is KEPT — it's what Gemini
+and any Anthropic BYOK key need, and it's harmless where a provider auto-caches.
+NEXT: watch the `cache: { input, read, write }` line in `turn complete` on the
+new primary — read HIGH / input LOW across a thread confirms deepseek is
+auto-caching. If it isn't, the researched next step is OpenRouter's top-level
+`cache_control` (auto-advances the breakpoint for multi-turn), but don't add it
+blind — a wrong caching change only shows up on the bill.
 
 **The ChatGPT account is parked until 2026-08-23.** The linked account is on a
 FREE plan and its quota is spent; the 429 named that reset date, which is now
