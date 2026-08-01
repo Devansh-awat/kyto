@@ -49,6 +49,33 @@ GitHub through the parsed-request proxy. STILL TO BUILD — not done in this pas
 (a host-side GitHub proxy + egress rewiring + tests is a standalone build); the
 decision above unblocks it.
 
+**FINDING 2026-08-01 (claude), building it — `denyOut` CANNOT take domains, and
+it turns out we don't need it.** The E2B API schema is explicit: `denyOut` is
+"denied CIDR blocks or IP addresses … Domain names are not supported for deny
+rules" (`node_modules/**/e2b/**/index.d.ts`). So "denyOut github.com" is
+UNBUILDABLE as written; a domain deny would need GitHub's IP CIDRs (from
+api.github.com/meta — large, changing, and a shell could resolve to a fresh IP
+we don't list). BUT the reframe is cleaner: the token-abuse hole is closed simply
+by **not brokering the token at all**. Today the real PAT lives ONLY in the E2B
+egress header-injection rule (the sandbox-visible `GH_TOKEN` is a base64
+placeholder). Remove that rule and NO sandbox process — kyto tool, sshx, tmate,
+`sh -c` — has the token; a direct `curl github.com` is anonymous (fine for public
+reads, useless for writes/private). The real token then lives ONLY host-side in
+the proxy, which kyto's own gh/git are pointed at (via `GH_HOST` +
+`url.<proxy>.insteadOf`) and which enforces the parsed-request guard. So:
+- **Security = stop brokering + host-side proxy.** No denyOut required.
+- **denyOut/`/etc/hosts` sinkhole of github hosts is OPTIONAL UX** (force git
+  through the proxy so authed ops "just work"), NOT the security boundary — and
+  since denyOut can't name domains, the sinkhole (`127.0.0.1 github.com …` in the
+  bootstrap, same idempotent slot as GIT_HARDEN_COMMAND) is the mechanism if we
+  want it.
+Stop-brokering CANNOT ship without the proxy (gh/git would break unauthenticated),
+so they land together — it's one focused build, deferred to its own pass. Also
+flagged for the owner: this shifts the trust model to ONE principal baked in per
+sandbox lifetime (vs per-shell-command), which matches the already-single-user
+-per-thread sandbox but is a real change; and the proxy must proxy git
+smart-HTTP (upload-pack/receive-pack), not just REST.
+
 Adjacent, from the same conversation and also unrecorded:
 - A **GitHub App minting per-turn installation tokens** scoped to the repos the
   guard would allow is the durable answer — it also fixes the "kyto has ONE
