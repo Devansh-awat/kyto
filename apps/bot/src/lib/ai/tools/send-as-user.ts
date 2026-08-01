@@ -9,6 +9,7 @@ import {
 } from '@/harness';
 import { requestPostConfirmation } from '@/lib/confirm-post/request';
 import logger from '@/lib/logger';
+import { normalizeSlackChannelArg, toRawSlackUserId } from '@/lib/slack/ids';
 import { errorMessage } from '@/lib/utils/error';
 import { parseBlocks } from './post-message';
 
@@ -247,6 +248,33 @@ export function sendAsUserTool({
             success: false,
           };
         }
+        // Validate the target SHAPE before it can be queued and confirmed. A
+        // timestamp mis-supplied as `channelId` (or a display name as `userId`)
+        // otherwise sails through the gate and only fails deep in the Web API as
+        // `channel_not_found` — sometimes after the owner already clicked Confirm.
+        // postMessage guards this at its entry; sendAsUser/editAsUser did not.
+        let resolvedChannel: string | undefined;
+        if (channelId) {
+          const raw = normalizeSlackChannelArg(channelId);
+          if (!raw) {
+            return {
+              error: `"${channelId}" is not a Slack channel id — it looks like a message timestamp. Pass a channel id (C…/G…/D…) or an <#channel> mention.`,
+              success: false,
+            };
+          }
+          resolvedChannel = raw;
+        }
+        let resolvedUser: string | undefined;
+        if (userId) {
+          const raw = toRawSlackUserId(userId);
+          if (!raw) {
+            return {
+              error: `"${userId}" is not a Slack user id, so it can't be a DM target. Pass a user id (U…/W… or an <@mention>).`,
+              success: false,
+            };
+          }
+          resolvedUser = raw;
+        }
         let blocks: unknown[] | undefined;
         if (rawBlocks) {
           const parsed = parseBlocks(rawBlocks);
@@ -256,7 +284,8 @@ export function sendAsUserTool({
           blocks = parsed.blocks;
         }
         const crossChannel = Boolean(
-          userId || (channelId && channelId !== currentChannelId)
+          resolvedUser ||
+            (resolvedChannel && resolvedChannel !== currentChannelId)
         );
         // Same broadcast rule as postMessage: a send that leaves the current
         // channel never carries an @channel/@here ping, owner included.
@@ -267,12 +296,12 @@ export function sendAsUserTool({
         const body = crossChannel ? neutralizeBroadcast(restored) : restored;
         const safeBlocks =
           crossChannel && blocks ? neutralizeBroadcastDeep(blocks) : blocks;
-        const targetChannel = userId
+        const targetChannel = resolvedUser
           ? undefined
-          : (channelId ?? currentChannelId);
+          : (resolvedChannel ?? currentChannelId);
         let summary = 'send as YOU in this thread';
-        if (userId) {
-          summary = `send as YOU in a DM to <@${userId}>`;
+        if (resolvedUser) {
+          summary = `send as YOU in a DM to <@${resolvedUser}>`;
         } else if (crossChannel && targetChannel) {
           summary = `send as YOU to <#${targetChannel}>`;
         }
@@ -287,7 +316,7 @@ export function sendAsUserTool({
             requestedBy: authorUserId,
             summary: blocks ? `${summary} (Block Kit)` : summary,
             targetChannel,
-            targetUser: userId,
+            targetUser: resolvedUser,
             text: body,
             threadTs,
           },
@@ -368,7 +397,20 @@ export function editAsUserTool({
           }
           blocks = parsed.blocks;
         }
-        const targetChannel = channelId ?? currentChannelId;
+        // Same shape guard as sendAsUser: reject a timestamp-as-channel before
+        // it becomes a dead confirm that fails as channel_not_found on click.
+        let resolvedChannel: string | undefined;
+        if (channelId) {
+          const raw = normalizeSlackChannelArg(channelId);
+          if (!raw) {
+            return {
+              error: `"${channelId}" is not a Slack channel id — it looks like a message timestamp. Pass a channel id (C…/G…/D…) or an <#channel> mention.`,
+              success: false,
+            };
+          }
+          resolvedChannel = raw;
+        }
+        const targetChannel = resolvedChannel ?? currentChannelId;
         return await requestPostConfirmation({
           abortSignal,
           extendAttemptDeadline,

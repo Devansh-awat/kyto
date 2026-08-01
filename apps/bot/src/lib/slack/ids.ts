@@ -42,6 +42,29 @@ export function isRawSlackChannelId(id: string): boolean {
   return RAW_SLACK_CHANNEL_ID.test(id);
 }
 
+/**
+ * Normalize any channel reference a model may supply — a raw C…/G…/D… id, a
+ * `<#C123|name>`/`#C123` mention, or a Chat SDK `slack:CHANNEL[:TS]` id — into a
+ * raw Slack channel id. Returns null for anything that cannot be one (most
+ * importantly a message TIMESTAMP), so a caller can reject it before it reaches
+ * the Web API as `channel_not_found` — sometimes only AFTER a human clicked
+ * Confirm on a queued post.
+ */
+export function normalizeSlackChannelArg(value: string): string | null {
+  const trimmed = value.trim();
+  const mention = trimmed.match(SLACK_CHANNEL_MENTION);
+  if (mention?.[1]) {
+    return mention[1];
+  }
+  let raw = trimmed;
+  if (raw.startsWith('slack:')) {
+    raw = raw.split(':')[1] ?? '';
+  } else if (raw.startsWith('#')) {
+    raw = raw.slice(1);
+  }
+  return RAW_SLACK_CHANNEL_ID.test(raw) ? raw : null;
+}
+
 // Normalize the many shapes a channel reference arrives in (a Chat SDK id, a raw
 // `C123` id, a `<#C123|name>` mention, or a bare `#C123`) into a Chat SDK
 // `slack:CHANNEL` id. Throws only when the value can't be a Slack channel at all.
