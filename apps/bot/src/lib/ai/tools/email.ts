@@ -123,7 +123,12 @@ export function checkInboxTool({ apiKey }: { apiKey: string }) {
               id: message.messageId,
               preview: preview.text,
               subject: redactSecrets(message.subject).text,
-              timestamp: message.timestamp,
+              // AgentMail hands back a raw JS Date here. A tool result must be
+              // JSON-primitive: streamText re-validates the WHOLE accumulated
+              // history against jsonValueSchema on every step, and that schema
+              // rejects a Date outright — so leaving it raw makes the step AFTER
+              // checkInbox fail with "malformed prompt" every single time.
+              timestamp: message.timestamp.toISOString(),
             };
             if (!full) {
               return base;
@@ -210,7 +215,9 @@ export function readEmailTool({ apiKey }: { apiKey: string }) {
           note: redactionNote(body.redactions + subject.redactions),
           subject: subject.text,
           success: true,
-          timestamp: message.timestamp,
+          // JSON-primitive only — a raw Date here breaks the next step's prompt
+          // validation (see checkInbox above).
+          timestamp: message.timestamp.toISOString(),
           to: message.to,
         };
       } catch (error) {
