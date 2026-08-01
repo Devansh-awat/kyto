@@ -1,13 +1,16 @@
 import {
+  describeImages,
   HACKCLUB_PROVIDER,
   LEADERBOARD_FALLBACK,
   MAX_STEPS,
   type ModelAttempt,
+  modelSupportsVision,
   PRIMARY_ATTEMPT,
   type ResolvedModelHolder,
   type SandboxContext,
   streamAttempt,
   systemPrompt,
+  visionAttempt,
 } from '@repo/ai';
 import { LazySandbox } from '@repo/sandbox';
 import { env } from '@/env';
@@ -375,6 +378,30 @@ async function executeTurn(
         mediaType: entry.mimeType ?? 'image/png',
         path: entry.name,
       }));
+    // The primary (deepseek-v4-flash) is served by a text-only endpoint that
+    // 404s on image input. Rather than burn a doomed attempt on every screenshot
+    // and fall back, have Gemini DESCRIBE the attached images and feed that text
+    // to the primary — the owner's "use gemini to understand the image and tell
+    // deepseek what it is". The raw bytes are still on disk in the sandbox for a
+    // tool to read. Only kicks in for a text-only primary with a Gemini key
+    // configured; a successful description replaces the raw images so nothing
+    // 404s, and a failed one silently falls back to sending the raw images.
+    let visionDescription: string | null = null;
+    let modelImages = attachmentImages;
+    if (
+      attachmentImages.length > 0 &&
+      !modelSupportsVision(PRIMARY_ATTEMPT.model) &&
+      visionAttempt
+    ) {
+      visionDescription = await describeImages({
+        attempt: visionAttempt,
+        images: attachmentImages,
+        signal: controller.signal,
+      });
+      if (visionDescription) {
+        modelImages = [];
+      }
+    }
     // Distinguish a turn that did real work from a truly empty completion. Only
     // a completion that produced NEITHER reply text, NOR a deliberate skip, NOR
     // tool activity that ended on a clean `stop` is treated as unhandled and
@@ -488,6 +515,11 @@ async function executeTurn(
     // it had started talking) what the user has already been shown.
     const attemptPrompt = (isFallback: boolean): string => {
       const blocks = [messageText];
+      if (visionDescription) {
+        blocks.push(
+          `The user attached image(s). A vision model looked at them and described them for you (you cannot see the raw pixels this turn):\n<attached_image_description>\n${visionDescription}\n</attached_image_description>`
+        );
+      }
       if (isFallback && gatheredResults.length > 0) {
         blocks.push(renderCarryover(gatheredResults));
       }
@@ -606,7 +638,7 @@ async function executeTurn(
           // Errors the SDK swallows into the stream would otherwise be dumped
           // raw to stderr by its default console.error handler, unattributed.
           getFreshImages: built.drainImages,
-          images: attachmentImages,
+          images: modelImages,
           // An image the SDK's schema would reject is dropped rather than
           // allowed to invalidate the whole prompt. Log it: silently ignoring
           // someone's screenshot is confusing enough to be worth a line.

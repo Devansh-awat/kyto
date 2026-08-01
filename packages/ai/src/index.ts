@@ -18,10 +18,12 @@ export {
   LEADERBOARD_FALLBACK,
   MAX_OUTPUT_TOKENS,
   type ModelAttempt,
+  modelSupportsVision,
   PRIMARY_ATTEMPT,
   PRIMARY_MODEL,
   subagentAttempt,
   subagentAttempts,
+  visionAttempt,
 } from './providers/attempts';
 export {
   BYOK_PROVIDER_IDS,
@@ -44,3 +46,4 @@ export {
 } from './providers/chatgpt';
 export { provider } from './providers/models';
 export type { SandboxContext } from './types';
+export { describeImages } from './vision';

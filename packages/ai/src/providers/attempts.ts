@@ -118,6 +118,32 @@ const geminiAttempts: ModelAttempt[] = env.GEMINI_API_KEY
     }))
   : [];
 
+// Models that CANNOT accept image input. The deepseek-v4-flash primary is served
+// by Cloudflare, which is text-only: any turn carrying an image 404s ("No
+// endpoints found that support image input") and burns a doomed attempt before
+// falling back. For a text-only model kyto pre-describes the image with Gemini
+// (see vision.ts) and feeds the description as text instead of the raw pixels.
+const TEXT_ONLY_MODELS = new Set<string>(['deepseek/deepseek-v4-flash-0731']);
+
+/** True unless the model's endpoint is known to reject image input. */
+export function modelSupportsVision(model: string): boolean {
+  return !TEXT_ONLY_MODELS.has(model);
+}
+
+// A vision-capable Gemini attempt (owner's key, a quota separate from HackClub's
+// shared cap) used ONLY to describe images for a text-only primary — it is NOT a
+// rung in the answer fallback chain. gemini-2.5-flash is a cheap, reliable
+// vision/OCR model; undefined when no Gemini key is configured (then a text-only
+// primary simply can't see images, same as before this existed).
+export const visionAttempt: ModelAttempt | undefined = env.GEMINI_API_KEY
+  ? {
+      apiKey: env.GEMINI_API_KEY,
+      baseURL: GEMINI_BASE_URL,
+      model: 'gemini-2.5-flash',
+      provider: GEMINI_PROVIDER,
+    }
+  : undefined;
+
 /**
  * The attempt the main query starts on: PRIMARY_MODEL, served by HackClub.
  * HackClub is always configured, so this never degrades on a missing key.

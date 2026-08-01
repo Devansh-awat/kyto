@@ -1,5 +1,12 @@
 import nodePath from 'node:path/posix';
-import type { ImageInput, SandboxContext } from '@repo/ai';
+import {
+  describeImages,
+  type ImageInput,
+  modelSupportsVision,
+  PRIMARY_ATTEMPT,
+  type SandboxContext,
+  visionAttempt,
+} from '@repo/ai';
 import { tool } from 'ai';
 import { z } from 'zod';
 
@@ -64,7 +71,26 @@ export function viewImageTool({
           viewing: false,
         };
       }
-      pushImage({ bytes: new Uint8Array(bytes), mediaType, path });
+      const image: ImageInput = {
+        bytes: new Uint8Array(bytes),
+        mediaType,
+        path,
+      };
+      // A text-only primary (deepseek-v4-flash) 404s on image input, so it can
+      // never be shown the pixels. Describe the image with Gemini and hand back
+      // the text right now instead of queuing it for a vision step that would
+      // fail. Falls through to the normal vision path if description is
+      // unavailable (no Gemini key) or fails.
+      if (!modelSupportsVision(PRIMARY_ATTEMPT.model) && visionAttempt) {
+        const description = await describeImages({
+          attempt: visionAttempt,
+          images: [image],
+        });
+        if (description) {
+          return { description, path, viewing: true };
+        }
+      }
+      pushImage(image);
       return {
         note: 'Loaded — you will see this image on your next step.',
         path,
