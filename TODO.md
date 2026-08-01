@@ -241,12 +241,16 @@ direct-send path (no confirm) — and in a DM, "thread" and "channel" are the sa
 conversation. The separate duplicate-OUTCOME-notice item above still needs a live
 incident's channel/ts to close.
 
-The subagents you use, configure them to use either haiku 4.5 or sonnet 5, not opus. (think its in .claude/agents but not sure.) when launching subagent can you choose a model?
-In CLAUDE.md, say to be token conservative, and to do this, use subagents which will both make it faster and less token use. 
-
-
-to save quota, i want you to make it so that you can use `agy` subagents or your native subagents, ive found https://github.com/yuting0624/antigravity-for-claude-code which may help, use a subagent to see if it helps or there are better ways or direct code. 
-Make sure that you can choose to use gemini or your native subagents.
+**Subagent model + agy — DONE 2026-08-01 (claude).** Yes, the `Agent` tool takes
+a `model` param, so I can (and now do) pick the model per spawn. CLAUDE.md now
+states the DEFAULT for any spawned subagent is `model: "sonnet"` (Sonnet 5) and
+that an omitted model silently inherits Opus — so it's never left unset; drop to
+`haiku` only for mechanical search/read. Token-conservative + use-subagents
+guidance was already in CLAUDE.md. Gemini-vs-native is a real choice too: the
+`antigravity` plugin is installed and configured (agy = Gemini via
+`agy-delegate` / the `antigravity-delegate` subagent, for above-break-even bulk
+work), and native Claude subagents run on sonnet/haiku — so both paths exist and
+the routing policy says when to use which.
 
 ---
 
