@@ -32,17 +32,28 @@ export interface ModelAttempt {
 }
 
 /**
- * The primary model for the main query: Qwen3.7 Plus, pinned, served by
- * **HackClub** — owner's call (2026-07-28). It replaced
- * `moonshotai/kimi-k2.7-code`, and it is cheaper on both sides
- * ($0.32/M in vs $0.73, $1.28/M out vs $3.50) with ~4x the context window
- * (1M vs 262k), verified `tools`-capable on ai.hackclub.com/proxy/v1/models.
+ * The primary model for the main query: DeepSeek V4 Flash (the 0731 retrain),
+ * pinned, served by **HackClub** — owner's call (2026-08-01, "IT WORKED … we can
+ * use it now"). It replaced `qwen/qwen3.7-plus`, which it beats on benchmarks
+ * AND on cost: ~$0.14/M in and ~$0.28/M out (measured from a live proxy
+ * completion, `upstream_inference_prompt_cost`) vs qwen's $0.32/$1.28. Verified
+ * `tools`-capable and returning a real completion on ai.hackclub.com/proxy/v1.
  *
- * The context window is not incidental. HackClub aborts an upstream request
- * that has not returned response HEADERS within 5s and turns it into a 504
- * (`UPSTREAM_HEADER_TIMEOUT_MS`, hackclub/ai `src/routes/proxy/v1/general.ts`,
- * added 2026-05-24) — so the slower a model is to produce its first byte, the
- * more of kyto's turns die at the proxy. See MODELS.md.
+ * It was a fallback rung that 404'd for weeks ("No endpoints available matching
+ * your guardrail restrictions and data policy") because its only OpenRouter
+ * providers trained on prompts, which HackClub's account data policy forbids.
+ * A no-train provider (Cloudflare) came online and the 404 became a 200 — the
+ * signal MODELS.md said to watch for before promoting it to primary.
+ *
+ * CAVEAT — it is a REASONING model (emits `reasoning`/`reasoning_content`). Some
+ * reasoning models think before their first token, and HackClub aborts an
+ * upstream request that has not returned response HEADERS within 5s and turns it
+ * into a 504 (`UPSTREAM_HEADER_TIMEOUT_MS`, hackclub/ai
+ * `src/routes/proxy/v1/general.ts`) — so a slow first byte loses turns at the
+ * proxy. The live probe returned fast and `gateway-retry.ts` replays a 504
+ * before it can cost a fallback, but if 504s spike after this promotion, the
+ * first-byte latency is the suspect and qwen3.7-plus (now the top fallback rung)
+ * is the model to pin back. See MODELS.md.
  *
  * COST NOTE: **every turn spends HackClub's shared daily $3 cap**, so
  * `BudgetExhaustedError` is reachable in ordinary use. There used to be a
@@ -55,7 +66,7 @@ export interface ModelAttempt {
  * re-routing produced empty completions and long fallback cascades), so 1-hour
  * prompt caching (addCacheControl in agent.ts) sticks across a thread's turns.
  */
-export const PRIMARY_MODEL = 'qwen/qwen3.7-plus';
+export const PRIMARY_MODEL = 'deepseek/deepseek-v4-flash-0731';
 
 // Cap output tokens on HackClub requests. OpenRouter enforces the daily spend
 // limit PESSIMISTICALLY: with no `max_tokens` it assumes the model could emit
@@ -161,30 +172,26 @@ export const subagentAttempt: ModelAttempt | undefined = subagentAttempts[0];
 // provider keys rate-limited or in cooldown"). Re-add rungs here only after
 // verifying a real completion succeeds.
 export const LEADERBOARD_FALLBACK: ModelAttempt[] = [
-  // DeepSeek V4 Flash (the 0731 retrain) — kept as a rung but currently DEAD on
-  // this proxy, and therefore NOT promotable to primary despite being stronger
-  // on benchmarks (owner's finding, 2026-07-31). Every attempt so far 404s with
-  // "No endpoints available matching your guardrail restrictions and data
-  // policy" — i.e. OpenRouter (which backs HackClub's proxy) has no provider for
-  // this model that satisfies HackClub's account-level data policy. That is a
-  // toggle on HackClub's OpenRouter privacy settings, not something kyto can fix
-  // in code and not a timeout; it will keep 404ing (fast, no gateway-retry,
-  // immediate fall-through to M3) until HackClub enables a matching provider.
-  // The moment a real 200 shows in the journal, revisit promoting it to primary.
-  // Verified LISTED as `deepseek/deepseek-v4-flash-0731` on
-  // ai.hackclub.com/proxy/v1/models, but listed != runnable.
-  catalogAttempt('deepseek/deepseek-v4-flash-0731'),
-  // MiniMax M3 ($0.30/M in, $1.20/M out, 1M ctx) — marginally cheaper than the
-  // primary and the same context class, so a fallback costs nothing extra and
-  // cannot fail on a long thread the primary was holding. It also measured
-  // clean where the old primary did not: 200/200 successes against
-  // kimi-k2.7-code's 99/100, same probe, same minute (2026-07-28).
+  // Qwen3.7 Plus ($0.32/M in, $1.28/M out, 1M ctx) — the former PRIMARY, demoted
+  // to the top fallback rung when deepseek-v4-flash was promoted over it
+  // (2026-08-01). It held the primary slot for weeks with no quality complaints,
+  // so it is the natural first fall-back and the model to pin BACK if the
+  // deepseek promotion turns out to lose turns at the proxy's 5s header timeout
+  // (deepseek is a reasoning model — see PRIMARY_MODEL's caveat). Verified
+  // `tools`-capable on ai.hackclub.com/proxy/v1/models.
+  catalogAttempt('qwen/qwen3.7-plus'),
+  // MiniMax M3 ($0.30/M in, $1.20/M out, 1M ctx) — cheap and the same 1M context
+  // class, so falling onto it cannot fail on a long thread an earlier rung was
+  // holding. Dearer than the deepseek primary now, but still cheap in absolute
+  // terms. It measured clean where kimi-k2.7-code did not: 200/200 successes
+  // against its 99/100, same probe, same minute (2026-07-28).
   catalogAttempt('minimax/minimax-m3'),
-  // Kimi K2.6 ($0.646/M in, $2.72/M out, 262k ctx). It is ~2x the primary's
-  // per-token cost — the only rung here that is — so it sits BEHIND M3 rather
-  // than being dropped: it is a different model family from both the primary
-  // and M3, which is the point of a third rung, and 2x a cheap number is still
-  // cheap. If the daily cap starts running out, this is the first rung to cut.
+  // Kimi K2.6 ($0.646/M in, $2.72/M out, 262k ctx). The most expensive rung here
+  // — several times the deepseek primary's per-token cost — so it sits LAST among
+  // the HackClub rungs rather than being dropped: it is a different model family
+  // from the primary, qwen and M3, which is the point of a fourth rung, and it is
+  // still cheap in absolute terms. If the daily cap starts running out, this is
+  // the first rung to cut.
   catalogAttempt('moonshotai/kimi-k2.6'),
   ...geminiAttempts,
 ];
