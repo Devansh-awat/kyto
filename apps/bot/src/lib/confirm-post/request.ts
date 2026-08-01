@@ -185,7 +185,10 @@ export async function requestPostConfirmation({
   return outcomeToResult(outcome, post, Boolean(abortSignal?.aborted));
 }
 
-const interactionSchema = { response_url: '' };
+const interactionSchema = {
+  container: { thread_ts: '' },
+  response_url: '',
+};
 
 // Confirm prompts that were delivered as a real DM (the ephemeral fallback),
 // keyed by pending-post id, so the outcome can edit that message rather than
@@ -232,16 +235,25 @@ export async function respondToInteraction(
       );
     }
   }
-  const responseUrl = (raw as Partial<typeof interactionSchema> | undefined)
-    ?.response_url;
+  const payload = raw as Partial<typeof interactionSchema> | undefined;
+  const responseUrl = payload?.response_url;
   if (!responseUrl) {
     return;
   }
+  // The confirm prompt is a THREADED ephemeral (postEphemeral with thread_ts).
+  // A response_url reply with replace_original but NO thread_ts can't anchor to
+  // the threaded original: Slack swaps it for the viewing client AND drops a
+  // second copy at the channel root — the duplicate ephemeral the owner saw.
+  // The block_actions payload carries the thread on `container.thread_ts` (same
+  // field bot.ts reads to route the interaction); carry it one more hop so the
+  // replacement targets the threaded message unambiguously.
+  const threadTs = payload?.container?.thread_ts;
   try {
     await fetch(responseUrl, {
       body: JSON.stringify({
         replace_original: true,
         text,
+        ...(threadTs ? { thread_ts: threadTs } : {}),
       }),
       headers: { 'Content-Type': 'application/json' },
       method: 'POST',
