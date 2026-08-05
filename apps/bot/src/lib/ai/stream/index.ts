@@ -141,7 +141,12 @@ export async function* renderStream({
   const visibleTaskIds = new Set<string>();
   // Reasoning cards' own visibility budget (see MAX_VISIBLE_REASONING).
   const visibleReasoningIds = new Set<string>();
-  let hiddenTaskCount = 0;
+  // Two overflow rows, not one. They used to share a counter, so a long turn
+  // showed a single "N more steps (running)" that mixed hidden tool calls with
+  // hidden thinking blocks — the owner read it as kyto narrating step counts
+  // instead of reasoning. Counted apart, each row says which kind it is.
+  let hiddenToolCount = 0;
+  let hiddenReasoningCount = 0;
   let skipped = false;
   let droppedTextDeltas = 0;
   // Reasoning that arrived inline in the TEXT stream (see inline-reasoning.ts),
@@ -273,8 +278,12 @@ export async function* renderStream({
               visibleIds: visibleReasoningIds,
             })
           ) {
-            hiddenTaskCount += 1;
-            yield hiddenTaskUpdate({ count: hiddenTaskCount, done: false });
+            hiddenReasoningCount += 1;
+            yield hiddenTaskUpdate({
+              count: hiddenReasoningCount,
+              done: false,
+              kind: 'thinking',
+            });
             break;
           }
           yield {
@@ -328,8 +337,12 @@ export async function* renderStream({
               visibleIds: visibleTaskIds,
             })
           ) {
-            hiddenTaskCount += 1;
-            yield hiddenTaskUpdate({ count: hiddenTaskCount, done: false });
+            hiddenToolCount += 1;
+            yield hiddenTaskUpdate({
+              count: hiddenToolCount,
+              done: false,
+              kind: 'tool',
+            });
             break;
           }
           yield {
@@ -462,8 +475,19 @@ export async function* renderStream({
       '[stream] model emitted reasoning inline in its text; kept it out of the reply'
     );
   }
-  if (hiddenTaskCount > 0) {
-    yield hiddenTaskUpdate({ count: hiddenTaskCount, done: true });
+  if (hiddenToolCount > 0) {
+    yield hiddenTaskUpdate({
+      count: hiddenToolCount,
+      done: true,
+      kind: 'tool',
+    });
+  }
+  if (hiddenReasoningCount > 0) {
+    yield hiddenTaskUpdate({
+      count: hiddenReasoningCount,
+      done: true,
+      kind: 'thinking',
+    });
   }
   logger.info(
     { ...context, ...tally, droppedTextDeltas },
@@ -507,19 +531,23 @@ function showTask({
 function hiddenTaskUpdate({
   count,
   done,
+  kind,
 }: {
   count: number;
   done: boolean;
+  kind: 'thinking' | 'tool';
 }): StreamChunk {
+  const noun =
+    kind === 'tool'
+      ? `tool call${count === 1 ? '' : 's'}`
+      : `thinking step${count === 1 ? '' : 's'}`;
   return {
-    id: 'hidden-activity',
+    id: kind === 'tool' ? 'hidden-activity' : 'hidden-reasoning',
     output: done
-      ? `${count} more step${count === 1 ? '' : 's'} ran and are not shown individually, to keep this list readable.`
+      ? `${count} more ${noun} ran and are not shown individually, to keep this list readable.`
       : undefined,
     status: done ? 'complete' : 'in_progress',
-    title: done
-      ? `${count} more step${count === 1 ? '' : 's'}`
-      : `${count} more step${count === 1 ? '' : 's'} (running)`,
+    title: done ? `${count} more ${noun}` : `${count} more ${noun} (running)`,
     type: 'task_update',
   };
 }
