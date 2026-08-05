@@ -146,12 +146,12 @@ is exactly what an OpenAI-compatible bridge is, and its terms separately prohibi
 rate-limit evasion — which is what round-robining AWS Builder IDs is FOR.
 
 **Free tiers worth trying instead, ranked (researched 2026-07-29).** Answering
-the owner's "do they have good models, for free? i dont want stuff like llama
+the owner's "do they have good models, for free? i don't want stuff like llama
 8b": yes for 1 and 2, with caveats.
 1. **NVIDIA NIM** — permanently free key, no card, ~40 RPM, tool calling
    confirmed on GLM-5 / DeepSeek V4 / Qwen3 / Kimi K2.6. Those are frontier-class
    open models, not small ones. Best structural fit; no expiring credits.
-2. **Cloudflare Workers AI** — built for low TTFB, the property that matters
+2. **Cloudflare Workers AI** — built for low time-to-first-byte, the property that matters
    against HackClub's 5s header timeout. Catalogue is smaller and more
    mid-sized; good as a fast rung, not as a primary.
 3. **Groq** — famously fast first token, but its catalogue is where "llama 8b"

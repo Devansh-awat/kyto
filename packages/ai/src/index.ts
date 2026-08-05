@@ -3,8 +3,8 @@ export {
   MAX_STEPS,
   type ResolvedModelHolder,
   SKIP_TOOL_NAME,
-  UPGRADE_TOOL_NAME,
   streamAttempt,
+  UPGRADE_TOOL_NAME,
 } from './agent';
 export {
   type RequestHints,
@@ -17,7 +17,6 @@ export {
   GEMINI_PROVIDER,
   HACKCLUB_PROVIDER,
   LEADERBOARD_FALLBACK,
-  UPGRADE_ATTEMPTS,
   MAX_OUTPUT_TOKENS,
   type ModelAttempt,
   modelSupportsVision,
@@ -25,6 +24,7 @@ export {
   PRIMARY_MODEL,
   subagentAttempt,
   subagentAttempts,
+  UPGRADE_ATTEMPTS,
   visionAttempt,
 } from './providers/attempts';
 export {
