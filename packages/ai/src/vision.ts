@@ -31,10 +31,19 @@ const DESCRIBE_INSTRUCTION =
 export async function describeImages({
   attempt,
   images,
+  question,
   signal,
 }: {
   attempt: ModelAttempt;
   images: ImageInput[];
+  /**
+   * A specific thing to look for ("what does the error message say?", "how many
+   * cores are listed?"). Without it the vision model writes a general
+   * description, which is a lot of tokens for a question that had one answer —
+   * and a general description regularly missed the one detail that was asked
+   * about. With it, the answer comes back first and the description second.
+   */
+  question?: string;
   signal?: AbortSignal;
 }): Promise<string | null> {
   const usable = images.slice(0, MAX_DESCRIBED_IMAGES);
@@ -52,7 +61,12 @@ export async function describeImages({
       messages: [
         {
           content: [
-            { text: DESCRIBE_INSTRUCTION, type: 'text' as const },
+            {
+              text: question
+                ? `${DESCRIBE_INSTRUCTION}\n\nThe assistant asked specifically: "${question}" — answer that FIRST, directly and completely, then give the description.`
+                : DESCRIBE_INSTRUCTION,
+              type: 'text' as const,
+            },
             ...usable.map((image) => ({
               data: image.bytes,
               mediaType: image.mediaType,

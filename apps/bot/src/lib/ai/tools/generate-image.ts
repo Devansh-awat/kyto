@@ -21,6 +21,20 @@ import type { GeneratedImage } from '@/types/tools/generate-image';
 const IMAGES_URL = 'https://ai.hackclub.com/proxy/v1/images/generations';
 const IMAGE_MODEL = 'google/gemini-3.1-flash-image';
 
+// EDITING an existing image goes somewhere else entirely. The OpenAI-shaped
+// `/images/edits` route 404s on this proxy (verified 2026-08-05), but the same
+// model accepts an image on CHAT completions and answers with one, provided the
+// request asks for the image modality — the reply then carries the result in
+// `message.images[].image_url.url` as a data URI rather than in `content`.
+// That is the path every "make this X" / "add Y to this picture" request takes.
+const CHAT_URL = 'https://ai.hackclub.com/proxy/v1/chat/completions';
+// Beyond this, a request is more likely to time out than to succeed, and each
+// image is inlined as base64.
+const MAX_INPUT_IMAGES = 4;
+const MAX_INPUT_BYTES = 8 * 1024 * 1024;
+
+const DATA_URI = /^data:([^;,]+);base64,(.+)$/s;
+
 // Detect the media type from the decoded bytes' magic number so Slack shows the
 // right file type (this endpoint returns JPEG, but don't hard-code it).
 function detectMediaType(bytes: Uint8Array): string {
@@ -66,6 +80,148 @@ async function saveToSandbox({
   }
 }
 
+/**
+ * Edit existing image(s): send them to the image model on chat completions and
+ * pull the returned image back out. Returns the raw bytes of every image the
+ * model produced.
+ */
+async function editImages({
+  images,
+  prompt,
+}: {
+  images: { bytes: Uint8Array; mediaType: string }[];
+  prompt: string;
+}): Promise<{ bytes: Uint8Array[]; error?: string }> {
+  const response = await fetch(CHAT_URL, {
+    body: JSON.stringify({
+      messages: [
+        {
+          content: [
+            { text: prompt, type: 'text' },
+            ...images.map((image) => ({
+              image_url: {
+                url: `data:${image.mediaType};base64,${Buffer.from(image.bytes).toString('base64')}`,
+              },
+              type: 'image_url',
+            })),
+          ],
+          role: 'user',
+        },
+      ],
+      // Without this the model answers in prose ABOUT the image instead of
+      // returning one.
+      modalities: ['image', 'text'],
+      model: IMAGE_MODEL,
+    }),
+    headers: {
+      Authorization: `Bearer ${env.HACKCLUB_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    method: 'POST',
+  });
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    return {
+      bytes: [],
+      error: `Image editing failed (${response.status}): ${body.slice(0, 300)}`,
+    };
+  }
+  const payload = (await response.json()) as {
+    choices?: {
+      message?: {
+        content?: string;
+        images?: { image_url?: { url?: string } }[];
+      };
+    }[];
+  };
+  const message = payload.choices?.at(0)?.message;
+  const out: Uint8Array[] = [];
+  for (const entry of message?.images ?? []) {
+    const match = DATA_URI.exec(entry.image_url?.url ?? '');
+    if (match?.[2]) {
+      out.push(Uint8Array.from(Buffer.from(match[2], 'base64')));
+    }
+  }
+  if (out.length === 0) {
+    return {
+      bytes: [],
+      error: `The image model returned no image${message?.content ? `. It said: ${message.content.slice(0, 300)}` : '.'}`,
+    };
+  }
+  return { bytes: out };
+}
+
+/**
+ * The edit path end to end: read the inputs out of the sandbox, send them to
+ * the model, then save (and optionally post) whatever came back.
+ */
+async function runEdit({
+  editPaths,
+  getSandboxContext,
+  prompt,
+  shouldUpload,
+  upload,
+}: {
+  editPaths: string[];
+  getSandboxContext: () => SandboxContext;
+  prompt: string;
+  shouldUpload: boolean;
+  upload: (image: GeneratedImage) => Promise<void>;
+}) {
+  const context = getSandboxContext();
+  const inputs: { bytes: Uint8Array; mediaType: string }[] = [];
+  for (const path of editPaths) {
+    const bytes = await Promise.resolve(
+      context.session.readBinaryFile({ path })
+    ).catch(() => null);
+    if (!bytes) {
+      return {
+        error: `Could not read "${path}" from the sandbox. Check the path — an image someone posted is downloaded into your workspace, and listing the directory will show its real name.`,
+        success: false,
+      };
+    }
+    if (bytes.length > MAX_INPUT_BYTES) {
+      return {
+        error: `"${path}" is ${Math.round(bytes.length / 1024 / 1024)}MB, too large to send for editing. Resize it below 8MB first.`,
+        success: false,
+      };
+    }
+    inputs.push({ bytes, mediaType: detectMediaType(bytes) });
+  }
+  const edited = await editImages({ images: inputs, prompt });
+  if (edited.error) {
+    return { error: edited.error, success: false };
+  }
+  const total = edited.bytes.length;
+  const paths: string[] = [];
+  let uploaded = 0;
+  for (const [index, bytes] of edited.bytes.entries()) {
+    const mediaType = detectMediaType(bytes);
+    const saved = await saveToSandbox({
+      bytes,
+      getSandboxContext,
+      index,
+      mediaType,
+    });
+    if (saved) {
+      paths.push(saved);
+    }
+    if (shouldUpload) {
+      await upload({ bytes, index, mediaType, total });
+      uploaded += 1;
+    }
+  }
+  const plural = total === 1 ? '' : 's';
+  return {
+    paths,
+    prompt,
+    summary: shouldUpload
+      ? `Edited ${editPaths.length} image${editPaths.length === 1 ? '' : 's'} and posted ${total} result${plural} to this Slack thread (also saved: ${paths.join(', ') || 'none'}).`
+      : `Edited ${editPaths.length} image${editPaths.length === 1 ? '' : 's'} into ${total} result${plural} in the sandbox (not posted): ${paths.join(', ') || 'none'}.`,
+    uploaded,
+  };
+}
+
 export function generateImageTool({
   getSandboxContext,
   upload,
@@ -76,8 +232,15 @@ export function generateImageTool({
 }) {
   return tool({
     description:
-      'Generate one or more AI images from a prompt. By default they are posted to the current Slack thread; pass upload:false to generate quietly (e.g. an asset for a site you are building, or an input for further editing). Either way every image is also saved into your sandbox workspace and the paths come back in the result, so you can edit, reuse, or upload it later.',
+      'Generate or EDIT AI images. With just a prompt it generates from scratch. Pass `editPaths` (sandbox file paths to existing images — an image someone sent you is already downloaded into your workspace) to edit them instead: "make the background blue", "add a hat", "combine these two", "turn this sketch into a photo". By default the result is posted to the current Slack thread; pass upload:false to work quietly (e.g. an asset for a site, or an intermediate step). Either way every image is saved into your sandbox workspace and the paths come back in the result, so you can edit it again, reuse it, or upload it later.',
     inputSchema: z.object({
+      editPaths: z
+        .array(z.string())
+        .max(MAX_INPUT_IMAGES)
+        .optional()
+        .describe(
+          'Sandbox paths of existing images to EDIT rather than generating from scratch. Several paths are given to the model together, so it can combine them. `n` is ignored when editing.'
+        ),
       n: z
         .number()
         .int()
@@ -97,8 +260,17 @@ export function generateImageTool({
           'Post the images to this Slack thread. Set false to only save them to the sandbox.'
         ),
     }),
-    execute: async ({ n, prompt, upload: shouldUpload }) => {
+    execute: async ({ editPaths, n, prompt, upload: shouldUpload }) => {
       try {
+        if (editPaths && editPaths.length > 0) {
+          return await runEdit({
+            editPaths,
+            getSandboxContext,
+            prompt,
+            shouldUpload,
+            upload,
+          });
+        }
         const response = await fetch(IMAGES_URL, {
           body: JSON.stringify({ model: IMAGE_MODEL, n, prompt }),
           headers: {
