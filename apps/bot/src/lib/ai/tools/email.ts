@@ -93,7 +93,7 @@ export function checkInboxTool({ apiKey }: { apiKey: string }) {
   const client = new AgentMailClient({ apiKey });
   return tool({
     description:
-      'List recent messages in kyto\'s own email inbox (via AgentMail). This gives you each message\'s sender, subject and a short preview — call readEmail with a message id to get the actual body. Set full:true to fetch the bodies of everything listed in one go, which is usually what someone means by "read my latest email".',
+      'List recent messages in kyto\'s own email inbox (via AgentMail). This gives you each message\'s sender, recipients (to/cc), arrival time, subject and a short preview — call readEmail with a message id to get the actual body. Set full:true to fetch the bodies of everything listed in one go, which is usually what someone means by "read my latest email".',
     inputSchema: z.object({
       limit: z.number().int().min(1).max(50).default(10),
       full: z
@@ -119,10 +119,17 @@ export function checkInboxTool({ apiKey }: { apiKey: string }) {
             const preview = redactSecrets(message.preview);
             redactions += preview.redactions;
             const base = {
+              // Who it came from, who it went to, and when. The listing used to
+              // give only `from`, so "who was this sent to?" or "when did that
+              // arrive?" needed a readEmail round trip per message — and kyto's
+              // inbox receives plenty of mail addressed to a list rather than to
+              // it directly, which the sender alone doesn't show.
+              cc: message.cc,
               from: message.from,
               id: message.messageId,
               preview: preview.text,
               subject: redactSecrets(message.subject).text,
+              to: message.to,
               // AgentMail hands back a raw JS Date here. A tool result must be
               // JSON-primitive: streamText re-validates the WHOLE accumulated
               // history against jsonValueSchema on every step, and that schema
