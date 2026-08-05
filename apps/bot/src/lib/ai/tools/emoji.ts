@@ -165,7 +165,7 @@ export function submitEmojiTool({
   requestedBy: string;
 }) {
   return tool({
-    description: `Submit a new custom emoji for the workspace: posts the image and the requested name into the emoji-request channel, where an admin adds it. The image must already be in your sandbox — generate or edit one first (generateImage), or download the one you were given. Slack's limits are 128x128 pixels and 128KB, so resize it in the sandbox first if it is bigger (ImageMagick: \`convert in.png -resize 128x128 out.png\`); this refuses anything over 128KB rather than posting something that will be thrown away.`,
+    description: `Add a new custom emoji to the workspace. It posts the image into the emoji channel with the name as the message text, which is the exact shape the emoji bot there reads — it does the adding. The image must already be in your sandbox: generate or edit one first (generateImage), or download the one you were given. Slack's limits are 128x128 pixels and 128KB, so resize it first if it is bigger (ImageMagick: \`convert in.png -resize 128x128 out.png\`); this refuses anything over 128KB rather than posting something that gets thrown away. One emoji per call — the bot rejects a message carrying more than one image.`,
     inputSchema: z.object({
       name: z
         .string()
@@ -174,16 +174,11 @@ export function submitEmojiTool({
         .describe(
           'The emoji name, lowercase, no colons — letters, digits, - _ + only.'
         ),
-      note: z
-        .string()
-        .max(200)
-        .optional()
-        .describe('One short line about what it is, if it helps.'),
       path: z
         .string()
         .describe('Sandbox path of the image file (png or gif preferred).'),
     }),
-    execute: async ({ name, note, path }) => {
+    execute: async ({ name, path }) => {
       const cleaned = name.replace(/:/g, '').trim().toLowerCase();
       if (!EMOJI_NAME.test(cleaned)) {
         return {
@@ -223,19 +218,22 @@ export function submitEmojiTool({
               filename: `${cleaned}${extension}`,
             },
           ],
-          // filesUploadV2 does NOT go through ThreadHandle.post, so the
-          // deny-by-default broadcast strip does not apply here — and `note`
-          // is model-written text going into a channel kyto was not invoked
-          // in. Strip it explicitly or a `<!channel>` in that note pings the
-          // whole emoji channel.
-          initial_comment: neutralizeBroadcast(
-            `\`:${cleaned}:\` — requested by <@${requestedBy}>${note ? `\n${note}` : ''}`
-          ),
+          // The message text must be the BARE NAME and nothing else — that is
+          // what the emoji bot in that channel parses (verified against the
+          // channel's own history: `hedgehog`, `crack-ani`, `ember-sit-new`).
+          // No colons, no "requested by", no note: any of those and the
+          // submission is just a message nobody acts on.
+          //
+          // neutralizeBroadcast is belt and braces — EMOJI_NAME already makes a
+          // control token unrepresentable — because filesUploadV2 does NOT go
+          // through ThreadHandle.post, so the deny-by-default broadcast strip
+          // never runs on this path.
+          initial_comment: neutralizeBroadcast(cleaned),
         });
         return {
           name: cleaned,
           submitted: true,
-          summary: `Posted \`:${cleaned}:\` to the emoji-request channel. An admin has to add it before it works.`,
+          summary: `Posted \`${cleaned}\` and its image to the emoji channel for <@${requestedBy}>. The emoji bot there adds it — it is usually live within a minute, so check with lookupEmoji before promising it works.`,
         };
       } catch (error) {
         logger.warn({ err: error, name: cleaned }, '[emoji] submission failed');
