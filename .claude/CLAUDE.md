@@ -4,6 +4,23 @@
 
 House style beyond Biome: explicit types where they aid clarity, `unknown` over `any`; `const` by default; `for...of` over `.forEach()`; early returns over nesting; named constants over magic numbers; `Error` objects with real messages; no `console.log`/`debugger` in production; no barrel files; validate input.
 
+Also: inline over extract (no one-shot helpers, wrappers, or re-export-only
+files); a function with more than one parameter takes a single options object;
+never cast to silence TypeScript — parse or validate with Zod at the boundary;
+comment only a non-obvious *why*, especially the failure the code exists to
+prevent; Slack features live under `apps/bot/src/features/<name>/`, and nothing
+Slack-only goes in `packages/ai`.
+
+**Before handing work back:** `bun run typecheck`, `bun run check`
+(`check:write` autofixes), `bun test`, plus `bun run check:spelling` and
+`bun run check:knip` for cleanup or package-export work. New tables and columns
+go in as one-off `ALTER TABLE … ADD COLUMN IF NOT EXISTS` /
+`CREATE TABLE IF NOT EXISTS` SQL — `drizzle-kit push` prompts interactively and
+hangs in a non-TTY shell.
+
+`AGENTS.md` at the repo root is a symlink to this file, so any agent that reads
+`AGENTS.md` (agy/Gemini, Codex, …) gets exactly these instructions.
+
 ---
 
 # Project Notes (Kyto Slack bot)

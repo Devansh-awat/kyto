@@ -8,6 +8,7 @@ import logger from '@/lib/logger';
 import { startReminderScheduler } from '@/lib/reminders/scheduler';
 import { startSandboxReaper } from '@/lib/sandbox/store';
 import { startSitesServer } from '@/lib/sites/server';
+import { ensureChannelIndex } from '@/lib/slack/channel-links';
 
 let shuttingDown = false;
 
@@ -35,6 +36,9 @@ try {
   startThinkingReaper();
   // Same window, same reason, for compacted thread history.
   startSummaryReaper();
+  // Warm the channel name→id index so the FIRST reply after a restart can
+  // already turn `#some-channel` into a real link (see lib/slack/channel-links).
+  await ensureChannelIndex();
   const botProfile = slack.botUserId
     ? await slack.webClient.users
         .info({ user: slack.botUserId })

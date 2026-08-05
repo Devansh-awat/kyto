@@ -64,6 +64,7 @@ import {
 import { brokerableGithubToken } from '@/lib/github/token';
 import logger from '@/lib/logger';
 import { acquireThreadSandbox, threadSandboxStore } from '@/lib/sandbox/store';
+import { ensureChannelIndex } from '@/lib/slack/channel-links';
 import {
   registerProxyToken,
   revokeProxyToken,
@@ -205,6 +206,11 @@ async function executeTurn(
   };
   setTurn({ threadId, turn: activeTurn });
   await startThinking({ thread });
+  // Keep the channel name→id index fresh (30-min TTL, shared in-flight
+  // refresh) so `#some-channel` in the reply becomes a real link. A no-op on
+  // all but one turn in thirty minutes, and it swallows its own failures — a
+  // stale index just leaves a name as plain text.
+  await ensureChannelIndex();
   const hints = await requestHints({ thread, message });
 
   // Per-turn read-only Slack proxy secret: injected into the sandbox so a

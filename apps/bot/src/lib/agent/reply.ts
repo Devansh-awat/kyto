@@ -6,6 +6,7 @@ import {
 } from '@/harness';
 import { resolveIdentity } from '@/lib/identity';
 import logger from '@/lib/logger';
+import { linkChannelNames } from '@/lib/slack/channel-links';
 
 // Slack rejects oversized messages (`msg_blocks_too_long`), so streamed prose is
 // posted in pieces. We cut on blank-line boundaries; tables, lists and
@@ -126,7 +127,13 @@ export function createReply({
     // text. Turning it back into `<@Uxxx>` here is what makes a mention ping.
     // Broadcast neutralization still runs after, so this cannot smuggle one in
     // (it only ever produces `<@ID>`, never a `<!channel>` control token).
-    const restored = restoreAnnotatedMentions(chunk);
+    // …and the same for channels: the model writes `#some-channel` because
+    // that is how channels read everywhere else, and Slack renders that as
+    // plain text. Resolved off the cached name→id index; an unknown name is
+    // left exactly as written. Channels only — a person or user group is never
+    // auto-resolved, because guessing which `@name` is whom is how you ping the
+    // wrong person or a whole group nobody asked for.
+    const restored = linkChannelNames(restoreAnnotatedMentions(chunk));
     return heal(allowBroadcast ? restored : neutralizeBroadcast(restored));
   }
 
