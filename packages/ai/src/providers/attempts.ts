@@ -181,6 +181,27 @@ export const visionAttempt: ModelAttempt | undefined = env.GEMINI_API_KEY
  */
 export const PRIMARY_ATTEMPT: ModelAttempt = catalogAttempt(PRIMARY_MODEL);
 
+/**
+ * Where `upgradeModel` sends a turn: the rungs kyto escalates to when the model
+ * itself says the task is beyond it (owner's call, 2026-08-05 — "model self
+ * escalate whenever needed … anyone can escalate it").
+ *
+ * These are DEAR. kimi-k3 is $3/M in and $15/M out against the primary's
+ * $0.14/$0.28 — roughly 20x and 50x — and the whole HackClub tier shares one
+ * $3/day cap, so a single long escalated turn can eat most of a day's budget.
+ * That is why escalation is capped per turn AND per day (see the upgradeModel
+ * tool), and why the ladder is ordered cheapest-capable-first rather than
+ * "best": claude-sonnet-5 ($2/$10) is the second rung, not the first, and
+ * nothing here is a `-pro` variant (gpt-5.4-pro is $30/M in — one turn).
+ *
+ * Both are verified tools-capable on the proxy and both take images, so an
+ * escalated turn can still see an attachment the text-only primary could not.
+ */
+export const UPGRADE_ATTEMPTS: ModelAttempt[] = [
+  catalogAttempt('moonshotai/kimi-k3'),
+  catalogAttempt('anthropic/claude-sonnet-5'),
+];
+
 // The models a subagent runs on, best-value first: the owner's own Gemini key
 // (cheap, and a quota separate from HackClub's shared daily cap), then a single
 // HackClub rung as the floor. A subagent walks this list on failure OR on an

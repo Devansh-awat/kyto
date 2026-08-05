@@ -10,6 +10,7 @@ import {
   type SandboxContext,
   streamAttempt,
   systemPrompt,
+  UPGRADE_ATTEMPTS,
   visionAttempt,
 } from '@repo/ai';
 import { LazySandbox } from '@repo/sandbox';
@@ -49,6 +50,7 @@ import { startThinking } from '@/lib/agent/utils';
 import { promptWithAttachments, seedAttachments } from '@/lib/ai/attachments';
 import { requestHints } from '@/lib/ai/hints';
 import { renderStream, type StreamError } from '@/lib/ai/stream';
+import type { Escalation } from '@/lib/ai/tools/upgrade-model';
 import { buildTools } from '@/lib/ai/toolset';
 import { runQueuedTurn } from '@/lib/ai/turn-queue';
 import { recordByokOutcome, resolveUserRouting } from '@/lib/byok';
@@ -461,8 +463,13 @@ async function executeTurn(
     // Built once: the toolset does not depend on the chosen model. Its keys let
     // renderStream hide hallucinated calls to non-existent tools; activeTools
     // drives deferred-tool visibility via prepareStep.
+    // The model's own "this is beyond me" signal. `upgradeModel` fills `pending`
+    // and its call ENDS the attempt (a stop condition, like skip), so the weaker
+    // model never carries on after asking to be replaced.
+    const escalation: Escalation = {};
     const built = await buildTools({
       bot,
+      escalation,
       extendAttemptDeadline: (extraMs) => extendDeadline?.(extraMs),
       getSandboxContext: () => sandboxContext,
       message: turnMessage,
@@ -879,6 +886,48 @@ async function executeTurn(
           throw new StreamInterruptedError(
             `Model ${currentAttempt.model} died mid-task (${attemptStreamError.status ?? 'stream error'}): ${attemptStreamError.message}`,
             { cause: attemptStreamError.error }
+          );
+        }
+
+        // The model asked to be replaced by a stronger one. Route the turn onto
+        // the escalation rung rather than letting the "ran tools, wrote nothing"
+        // path treat it as a failure to recover from — the attempt did exactly
+        // what it was supposed to. Recorded in `attempts` so the next one is
+        // treated as a fallback: that is what replays the gathered tool results
+        // (renderCarryover) and anything already streamed (renderContinuation),
+        // so the stronger model picks up the work instead of restarting it.
+        if (escalation.pending && !escalation.used) {
+          const { reason } = escalation.pending;
+          escalation.pending = undefined;
+          escalation.used = true;
+          const target = UPGRADE_ATTEMPTS.find(
+            (candidate) => !failedKeys.has(attemptKey(candidate))
+          );
+          if (target) {
+            const done = completeModelTask();
+            if (done) {
+              yield done;
+            }
+            logger.info(
+              {
+                attempt: attemptLog(currentAttempt),
+                reason,
+                threadId,
+                to: target.model,
+              },
+              '[agent] upgrading the turn to a stronger model'
+            );
+            attempts.push({
+              attempt: currentAttempt,
+              error: new Error(`Escalated to a stronger model: ${reason}`),
+            });
+            failedKeys.add(attemptKey(currentAttempt));
+            attempt = target;
+            continue;
+          }
+          logger.warn(
+            { reason, threadId },
+            '[agent] upgrade requested but no escalation rung is available'
           );
         }
 

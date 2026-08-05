@@ -4,6 +4,7 @@ import {
   type SandboxContext,
   SKIP_TOOL_NAME,
   subagentAttempt,
+  UPGRADE_TOOL_NAME,
 } from '@repo/ai';
 import { listMcpServers } from '@repo/db/queries';
 import { type Tool, type ToolSet, tool } from 'ai';
@@ -86,6 +87,7 @@ import { slackScriptTool } from './tools/slack-script';
 import { runSubagentTool } from './tools/subagent';
 import { summarizeThreadTool } from './tools/summarize-thread';
 import { textToSpeechTool } from './tools/text-to-speech';
+import { type Escalation, upgradeModelTool } from './tools/upgrade-model';
 import { uploadFileTool } from './tools/upload-file';
 import { fetchUrlTool, getPermalinkTool } from './tools/url';
 import { viewImageTool } from './tools/view-image';
@@ -114,6 +116,7 @@ export interface BuiltTools {
  */
 export async function buildTools({
   bot,
+  escalation,
   extendAttemptDeadline,
   getSandboxContext,
   message,
@@ -125,6 +128,13 @@ export async function buildTools({
    * deliberate pause is never mistaken for a stalled attempt. Absent for callers
    * with no watchdog of their own (the subagent, reminders).
    */
+  /**
+   * The turn's escalation slot. The `upgradeModel` tool writes into it and the
+   * agent loop reads it after the attempt ends. Absent for callers with no
+   * fallback ladder of their own (the subagent, reminders), which is what
+   * leaves the tool unregistered for them.
+   */
+  escalation?: Escalation;
   extendAttemptDeadline?: (extraMs: number) => void;
   getSandboxContext: () => SandboxContext;
   message: Message;
@@ -198,6 +208,17 @@ export async function buildTools({
     // Keyed off the constant: the stop condition that makes a skip terminal
     // matches on this exact name (see streamAttempt).
     [SKIP_TOOL_NAME]: skipTool({ threadId: thread.id }),
+    // CORE, not deferred: a model deciding "this is beyond me" cannot be asked
+    // to first spend a round trip loading the tool that says so.
+    ...(escalation
+      ? {
+          [UPGRADE_TOOL_NAME]: upgradeModelTool({
+            escalation,
+            threadId: thread.id,
+            userId: authorUserId,
+          }),
+        }
+      : {}),
     saveMemory: saveMemoryTool({ authorUserId, isOwner }),
     fetchMemory: fetchMemoryTool({ authorUserId, isOwner }),
     editMemory: editMemoryTool({ authorUserId, isOwner }),

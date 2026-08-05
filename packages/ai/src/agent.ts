@@ -47,6 +47,13 @@ export const MAX_STEPS = Number(process.env.AGENT_MAX_STEPS) || 1000;
  */
 export const SKIP_TOOL_NAME = 'skip';
 
+// Same mechanism, opposite reason: `upgradeModel` says "this needs a better
+// model than me". Ending the attempt on the call is the whole point — the
+// weaker model must not carry on working after asking to be replaced, and the
+// agent loop routes the turn onto the escalation rung with the work so far
+// replayed as carryover.
+export const UPGRADE_TOOL_NAME = 'upgradeModel';
+
 /**
  * Filled in as the attempt runs: `model` is the concrete slug OpenRouter's
  * auto-router resolved to (read off the response body), `calls` counts
@@ -328,7 +335,11 @@ export function streamAttempt({
     // Either bound ends the attempt: the step ceiling, or a deliberate skip
     // (see SKIP_TOOL_NAME — without this the "no reply" decision was made over
     // and over on the same message).
-    stopWhen: [stepCountIs(MAX_STEPS), hasToolCall(SKIP_TOOL_NAME)],
+    stopWhen: [
+      stepCountIs(MAX_STEPS),
+      hasToolCall(SKIP_TOOL_NAME),
+      hasToolCall(UPGRADE_TOOL_NAME),
+    ],
     system,
     tools,
   });
