@@ -12,6 +12,7 @@ import { env } from '@/env';
 import type { KytoBot, Message, ThreadHandle } from '@/harness';
 import { buildMcpTools } from '@/lib/ai/mcp';
 import logger from '@/lib/logger';
+import { recallLoadedTools, rememberLoadedTools } from './loaded-tools';
 import { askQuestionTool } from './tools/ask-question';
 import { backgroundProcessTools } from './tools/background';
 import { browserTool } from './tools/browser';
@@ -440,11 +441,27 @@ export async function buildTools({
     };
   }
 
+  // Anything this thread already loaded stays loaded (see lib/ai/loaded-tools).
+  // Filtered through THIS turn's `deferred`, which is built for the person
+  // speaking now — so a tool only registered for the owner, or an MCP tool from
+  // someone else's server, can never be seeded onto a different user's turn
+  // just because it was loaded earlier in the thread.
+  const remembered = new Set(
+    recallLoadedTools(thread.id).filter((name) => deferred[name])
+  );
+
+  // Already-active tools are left out of the catalog: they are in the prompt as
+  // real tools, and listing them invites a round trip to "load" what is already
+  // there.
   const catalog = Object.entries(deferred)
+    .filter(([name]) => !remembered.has(name))
     .map(([name, entry]) => `- ${name}: ${entry.summary}`)
     .join('\n');
   const active = new Set(Object.keys(core));
   active.add('loadTools');
+  for (const name of remembered) {
+    active.add(name);
+  }
 
   // Deferral is a trade: a deferred tool's schema stays out of the cached
   // prefix, but reaching it costs an extra round trip (loadTools, then the call
@@ -494,10 +511,11 @@ export async function buildTools({
           unknown.push(name);
         }
       }
+      rememberLoadedTools(thread.id, loaded);
       return Promise.resolve({
         loaded,
         summary: loaded.length
-          ? `Loaded: ${loaded.join(', ')}. They are available as tools from the next step.`
+          ? `Loaded: ${loaded.join(', ')}. They stay available for the rest of this thread — you don't have to load them again on a later message here.`
           : 'No matching tools.',
         unknown,
       });
@@ -533,6 +551,10 @@ export async function buildTools({
           // catalog description is misleading the model.
           loadedUnused: [...loadedNames].filter((name) => !usage.has(name)),
           loadedUsed: [...loadedNames].filter((name) => usage.has(name)),
+          // Carried in from an earlier turn of this thread rather than loaded
+          // here — keeps the deferral measurement honest now that the set
+          // survives the turn.
+          remembered: [...remembered],
           userId: authorUserId,
         },
         '[tools] turn summary'
