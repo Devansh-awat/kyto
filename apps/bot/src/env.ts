@@ -22,6 +22,9 @@ export const env = createEnv({
     OWNER_USER_ID: z.string().optional(),
     PORT: z.coerce.number().default(3000),
     OPT_IN_CHANNEL: z.string().optional(),
+    // The workspace channel where new custom emoji are requested (an admin
+    // reads it and adds them). Unset = the submitEmoji tool isn't registered.
+    EMOJI_REQUEST_CHANNEL: z.string().optional(),
 
     // Static site hosting (see lib/sites). The host only ever serves prebuilt
     // static files from SITES_ROOT — it never executes site code. Building and

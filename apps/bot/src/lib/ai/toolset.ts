@@ -35,6 +35,7 @@ import {
   replyEmailTool,
   sendEmailTool,
 } from './tools/email';
+import { lookupEmojiTool, submitEmojiTool } from './tools/emoji';
 import { deleteFileTool, fileStatTool } from './tools/files';
 import { focusModeTool } from './tools/focus';
 import { generateImageTool } from './tools/generate-image';
@@ -283,6 +284,10 @@ export async function buildTools({
       summary: 'delete a Slack canvas',
       tool: canvasDeleteTool(),
     },
+    lookupEmoji: {
+      summary: 'see what a workspace custom emoji actually depicts',
+      tool: lookupEmojiTool(),
+    },
     slackDocs: {
       summary:
         'reference notes: Block Kit blocks/limits, canvas markdown (checkboxes), search modifiers',
@@ -402,6 +407,24 @@ export async function buildTools({
           replyEmail: {
             summary: 'reply to an email thread',
             tool: replyEmailTool({ apiKey: agentMailKey }),
+          },
+        }
+      : {}),
+    // Submitting an emoji posts a file into a channel kyto was NOT invoked in,
+    // which is exactly the shape the confirm gate exists for — and the pending
+    // -post store has no way to hold a file. So it is registered for the OWNER
+    // only, the same rule sendAsUser follows, rather than opening an ungated
+    // outward path into a public channel that an injection could put an image
+    // through. Everyone else asks him.
+    ...(isOwner && env.EMOJI_REQUEST_CHANNEL
+      ? {
+          submitEmoji: {
+            summary: 'submit a new custom emoji to the emoji-request channel',
+            tool: submitEmojiTool({
+              channelId: env.EMOJI_REQUEST_CHANNEL,
+              getSandboxContext,
+              requestedBy: authorUserId,
+            }),
           },
         }
       : {}),
