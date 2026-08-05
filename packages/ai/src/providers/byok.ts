@@ -16,6 +16,8 @@ export const BYOK_PROVIDER_IDS = [
   'openrouter',
   'groq',
   'xai',
+  'hackclub',
+  'mebbo',
   'custom',
 ] as const;
 
@@ -46,6 +48,25 @@ export const BYOK_PROVIDERS: Record<ByokProviderId, ByokProviderSpec> = {
     id: 'custom',
     keyHint: 'any',
     label: 'Custom (OpenAI-compatible)',
+  },
+  // The same proxy kyto's own shared tier runs on. Offered because a Hack Club
+  // member has their OWN key with their OWN daily cap — pasting it here routes
+  // their turns off the shared $3/day that everyone else is also spending.
+  hackclub: {
+    baseUrl: 'https://ai.hackclub.com/proxy/v1',
+    defaultModel: 'deepseek/deepseek-v4-flash-0731',
+    id: 'hackclub',
+    keyHint: 'sk-hc-…',
+    label: 'Hack Club AI',
+  },
+  // A friend of the owner's self-hosted OpenWebUI. Free, shared limits, and
+  // only worth pointing at the models that actually answer — see MODELS.md.
+  mebbo: {
+    baseUrl: 'https://chat.mebbo.cloud/api',
+    defaultModel: 'deepseek-ai/deepseek-v4-pro',
+    id: 'mebbo',
+    keyHint: 'sk-…',
+    label: 'mebbo (chat.mebbo.cloud)',
   },
   google: {
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/',
