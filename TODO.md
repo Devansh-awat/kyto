@@ -329,4 +329,196 @@ the routing policy says when to use which.
 
 ---
 
+deepseek should be able to ask gemini about the pic, such as what text there is, so that it gets more info. 
 
+model sometimes outputs latex, so parse the latex if slack allows, check docs for this, if not then tell model to not use latex(use agy subagent for it, and report to me if you used bash tool with agy -p or a tool the plugin i installed added.)
+
+Tools disapear AGAIN? check logs
+https://hackclub.slack.com/archives/C0BDH1FNCTX/p1785601038694439
+devansh  [9:47 PM]
+@kyto create a PR fixing https://github.com/exelban/stats/issues/3509
+kyto  [9:47 PM]
+kyto  [9:47 PM]
+The issue is real (opened by kyto-agent earlier): on an M3 Pro, only some CPU core temperatures show, with IDs parsed like "E0" but displayed as 1, 3, 4. Let me clone the repo and dig in.
+kyto  [9:47 PM]
+kyto  [9:48 PM]
+M3 Pro has 6 efficiency + 6 performance cores, but the m3Gen sensor list only defines 4 efficiency cores. Let me dig into how these are read and displayed.
+kyto  [9:48 PM]
+devansh  [9:48 PM]
+## why did i open it with the wrong account
+kyto  [9:49 PM]
+Let me look at the issue screenshots and gather context on the M3 SMC keys.
+kyto  [9:49 PM]
+kyto  [9:50 PM]
+The screenshot confirms it: M3 Pro (12 cores), but only CPU efficiency core 1, 3, 4 are detected. Efficiency core 2 + all performance cores are missing. The m3Gen SMC sensor keys look wrong. Let me find the correct M3 SMC keys.
+kyto  [9:50 PM]
+kyto  [9:50 PM]
+Real M3 SMC dumps exist in related issues. Let me fetch the actual M3 Pro sensor list to get the correct keys.
+kyto  [9:50 PM]
+kyto  [9:50 PM]
+Now I have the real M3 Pro SMC keys. Let me pull tycho's analysis (the source the m3Gen list was based on) and get a 12-core M3 Pro dump to nail the correct mapping.
+kyto  [9:50 PM]
+kyto  [9:51 PM]
+Tycho's gist is about GPU power, not core temps. Let me pull the full discussion threads and any additional SMC dumps (12-core M3 Pro ideally) from the related issues via the GitHub API.
+kyto  [9:51 PM]
+kyto  [9:51 PM]
+This is genuinely intricate (M3 uses per-SoC SMC keys; the maintainer flagged it as hard). Let me understand exactly how Stats decides which sensors to show, and gather a 12-core M3 Pro dump (the exact device in the issue).
+kyto  [9:51 PM]
+kyto  [9:52 PM]
+The reader auto-filters: sensors only show if their SMC key actually exists on the device. So on M3 Pro, Te0L + all Tf0x keys are absent → cores hidden. Let me gather the correct M3 Pro keys from all available dumps to build an accurate list.
+kyto  [9:52 PM]
+kyto  [9:53 PM]
+Let me check whether anyone has published a definitive M3 core-to-key map (the smol project notes looked promising), and pull the M3 Max dump shared in #1703.
+kyto  [9:53 PM]
+kyto  [9:56 PM]
+...that'll give me the per-SoC mapping I need to correct the m3Gen sensor list. One catch, though: my tools are switched off on this turn, so I can't fetch that dump or open the PR from here. The fix is clear enough in outline — the reader already auto-hides cores whose SMC keys don't exist, so I need to replace the incomplete m3Gen keys (Te0L + Tf0x with only 4 efficiency cores) with the real per-SoC keys for the 12-core M3 Pro. The moment tools are back I can verify against the dump and open the PR.kyto  [9:56 PM]
+26,238 tokens · 48 tok/s
+
+last thinking block shows
+Te core-temp candidates (values in 40-44 range):
+Te05 40.8 (E had this)
+Te0H 41.0
+Te0P 41.7
+Te0S 43.1
+Te0U 43.6
+= 5
+
+Tp core-temp candidates (the '0x' pattern where value ~40-52, matching the pattern Tp00/01/02, Tp04/05/06...):
+Looking at dump, Tp keys: Tp04 38.6/ Tp05 44.7/ Tp06 43.6 / Tp0C 38.4/ Tp0D 44.5 / Tp0K 38.2/ Tp0L 44.3 / Tp0R 38.1/ Tp0S 44.2 / Tp0U 39.9/ Tp0V 47.2 / Tp0a 40.1/ Tp0b 47.4 / Tp0g 39.8/ Tp0h 47.1 / Tp0m 39.6/ Tp0n 46.9 / Tp0u 41.1/ Tp0v 50.4 / Tp0y 41.2/ Tp0z 50.5 / Tp16 38.5/ Tp17 44.6 / Tp1E 38.5/ Tp1F 44.6 / Tp1I 39.5/ Tp1J 46.8 / Tp1Q 39.4/ Tp1R 46.7 / Tp3O 44.1/Tp3P 45.6 / Tp3S 45.2/Tp3T 45.7 / Tp3W 43.5/Tp3X 51.3
+
+For the M3 Pro 11C (5…
+ThinkingThe system is telling me that every tool has been switched off deliberately, and I have no tools available. The user's context implies I was cut off mid-thought, working on creating a PR to fix the stats issue #3509.
+
+So I need to write only the continuation, starting where the previous text stops. The text stops with "let me pull the M3 Max dump shared in #1703."
+
+I have no tools. I cannot actually create the PR, clone the repo, fetch data, etc. The instruction says: "Answer from what is already in front of you; if something is genuinely missing, say so in one short sentence and stop."
+
+so what happened?
+
+from inspection of logs on the hcai site, getting cache hit rate of 40% now. although deepseek is so cheap that it basicly does not matter, still better to get higher cache hits, from what i think we should get 95% cache hit as only tool output should be uncached, after tool call, when model continues, all stuff before it should be cached.
+
+add ai.hackclub.com/proxy/v1 as model provider in home page
+
+some issues with github, is model being dumb or harness bug? i later found out that only contributors can make PRs, so that is why kyto could not, but wont gh cli tell that you cant PR it?
+kyto  [10:27 PM]
+The edit is clean. Now let me branch, commit, and open the PR from the fork.
+kyto  [10:27 PM]
+kyto  [10:27 PM]
+Now let me set up the fork and push the branch.
+kyto  [10:27 PM]
+kyto  [10:27 PM]
+The fork doesn't exist yet. Let me create it and push.
+kyto  [10:27 PM]
+kyto  [10:27 PM]
+The branch is pushed to the fork. Now let me open the PR against the upstream repo.
+kyto  [10:27 PM]
+kyto  [10:27 PM]
+The fork exists but the PR creation failed. Let me check the fork relationship and retry.
+kyto  [10:27 PM]
+kyto  [10:28 PM]
+The fork has parent: null — so kyto-agent/stats isn't actually a fork of exelban/stats. There's likely a stale repo with that name on my account blocking the fork. Let me inspect it.
+kyto  [10:28 PM]
+kyto  [10:28 PM]
+The fork was created just now (16:57Z) with full content but parent reads null — the fork relationship may not have registered with GitHub yet, which is why the PR creation failed. Let me wait a moment and check, then retry.
+kyto  [10:28 PM]
+kyto  [10:28 PM]
+The fork relationship just registered with GitHub (parent: exelban/stats, fork: true). Let me retry creating the PR.
+kyto  [10:28 PM]
+kyto  [10:28 PM]
+Still the permission error. Let me try the REST API directly, which may give a clearer signal, and double-check the fork is recognized by GitHub's fork network now.
+kyto  [10:28 PM]
+kyto  [10:28 PM]
+The fork may still be propagating into upstream's fork network. Let me verify and wait a bit before retrying.
+kyto  [10:28 PM]
+kyto  [10:28 PM]
+Let me wait for GitHub to fully propagate the fork network, then retry.
+kyto  [10:28 PM]
+kyto  [10:29 PM]
+The fork is confirmed (fork: true, parent: exelban/stats). Let me retry the PR creation and capture raw output.kyto  [10:29 PM]
+
+this bug still happens, but now the thinking part is shown just no tool use shown
+kyto  [11:07 PM]
+ 5 more steps (running)ThinkingThe command got backgrounded because tsc is slow; and there's a "Bad substitution" from ${PIPESTATUS[0]} in sh (the bash tool uses sh). Let me poll bg-36 for the tsc output.
+Thinkingtsc is still running (no output yet). Let me wait a bit more and poll again.
+this happened in the thinking block after https://hackclub.slack.com/archives/C0BDH1FNCTX/p1785605830956889?thread_ts=1785603294.418899&cid=C0BDH1FNCTX due to bug in slack i could not copy link of the exact msg. 
+
+ive added emoji read scope so that it can use a tool to understand what emoji is, make sure this is a tool, token updated. to add emojis it should post in channel C02T3CU03T3 with emoji name and attached emoji, make sure its a small emoji. dont tell model to post there, give it a tool which posts there.
+
+many, if not all image genration models support image input, basicly they can edit the image too, check if kyto uses such a model by searching the web, then make sure kyto can do it
+
+symlink CLAUDE.md to AGENTS.md
+
+use agy subagents whenever needed for research tasks atleast, and easy code stuff
+
+and tell me if agy subagents are used through bash tool or another tool
+
+often it does not mention users or channels properly, pls fix. but make sure it does not go around pinging big subteams or such, unless asked to. basicly, only mention the person or team if needed, but channel always. 
+
+another freind gimme more free ai
+olii-dev  [10:08 AM]
+Hey yall
+
+I set up OpenWebUI and hooked up:
+
+DeepSeek-V4-Flash-0731
+kimi-k3-free
+llama-3.1-8b
+llama-3.3-70b
+gpt-oss-120b
+codestral-latest
+mistral-large-latest
+macaron v1 venti
+
+
+It's hosted 24/7 from my Ubuntu server at https://chat.mebbo.cloud (that's MY domain, dont worry)
+
+SHARED limits (across everyone):
+
+DeepSeek-V4-Flash-0731: ~12 requests/min
+kimi-k3-free: no limit but slow
+llama-3.1-8b: around 30 requests/min and ~14,400 requests/day
+llama-3.3-70b: around 30 requests/min and ~1,000 requests/day
+gpt-oss-120b: around 30 requests/min and ~1,000 requests/day
+mistral models: 1 Billion tokens/month
+macarom v1 Venti: 30 requests/min
+
+
+I'll keep adding more models over time, BUT some models may disappear or change (sorry)
+
+access it at: https://chat.mebbo.cloud
+
+(supports API keys so u can take it off OpenWebUI)
+Enjoy!
+those limits are shared
+api key is sk-REDACTED
+the limits are shared probably
+
+should we add tool called upgrade model which can updgrade kyto to a more capable model if it needs to do compelx stuff like Kimi K3?
+
+also probably we can get the full limits if we find out their provider
+olii-dev  [8:58 PM]
+okok allg
+[8:58 PM]i enabled it for only me :skull: its enabled for everyone now, try!
+bl4747  [9:33 PM]
+Are you seriously freeloading off Victor’s DSv4 Flash endpoint and calling ts your own :sob::sob:
+olii-dev  [9:41 PM]
+who tf is victor bro :skull: no i am not doing that for all the models, only deepseek v4 flash bud (edited) 
+devansh  [10:18 PM]
+got the key
+[10:18 PM]will try to use it later
+bl4747  [10:42 PM]
+@olii-dev the huggingface endpoint
+bl4747  [10:44 PM]
+PSA this guy ^ is just going through existing free APIs hosted by others and putting it on his chat platform
+devansh  [11:02 PM]
+who else is hosting free api @bl4747
+
+tools unloaded?
+ThinkingThe gh tool was loaded in a previous turn but isn't available now (it's per-turn). Let me reload it.
+loadToolsCompleted.
+
+when kyto-agent is given acces to a repo, it should not need my perms to edit it, etc.
+
+mail checking tools should give mail time and who sent, who was it sent to, etc
+
+to improve caching, maybe record the raw stuff we send to api to see where it differs. if not already done. 

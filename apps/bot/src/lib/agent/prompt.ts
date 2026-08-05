@@ -117,6 +117,17 @@ export async function buildPrompt(
     ? `The latest message, which you must respond to:\n${current}`
     : current;
 
+  // The two facts that change on EVERY turn, kept in the volatile tail rather
+  // than in the system prompt where they used to be. A per-turn timestamp and a
+  // per-turn message id inside the system string meant cache breakpoint A (the
+  // system prompt + every tool schema) missed on every new turn of a thread —
+  // the biggest single cached prefix, re-billed at full price each time, on a
+  // shared daily cap. Down here they invalidate nothing but themselves.
+  const nowLine = [
+    `The current date and time is ${new Date().toISOString()}.`,
+    `The message you're responding to has id ${message.id}.`,
+  ].join('\n');
+
   // ORDER IS LOAD-BEARING, for prompt caching (see addCacheControl in
   // packages/ai/src/agent.ts — the breakpoint lands on the last user message,
   // which is this whole string).
@@ -127,7 +138,7 @@ export async function buildPrompt(
   //   compacted           changes once per COMPACT_BATCH of overflow
   //   history             append-only until the thread passes MAX_THREAD_MESSAGES
   //   thinking            CHANGES EVERY TURN (last turn's reasoning is appended)
-  //   current             the new message
+  //   nowLine + current   the clock, the message id, and the new message
   //
   // The thinking block used to come FIRST. It is up to THINKING_BUDGET_CHARS of
   // text that is different on every single turn, so putting it at the front
@@ -148,6 +159,7 @@ export async function buildPrompt(
     compacted,
     history,
     thinking,
+    nowLine,
     latest,
   ]
     .filter(Boolean)

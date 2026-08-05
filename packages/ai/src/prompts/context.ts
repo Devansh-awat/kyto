@@ -1,7 +1,16 @@
 import type { RequestHints } from './hints';
 
+// NOTHING VOLATILE MAY GO IN HERE. This block is the tail of the system prompt,
+// which is cache breakpoint A (system + tool schemas — the single biggest cached
+// prefix). The system message is ONE string, so one changed byte anywhere in it
+// invalidates the whole prefix and the turn re-bills every tool schema at full
+// price. The current time and the id of the message being answered used to live
+// here and are different on EVERY turn, so breakpoint A could never hit across
+// a thread's turns — only the within-turn steps benefited. Both moved to the
+// volatile tail of the user message (see buildPrompt in lib/agent/prompt.ts).
+// Keep this block to facts that are stable for the life of a thread.
 export function contextPrompt(hints: RequestHints): string {
-  const lines = [`The current date and time is ${hints.time}.`];
+  const lines: string[] = [];
   if (hints.botUserId) {
     lines.push(
       `Your own Slack user id is ${hints.botUserId}. A message that mentions <@${hints.botUserId}> (or @kyto) is addressed to YOU — never mistake it for another bot like gorkie. Never look this id up as a user.`
@@ -22,9 +31,6 @@ export function contextPrompt(hints: RequestHints): string {
   lines.push(`The current thread id is ${hints.threadId}.`);
   if (hints.channel?.id) {
     lines.push(`The current channel id is ${hints.channel.id}.`);
-  }
-  if (hints.messageId) {
-    lines.push(`The message you're responding to has id ${hints.messageId}.`);
   }
   if (hints.githubLogin) {
     // The gh tool says this too, but gh is DEFERRED — it isn't in the prompt

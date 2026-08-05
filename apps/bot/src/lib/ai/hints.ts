@@ -36,11 +36,9 @@ export async function requestHints({
     customization,
     email,
     memories,
-    messageId: message.id,
     ownerUserId: env.OWNER_USER_ID,
     githubLogin: env.GH_LOGIN,
     workspace,
     threadId: thread.id,
-    time: new Date().toISOString(),
   };
 }

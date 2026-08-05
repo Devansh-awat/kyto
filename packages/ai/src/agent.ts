@@ -9,6 +9,12 @@ import {
   type ToolSet,
 } from 'ai';
 import { addCacheControl } from './cache-control';
+import {
+  comparePrefix,
+  type PrefixDivergence,
+  type PrefixUnit,
+  prefixUnits,
+} from './cache-probe';
 import { fetchWithGatewayRetry, type GatewayRetryInfo } from './gateway-retry';
 import {
   GEMINI_PROVIDER,
@@ -138,6 +144,7 @@ export function streamAttempt({
   holder,
   images,
   getFreshImages,
+  onCachePrefix,
   onDroppedImages,
   onError,
   onGatewayRetry,
@@ -171,6 +178,13 @@ export function streamAttempt({
    * failure that was impossible to attribute without a Slack transcript.
    */
   onError?: (error: unknown) => void;
+  /**
+   * Called once per step with where this request's prompt stopped matching the
+   * previous step's. Prompt caching is a prefix match, so a step that is not
+   * append-only re-bills everything after the divergence — and nothing else
+   * reports that: the turn succeeds either way and only the invoice differs.
+   */
+  onCachePrefix?: (info: PrefixDivergence) => void;
   /**
    * Called when a step's request came back a gateway failure and is being sent
    * again (see gateway-retry). Purely observational — the retry happens either
@@ -207,6 +221,7 @@ export function streamAttempt({
         fetch: tunedFetch({
           attempt,
           holder,
+          onCachePrefix,
           onGatewayRetry,
         }) as unknown as typeof fetch,
         // Extra per-attempt headers. Authorization is set from apiKey.
@@ -457,10 +472,12 @@ function codexFetch({
 function tunedFetch({
   attempt,
   holder,
+  onCachePrefix,
   onGatewayRetry,
 }: {
   attempt: ModelAttempt;
   holder: ResolvedModelHolder;
+  onCachePrefix?: (info: PrefixDivergence) => void;
   onGatewayRetry?: (info: GatewayRetryInfo) => void;
 }): FetchLike {
   // Gemini 3.x attaches an encrypted `thought_signature` to every function call
@@ -471,6 +488,10 @@ function tunedFetch({
   // Scoped to this attempt's closure so it persists across the attempt's steps.
   const thoughtSignatures = new Map<string, string>();
   const isGemini = attempt.provider === GEMINI_PROVIDER;
+  // The previous request's prefix units, so each step can be checked for cache
+  // churn against the one before it. Per-attempt closure, same as the
+  // signatures above.
+  const cacheProbe: { units: PrefixUnit[] } = { units: [] };
   return async (input, init) => {
     const url = requestUrl(input);
     let callInput = input;
@@ -480,7 +501,8 @@ function tunedFetch({
       const tuned = tuneBody(
         await readRequestBody(input, init),
         attempt,
-        isGemini ? thoughtSignatures : undefined
+        isGemini ? thoughtSignatures : undefined,
+        onCachePrefix ? { onCachePrefix, state: cacheProbe } : undefined
       );
       if (tuned) {
         const source =
@@ -545,7 +567,11 @@ const REQUIRED_TOP_P: Record<string, number> = {};
 function tuneBody(
   raw: string | undefined,
   attempt: ModelAttempt,
-  thoughtSignatures?: Map<string, string>
+  thoughtSignatures?: Map<string, string>,
+  probe?: {
+    onCachePrefix: (info: PrefixDivergence) => void;
+    state: { units: PrefixUnit[] };
+  }
 ): string | null {
   if (raw === undefined) {
     return null;
@@ -554,6 +580,17 @@ function tuneBody(
     const payload = JSON.parse(raw) as Record<string, unknown>;
     if (!payload || typeof payload !== 'object') {
       return null;
+    }
+    // Measured on the RAW payload, before the rewrites below: addCacheControl
+    // moves a breakpoint every step, which would read as prefix churn that the
+    // provider never sees.
+    if (probe) {
+      const units = prefixUnits(payload);
+      const divergence = comparePrefix(probe.state.units, units);
+      probe.state.units = units;
+      if (divergence) {
+        probe.onCachePrefix(divergence);
+      }
     }
     let changed = false;
     // Gemini: re-attach captured thought signatures to assistant tool calls so

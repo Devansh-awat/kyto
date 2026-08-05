@@ -13,9 +13,9 @@ import {
   visionAttempt,
 } from '@repo/ai';
 import { LazySandbox } from '@repo/sandbox';
+import type { ToolSet } from 'ai';
 import { env } from '@/env';
 import type { Message, StreamChunk, ThreadHandle } from '@/harness';
-import type { ToolSet } from 'ai';
 import {
   type GatheredResult,
   renderCarryover,
@@ -666,6 +666,32 @@ async function executeTurn(
                 threadId,
               },
               '[agent] provider error inside attempt stream'
+            );
+          },
+          // Prompt caching is a prefix match, so a step whose prompt is not a
+          // pure APPEND of the previous step's re-bills everything after the
+          // divergence at full price. Nothing else surfaces that — the turn
+          // succeeds either way and only the invoice differs — so log where it
+          // broke, and what share of the request could still be cached.
+          onCachePrefix: (divergence) => {
+            if (divergence.appendOnly) {
+              return;
+            }
+            logger.warn(
+              {
+                attempt: attemptLog(currentAttempt),
+                cacheable: `${Math.round(
+                  (divergence.stableChars /
+                    Math.max(divergence.totalChars, 1)) *
+                    100
+                )}%`,
+                divergedAt: divergence.label,
+                index: divergence.index,
+                stableChars: divergence.stableChars,
+                threadId,
+                totalChars: divergence.totalChars,
+              },
+              '[agent] prompt prefix changed mid-turn; cache lost from here'
             );
           },
           // A replayed gateway failure is invisible otherwise — the turn just
