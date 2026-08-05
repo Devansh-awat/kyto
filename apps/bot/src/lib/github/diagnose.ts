@@ -28,6 +28,18 @@ const TOUCHES_GITHUB = /github\.com|gh:\s|\bgh\b/i;
 const HINT =
   "GitHub rejected kyto's brokered credentials. That token is injected at the network layer, so nothing inside the sandbox can read, refresh, or replace it, and `gh auth` commands won't help — it needs the bot owner to rotate GH_TOKEN, and a thread only picks up a rotated token on its NEXT fresh sandbox. Note this does NOT mean the repo is private or missing: this failure looks identical for a public repo, because the rejected credential is attached before GitHub ever considers the request anonymous. To read a PUBLIC repo meanwhile, skip git auth entirely and download the tarball, e.g. `curl -sL https://codeload.github.com/OWNER/REPO/tar.gz/refs/heads/main | tar xz`. Tell whoever asked that the token needs rotating rather than retrying the same command.";
 
+// A repo can refuse a pull request from kyto's account outright — GitHub answers
+// `GraphQL: <login> does not have the correct permissions to execute
+// \`CreatePullRequest\``. It is NOT an auth failure and NOT transient, but it
+// reads like one: an observed turn re-created the fork, waited for the fork
+// network to "propagate", checked `parent`, and retried five times before giving
+// up, because nothing told it the answer would never change.
+const PR_PERMISSION_FAILURE =
+  /does not have the correct permissions to execute .?CreatePullRequest|not authorized to create a pull request/i;
+
+const PR_PERMISSION_HINT =
+  "GitHub refused the pull request itself, not your credentials: that repository does not let kyto's account (kyto-agent) open a PR — some repos restrict pull requests to collaborators or to members of the org. This will NOT change on a retry, and it is not a fork problem: re-forking, waiting for the fork network, pushing again, or calling the REST API instead all hit the same wall. Stop retrying. Tell whoever asked that the branch is pushed and the repo won't accept a PR from kyto, and offer them the compare link (https://github.com/OWNER/REPO/compare/BASE...kyto-agent:BRANCH) so they can open it from their own account.";
+
 /**
  * A hint to append to a failed command's result, or undefined when the failure
  * had nothing to do with GitHub auth.
@@ -43,6 +55,9 @@ export function githubAuthHint({
 }): string | undefined {
   if (exitCode === 0) {
     return;
+  }
+  if (PR_PERMISSION_FAILURE.test(stderr)) {
+    return PR_PERMISSION_HINT;
   }
   if (!AUTH_FAILURE.test(stderr)) {
     return;

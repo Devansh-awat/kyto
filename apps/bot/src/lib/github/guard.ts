@@ -9,6 +9,7 @@ import { env } from '@/env';
 import { canEdit } from '@/lib/ai/tools/editors';
 import { requestApproval } from '@/lib/approvals/request';
 import logger from '@/lib/logger';
+import { kytoCanPush } from './collaborator';
 import { parseGithubCommand } from './command';
 
 /**
@@ -27,6 +28,9 @@ import { parseGithubCommand } from './command';
  *    protects kyto's GitHub account from the workspace; an untrusted attempt is
  *    refused and queued for the owner to approve. Reads stay open to everyone
  *    under both gates.
+ *    EXCEPTION: a repo that added kyto's GitHub account as a collaborator with
+ *    push access skips this gate — the invitation is the grant (see
+ *    ./collaborator.ts). Gate 1 still runs first and is unaffected.
  *
  * Enforcement is at execute time against the REQUESTING user, never against
  * whoever the model says it is acting for — same rule as reminders and sites.
@@ -192,14 +196,27 @@ export async function guardGithubTargets({
   const thirdParty = [...targets].filter(
     (repo) => !(inKytoNamespace(repo) || claimedByUser.has(repo))
   );
-  if (thirdParty.length > 0 && !isOwner) {
+  // …unless someone already added kyto's GitHub account as a collaborator with
+  // push access. That invitation IS the grant (owner's call, 2026-08-05: "when
+  // kyto-agent is given access to a repo, it should not need my perms to edit
+  // it"), so the trust gate below would only be re-asking a question GitHub has
+  // already answered. A repo nobody invited kyto to reports push:false and is
+  // still gated; a failed check answers false, so an outage tightens this rather
+  // than opening it. Gate 1 (another user's claimed repo) ran ABOVE and is
+  // untouched — this cannot be used to reach past it.
+  const invited = await Promise.all(
+    thirdParty.map(async (repo) => ((await kytoCanPush(repo)) ? repo : null))
+  );
+  const invitedRepos = new Set(invited.filter((repo) => repo !== null));
+  const gated = thirdParty.filter((repo) => !invitedRepos.has(repo));
+  if (gated.length > 0 && !isOwner) {
     const trust = await getGithubTrust(userId).catch((error: unknown) => {
       logger.warn({ err: error }, '[github] failed to read trust');
       return null;
     });
     const untrusted = trust?.allRepos
       ? []
-      : thirdParty.filter((repo) => !(trust?.repos ?? []).includes(repo));
+      : gated.filter((repo) => !(trust?.repos ?? []).includes(repo));
     if (untrusted.length > 0) {
       // Don't hold the turn open waiting for a decision — a turn can't block
       // for hours. Record it, refuse, and let them ask again once approved.
