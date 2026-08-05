@@ -9,6 +9,8 @@ export const keys = () =>
       INFERENCE_API_KEY: z.string().min(1).optional(),
       GEMINI_API_KEY: z.string().min(1).optional(),
       GEMINI_BASE_URL: z.url().optional(),
+      MEBBO_API_KEY: z.string().min(1).optional(),
+      MEBBO_BASE_URL: z.url().optional(),
       EXA_API_KEY: z.string().min(1),
     },
     runtimeEnv: {
@@ -17,6 +19,8 @@ export const keys = () =>
       INFERENCE_API_KEY: process.env.INFERENCE_API_KEY,
       GEMINI_API_KEY: process.env.GEMINI_API_KEY,
       GEMINI_BASE_URL: process.env.GEMINI_BASE_URL,
+      MEBBO_API_KEY: process.env.MEBBO_API_KEY,
+      MEBBO_BASE_URL: process.env.MEBBO_BASE_URL,
       EXA_API_KEY: process.env.EXA_API_KEY,
     },
     emptyStringAsUndefined: true,

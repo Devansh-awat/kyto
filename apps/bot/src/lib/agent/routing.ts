@@ -2,7 +2,11 @@ import type { ModelAttempt } from '@repo/ai';
 // From the env-free module on purpose: this file must stay importable (and so
 // testable) without a valid API-key environment.
 import { isGatewayStatus } from '@repo/ai/gateway-retry';
-import { GEMINI_PROVIDER, HACKCLUB_PROVIDER } from '@repo/ai/providers/names';
+import {
+  GEMINI_PROVIDER,
+  HACKCLUB_PROVIDER,
+  MEBBO_PROVIDER,
+} from '@repo/ai/providers/names';
 
 // The order kyto falls back in. Split out of the agent loop because this is
 // where the worst regression in the project's history lived, and it was guarded
@@ -18,7 +22,9 @@ export function attemptKey(attempt: ModelAttempt): string {
  *
  *   1. the HackClub rungs, in list order (LEADERBOARD_FALLBACK — cheap K2-class
  *      models, deliberately no longer the arena's expensive top end);
- *   2. the owner's Gemini key, the cheap last resort.
+ *   2. the free mebbo tier (a friend's self-hosted OpenWebUI) — costs nothing,
+ *      so it is worth a try before spending quota, but it is a hobby box;
+ *   3. the owner's Gemini key, the cheap last resort.
  *
  * Within each tier, the list's own order decides.
  *
@@ -35,7 +41,11 @@ export function buildFallbackQueue(
 ): ModelAttempt[] {
   const tier = (provider: string) =>
     leaderboard.filter((candidate) => candidate.provider === provider);
-  return [...tier(HACKCLUB_PROVIDER), ...tier(GEMINI_PROVIDER)];
+  return [
+    ...tier(HACKCLUB_PROVIDER),
+    ...tier(MEBBO_PROVIDER),
+    ...tier(GEMINI_PROVIDER),
+  ];
 }
 
 /**

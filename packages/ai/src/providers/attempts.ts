@@ -1,5 +1,5 @@
 import { keys } from '../keys';
-import { GEMINI_PROVIDER, HACKCLUB_PROVIDER } from './names';
+import { GEMINI_PROVIDER, HACKCLUB_PROVIDER, MEBBO_PROVIDER } from './names';
 
 const env = keys();
 
@@ -8,7 +8,9 @@ const GEMINI_BASE_URL =
   env.GEMINI_BASE_URL ??
   'https://generativelanguage.googleapis.com/v1beta/openai/';
 
-export { GEMINI_PROVIDER, HACKCLUB_PROVIDER } from './names';
+export { GEMINI_PROVIDER, HACKCLUB_PROVIDER, MEBBO_PROVIDER } from './names';
+
+const MEBBO_BASE_URL = env.MEBBO_BASE_URL ?? 'https://chat.mebbo.cloud/api';
 
 /** One model attempt: an OpenAI-compatible endpoint + model slug. */
 export interface ModelAttempt {
@@ -118,6 +120,35 @@ const geminiAttempts: ModelAttempt[] = env.GEMINI_API_KEY
     }))
   : [];
 
+// A free tier a friend of the owner runs: OpenWebUI on his own Ubuntu box
+// (chat.mebbo.cloud), fronting free upstream endpoints, on ONE key shared with
+// everyone he handed it to. Free and genuinely useful, but NOT primary material,
+// which is the call the owner asked for (2026-08-05, "if it has better models
+// than our deepseek v4 flash and also works well, use as primary, otherwise
+// before gemini"). Measured that day:
+//   - `deepseek-v4-pro` and `gpt-oss-120b` return real `tool_calls`, first byte
+//     in ~0.1-0.5s. Both are strictly better models than the flash primary.
+//   - but `glm-5.2` and `kimi-k3-free` HUNG — no bytes at all in 95s, which is
+//     worse than an error (an idle stall burns the watchdog);
+//   - and at 10 concurrent requests 2 of 10 came back 400 while latency for a
+//     five-token reply went to 18s. A kyto turn is one request per STEP, so a
+//     tool loop would sit on that limit constantly.
+// So: a fallback tier ahead of the Gemini key, carrying only the two models that
+// verified. Unset key = the tier simply isn't there.
+const MEBBO_MODELS = [
+  'deepseek-ai/deepseek-v4-pro',
+  'openai/gpt-oss-120b',
+] as const;
+
+const mebboAttempts: ModelAttempt[] = env.MEBBO_API_KEY
+  ? MEBBO_MODELS.map((model) => ({
+      apiKey: env.MEBBO_API_KEY as string,
+      baseURL: MEBBO_BASE_URL,
+      model,
+      provider: MEBBO_PROVIDER,
+    }))
+  : [];
+
 // Models that CANNOT accept image input. The deepseek-v4-flash primary is served
 // by Cloudflare, which is text-only: any turn carrying an image 404s ("No
 // endpoints found that support image input") and burns a doomed attempt before
@@ -219,5 +250,9 @@ export const LEADERBOARD_FALLBACK: ModelAttempt[] = [
   // still cheap in absolute terms. If the daily cap starts running out, this is
   // the first rung to cut.
   catalogAttempt('moonshotai/kimi-k2.6'),
+  // The free mebbo tier sits between HackClub and the owner's Gemini key: it
+  // costs nothing at all, so it is worth trying before spending Gemini quota,
+  // but it is a hobby box and cannot be relied on to hold a turn.
+  ...mebboAttempts,
   ...geminiAttempts,
 ];

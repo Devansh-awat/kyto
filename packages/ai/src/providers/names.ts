@@ -12,3 +12,6 @@
 
 export const GEMINI_PROVIDER = 'gemini';
 export const HACKCLUB_PROVIDER = 'hackclub';
+// A friend's self-hosted OpenWebUI (chat.mebbo.cloud), re-exposing free
+// upstream endpoints on ONE key shared with everyone he gave it to.
+export const MEBBO_PROVIDER = 'mebbo';

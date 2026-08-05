@@ -490,7 +490,7 @@ access it at: https://chat.mebbo.cloud
 (supports API keys so u can take it off OpenWebUI)
 Enjoy!
 those limits are shared
-api key is sk-REDACTED
+api key is sk-… (in apps/bot/.env as MEBBO_API_KEY — not committed)
 the limits are shared probably
 
 should we add tool called upgrade model which can updgrade kyto to a more capable model if it needs to do compelx stuff like Kimi K3?

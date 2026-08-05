@@ -20,12 +20,22 @@ function gemini(model: string): ModelAttempt {
   return { apiKey: 'k', baseURL: 'https://gemini', model, provider: 'gemini' };
 }
 
+function mebbo(model: string): ModelAttempt {
+  return {
+    apiKey: 'k',
+    baseURL: 'https://chat.mebbo.cloud/api',
+    model,
+    provider: 'mebbo',
+  };
+}
+
 // Mirrors the shape of LEADERBOARD_FALLBACK: HackClub rungs in rank order,
 // Gemini appended at the bottom.
 const leaderboard: ModelAttempt[] = [
   hackclub('openai/gpt-5.6-sol'),
   hackclub('anthropic/claude-opus-4.8'),
   hackclub('anthropic/claude-sonnet-5'),
+  mebbo('deepseek-ai/deepseek-v4-pro'),
   gemini('gemini-3.1-flash-lite'),
   gemini('gemini-2.5-flash'),
 ];
@@ -36,6 +46,7 @@ describe('buildFallbackQueue', () => {
       'openai/gpt-5.6-sol',
       'anthropic/claude-opus-4.8',
       'anthropic/claude-sonnet-5',
+      'deepseek-ai/deepseek-v4-pro',
       'gemini-3.1-flash-lite',
       'gemini-2.5-flash',
     ]);
@@ -100,7 +111,7 @@ describe('selectNextAttempt', () => {
       queue,
       skipHackclub: true,
     });
-    expect(next?.provider).toBe('gemini');
+    expect(next?.provider).toBe('mebbo');
   });
 
   test('returns undefined when the whole chain is spent', () => {
@@ -119,9 +130,10 @@ describe('selectNextAttempt', () => {
     expect(
       selectNextAttempt({ failedKeys, queue, skipHackclub: false })?.provider
     ).toBe('hackclub');
+    // The next tier down is mebbo (free), then Gemini.
     expect(
       selectNextAttempt({ failedKeys, queue, skipHackclub: true })?.provider
-    ).toBe('gemini');
+    ).toBe('mebbo');
   });
 });
 
