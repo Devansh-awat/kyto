@@ -7,6 +7,7 @@ import {
 } from '@repo/ai';
 import { tool } from 'ai';
 import { z } from 'zod';
+import { neutralizeBroadcast } from '@/harness';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
 import { errorMessage } from '@/lib/utils/error';
@@ -222,7 +223,14 @@ export function submitEmojiTool({
               filename: `${cleaned}${extension}`,
             },
           ],
-          initial_comment: `\`:${cleaned}:\` — requested by <@${requestedBy}>${note ? `\n${note}` : ''}`,
+          // filesUploadV2 does NOT go through ThreadHandle.post, so the
+          // deny-by-default broadcast strip does not apply here — and `note`
+          // is model-written text going into a channel kyto was not invoked
+          // in. Strip it explicitly or a `<!channel>` in that note pings the
+          // whole emoji channel.
+          initial_comment: neutralizeBroadcast(
+            `\`:${cleaned}:\` — requested by <@${requestedBy}>${note ? `\n${note}` : ''}`
+          ),
         });
         return {
           name: cleaned,
