@@ -50,7 +50,11 @@ import { startThinking } from '@/lib/agent/utils';
 import { promptWithAttachments, seedAttachments } from '@/lib/ai/attachments';
 import { requestHints } from '@/lib/ai/hints';
 import { renderStream, type StreamError } from '@/lib/ai/stream';
-import type { Escalation } from '@/lib/ai/tools/upgrade-model';
+import {
+  claimStickyUpgrade,
+  type Escalation,
+  rememberUpgrade,
+} from '@/lib/ai/tools/upgrade-model';
 import { buildTools } from '@/lib/ai/toolset';
 import { runQueuedTurn } from '@/lib/ai/turn-queue';
 import { recordByokOutcome, resolveUserRouting } from '@/lib/byok';
@@ -467,6 +471,22 @@ async function executeTurn(
     // and its call ENDS the attempt (a stop condition, like skip), so the weaker
     // model never carries on after asking to be replaced.
     const escalation: Escalation = {};
+    // An earlier turn in this thread escalated, so this one starts there too
+    // (see claimStickyUpgrade for the two bounds). `used` is set with it: the
+    // turn is already on the strongest rung kyto has, and letting it ask for
+    // another upgrade would only burn a second slot to arrive where it is.
+    const stickyUpgrade = claimStickyUpgrade(threadId)
+      ? UPGRADE_ATTEMPTS.find((candidate) => candidate)
+      : undefined;
+    if (stickyUpgrade) {
+      escalation.used = true;
+    }
+    // Why the NEXT attempt is starting, for its Thinking card. An escalation the
+    // model asked for is not kyto recovering from a broken provider, and reading
+    // "fallback" for one made a deliberate upgrade look like a failure.
+    let nextAttemptLabel: 'fallback' | 'upgraded' | undefined = stickyUpgrade
+      ? 'upgraded'
+      : undefined;
     const built = await buildTools({
       bot,
       escalation,
@@ -489,6 +509,11 @@ async function executeTurn(
     const nextSharedAttempt = (): ModelAttempt | undefined => {
       if (!triedPrimary) {
         triedPrimary = true;
+        // A thread that escalated leads with the strong rung; if it fails, the
+        // walk carries on from the primary exactly as it always did.
+        return stickyUpgrade ?? PRIMARY_ATTEMPT;
+      }
+      if (stickyUpgrade && !failedKeys.has(attemptKey(PRIMARY_ATTEMPT))) {
         return PRIMARY_ATTEMPT;
       }
       fallbackQueue ??= buildQueue(LEADERBOARD_FALLBACK);
@@ -549,8 +574,12 @@ async function executeTurn(
     while (attempt) {
       const currentAttempt = attempt;
       const modelTaskId = `model-${attempts.length}`;
-      const modelTaskTitle =
-        attempts.length > 0 ? 'Thinking · fallback' : 'Thinking';
+      const attemptLabel = nextAttemptLabel;
+      nextAttemptLabel = undefined;
+      const modelTaskTitle = labelledThinking({
+        isRetry: attempts.length > 0,
+        label: attemptLabel,
+      });
       // Filled by streamAttempt's fetch with the resolved slug. The guard
       // completes the model task EXACTLY once (post-stream success or catch).
       const holder: ResolvedModelHolder = {};
@@ -908,6 +937,11 @@ async function executeTurn(
             if (done) {
               yield done;
             }
+            nextAttemptLabel = 'upgraded';
+            // Carry the escalation into the thread's LATER turns too: the reason
+            // the model asked for a better one is the task, and the task usually
+            // survives the next message.
+            rememberUpgrade(threadId);
             logger.info(
               {
                 attempt: attemptLog(currentAttempt),
@@ -1293,6 +1327,28 @@ function attemptLog(attempt: ModelAttempt | undefined) {
   return attempt
     ? { model: attempt.model, provider: attempt.provider }
     : undefined;
+}
+
+/**
+ * The Thinking card's title for one attempt.
+ *
+ * `· upgraded` and `· fallback` are different events and must not read the
+ * same: one is the model asking to be replaced by a better one (or a thread that
+ * already did), the other is kyto recovering from a rung that broke. Calling an
+ * escalation "fallback" made a deliberate step UP look like something going
+ * wrong, which is what the owner saw.
+ */
+function labelledThinking({
+  isRetry,
+  label,
+}: {
+  isRetry: boolean;
+  label: 'fallback' | 'upgraded' | undefined;
+}): string {
+  if (label === 'upgraded') {
+    return 'Thinking · upgraded';
+  }
+  return isRetry ? 'Thinking · fallback' : 'Thinking';
 }
 
 // The whole fallback walk on one line: which models were tried, and the real

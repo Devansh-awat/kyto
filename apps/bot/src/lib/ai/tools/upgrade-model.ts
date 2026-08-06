@@ -20,8 +20,24 @@ import logger from '@/lib/logger';
 // share of $3 at kimi-k3 prices.
 const DAILY_LIMIT = 8;
 
+// How long an upgrade STICKS to the thread it happened in. Reported 2026-08-06:
+// "i noticed that it upgrade model, then i send new msg in thread it use
+// deepseek again?" — and that was right, escalation lived for one turn only, so
+// a follow-up question about the hard thing went straight back to the model that
+// had just said it couldn't do it. It now carries, because the reason for the
+// upgrade is almost always the TASK, and the task outlives one message.
+//
+// Bounded two ways rather than one: this idle window (a thread that goes quiet
+// for half an hour is a new conversation), and the same DAILY_LIMIT every fresh
+// escalation claims — a sticky turn spends budget exactly like an asked-for one,
+// so a long thread on the expensive rung cannot outrun the day's cap. When the
+// budget runs out the thread quietly drops back to the primary.
+const STICKY_TTL_MS = 30 * 60 * 1000;
+const STICKY_MAX_THREADS = 200;
+
 let day = '';
 let used = 0;
+const sticky = new Map<string, number>();
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
@@ -38,6 +54,45 @@ function claimDailyBudget(): boolean {
     return false;
   }
   used += 1;
+  return true;
+}
+
+/** Remember that THIS thread is running on the escalation rung. */
+export function rememberUpgrade(threadId: string): void {
+  const now = Date.now();
+  if (sticky.size >= STICKY_MAX_THREADS) {
+    for (const [id, at] of sticky) {
+      if (now - at >= STICKY_TTL_MS) {
+        sticky.delete(id);
+      }
+    }
+    // Still full: the oldest entry is the least likely to be an active thread.
+    if (sticky.size >= STICKY_MAX_THREADS) {
+      const oldest = [...sticky.entries()].sort((a, b) => a[1] - b[1])[0];
+      if (oldest) {
+        sticky.delete(oldest[0]);
+      }
+    }
+  }
+  sticky.set(threadId, now);
+}
+
+/**
+ * Should this turn START on the stronger model because an earlier turn in the
+ * same thread escalated? Claims a slot from the daily budget when it says yes,
+ * so a sticky thread is bounded by exactly the same cap as an explicit upgrade;
+ * a refusal forgets the thread rather than asking again every turn.
+ */
+export function claimStickyUpgrade(threadId: string): boolean {
+  const at = sticky.get(threadId);
+  if (at === undefined) {
+    return false;
+  }
+  if (Date.now() - at >= STICKY_TTL_MS || !claimDailyBudget()) {
+    sticky.delete(threadId);
+    return false;
+  }
+  sticky.set(threadId, Date.now());
   return true;
 }
 
