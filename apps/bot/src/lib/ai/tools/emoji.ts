@@ -34,6 +34,14 @@ const EMOJI_MAX_UPLOAD_BYTES = 128 * 1024;
 const EMOJI_NAME = /^[a-z0-9][a-z0-9_+-]{1,39}$/;
 const ALIAS_PREFIX = 'alias:';
 
+// How long to wait for the emoji bot to answer in the submission's thread. It
+// normally replies within a couple of seconds (":name: has been added"), and a
+// submission that gets no reply at all is the case worth reporting, so kyto
+// stops telling people an emoji exists when it doesn't.
+const VERDICT_TIMEOUT_MS = 30_000;
+const VERDICT_POLL_MS = 3000;
+const VERDICT_HISTORY_SCAN = 10;
+
 let cache: { at: number; emoji: Record<string, string> } | undefined;
 
 async function emojiList(): Promise<Record<string, string>> {
@@ -154,6 +162,61 @@ export function lookupEmojiTool() {
   });
 }
 
+/**
+ * Wait for whatever the emoji bot says back about a submission.
+ *
+ * `filesUploadV2` doesn't hand back the ts of the message it created, so the
+ * submission is found by scanning the channel's last few messages for kyto's own
+ * post carrying exactly this name, then polling that message's thread.
+ *
+ * Why bother: the emoji bot sometimes answers with a CHOICE instead of adding it
+ * ("upload as is" / "without background"), and that prompt is ephemeral to the
+ * poster — kyto is the poster, a bot never receives ephemerals, and Slack has no
+ * API for pressing a button on someone else's message with a bot OR a user
+ * token. So kyto genuinely cannot complete that path, and the only honest thing
+ * it can do is notice that nothing came back and say so instead of promising an
+ * emoji that was never added.
+ */
+interface EmojiVerdict {
+  permalink?: string;
+  text?: string;
+}
+
+async function awaitVerdict(
+  channelId: string,
+  name: string
+): Promise<EmojiVerdict> {
+  const history = await slack.webClient.conversations.history({
+    channel: channelId,
+    limit: VERDICT_HISTORY_SCAN,
+  });
+  const submission = (history.messages ?? []).find(
+    (message) => message.text?.trim() === name && Boolean(message.files?.length)
+  );
+  const ts = submission?.ts;
+  if (!ts) {
+    return {};
+  }
+  const permalink = await slack.webClient.chat
+    .getPermalink({ channel: channelId, message_ts: ts })
+    .then((result) => result.permalink)
+    .catch(() => undefined);
+  const deadline = Date.now() + VERDICT_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, VERDICT_POLL_MS));
+    const replies = await slack.webClient.conversations
+      .replies({ channel: channelId, limit: 5, ts })
+      .catch(() => null);
+    const reply = (replies?.messages ?? []).find(
+      (message) => message.ts !== ts && message.text
+    );
+    if (reply?.text) {
+      return { permalink, text: reply.text };
+    }
+  }
+  return { permalink };
+}
+
 export function submitEmojiTool({
   channelId,
   getSandboxContext,
@@ -165,7 +228,7 @@ export function submitEmojiTool({
   requestedBy: string;
 }) {
   return tool({
-    description: `Add a new custom emoji to the workspace. It posts the image into the emoji channel with the name as the message text, which is the exact shape the emoji bot there reads — it does the adding. The image must already be in your sandbox: generate or edit one first (generateImage), or download the one you were given. Slack's limits are 128x128 pixels and 128KB, so resize it first if it is bigger (ImageMagick: \`convert in.png -resize 128x128 out.png\`); this refuses anything over 128KB rather than posting something that gets thrown away. One emoji per call — the bot rejects a message carrying more than one image.`,
+    description: `Add a new custom emoji to the workspace. It posts the image into the emoji channel with the name as the message text, which is the exact shape the emoji bot there reads — it does the adding. The image must already be in your sandbox: generate or edit one first (generateImage), or download the one you were given. Slack's limits are 128x128 pixels and 128KB, so resize it first if it is bigger (ImageMagick: \`convert in.png -resize 128x128 out.png\`); this refuses anything over 128KB rather than posting something that gets thrown away. One emoji per call — the bot rejects a message carrying more than one image. It waits for the emoji bot's reply and hands it back, so read the result before telling anyone the emoji exists: that bot sometimes asks the poster to pick an option instead of adding it, and since the poster is me and Slack has no way for an app to press another app's button, only a human in that channel can finish it.`,
     inputSchema: z.object({
       name: z
         .string()
@@ -230,10 +293,32 @@ export function submitEmojiTool({
           // never runs on this path.
           initial_comment: neutralizeBroadcast(cleaned),
         });
+        // The channel only ever sees "kyto" as the poster — the message text has
+        // to be the bare name, and a threaded "requested by …" note is not safe
+        // either (the emoji bot parses thread REPLIES too: a reply of "gng" in
+        // that channel removed an emoji that had just been added). So this log
+        // line is the entire audit trail for who asked.
+        logger.info(
+          { name: cleaned, userId: requestedBy },
+          '[emoji] submitted to the emoji channel'
+        );
+        const verdict: EmojiVerdict = await awaitVerdict(
+          channelId,
+          cleaned
+        ).catch((): EmojiVerdict => ({}));
+        if (verdict.text) {
+          return {
+            name: cleaned,
+            reply: verdict.text,
+            submitted: true,
+            summary: `Submitted \`${cleaned}\` for <@${requestedBy}>. The emoji bot replied: ${verdict.text}`,
+          };
+        }
         return {
           name: cleaned,
+          permalink: verdict.permalink,
           submitted: true,
-          summary: `Posted \`${cleaned}\` and its image to the emoji channel for <@${requestedBy}>. The emoji bot there adds it — it is usually live within a minute, so check with lookupEmoji before promising it works.`,
+          summary: `Posted \`${cleaned}\` and its image to the emoji channel for <@${requestedBy}>, but the emoji bot has not answered in that thread yet. It sometimes asks the poster to choose (e.g. "upload as is" vs "without background") in a message only the poster can see — and since the poster is me, and Slack gives no way to press a button on another app's message, I cannot answer it. Tell the user it is posted but not confirmed, link them to ${verdict.permalink ?? 'the emoji channel'} so they can finish it, and do NOT claim the emoji exists until lookupEmoji finds it.`,
         };
       } catch (error) {
         logger.warn({ err: error, name: cleaned }, '[emoji] submission failed');

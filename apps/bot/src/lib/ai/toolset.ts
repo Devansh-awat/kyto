@@ -431,13 +431,15 @@ export async function buildTools({
           },
         }
       : {}),
-    // Submitting an emoji posts a file into a channel kyto was NOT invoked in,
-    // which is exactly the shape the confirm gate exists for — and the pending
-    // -post store has no way to hold a file. So it is registered for the OWNER
-    // only, the same rule sendAsUser follows, rather than opening an ungated
-    // outward path into a public channel that an injection could put an image
-    // through. Everyone else asks him.
-    ...(isOwner && env.EMOJI_REQUEST_CHANNEL
+    // Open to EVERYONE (owner's call, 2026-08-06: "no, should work for
+    // everyone"), not gated like the other outward paths. It does post a file
+    // into a channel kyto was not invoked in, so the rails that remain are the
+    // ones in the tool: a strict name pattern (no control token is even
+    // representable), Slack's own 128KB cap, `neutralizeBroadcast` on the
+    // comment because `filesUploadV2` bypasses `ThreadHandle.post`, and a
+    // journal line naming the Slack user who asked — the CHANNEL only ever sees
+    // "kyto", so that log line is the whole audit trail.
+    ...(env.EMOJI_REQUEST_CHANNEL
       ? {
           submitEmoji: {
             summary: 'submit a new custom emoji to the emoji-request channel',
