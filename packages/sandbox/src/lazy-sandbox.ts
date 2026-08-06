@@ -1,18 +1,20 @@
 import { CommandExitError, Sandbox } from '@e2b/code-interpreter';
 import type { Logger } from '@repo/logging/logger';
-import { ALL_TRAFFIC, type SandboxNetworkOpts } from 'e2b';
 import { sandboxConfig as config } from './config';
 import { DISPLAY_INSTALL_COMMAND } from './display';
 import { GIT_HARDEN_COMMAND } from './git-safety';
 
-// gh/git need SOME token value to act authenticated; the real one is injected
-// at the network egress layer (below), never placed in the sandbox. So the env
-// gets this inert placeholder — `echo $GH_TOKEN` inside the sandbox only ever
-// reveals this, not the secret.
-const GH_PLACEHOLDER = Buffer.from(
-  'kyto: real GitHub creds are injected at the network layer, not here',
-  'utf8'
-).toString('base64');
+// NO GitHub credential of any kind is placed in, or brokered into, a sandbox.
+//
+// Until 2026-08-06 the real PAT was injected by an E2B egress rule that rewrote
+// `Authorization` on every github.com request. The token was genuinely
+// unextractable, but that missed the point: EVERY process in the box was
+// authenticated as `kyto-agent` — a shell script, a background job, sshx, tmate
+// — while the guard only ever saw strings that had passed through a kyto tool.
+// The credential now lives host-side in `lib/github-proxy`, which `gh` and
+// `git` are pointed at (see `githubProxyEnv` / `githubProxyGitConfig`), and it
+// classifies and guards each request itself. Do NOT reintroduce a `network`
+// rule carrying the token.
 
 // There is no terminal in the sandbox, so a git command that decides it needs
 // credentials has nobody to ask. Without these it still TRIES, and the failure
@@ -28,32 +30,6 @@ const GIT_NON_INTERACTIVE: Record<string, string> = {
   GIT_ASKPASS: '/bin/echo',
   GIT_TERMINAL_PROMPT: '0',
 };
-
-// Broker the GitHub token via E2B egress rules (e2b >= 2.28): the proxy rewrites
-// the Authorization header on outbound requests to GitHub, so the sandbox can
-// use gh/git as the token's identity but can NEVER read the token itself (no
-// amount of `echo`/drip works — the secret is not in the sandbox at all). This
-// is the technique gorkie uses; implemented here against E2B's own API.
-function githubNetwork(token: string): SandboxNetworkOpts {
-  const bearer = [
-    { transform: { headers: { Authorization: `Bearer ${token}` } } },
-  ];
-  const basic = Buffer.from(`x-access-token:${token}`, 'utf8').toString(
-    'base64'
-  );
-  return {
-    // Keep full internet access (the API requires the ALL_TRAFFIC sentinel when
-    // allowOut is set at all); the rule hosts are covered by it.
-    allowOut: [ALL_TRAFFIC],
-    rules: {
-      'api.github.com': bearer,
-      'github.com': [
-        { transform: { headers: { Authorization: `Basic ${basic}` } } },
-      ],
-      'uploads.github.com': bearer,
-    },
-  };
-}
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -93,11 +69,9 @@ export interface SandboxStore {
  * turn in that thread reconnects to the same filesystem (`Sandbox.connect`
  * auto-resumes a paused sandbox). A paused sandbox costs storage, not compute.
  *
- * Two things are fixed at CREATE time and therefore stale on a resumed sandbox:
- * the `network` egress rules (which broker the real GitHub token) and the
- * create-time `envs`. Rotating `GH_TOKEN` only takes effect on a thread's next
- * fresh sandbox. Per-command env is re-sent on every `run()`, so short-lived
- * secrets (the per-turn Slack proxy token) are always current.
+ * The create-time `envs` are fixed at CREATE time and therefore stale on a
+ * resumed sandbox. Per-command env is re-sent on every `run()`, so short-lived
+ * secrets (the per-turn Slack and GitHub proxy tokens) are always current.
  */
 export class LazySandbox {
   readonly workDir = config.workdir;
@@ -111,13 +85,10 @@ export class LazySandbox {
   private sandbox: Sandbox | null = null;
   private creating: Promise<Sandbox> | null = null;
 
-  private readonly githubToken: string | undefined;
-
   constructor({
     apiKey,
     bootstrapCommand,
     env = {},
-    githubToken,
     logger,
     sessionId,
     store,
@@ -130,8 +101,6 @@ export class LazySandbox {
      */
     bootstrapCommand?: string;
     env?: Record<string, string>;
-    /** Real GitHub token, brokered via egress rules (never enters the sandbox). */
-    githubToken?: string;
     logger: Logger;
     sessionId?: string;
     /** Provide to make this thread's sandbox persist across turns. */
@@ -139,16 +108,7 @@ export class LazySandbox {
   }) {
     this.apiKey = apiKey;
     this.bootstrapCommand = bootstrapCommand;
-    this.githubToken = githubToken;
-    // gh/git see only the placeholder; auth happens at the network layer.
-    this.env = githubToken
-      ? {
-          ...GIT_NON_INTERACTIVE,
-          GH_TOKEN: GH_PLACEHOLDER,
-          GITHUB_TOKEN: GH_PLACEHOLDER,
-          ...env,
-        }
-      : { ...GIT_NON_INTERACTIVE, ...env };
+    this.env = { ...GIT_NON_INTERACTIVE, ...env };
     this.logger = logger;
     this.sessionId = sessionId;
     this.store = store;
@@ -200,7 +160,6 @@ export class LazySandbox {
         app: 'kyto',
         ...(this.sessionId ? { threadId: this.sessionId } : {}),
       },
-      ...(this.githubToken ? { network: githubNetwork(this.githubToken) } : {}),
       timeoutMs: config.timeoutMs,
     });
     await sandbox.files.makeDir(config.workdir).catch(() => undefined);

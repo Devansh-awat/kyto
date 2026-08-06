@@ -67,16 +67,10 @@ import {
   DegenerateOutputError,
   StreamInterruptedError,
 } from '@/lib/errors';
-import { brokerableGithubToken } from '@/lib/github/token';
 import logger from '@/lib/logger';
+import { openSandboxProxies } from '@/lib/sandbox/proxies';
 import { acquireThreadSandbox, threadSandboxStore } from '@/lib/sandbox/store';
 import { ensureChannelIndex } from '@/lib/slack/channel-links';
-import {
-  registerProxyToken,
-  revokeProxyToken,
-  slackHelperInstall,
-  slackProxyEnv,
-} from '@/lib/slack-proxy';
 import {
   deepErrorText,
   describeMalformedPrompt,
@@ -219,13 +213,15 @@ async function executeTurn(
   await ensureChannelIndex();
   const hints = await requestHints({ thread, message });
 
-  // Per-turn read-only Slack proxy secret: injected into the sandbox so a
-  // script can query Slack (read-only) without the bot token, revoked at turn
-  // end. Only when the sites server (which hosts the proxy) is enabled.
-  const slackProxySecret = env.SITES_ENABLED ? registerProxyToken() : undefined;
-  const proxyEnv = slackProxySecret
-    ? slackProxyEnv(slackProxySecret, env.SITES_PUBLIC_HOST)
-    : {};
+  // Per-turn proxy secrets, revoked at turn end: the read-only Slack proxy (so
+  // a script can query Slack without the bot token) and the GitHub proxy, which
+  // is where the real PAT lives — nothing in the sandbox holds a GitHub
+  // credential, and every authenticated request is guarded as THIS user.
+  const proxies = openSandboxProxies({
+    isOwner: message.author.userId === env.OWNER_USER_ID,
+    threadId,
+    userId: message.author.userId,
+  });
 
   // The lazy sandbox: creating this object is free — the real E2B sandbox
   // materializes only when a tool first touches it. It is PER-THREAD and
@@ -235,13 +231,10 @@ async function executeTurn(
   const sandboxSession = new LazySandbox({
     apiKey: env.E2B_API_KEY,
     // Puts `slack <method>` on PATH, so the plain `bash` tool can query Slack
-    // read-only too — not just the slackScript tool.
-    bootstrapCommand: slackProxySecret ? slackHelperInstall() : undefined,
-    env: proxyEnv,
-    // Only a token GitHub still accepts. Brokering a dead one attaches an
-    // Authorization header GitHub rejects to EVERY github.com request, which
-    // breaks anonymous reads of PUBLIC repos too (see lib/github/token).
-    githubToken: await brokerableGithubToken(),
+    // read-only too — not just the slackScript tool — and points git at the
+    // GitHub proxy.
+    bootstrapCommand: proxies.bootstrapCommand,
+    env: proxies.env,
     logger,
     sessionId: threadId,
     store: threadSandboxStore,
@@ -277,7 +270,7 @@ async function executeTurn(
     | undefined;
 
   const cleanup = async (): Promise<void> => {
-    revokeProxyToken(slackProxySecret);
+    proxies.revoke();
     await closeTools?.().catch(() => undefined);
     await sandboxSession.destroy().catch(() => undefined);
   };

@@ -1,15 +1,9 @@
 import type { Reminder } from '@repo/db/queries';
 import { LazySandbox, runOnce } from '@repo/sandbox';
 import { env } from '@/env';
-import { brokerableGithubToken } from '@/lib/github/token';
 import logger from '@/lib/logger';
+import { openSandboxProxies } from '@/lib/sandbox/proxies';
 import { threadSandboxStore, withThreadSandbox } from '@/lib/sandbox/store';
-import {
-  registerProxyToken,
-  revokeProxyToken,
-  slackHelperInstall,
-  slackProxyEnv,
-} from '@/lib/slack-proxy';
 
 const MAX_OUTPUT_CHARS = 4000;
 
@@ -62,12 +56,17 @@ export async function runReminderBash(reminder: Reminder): Promise<string> {
   }
   const threadId = reminder.threadId;
   return await withThreadSandbox(threadId, async () => {
-    const secret = env.SITES_ENABLED ? registerProxyToken() : undefined;
+    // A GitHub write from a reminder is guarded as the person who CREATED it —
+    // the job outlives the turn, so there is no other principal to check.
+    const proxies = openSandboxProxies({
+      isOwner: reminder.userId === env.OWNER_USER_ID,
+      threadId,
+      userId: reminder.userId,
+    });
     const sandbox = new LazySandbox({
       apiKey: env.E2B_API_KEY,
-      bootstrapCommand: secret ? slackHelperInstall() : undefined,
-      env: secret ? slackProxyEnv(secret, env.SITES_PUBLIC_HOST) : {},
-      githubToken: await brokerableGithubToken(),
+      bootstrapCommand: proxies.bootstrapCommand,
+      env: proxies.env,
       logger,
       sessionId: threadId,
       store: threadSandboxStore,
@@ -75,7 +74,7 @@ export async function runReminderBash(reminder: Reminder): Promise<string> {
     try {
       return format(await sandbox.run({ command }));
     } finally {
-      revokeProxyToken(secret);
+      proxies.revoke();
       // Pauses (not kills) the thread's sandbox — same as a turn does.
       await sandbox.destroy().catch(() => undefined);
     }

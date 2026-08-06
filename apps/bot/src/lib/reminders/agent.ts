@@ -10,15 +10,9 @@ import { env } from '@/env';
 import type { Message, ThreadHandle } from '@/harness';
 import { requestHints } from '@/lib/ai/hints';
 import { bot } from '@/lib/chat';
-import { brokerableGithubToken } from '@/lib/github/token';
 import logger from '@/lib/logger';
+import { openSandboxProxies } from '@/lib/sandbox/proxies';
 import { threadSandboxStore, withThreadSandbox } from '@/lib/sandbox/store';
-import {
-  registerProxyToken,
-  revokeProxyToken,
-  slackHelperInstall,
-  slackProxyEnv,
-} from '@/lib/slack-proxy';
 
 // An agent reminder runs the SAME multi-step tool loop as a real turn, but
 // headless: nothing is streamed to Slack, and its final text becomes the
@@ -126,12 +120,15 @@ async function runAgent(
 
   // A fresh proxy token for this fire (the creating turn's was revoked long
   // ago), so the job's bash/slackScript tools can read Slack.
-  const secret = env.SITES_ENABLED ? registerProxyToken() : undefined;
+  const proxies = openSandboxProxies({
+    isOwner: reminder.userId === env.OWNER_USER_ID,
+    ...(reminder.threadId ? { threadId: reminder.threadId } : {}),
+    userId: reminder.userId,
+  });
   const sandboxSession = new LazySandbox({
     apiKey: env.E2B_API_KEY,
-    bootstrapCommand: secret ? slackHelperInstall() : undefined,
-    env: secret ? slackProxyEnv(secret, env.SITES_PUBLIC_HOST) : {},
-    githubToken: await brokerableGithubToken(),
+    bootstrapCommand: proxies.bootstrapCommand,
+    env: proxies.env,
     logger,
     // Sharing the thread's sandbox is the whole point: the job can use what the
     // model built earlier. Jobs without a thread get an unremembered sandbox.
@@ -196,7 +193,7 @@ async function runAgent(
     }
     throw new Error('Agent reminder produced an empty response.');
   } finally {
-    revokeProxyToken(secret);
+    proxies.revoke();
     await close?.().catch(() => undefined);
     await sandboxSession.destroy().catch(() => undefined);
   }

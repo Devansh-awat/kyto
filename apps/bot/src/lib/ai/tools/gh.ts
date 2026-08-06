@@ -14,15 +14,16 @@ import { disarmFetchedRepos } from '@/lib/sandbox/git-safety';
 import { errorMessage } from '@/lib/utils/error';
 import { canEdit, editorsSchema, parseEditors } from './editors';
 
-// gh/git are pre-authenticated inside the sandbox WITHOUT the token ever being
-// there: LazySandbox brokers the real GITHUB token via E2B egress rules (the
-// proxy rewrites the Authorization header on outbound GitHub requests), and the
-// sandbox env only holds an inert placeholder. Because the secret is not in the
-// sandbox at all, a full shell (piping, jq, etc.) is safe here — `echo $GH_TOKEN`
-// only ever reveals the placeholder, so the char-at-a-time drip attack is moot.
+// gh/git are pre-authenticated inside the sandbox WITHOUT any GitHub credential
+// being there: they are pointed at the host-side proxy (`lib/github-proxy`),
+// which holds the real PAT and guards every write itself. So a full shell
+// (piping, jq, etc.) is safe here — there is no secret in the box to drip out,
+// and `echo $GH_TOKEN` prints nothing at all.
 //
-// What the token DOESN'T carry is any notion of which Slack user is asking, so
-// every write goes through the ownership gate first (lib/github/guard.ts).
+// The command-level guard below still runs, and is NOT redundant: it refuses
+// before anything executes and hands the model a sentence explaining why, where
+// the proxy can only answer a 403 once gh is already running. The proxy is what
+// makes the gate unbypassable; this is what makes it legible.
 const MAX_OUTPUT_CHARS = 8000;
 
 function truncate(text: string): string {

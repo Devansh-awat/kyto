@@ -252,9 +252,16 @@ export async function guardGithubTargets({
         }
       }
       const list = untrusted.map((repo) => `"${repo}"`).join(', ');
+      // Only claim the in-thread request exists when there WAS a thread to post
+      // it in: a reminder or a proxy call outside a turn queues the dashboard
+      // row only, and telling the user to look for buttons that were never
+      // posted sends them hunting.
+      const queued = threadId
+        ? 'An Approve/Deny request has been posted in this thread for him, and it does not expire.'
+        : "The request is waiting for him on kyto's dashboard, and it does not expire.";
       return {
         allowed: false,
-        reason: `Refused for now: ${list} ${untrusted.length === 1 ? 'is not a repo' : 'are not repos'} you own, and writes there go out under your own GitHub account, so <@${env.OWNER_USER_ID}> has to approve this person for it. An Approve/Deny request has been posted in this thread for him, and it does not expire. Tell them it's waiting on his approval and that they can ask you again once he's granted it — approving grants the access but deliberately does NOT re-run the command. Don't look for another route — forking it, pushing from a different checkout, and calling the REST API directly are all the same thing. Reading the repo is still fine.`,
+        reason: `Refused for now: ${list} ${untrusted.length === 1 ? 'is not a repo' : 'are not repos'} you own, and writes there go out under your own GitHub account, so <@${env.OWNER_USER_ID}> has to approve this person for it. ${queued} Tell them it's waiting on his approval and that they can ask you again once he's granted it — approving grants the access but deliberately does NOT re-run the command. Don't look for another route — forking it, pushing from a different checkout, and calling the REST API directly are all the same thing. Reading the repo is still fine.`,
       };
     }
   }

@@ -4,6 +4,7 @@ import nodePath from 'node:path';
 import { promisify } from 'node:util';
 import { env } from '@/env';
 import { handleDashboard } from '@/lib/dashboard';
+import { handleGithubProxy } from '@/lib/github-proxy';
 import logger from '@/lib/logger';
 import { handleSlackProxy } from '@/lib/slack-proxy';
 import { isValidSiteName, resolveWithin, siteRoot, sitesRoot } from './paths';
@@ -122,6 +123,16 @@ export async function startSitesServer(): Promise<void> {
         const proxied = await handleSlackProxy(request, pathname);
         if (proxied) {
           return proxied;
+        }
+
+        // Host-side GitHub proxy: this is where the real PAT lives now, so that
+        // nothing inside a sandbox holds GitHub credentials. It answers ONLY
+        // requests carrying a live per-turn proxy token and returns null
+        // otherwise, so an ordinary visitor still falls through to the static
+        // site below even on a path that looks like a git endpoint.
+        const github = await handleGithubProxy(request, pathname);
+        if (github) {
+          return github;
         }
 
         // Owner dashboard (memory promotion, GitHub trust). Password-gated, and
