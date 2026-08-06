@@ -30,6 +30,7 @@ export default defineConfig({
     '/[\\dA-F]{32,}/g',
   ],
   words: [
+    'GHES',
     'ephemerals',
     'unbypassable',
     'AGENTMAIL',

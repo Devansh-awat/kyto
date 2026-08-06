@@ -5,56 +5,45 @@
 
 ### Open
 
-**Move the GitHub write gate to the HTTP layer** — owner's call, 2026-07-29
-("yeah move gaurd to http layer"). The trigger was the owner's own question:
-"if you get a shell into kyto, you can use its gh and do stuff right? … remote
-shell are not easy to stop, you block sshx one will use tmate". He is right, and
-the token being unextractable does not help: the E2B egress rule staples
-`Authorization` onto EVERY github.com request out of the sandbox, so any process
-in the box — kyto tool or not — is already authenticated as `kyto-agent`.
-`guardGithubCommand` only ever sees strings that came through a kyto TOOL, so
-sshx/tmate, a shell script, or `sh -c 'g''h …'` never meets it.
+**DECIDE: retire the 139 sandboxes created before the GitHub proxy.** The proxy
+shipped 2026-08-06 and nothing NEW gets the PAT brokered into it — but E2B egress
+rules are fixed at CREATE time, so every sandbox that already exists still has the
+old rule injecting the real token on every github.com request, until it is
+recreated or the reaper kills it (30 days of inactivity, and a warm one never
+ages out). Not a new exposure — it is the old one persisting — but it is the last
+piece of the hole. Killing them costs 139 threads their sandbox filesystem:
 
-**DECISION 2026-08-01 (owner): build stop-brokering + a host-side proxy, NO
-egress deny.** `denyOut` CANNOT take domains (the E2B schema is explicit:
-"Domain names are not supported for deny rules"), and it turns out not to be
-needed — the token-abuse hole closes simply by NOT BROKERING THE TOKEN. Today
-the real PAT lives ONLY in the egress header-injection rule (the sandbox-visible
-`GH_TOKEN` is a base64 placeholder). Remove that rule and no sandbox process has
-it; a direct `curl github.com` is anonymous, which is fine for public reads and
-useless for writes. The real token then lives only host-side in the proxy, which
-kyto's own gh/git are pointed at and which enforces the parsed-request guard.
-Accepted trade: this bakes ONE principal per sandbox lifetime (vs per shell
-command), which matches the already-single-user-per-thread sandbox.
+```sh
+cd apps/bot && bun -e "import {Sandbox} from '@e2b/code-interpreter'; \
+  const {db}=await import('@repo/db'); const {sql}=await import('drizzle-orm'); \
+  const rows=await db.execute(sql\`select sandbox_id from thread_sandboxes\`); \
+  for (const r of rows) { await Sandbox.kill(r.sandbox_id,{apiKey:process.env.E2B_API_KEY}).catch(()=>{}); } \
+  await db.execute(sql\`delete from thread_sandboxes\`); process.exit(0)"
+```
 
-Build plan (still to do — a standalone pass):
-1. `apps/bot/src/lib/github-proxy/index.ts` — `handleGithubProxy(req, pathname)`
-   mounted at `/_ghapi/` on the sites Bun.serve (beside `handleSlackProxy`).
-   Per-turn token stores `{userId, isOwner, threadId, expiry}` so it can feed the
-   guard. Classify method+path (writes = POST/PUT/PATCH/DELETE to /repos/..,
-   /user/repos, /orgs/.., graphql `mutation`; else read) → call
-   **`guardGithubTargets`** (already extracted for exactly this) → forward to the
-   real host with the PAT attached host-side → on 2xx call `claim()`. Must handle
-   git smart-HTTP (`info/refs?service=git-upload-pack` / `git-receive-pack`), not
-   just REST.
-2. `packages/sandbox/src/lazy-sandbox.ts` — stop calling `githubNetwork()`, drop
-   the placeholder `GH_TOKEN` env; keep GIT_ASKPASS/GIT_TERMINAL_PROMPT. Add an
-   idempotent bootstrap step (same slot as GIT_HARDEN_COMMAND) setting `GH_HOST`
-   + `git config --global url."<proxy>/".insteadOf`, fed the per-turn proxy token
-   via per-command env (the Slack-proxy pattern).
-3. Preserve every guard invariant: ownership → trust → claim-on-success-only,
-   `github_requests` queueing, dead-PAT falls open to anonymous public reads,
-   **and the new collaborator exception** (`lib/github/collaborator.ts`).
-4. TEST live: sandbox has NO real token, gh/git route through the proxy, a
-   third-party write is gated + queued, a public read works.
+Say the word and it runs; otherwise it closes itself out over the next month.
 
-Adjacent, still unrecorded elsewhere:
-- A **GitHub App minting per-turn installation tokens** scoped to the repos the
-  guard would allow is the durable answer — it also fixes "kyto has ONE GitHub
-  identity", which is why the PAT got revoked in the first place.
-- A **hard wall-clock ceiling per sandbox**, independent of activity. The reaper
-  is activity-based, so a sandbox kept warm never ages out (the owner's own "if
-  you get kyto to use wait and not pause sandbox?").
+**The TokenRouter key has $0.00 credit — unusable as supplied (checked
+2026-08-06).** `GET /v1/models` lists ~40 slugs (deepseek-v4-pro, qwen3.7-max,
+gpt-5.2, claude-opus-4.8-fast, kimi-k3-free, …) but every paid one answers
+`insufficient_user_quota — remaining credit limit: $0.00`, and the one free slug
+(`moonshotai/kimi-k3-free`) hung for 45s with zero bytes, twice. Nothing was
+wired up: same rule as netic, no tier without a live account behind it. If it is
+supposed to have free credit, the account needs topping up or a different key.
+
+**OpenCode Zen needs a key.** `GET https://opencode.ai/zen/v1/models` answers
+anonymously and lists claude-opus-5, opus-4.8/4.7/4.6, sonnet-5, fable-5 and
+friends — a genuinely strong catalogue — but every completion needs auth and
+`OPENCODE_API_KEY` is unset (the var is already declared in
+`packages/ai/src/keys.ts`). Paste a key and it can be measured like mebbo was:
+tool calls, first-byte latency, and whether the free plan actually covers it.
+
+**Is deepseek-v4-pro better than the v4-flash primary?** Asked 2026-08-06, not
+answerable yet: pro is reachable on mebbo, but a fair comparison needs the same
+prompts through both and a look at first-byte latency, which is what actually
+loses turns against HackClub's 5s header timeout. Worth doing as its own pass —
+flash was picked partly BECAUSE it answers fast, so "pro is smarter" alone does
+not settle it.
 
 **Reduce the system prompt.** Asked 2026-07-28 and still not attempted. Measure
 the assembled prompt first; it is paid on every turn of every thread against the
@@ -62,14 +51,6 @@ shared $3/day. Note this got LESS urgent on 2026-08-05: the system prompt is now
 stable across a thread's turns, so it should be a cached read rather than a
 full-price one — measure the cache first, then decide if trimming is still worth
 it.
-
-**`@kyto?focusmode @person` — needs one clarification before building.** The ask
-(2026-08-05) was: "if anyone send msg @kyto?focusmode @person (proper mentions)
-then it do focusmode without interupiting kyto". Two readings, and they build
-differently: (a) a COMMAND PREFIX — a message matching `@kyto?<command> …` is
-handled by the harness directly (set focus, no model turn, and no interruption
-of a turn already running); or (b) simply "turning focus on must not abort the
-in-flight turn". Ask before building.
 
 **"Thinking..." shows as plain text before the plan block appears.** No such
 string exists anywhere in kyto and the first plan chunk is pulled before the
@@ -90,82 +71,95 @@ duplicate is still seen, grab the actual thread/DM and the timestamps: the
 remaining possibility is the confirm going to BOTH the thread and the DM, which
 the current code shouldn't do.
 
-**`submitEmoji` is owner-only, and that is a stopgap.** Submitting an emoji puts
-a FILE into a channel kyto was not invoked in — exactly the shape the confirm
-gate exists for — and `PendingPost` has no way to hold a file. Opening it to
-everyone means teaching the APPROVAL gate a new kind whose payload is
-`{threadId, path, name}` and which reads the file back at approve time. Worth
-doing; say so if you want it.
+**Still worth doing on GitHub, now that the proxy exists:**
+- A **GitHub App minting per-turn installation tokens** scoped to the repos the
+  guard would allow. The proxy makes this a swap of what the host attaches, not
+  a redesign — and it fixes "kyto has ONE GitHub identity", which is why the PAT
+  got revoked in the first place.
+- A **hard wall-clock ceiling per sandbox**, independent of activity. The reaper
+  is activity-based, so a sandbox kept warm never ages out (the owner's own "if
+  you get kyto to use wait and not pause sandbox?").
 
 ### Watch list
 
-**DID THE CACHING FIX WORK? (2026-08-05 — check this first.)** Two real bugs
-were found and fixed. The system prompt carried the current time (to the
-millisecond) and the id of the message being answered, and it is sent as ONE
-string, so breakpoint A (system + every tool schema, ~23k tokens) was
-invalidated on EVERY new turn — only the within-turn steps ever hit, which is
-exactly the ~22.8k-cached-of-78k pattern in the activity dump. Both moved to the
-volatile tail of the user message. Separately, `loadTools` growing the tools
-array mid-turn invalidated the same prefix for the rest of that turn; a thread's
-loaded set now survives the turn, so a repeat thread stops churning it.
+**DOES `gh`/`git` STILL WORK? (2026-08-06 — check this first.)** The write gate
+moved to the HTTP layer and nothing in a sandbox holds a GitHub credential any
+more. Verified end to end against real GitHub with gh 2.96 and git pointed at a
+local instance of the proxy — read, clone, refused push, refused third-party PR
+mutation, allowed write in kyto's namespace, anonymous fall-through — and the
+deployed proxy answers correctly on `kyto.dino.icu`. What is NOT yet proven is
+the E2B side: whether the sandbox image's own `gh` speaks the same GHES routing.
+- `journalctl -u kyto.service | grep github-proxy` — refusals and upstream
+  failures both log there.
+- A `gh` call that fails with "unexpected response" or a 404 on `/api/v3/…`
+  means the routing, not the guard.
+
+**DID THE CACHING FIX WORK? (2026-08-05.)** The system prompt carried the current
+time and the answered message's id, and it is sent as ONE string, so breakpoint A
+(system + every tool schema, ~23k tokens) was invalidated on EVERY new turn.
+Both moved to the volatile tail. Separately, `loadTools` growing the tools array
+mid-turn invalidated the same prefix for the rest of that turn; a thread's loaded
+set now survives the turn.
 - `journalctl -u kyto.service | grep 'turn complete'` → `cache: {input, read,
   write}`. Read HIGH / input LOW across a thread's turns is the win.
-- `journalctl -u kyto.service | grep 'prompt prefix changed'` — the new probe
+- `journalctl -u kyto.service | grep 'prompt prefix changed'` — the probe
   (`packages/ai/src/cache-probe.ts`) logs any step whose prompt is not a pure
-  APPEND of the previous step's, naming the unit that diverged and the share of
-  the request that could still be cached. That is the "record the raw stuff we
-  send to the api to see where it differs" ask, made permanent.
+  APPEND of the previous step's, naming the unit that diverged.
 - If read is still low on deepseek, the researched next step is OpenRouter's
-  top-level `cache_control` (it auto-advances the breakpoint for multi-turn) —
-  but don't add it blind, a wrong caching change only shows up on the bill.
+  top-level `cache_control` — but don't add it blind, a wrong caching change only
+  shows up on the bill.
 
-**How often does `upgradeModel` fire?** New 2026-08-05, and the counter exists to
-tune the prompt: `journalctl -u kyto.service | grep 'model upgrade requested'`.
-Too many → tighten the wording in `corePrompt`; none at all → loosen it. The
-rungs are kimi-k3 then claude-sonnet-5, ~20-50x the primary on the same $3/day
-cap, capped at once per turn and 8 per UTC day workspace-wide.
+**How often does `upgradeModel` fire, and does the stickiness cost too much?**
+`journalctl -u kyto.service | grep 'model upgrade requested'`. Since 2026-08-06
+an upgrade STICKS to its thread for 30 minutes of activity, and every sticky turn
+claims a slot from the same 8-per-UTC-day cap — so the counter now measures
+follow-ups as well as first asks. Too many → tighten `corePrompt`; the day's cap
+running out early → shorten `STICKY_TTL_MS` rather than raising the cap.
 
 **The mebbo tier is a hobby box.** `deepseek-v4-pro` and `gpt-oss-120b` verified
 (real tool calls, ~0.1-0.5s first byte); `glm-5.2` and `kimi-k3-free` HUNG for
 95s with no bytes, and 2 of 10 concurrent requests came back 400. It sits between
 HackClub and Gemini. Watch whether it ever actually answers a live turn, and
-whether the hangs spread to the two wired models. Owner also mentioned opencode
-running on that box ("we can get a bit more free requests from it, using the api
-which i think it has") — not investigated; there is an unused `OPENCODE_API_KEY`
-already declared in `packages/ai/src/keys.ts` if that turns into something.
+whether the hangs spread to the two wired models.
+
+**Does `submitEmoji` ever get the choice prompt?** Open to everyone since
+2026-08-06, and it now waits up to 30s for the emoji bot's reply and hands it
+back. The reported "upload as is / without background" Block Kit message is
+EPHEMERAL to the poster and appears in none of the channel's last 200 messages —
+kyto is the poster, a bot never receives ephemerals, and Slack has no API for
+pressing a button on another app's message with a bot OR a user token. So when it
+happens the tool reports "posted, not confirmed" plus a permalink. Watch the
+journal for `[emoji] submitted` followed by no verdict; if it turns out to be
+common, the answer is a human in `#emojibot`, not more code.
 
 **The netic (`netic.hackclub.app`) key is DEAD as supplied (checked 2026-07-29).**
 `GET /v1/models` answers 200 and lists all seven slugs, but every
-`POST /v1/chat/completions` returns `401 Invalid API key` — tested on all seven,
-directly against https so it is not a redirect stripping the header. Nothing was
-wired up: no tier without a live account behind it. Ask for a working key.
+`POST /v1/chat/completions` returns `401 Invalid API key`. Nothing was wired up.
 
 **9Router + Kiro: do not use (researched 2026-07-29).** Kiro's own FAQ prohibits
 "use with OpenClaw and similar tools that leverage third-party harnesses", which
 is exactly what an OpenAI-compatible bridge is, and its terms separately prohibit
 rate-limit evasion — which is what round-robining AWS Builder IDs is FOR.
 
-**Free tiers worth trying instead, ranked (researched 2026-07-29).** Answering
-the owner's "do they have good models, for free? i don't want stuff like llama
-8b": yes for 1 and 2, with caveats.
+**Free tiers worth trying instead, ranked (researched 2026-07-29).**
 1. **NVIDIA NIM** — permanently free key, no card, ~40 RPM, tool calling
-   confirmed on GLM-5 / DeepSeek V4 / Qwen3 / Kimi K2.6. Those are frontier-class
-   open models, not small ones. Best structural fit; no expiring credits.
-2. **Cloudflare Workers AI** — built for low time-to-first-byte, the property that matters
-   against HackClub's 5s header timeout. Catalogue is smaller and more
-   mid-sized; good as a fast rung, not as a primary.
+   confirmed on GLM-5 / DeepSeek V4 / Qwen3 / Kimi K2.6. Frontier-class open
+   models, no expiring credits. Best structural fit.
+2. **Cloudflare Workers AI** — built for low time-to-first-byte, the property
+   that matters against HackClub's 5s header timeout. Smaller catalogue; good as
+   a fast rung, not a primary.
 3. **Groq** — famously fast first token, but its catalogue is where "llama 8b"
-   actually lives; the ~6k TPM ceiling is also tight against kyto's prompt.
+   lives; the ~6k TPM ceiling is tight against kyto's prompt.
 Not worth it: Cerebras (~5 RPM), GitHub Models (8k input cap), DashScope
-(90-day trial, duplicates qwen), DeepSeek direct (one-time grant), xAI
-data-sharing (pays in user conversation content). OpenRouter's free tier lost a
-third of its catalogue in nine days — don't hard-code a `:free` slug as a rung.
+(90-day trial), DeepSeek direct (one-time grant), xAI data-sharing. OpenRouter's
+free tier lost a third of its catalogue in nine days — don't hard-code a `:free`
+slug as a rung.
 
 **Deferred-tool data.** Every turn logs `[tools] turn summary` with `loaded` /
-`loadedUsed` / `loadedUnused` / `coreUsed` — and now `remembered` (carried in
-from an earlier turn of the same thread, so the measurement stays honest).
-Promote anything always-loaded-and-used into `core`; defer any core tool that
-never shows up in `coreUsed`; `loadedUnused` is a round trip paid for nothing.
+`loadedUsed` / `loadedUnused` / `coreUsed` — and `remembered` (carried in from an
+earlier turn of the same thread). Promote anything always-loaded-and-used into
+`core`; defer any core tool that never shows up in `coreUsed`; `loadedUnused` is
+a round trip paid for nothing.
 
 **The prompt is ordered for caching; watch that it holds.** The volatile blocks
 (`<your_previous_thinking>`, the clock, the message id) sit BELOW the thread
@@ -173,15 +167,12 @@ history, so system + instructions + compacted + history is a stable append-only
 prefix. A new block goes below `history` or the cache breaks silently.
 
 **The ChatGPT account is parked until 2026-08-23** — it is on a FREE plan and its
-quota is spent; the 429 named that date and it is stored in
-`user_chatgpt_accounts.quota_resets_at`. Owner's note: that is his own linked
-account, and another user linking a paid one works independently of it. A
-completed turn clears the park automatically.
+quota is spent. Owner's note: that is his own linked account, and another user
+linking a paid one works independently of it. A completed turn clears the park.
 
 **HackClub sometimes serves opus-4.5 for a slug kyto never asks for** — a turn
 came back `(Empty response: {'content': [], 'model': 'claude-opus-4-5…'})`. Kyto
-filters the placeholder and falls back; whether HackClub remaps slugs upstream is
-their question. Watch whether it recurs.
+filters the placeholder and falls back. Watch whether it recurs.
 
 **HackClub's proxy 504s (reported to the HC AI team 2026-07-27).** Bursty, ~5.4s
 every time, reproducible with bare `curl` — theirs, not ours. `gateway-retry.ts`
@@ -193,14 +184,17 @@ the burst is worse than measured.
 (`MAX_THREAD_MESSAGES`) since it shipped. Check the first one that does: the
 `<earlier_in_this_thread>` block should carry real decisions, and it runs on the
 Gemini subagent key — if that key is unset the block degrades to a bare count.
+The owner points at
+https://hackclub.slack.com/archives/C0BDH1FNCTX/p1785766068566799 (~700 messages,
+though that count includes kyto's own thinking blocks, which are not replayed as
+thread messages — so it may still be under the cap).
 
 **Status narration in the Thinking card — half explained.** A turn's Thinking
 card showed plan/status text rather than reasoning. Audited: kyto never
 classifies anything as reasoning, it arrives pre-separated in the provider's own
 `reasoning_content` channel. Two candidates left: (a) the model genuinely wrote
-that as its reasoning (a prompt/model issue); (b) the card was truncated to its
-last fragment. The "5 more steps (running)" half IS fixed — that row counted
-hidden tool cards and hidden reasoning blocks TOGETHER, so a plan whose tool
-cards had all overflowed read as kyto narrating step counts; each kind now has
-its own row. Next time it happens, grab the raw `fullStream` parts
-(`KYTO_LOG_FULLSTREAM=1`), not the rendered card.
+that as its reasoning; (b) the card was truncated to its last fragment. The
+"5 more steps (running)" half IS fixed — that row counted hidden tool cards and
+hidden reasoning blocks TOGETHER; each kind now has its own row. Next time it
+happens, grab the raw `fullStream` parts (`KYTO_LOG_FULLSTREAM=1`), not the
+rendered card.
