@@ -6,6 +6,7 @@ import { bot, slack } from '@/lib/chat';
 import { handleCommand } from '@/lib/commands';
 import logger from '@/lib/logger';
 import { acceptOptIn, offerOptIn } from '@/lib/onboarding';
+import { handleSecret } from '@/lib/secret';
 import { toLogError } from '@/lib/utils/error';
 import { isAddressedOnly, isHiddenFromBot } from '@/lib/utils/message';
 import '@/features/approvals';
@@ -97,6 +98,12 @@ async function runCommandOrTurn(
   message: Message
 ): Promise<void> {
   if (await handleCommand({ message, thread })) {
+    return;
+  }
+  // `!secret` DOES cost a turn (it is a real question), but its plumbing is
+  // different enough — message deleted first, answer ephemeral, nothing
+  // persisted — to sit beside the no-turn commands rather than inside runTurn.
+  if (await handleSecret({ message, thread })) {
     return;
   }
   await runTurn({ message, thread });

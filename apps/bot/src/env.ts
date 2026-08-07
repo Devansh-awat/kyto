@@ -18,6 +18,11 @@ export const env = createEnv({
     // User OAuth token (xoxp-) used to post/edit AS the owner. Only ever applied
     // when the turn was triggered by OWNER_USER_ID; see the sendAsUser tool.
     SLACK_USER_TOKEN: z.string().optional(),
+    // Slack app OAuth credentials, for per-user "connect your Slack account"
+    // grants (lib/slack-oauth). From api.slack.com/apps → Basic Information.
+    // Unset = the whole feature is absent, same rule as BYOK_ENCRYPTION_KEY.
+    SLACK_CLIENT_ID: z.string().optional(),
+    SLACK_CLIENT_SECRET: z.string().optional(),
     // Slack user id allowed to act as themselves via SLACK_USER_TOKEN.
     OWNER_USER_ID: z.string().optional(),
     PORT: z.coerce.number().default(3000),

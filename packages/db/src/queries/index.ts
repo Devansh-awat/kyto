@@ -10,6 +10,7 @@ export * from './model-credentials';
 export * from './reminders';
 export * from './sandbox';
 export * from './sites';
+export * from './slack-grants';
 export * from './thread-sandboxes';
 export * from './thread-summaries';
 export * from './thread-thinking';

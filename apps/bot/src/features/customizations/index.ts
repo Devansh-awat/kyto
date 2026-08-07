@@ -4,6 +4,7 @@ import {
   cancelReminder,
   clearUserCustomization,
   deleteChatgptAccount,
+  deleteSlackGrant,
   deleteUserModelCredential,
   getChatgptAccount,
   getIdentityProfiles,
@@ -40,6 +41,7 @@ import {
 } from '@/lib/chatgpt';
 import { IDENTITY_TYPES, resetIdentityCache } from '@/lib/identity';
 import logger from '@/lib/logger';
+import { slackAuthorizeUrl } from '@/lib/slack-oauth';
 import { toLogError } from '@/lib/utils/error';
 import { eraseUserData, summarize } from './erase';
 import {
@@ -695,6 +697,42 @@ bot.onAction('home_unlink_chatgpt', async (event) => {
       logger.warn(
         { ...toLogError(error), userId: event.user.userId },
         'Failed to unlink ChatGPT account'
+      );
+    });
+});
+
+// Connecting is a LINK, not a modal: Slack's OAuth consent has to happen in a
+// browser, and the link carries an encrypted state bound to this user. Sent as
+// a DM rather than shown in the App Home view, so the URL is never re-rendered
+// into a view someone else could be shown by a stale publish.
+bot.onAction('home_connect_slack', async (event) => {
+  const userId = event.user.userId;
+  const url = slackAuthorizeUrl(userId);
+  if (!url) {
+    return;
+  }
+  await bot
+    .openDM(userId)
+    .then((thread) =>
+      thread.post({
+        markdown: `Connect your Slack account to kyto here: ${url}\n\nThis lets kyto act as you where you ask it to — today that means deleting your question when you use \`!secret\`. The link is yours alone and expires in 15 minutes.`,
+      })
+    )
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), userId },
+        'Failed to send the Slack connect link'
+      );
+    });
+});
+
+bot.onAction('home_disconnect_slack', async (event) => {
+  await deleteSlackGrant(event.user.userId)
+    .then(() => publishHome({ userId: event.user.userId }))
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), userId: event.user.userId },
+        'Failed to disconnect Slack account'
       );
     });
 });

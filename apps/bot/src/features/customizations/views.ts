@@ -3,6 +3,7 @@ import type {
   ChatgptAccount,
   IdentityProfile,
   Reminder,
+  SlackGrant,
   UserMcpServer,
   UserModelCredential,
 } from '@repo/db/queries';
@@ -356,6 +357,61 @@ export function buildChatgptModelModal(
   };
 }
 
+/**
+ * "Your Slack account" — the per-user OAuth grant (`lib/slack-oauth`).
+ *
+ * Deliberately says what it is FOR before asking: this is a person handing kyto
+ * the ability to act as them, so the section names the one thing that needs it
+ * today (`!secret`) rather than a vague "connect for more features".
+ */
+function slackGrantBlocks(grant: SlackGrant | null): SlackBlock[] {
+  if (!grant) {
+    return [
+      { type: 'divider' },
+      {
+        accessory: {
+          action_id: 'home_connect_slack',
+          style: 'primary',
+          text: plainText('Connect'),
+          type: 'button',
+        },
+        text: mrkdwn(
+          '*Your Slack account*\nConnect your own Slack account so kyto can act as you where you ask it to. Needed for `!secret` — asking privately works by kyto deleting your question, and only your own account can delete your messages. The token is encrypted at rest and never used except for something you asked for.'
+        ),
+        type: 'section',
+      },
+      { elements: [mrkdwn('_Not connected._')], type: 'context' },
+    ];
+  }
+  return [
+    { type: 'divider' },
+    {
+      accessory: {
+        action_id: 'home_disconnect_slack',
+        confirm: {
+          confirm: plainText('Disconnect'),
+          deny: plainText('Keep'),
+          text: mrkdwn(
+            'kyto will no longer be able to act as you, and `!secret` will stop working until you reconnect.'
+          ),
+          title: plainText('Disconnect Slack?'),
+        },
+        style: 'danger',
+        text: plainText('Disconnect'),
+        type: 'button',
+      },
+      text: mrkdwn(
+        '*Your Slack account*\nConnected — kyto can act as you where you ask it to.'
+      ),
+      type: 'section',
+    },
+    {
+      elements: [mrkdwn(`_Granted: ${escapeSlackText(grant.scopes)}_`)],
+      type: 'context',
+    },
+  ];
+}
+
 export function buildHomeView({
   byokEnabled = false,
   chatgptAccount = null,
@@ -367,6 +423,8 @@ export function buildHomeView({
   prompt,
   reminders = [],
   showUsageFooter = true,
+  slackGrant = null,
+  slackOauthEnabled = false,
   userId,
 }: {
   /** False when the host has no BYOK_ENCRYPTION_KEY: hide the section entirely. */
@@ -382,6 +440,10 @@ export function buildHomeView({
   prompt: string | null;
   reminders?: Reminder[];
   showUsageFooter?: boolean;
+  /** The user's own Slack authorization, or null. */
+  slackGrant?: SlackGrant | null;
+  /** False when the host has no Slack app OAuth credentials: hide the section. */
+  slackOauthEnabled?: boolean;
   /** The person viewing the tab, to mark reminders someone else shared here. */
   userId: string;
 }): SlackHomeView {
@@ -451,6 +513,9 @@ export function buildHomeView({
 
   if (byokEnabled) {
     blocks.push(...chatgptBlocks(chatgptAccount));
+  }
+  if (slackOauthEnabled) {
+    blocks.push(...slackGrantBlocks(slackGrant));
     blocks.push(...modelKeyBlocks(modelCredentials));
   }
 

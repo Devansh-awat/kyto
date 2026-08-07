@@ -6,6 +6,7 @@ import { env } from '@/env';
 import { handleDashboard } from '@/lib/dashboard';
 import { handleGithubProxy } from '@/lib/github-proxy';
 import logger from '@/lib/logger';
+import { handleSlackOauth } from '@/lib/slack-oauth';
 import { handleSlackProxy } from '@/lib/slack-proxy';
 import { isValidSiteName, resolveWithin, siteRoot, sitesRoot } from './paths';
 
@@ -133,6 +134,12 @@ export async function startSitesServer(): Promise<void> {
         const github = await handleGithubProxy(request, pathname);
         if (github) {
           return github;
+        }
+
+        // "Connect your Slack account" OAuth callback (lib/slack-oauth).
+        const slackAuth = await handleSlackOauth(request, pathname);
+        if (slackAuth) {
+          return slackAuth;
         }
 
         // Owner dashboard (memory promotion, GitHub trust). Password-gated, and

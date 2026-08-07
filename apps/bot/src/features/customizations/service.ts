@@ -1,6 +1,7 @@
 import {
   getChatgptAccount,
   getIdentityProfiles,
+  getSlackGrant,
   getUserCustomization,
   listMcpServers,
   listUserModelCredentials,
@@ -9,6 +10,7 @@ import {
 import { env } from '@/env';
 import { byokConfigured } from '@/lib/byok';
 import { slack } from '@/lib/chat';
+import { slackOauthConfigured } from '@/lib/slack-oauth';
 import { previewUserData } from './erase';
 import { buildHomeView } from './views';
 
@@ -19,6 +21,7 @@ export async function publishHome({
 }): Promise<void> {
   const isOwner = Boolean(env.OWNER_USER_ID) && userId === env.OWNER_USER_ID;
   const byokEnabled = byokConfigured();
+  const slackOauthEnabled = slackOauthConfigured();
   const [
     customization,
     mcpServers,
@@ -26,6 +29,7 @@ export async function publishHome({
     reminders,
     modelCredentials,
     chatgptAccount,
+    slackGrant,
     privacy,
   ] = await Promise.all([
     getUserCustomization(userId),
@@ -38,6 +42,9 @@ export async function publishHome({
     byokEnabled
       ? getChatgptAccount(userId).catch(() => undefined)
       : Promise.resolve(undefined),
+    slackOauthEnabled
+      ? getSlackGrant(userId).catch(() => null)
+      : Promise.resolve(null),
     // Best-effort: the "Your data" section still renders (with generic wording)
     // if the counts can't be read, because the erase buttons must never vanish.
     previewUserData(userId).catch(() => undefined),
@@ -56,6 +63,8 @@ export async function publishHome({
       prompt: customization?.prompt ?? null,
       reminders,
       showUsageFooter: customization?.showUsageFooter ?? true,
+      slackGrant: slackGrant ?? null,
+      slackOauthEnabled,
       userId,
     }) as never,
   });

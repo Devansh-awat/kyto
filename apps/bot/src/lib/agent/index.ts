@@ -17,6 +17,7 @@ import { LazySandbox } from '@repo/sandbox';
 import type { ToolSet } from 'ai';
 import { env } from '@/env';
 import type { Message, StreamChunk, ThreadHandle } from '@/harness';
+import { restoreAnnotatedMentions } from '@/harness';
 import {
   type GatheredResult,
   renderCarryover,
@@ -142,6 +143,27 @@ const ERROR_LOG_MAX_LENGTH = 800;
 // user's message plus carryover results are already in the prompt.
 const STREAMED_TEXT_MAX = 4000;
 
+// Slack caps an ephemeral message's text well below a normal post, and an
+// ephemeral cannot be length-split by createReply (that posts publicly). Cut on
+// blank lines like the normal reply path does, falling back to a hard cut.
+const EPHEMERAL_MAX = 2900;
+
+function splitForEphemeral(text: string): string[] {
+  const chunks: string[] = [];
+  let rest = text;
+  while (rest.length > EPHEMERAL_MAX) {
+    const window = rest.slice(0, EPHEMERAL_MAX);
+    const paragraph = window.lastIndexOf('\n\n');
+    const cut = paragraph > EPHEMERAL_MAX / 3 ? paragraph : EPHEMERAL_MAX;
+    chunks.push(rest.slice(0, cut).trim());
+    rest = rest.slice(cut).replace(/^\n+/, '');
+  }
+  if (rest.trim()) {
+    chunks.push(rest.trim());
+  }
+  return chunks;
+}
+
 function appendStreamedText(existing: string, text: string): string {
   const combined = existing + text;
   return combined.length > STREAMED_TEXT_MAX
@@ -162,6 +184,11 @@ export { stopAllTurns, stopTurn } from '@/lib/agent/turns';
 
 export function runTurn(input: {
   message: Message;
+  /**
+   * `!secret`: answer this one ephemerally, to the asker only, and leave no
+   * trace kyto can later read back. See the SecretTurn notes in executeTurn.
+   */
+  secret?: boolean;
   thread: ThreadHandle;
 }): Promise<void> {
   const turn = getTurn({ threadId: input.thread.id });
@@ -180,7 +207,11 @@ export function runTurn(input: {
 }
 
 async function executeTurn(
-  { message, thread }: { message: Message; thread: ThreadHandle },
+  {
+    message,
+    secret = false,
+    thread,
+  }: { message: Message; secret?: boolean; thread: ThreadHandle },
   controller: AbortController
 ): Promise<void> {
   const threadId = thread.id;
@@ -285,16 +316,27 @@ async function executeTurn(
     // threadTs always exists. The turn is driven as a SEQUENCE of plan messages
     // (see streamSegmented) so that reply text splits the plan into separate
     // collapsible blocks: [plan] text [plan] text.
-    await streamSegmented({ message, thread });
-    await reply?.flush({ thread });
-    if (hints.customization?.prompt && !slack.isDM(thread.id)) {
+    if (secret) {
+      // A secret turn takes the SAME model loop and throws away its public
+      // half: no plan message, no streamed reply, no footer. Everything the
+      // model writes is collected and handed to one ephemeral message.
+      await collectSecret({ message, thread });
+    } else {
+      await streamSegmented({ message, thread });
+      await reply?.flush({ thread });
+    }
+    if (!secret && hints.customization?.prompt && !slack.isDM(thread.id)) {
       await thread
         .post({
           markdown: "_kyto's responses are shaped by this user's instructions_",
         })
         .catch(() => undefined);
     }
-    if (usageFooter && hints.customization?.showUsageFooter !== false) {
+    if (
+      !secret &&
+      usageFooter &&
+      hints.customization?.showUsageFooter !== false
+    ) {
       await postUsageFooter({ footer: usageFooter, thread });
     }
     await cleanup();
@@ -1059,11 +1101,17 @@ async function executeTurn(
         // attempt that actually answered gets to: a failed attempt's reasoning
         // died with it, and feeding a spiral back in would only seed another.
         // Persisted (best-effort) so it survives a restart.
-        await rememberThinking({
-          blocks: attemptThinking,
-          observations: renderObservations(gatheredResults),
-          threadId,
-        });
+        // …except on a `!secret` turn, which must leave nothing kyto can read
+        // back. `thread_thinking` is injected into the NEXT turn's prompt, so
+        // persisting it here would let anyone in the thread ask "what did you
+        // just say?" and get the private answer.
+        if (!secret) {
+          await rememberThinking({
+            blocks: attemptThinking,
+            observations: renderObservations(gatheredResults),
+            threadId,
+          });
+        }
         // A user's own key/account that just answered a whole turn is
         // demonstrably valid (each recorder no-ops unless the attempt is theirs).
         await recordByokOutcome({
@@ -1227,6 +1275,62 @@ async function executeTurn(
   // tools, then writes more renders as [plan] text [plan] text — the model can
   // post an in-between update and keep working in a fresh block, instead of
   // every tool of the whole turn piling into one plan pinned above all the text.
+  /**
+   * Drive the turn with NO public output: drop every plan/task chunk, keep the
+   * reply text, and deliver it once as an ephemeral message only the asker can
+   * see.
+   *
+   * Slack ephemerals cannot stream and cannot carry a plan card, so a secret
+   * turn is silent until it finishes — which is also the point, since a
+   * streaming plan in the channel would announce that a private exchange is
+   * happening.
+   */
+  async function collectSecret({
+    message: turnMessage,
+    thread: turnThread,
+  }: {
+    message: Message;
+    thread: ThreadHandle;
+  }): Promise<void> {
+    let answer = '';
+    for await (const part of renderTurn({
+      message: turnMessage,
+      thread: turnThread,
+    })) {
+      if (typeof part === 'string') {
+        answer += part;
+      }
+    }
+    const text = restoreAnnotatedMentions(answer).trim();
+    if (!text) {
+      return;
+    }
+    // Posted through the web client rather than ThreadHandle for one reason:
+    // when the deleted question was itself the thread ROOT, `thread_ts` now
+    // points at a message that no longer exists and Slack rejects the
+    // ephemeral. Thread it only when the root is some other message.
+    const { channel, threadTs } = slack.decodeThreadId(turnThread.id);
+    const inThread = Boolean(threadTs && threadTs !== turnMessage.id);
+    // Deliberately NO DM fallback: a DM to kyto is a thread kyto can read back
+    // next turn, which is exactly what a secret answer must not become. If Slack
+    // refuses the ephemeral the answer is lost, and that is the safer failure.
+    for (const chunk of splitForEphemeral(text)) {
+      await slack.webClient.chat
+        .postEphemeral({
+          channel,
+          text: chunk,
+          ...(inThread && threadTs ? { thread_ts: threadTs } : {}),
+          user: turnMessage.author.userId,
+        })
+        .catch((error: unknown) => {
+          logger.warn(
+            { err: error, threadId },
+            '[agent] secret reply could not be delivered'
+          );
+        });
+    }
+  }
+
   async function streamSegmented({
     message: turnMessage,
     thread: turnThread,

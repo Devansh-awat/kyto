@@ -70,9 +70,18 @@
         "users:read",
         "users:read.email"
       ],
-      "user": ["chat:write", "im:write", "pins:write", "search:read"]
+      "user": [
+        "chat:write",
+        "groups:history",
+        "im:history",
+        "im:write",
+        "mpim:history",
+        "pins:write",
+        "search:read"
+      ]
     },
-    "pkce_enabled": false
+    "pkce_enabled": false,
+    "redirect_urls": ["https://kyto.dino.icu/_slackauth/callback"]
   },
   "settings": {
     "event_subscriptions": {
