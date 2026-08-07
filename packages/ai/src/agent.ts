@@ -23,6 +23,7 @@ import {
   type ModelAttempt,
 } from './providers/attempts';
 import { CHATGPT_PROVIDER } from './providers/chatgpt';
+import { stabilizeToolOrder } from './tool-order';
 
 // Ceiling on agentic steps within one attempt (model → tools → model …).
 // Effectively "no limit" for real work: a hard 60 used to strand long jobs
@@ -503,6 +504,9 @@ function tunedFetch({
   // churn against the one before it. Per-attempt closure, same as the
   // signatures above.
   const cacheProbe: { units: PrefixUnit[] } = { units: [] };
+  // The tool order this attempt has already sent, so a tool loaded mid-turn is
+  // APPENDED rather than slotted into the middle (see stabilizeToolOrder).
+  const toolOrder: { names: string[] } = { names: [] };
   return async (input, init) => {
     const url = requestUrl(input);
     let callInput = input;
@@ -513,7 +517,8 @@ function tunedFetch({
         await readRequestBody(input, init),
         attempt,
         isGemini ? thoughtSignatures : undefined,
-        onCachePrefix ? { onCachePrefix, state: cacheProbe } : undefined
+        onCachePrefix ? { onCachePrefix, state: cacheProbe } : undefined,
+        toolOrder
       );
       if (tuned) {
         const source =
@@ -582,7 +587,8 @@ function tuneBody(
   probe?: {
     onCachePrefix: (info: PrefixDivergence) => void;
     state: { units: PrefixUnit[] };
-  }
+  },
+  toolOrder?: { names: string[] }
 ): string | null {
   if (raw === undefined) {
     return null;
@@ -591,6 +597,12 @@ function tuneBody(
     const payload = JSON.parse(raw) as Record<string, unknown>;
     if (!payload || typeof payload !== 'object') {
       return null;
+    }
+    let changed = false;
+    // BEFORE the probe, because this one genuinely changes the bytes we send and
+    // the probe should measure what the provider actually gets.
+    if (toolOrder && stabilizeToolOrder(payload, toolOrder)) {
+      changed = true;
     }
     // Measured on the RAW payload, before the rewrites below: addCacheControl
     // moves a breakpoint every step, which would read as prefix churn that the
@@ -603,7 +615,6 @@ function tuneBody(
         probe.onCachePrefix(divergence);
       }
     }
-    let changed = false;
     // Gemini: re-attach captured thought signatures to assistant tool calls so
     // the API accepts the replayed history (see tunedFetch's closure comment).
     if (

@@ -6,10 +6,14 @@ import { rawText, withoutLeadingMentions } from '@/lib/utils/message';
 
 // Commands the HARNESS answers itself, before any model turn exists.
 //
-// Written `@kyto?focusmode @someone` (owner's ask, 2026-08-05) — the mention is
-// how you address kyto in a channel, and the command rides straight off it with
-// no space, which is why `withoutLeadingMentions` leaves the `?…` behind. `!` is
-// accepted for the same set, since `!stop` predates the `?` form.
+// Written `@kyto!focusmode @someone` (owner's ask, 2026-08-05; he typed `?` the
+// first time and corrected it to `!` on 2026-08-07) — the mention is how you
+// address kyto in a channel, and the command rides straight off it with no
+// space, which is why `withoutLeadingMentions` leaves the `!…` behind.
+//
+// `!` is the ONLY prefix. `?` was accepted briefly and is gone: a message that
+// opens with a question mark is far more often a real question than a command,
+// and one prefix is one thing to remember.
 //
 // The point of handling these here rather than as tools is that a command must
 // NOT cost a turn and must NOT disturb one already running: `runCommandOrTurn`
@@ -70,8 +74,8 @@ async function runStop({
 }
 
 /**
- * `?focusmode @a @b` — restrict this thread to those people; `?focusmode off`
- * lifts it; `?focusmode` on its own focuses the person who typed it.
+ * `!focusmode @a @b` — restrict this thread to those people; `!focusmode off`
+ * lifts it; `!focusmode` on its own focuses the person who typed it.
  *
  * Same state as the `focusMode` TOOL (`thread.setFocus`), so the same rules
  * apply: the owner is always exempt, and kyto's own messages always stay in
@@ -105,7 +109,7 @@ async function runFocusMode({
       ids.add(id);
     }
   }
-  // "@kyto?focusmode" with nobody named means the obvious thing: focus on me.
+  // "@kyto!focusmode" with nobody named means the obvious thing: focus on me.
   if (ids.size === 0) {
     ids.add(message.author.userId);
   }
@@ -118,7 +122,7 @@ async function runFocusMode({
   const who = focus.map((id) => `<@${id}>`).join(', ');
   await tell({
     message,
-    text: `focus mode on — in this thread i’ll only respond to ${who}. \`?focusmode off\` to clear.`,
+    text: `focus mode on — in this thread i’ll only respond to ${who}. \`!focusmode off\` to clear.`,
     thread,
     what: 'focus feedback',
   });
@@ -155,7 +159,7 @@ async function tell({
 function cmd(message: Message): BotCommand | null {
   const body = withoutLeadingMentions(rawText(message)).trim();
 
-  const match = body.match(/^[!?](\w+)\b(.*)$/is);
+  const match = body.match(/^!(\w+)\b(.*)$/is);
   if (!match?.[1]) {
     return null;
   }
@@ -167,8 +171,8 @@ function cmd(message: Message): BotCommand | null {
       return { args, type: 'focusmode' };
     case 'stop':
       return { args, type: 'stop' };
-    // Anything else is not a command — a message that merely opens with "?" is
-    // an ordinary question and must still reach the model.
+    // Anything else is not a command and must still reach the model — `!` opens
+    // plenty of ordinary sentences too.
     default:
       return null;
   }

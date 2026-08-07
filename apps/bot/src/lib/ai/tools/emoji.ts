@@ -178,8 +178,31 @@ export function lookupEmojiTool() {
  * emoji that was never added.
  */
 interface EmojiVerdict {
+  /** Labels of the buttons the emoji bot offered, when it asked instead of adding. */
+  choices?: string[];
   permalink?: string;
   text?: string;
+}
+
+/** Button labels out of a Block Kit `actions` block, if the reply carries one. */
+function choiceLabels(blocks: unknown): string[] {
+  if (!Array.isArray(blocks)) {
+    return [];
+  }
+  const labels: string[] = [];
+  for (const block of blocks) {
+    const record = block as { elements?: unknown; type?: unknown };
+    if (record.type !== 'actions' || !Array.isArray(record.elements)) {
+      continue;
+    }
+    for (const element of record.elements) {
+      const label = (element as { text?: { text?: unknown } }).text?.text;
+      if (typeof label === 'string' && label) {
+        labels.push(label);
+      }
+    }
+  }
+  return labels;
 }
 
 async function awaitVerdict(
@@ -211,7 +234,12 @@ async function awaitVerdict(
       (message) => message.ts !== ts && message.text
     );
     if (reply?.text) {
-      return { permalink, text: reply.text };
+      const choices = choiceLabels(reply.blocks);
+      return {
+        ...(choices.length > 0 ? { choices } : {}),
+        permalink,
+        text: reply.text,
+      };
     }
   }
   return { permalink };
@@ -306,9 +334,26 @@ export function submitEmojiTool({
           channelId,
           cleaned
         ).catch((): EmojiVerdict => ({}));
+        // The bot sometimes ASKS instead of adding — a real in-thread message
+        // (not ephemeral, as first assumed) carrying "as is" / "remove bg" /
+        // "nvm" buttons. Slack has no API for one app to press another app's
+        // button, with a bot token or a user token, so this is where kyto stops
+        // and a human finishes it. Say that plainly rather than reporting the
+        // question as if it were a verdict.
+        if (verdict.choices && verdict.choices.length > 0) {
+          return {
+            choices: verdict.choices,
+            name: cleaned,
+            needsHuman: true,
+            permalink: verdict.permalink,
+            submitted: true,
+            summary: `Posted \`${cleaned}\`, but the emoji bot is asking how to upload it (${verdict.choices.join(' / ')}) and only a human can press those buttons — Slack gives no way for one app to click another app's button. Tell whoever asked to open ${verdict.permalink ?? 'the emoji channel'} and pick an option, and do NOT say the emoji exists until lookupEmoji finds it.`,
+          };
+        }
         if (verdict.text) {
           return {
             name: cleaned,
+            permalink: verdict.permalink,
             reply: verdict.text,
             submitted: true,
             summary: `Submitted \`${cleaned}\` for <@${requestedBy}>. The emoji bot replied: ${verdict.text}`,
@@ -318,7 +363,7 @@ export function submitEmojiTool({
           name: cleaned,
           permalink: verdict.permalink,
           submitted: true,
-          summary: `Posted \`${cleaned}\` and its image to the emoji channel for <@${requestedBy}>, but the emoji bot has not answered in that thread yet. It sometimes asks the poster to choose (e.g. "upload as is" vs "without background") in a message only the poster can see — and since the poster is me, and Slack gives no way to press a button on another app's message, I cannot answer it. Tell the user it is posted but not confirmed, link them to ${verdict.permalink ?? 'the emoji channel'} so they can finish it, and do NOT claim the emoji exists until lookupEmoji finds it.`,
+          summary: `Posted \`${cleaned}\` and its image to the emoji channel for <@${requestedBy}>, but the emoji bot has not answered in that thread yet. Tell the user it is posted but not confirmed, link them to ${verdict.permalink ?? 'the emoji channel'} so they can finish it, and do NOT claim the emoji exists until lookupEmoji finds it.`,
         };
       } catch (error) {
         logger.warn({ err: error, name: cleaned }, '[emoji] submission failed');

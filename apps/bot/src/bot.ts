@@ -7,7 +7,7 @@ import { handleCommand } from '@/lib/commands';
 import logger from '@/lib/logger';
 import { acceptOptIn, offerOptIn } from '@/lib/onboarding';
 import { toLogError } from '@/lib/utils/error';
-import { isHiddenFromBot } from '@/lib/utils/message';
+import { isAddressedOnly, isHiddenFromBot } from '@/lib/utils/message';
 import '@/features/approvals';
 import '@/features/ask-question';
 import '@/features/assistant';
@@ -108,6 +108,12 @@ function shouldIgnore(message: Message): boolean {
     message.author.userId === 'USLACKBOT' ||
     message.author.isMe === true
   ) {
+    return true;
+  }
+  // `<>` at the front means "only the agents named here should answer". Applied
+  // uniformly, DMs included (owner's call, 2026-08-07: whichever is simpler) —
+  // one rule to explain, and in a DM it is still the sender saying "not you".
+  if (isAddressedOnly(message) && !message.isMention) {
     return true;
   }
 

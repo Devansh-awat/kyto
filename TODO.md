@@ -37,6 +37,7 @@ friends — a genuinely strong catalogue — but every completion needs auth and
 `OPENCODE_API_KEY` is unset (the var is already declared in
 `packages/ai/src/keys.ts`). Paste a key and it can be measured like mebbo was:
 tool calls, first-byte latency, and whether the free plan actually covers it.
+me put the key. but opencode command runs without needing key.
 
 **Is deepseek-v4-pro better than the v4-flash primary?** Asked 2026-08-06, not
 answerable yet: pro is reachable on mebbo, but a fair comparison needs the same
@@ -198,3 +199,32 @@ that as its reasoning; (b) the card was truncated to its last fragment. The
 hidden reasoning blocks TOGETHER; each kind now has its own row. Next time it
 happens, grab the raw `fullStream` parts (`KYTO_LOG_FULLSTREAM=1`), not the
 rendered card.
+
+check the two issues kyto made #2 and #3 and add them. 
+
+some cache miss here?
+4m ago • i	Kimi K3	43,226 in / 173 out	$0.02721	OK · 7.8s
+4m ago • i	Kimi K3	43,113 in / 75 out	$0.025401	OK · 9.3s
+4m ago • i	Kimi K3	43,009 in / 66 out	$0.024954	OK · 6.2s
+4m ago • i	Kimi K3	42,490 in / 481 out	$0.029622	OK · 16s
+4m ago • i	Kimi K3	42,350 in / 79 out	$0.023172	OK · 6.1s
+5m ago • i	Kimi K3	42,247 in / 51 out	$0.022443	OK · 5.7s
+5m ago • i	Kimi K3	42,134 in / 75 out	$0.022464	OK · 6.3s
+5m ago • i	Kimi K3	42,030 in / 66 out	$0.022017	OK · 5.9s
+5m ago • i	Kimi K3	41,666 in / 326 out	$0.024825	OK · 14s
+5m ago • i	Kimi K3	41,184 in / 61 out	$0.019404	OK · 6.5s
+5m ago • i	Kimi K3	41,068 in / 73 out	$0.019236	OK · 6.8s
+6m ago • i	Kimi K3	40,965 in / 65 out	$0.018807	OK · 5.1s
+6m ago • i	Kimi K3	40,526 in / 401 out	$0.02253	OK · 16s
+6m ago • i	Kimi K3	40,281 in / 62 out	$0.01671	OK · 6.7s
+6m ago • i	Kimi K3	39,947 in / 83 out	$0.016023	OK · 6.3s
+6m ago • i	Kimi K3	39,844 in / 65 out	$0.015444	OK · 6.4s
+6m ago • i	Kimi K3	39,507 in / 299 out	$0.017943	OK · 14s
+7m ago • i	Kimi K3	39,081 in / 233 out	$0.032264	OK · 10s
+7m ago • i	Kimi K3	38,881 in / 63 out	$0.07888	OK · 8.2s
+7m ago • i	Kimi K3	38,525 in / 207 out	$0.114187	OK · 11s
+7m ago • i	Kimi K3	38,758 in / 51 out	$0.117039	OK · 14s
+8m ago • i	Kimi K3	38,775 in / 538 out	$0.124395	OK · 31s
+8m ago • i	Kimi K3	40,868 in / 187 out	$0.125409	OK · 23s
+9m ago • i	Kimi K3	40,462 in / 349 out	$0.018189	OK · 9.2s
+9m ago • i	Kimi K3	39,359 in / 763 out	$0.129522	OK · 28s
