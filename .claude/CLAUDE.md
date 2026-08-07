@@ -45,24 +45,18 @@ hangs in a non-TTY shell.
 > items from `TODO.md` in the same commit.
 
 > **Delegate the reading to subagents; keep the editing yourself.** Searching a
-> big surface (which files touch X, where was Y discussed, does this pattern
-> repeat) burns the main context on output you only need the conclusion of — hand
-> those to a subagent and act on its answer. Do the edits, the judgement calls,
-> and the security-sensitive reasoning in the main thread, where the full project
-> context lives. Run independent investigations in parallel rather than in
-> sequence. Never delegate away a decision this file says is load-bearing.
+> big surface burns the main context on output you only need the conclusion of.
+> Do the edits, the judgement calls, and the security-sensitive reasoning in the
+> main thread. Run independent investigations in parallel. Never delegate away a
+> decision this file says is load-bearing.
 >
-> **Be token-conservative — it is the owner's money.** Prefer a subagent for any
-> broad read/search (it is both faster and keeps the expensive main context
-> small), read only the slices of a file you need, and don't re-read a file you
-> just edited to "verify". **Spawn dev subagents on a cheap model, never Opus**
-> (owner's call): **the DEFAULT for any spawned subagent is `model: "sonnet"`
-> (Sonnet 5)** — never leave the model unset, because an omitted model INHERITS
-> the parent (Opus) and quietly spends Opus tokens on delegated work. Use
-> `model: "sonnet"` for judgement-shaped work and drop to `model: "haiku"` only
-> for mechanical search/read. This is about CLAUDE CODE's own subagents (the
-> `Agent` tool) — kyto's RUNTIME `subagent` tool already runs on the cheap
-> Gemini/HackClub tier, never Opus.
+> **Be token-conservative — it is the owner's money.** Read only the slices of a
+> file you need, and don't re-read a file you just edited to "verify". **Spawn
+> dev subagents on a cheap model, never Opus** (owner's call): **the DEFAULT is
+> `model: "sonnet"`** — never leave it unset, because an omitted model INHERITS
+> the parent (Opus) and quietly spends Opus tokens on delegated work; drop to
+> `model: "haiku"` for mechanical search/read. This is about CLAUDE CODE's own
+> subagents — kyto's RUNTIME `subagent` tool already runs on a cheap tier.
 
 > **Put real choices to the owner, don't decide them silently.** When a change has
 > two defensible shapes with different blast radius (a security gate's scope, what
@@ -107,23 +101,21 @@ The Vercel Chat SDK, the Pi framework, and `@ai-sdk/harness*` were removed in a 
 - **Custom Slack harness** (`apps/bot/src/harness/`) — `@slack/socket-mode` + `@slack/web-api` directly. `SLACK_APP_TOKEN` required (Socket Mode is the only mode).
   - `SlackHarness` (`harness.ts`): Web API facade — thread-id codec `slack:CHANNEL[:TS]`, message building, fetch/history/listThreads, reactions, assistant status, native streaming via `webClient.chatStream` (task cards = `task_update` chunks, `task_display_mode: 'plan'`).
   - `KytoBot` (`bot.ts`): owns the Socket Mode connection and event routing. `app_mention` events are deliberately **ignored** — everything routes off `message` events (mention = text contains the bot id), killing the old dedupe problem.
-  - `ThreadHandle` (`thread.ts`): `post` (Block Kit `markdown` blocks; files via `filesUploadV2`; per-message profile overrides `username`/`iconUrl`/`iconEmoji`, needs `chat:write.customize`), `postEphemeral`, `schedule`, `subscribe`/`setState` (`thread_subscriptions` + 30s cache), `fetchMetadata`.
+  - `ThreadHandle` (`thread.ts`): `post` (Block Kit `markdown` blocks; files via `filesUploadV2`; per-message profile overrides, needs `chat:write.customize`), `postEphemeral`, `schedule`, `subscribe`/`setState` (`thread_subscriptions` + 30s cache), `fetchMetadata`.
   - **Every message threads** — a top-level DM/channel message roots its own thread (`threadTs = event.thread_ts || event.ts`). `buildPrompt` scopes context to that thread only, so kyto has no memory of the rest of a DM by default; it uses `searchSlack` (`in:@user`) to pull earlier history on purpose.
   - Markdown conversion is ours (`harness/markdown.ts`): inbound mrkdwn→markdown, `healMarkdown` closes dangling fences in chunked replies. `bot.getState()` is an in-memory TTL KV (`harness/kv.ts`), rebuilt at startup.
 
-- **Custom agent loop** on `ai`'s `streamText` (`packages/ai/src/agent.ts` `streamAttempt` + `apps/bot/src/lib/agent/index.ts`): multi-step tool loop (`MAX_STEPS = AGENT_MAX_STEPS` env, default **1000** — effectively no limit; the real bound is the watchdog, the degenerate guard, and a `skip`, since a hard cap stranded long jobs mid-solve). Per-attempt `@ai-sdk/openai-compatible` provider; a per-provider `fetch` tunes each request (see Models). `renderStream` (`lib/ai/stream/`) consumes `fullStream` and renders the plan.
+- **Custom agent loop** on `ai`'s `streamText` (`packages/ai/src/agent.ts` `streamAttempt` + `apps/bot/src/lib/agent/index.ts`): multi-step tool loop (`MAX_STEPS`, default **1000** — effectively no limit; the real bound is the watchdog, the degenerate guard, and a `skip`, since a hard cap stranded long jobs mid-solve). Per-attempt `@ai-sdk/openai-compatible` provider; a per-provider `fetch` tunes each request (see Models). `renderStream` (`lib/ai/stream/`) consumes `fullStream` and renders the plan.
 
-- **Sandbox tools** (`lib/ai/tools/sandbox.ts`): `bash`, `readFile`, `writeFile`, `editFile` run against `LazySandbox` (lazy-create, persistent-per-thread semantics under "Sandbox / E2B" below).
+- **Sandbox tools** (`lib/ai/tools/sandbox.ts`): `bash`, `readFile`, `writeFile`, `editFile` run against `LazySandbox` (see "Sandbox / E2B" below).
 
-- **Deferred tools**: uncommon tools (browser, the email trio, canvasDelete, slackDocs, createChannel, setChannelTopic, bookmarkLink, pins, poll, askQuestion, mermaid, sendAsUser/editAsUser, gh, TTS, subagent, every MCP tool) are registered but hidden until the model calls the **`loadTools`** meta-tool, enforced per step via `prepareStep`/`activeTools`. **Whether deferral is worth it is MEASURED, not assumed**: every turn logs `[tools] turn summary` (`loaded`/`loadedUsed`/`loadedUnused`/`coreUsed`). Always-loaded-and-used belongs in `core`; a core tool never in `coreUsed` belongs behind `loadTools`; `loadedUnused` is a round trip paid for nothing.
+- **Deferred tools**: uncommon tools (browser, email, canvasDelete, slackDocs, createChannel, setChannelTopic, bookmarkLink, pins, poll, askQuestion, mermaid, sendAsUser/editAsUser, gh, TTS, subagent, every MCP tool) are registered but hidden until the model calls the **`loadTools`** meta-tool, enforced per step via `prepareStep`/`activeTools`. **Whether deferral is worth it is MEASURED, not assumed**: every turn logs `[tools] turn summary` (`loaded`/`loadedUsed`/`loadedUnused`/`coreUsed`). Always-loaded-and-used belongs in `core`; a core tool never in `coreUsed` belongs behind `loadTools`; `loadedUnused` is a round trip paid for nothing.
 
-- **Per-user MCP servers** (`lib/ai/mcp.ts`, `user_mcp_servers`): users add remote Streamable-HTTP MCP servers from **App Home**. A hand-rolled JSON-RPC client (initialize/tools.list/tools.call; SSE) connects lazily per turn; listings cached 10 min per URL; tools namespaced `mcp_<server>_<tool>` and deferred behind `loadTools`. A dead server degrades only that turn. Local (user-machine) MCP servers are impossible over Slack.
+- **Per-user MCP servers** (`lib/ai/mcp.ts`, `user_mcp_servers`): remote Streamable-HTTP servers added from **App Home**. A hand-rolled JSON-RPC client connects lazily per turn; listings cached 10 min per URL; tools namespaced `mcp_<server>_<tool>` and deferred behind `loadTools`. A dead server degrades only that turn.
 
 ## AI tools
 
-Tools live in `apps/bot/src/lib/ai/tools/`, registered in `lib/ai/toolset.ts`. Raw Slack API: `slack.webClient.apiCall(method, args)`; error helpers `errorMessage()`/`toLogError()` from `@/lib/utils/error`.
-
-The roster is much larger than gorkie's (canvases, sites, memories, email, reminders, subagents, `gh`, browser, code mode, background processes, …) — **`TOOLS.md` is the index**; don't duplicate it here.
+Tools live in `apps/bot/src/lib/ai/tools/`, registered in `lib/ai/toolset.ts`. Raw Slack API: `slack.webClient.apiCall(method, args)`; error helpers from `@/lib/utils/error`. **`TOOLS.md` is the index of the roster**; don't duplicate it here.
 
 ### Per-tool detail lives in [`.claude/TOOLS.md`](./TOOLS.md)
 
@@ -144,24 +136,26 @@ Read it before touching a tool. **Not loaded automatically** (same convention as
 - **Third-party GitHub writes need owner-granted trust** (`github_trust`, `lib/github/guard.ts`): a repo outside kyto's namespace is refused unless the user is trusted blanket or for that repo, and the attempt is queued in `github_requests`. **EXCEPTION (owner's call, 2026-08-05): a repo that added `kyto-agent` as a collaborator with push access skips this gate for ANYONE** (`lib/github/collaborator.ts`, `GET /repos/{o}/{n}` → `permissions.push`, 10-min cache) — the invitation is the grant. A repo nobody invited kyto to reports `push:false` and is still gated; a failed check answers false, so a GitHub outage tightens this rather than opening it. Gate 1 (another user's claimed repo) runs FIRST, so this cannot reach past it. A SECOND gate on top of repo ownership — that protects users from each other, this protects kyto's single GitHub identity from the workspace (an unbounded version is why the token got revoked). Approving grants trust and does NOT replay the command.
 - **Broadcast pings are DENIED BY DEFAULT in `ThreadHandle.post`** (`PostContent.allowBroadcast`, off unless set). Opt-IN failed: the paths that forgot were the ones nobody thinks of as "the model talking" — REMINDERS (model-authored, creatable by anyone) and the `title` on `mermaid`/`uploadFile` — and `post` renders a control mention as `section`+`mrkdwn` precisely so it becomes a real ping, so those pinged whole channels ungated. Only two callers opt in: the owner's streamed reply, and an owner's SAME-CHANNEL `postMessage`. Omitting the flag fails CLOSED. The strip is field-by-field (markdown/fallbackText/blocks), not a deep walk — that would turn `files[].data` into a plain object.
 - **The approval gate is persisted, public, and never expires** (`approval_requests`, `lib/approvals/`, `features/approvals/`). A non-owner's cross-CHANNEL post, a broadcast the gate would otherwise strip, and a third-party GitHub write are queued rather than refused; the turn does NOT block on one (a request can sit for hours — holding the loop open would burn the watchdog). Load-bearing: only `OWNER_USER_ID` may decide (buttons are PUBLIC, so without that check the asker could approve themselves); the action runs from the row written when the request was MADE, so a later injection in the same thread can't redirect an approved post; `kind` is a CLOSED set re-validated at execute time; the claim is `status = 'pending'` in the UPDATE, so a double-click can't send twice. **`sendAsUser`/`editAsUser` are deliberately NOT an approval kind and must never become one** — posting as the owner keeps its synchronous confirm click, with no approval path at all.
-- **Ownership gate (reminders + sites)**: editable only by the creator, named editors, and the bot owner — enforced at execute time against `message.author.userId`, not whoever the model claims to act for. Detail in TOOLS.md.
+- **Ownership gate (reminders + sites)**: editable only by the creator, named editors, and the bot owner — enforced at execute time against `message.author.userId`. Detail in TOOLS.md.
 
 
 ## Identity, gating, and etiquette
 
 - **Broadcast mentions are owner-gated AND channel-local.** Only the owner may make kyto ping a whole channel, and only in the channel it was invoked in. `neutralizeBroadcast` (`harness/markdown.ts`) downgrades `<!channel>`/`<!here>`/`<!everyone>`/`<!subteam^…>` to inert plaintext; applied to the streamed reply (`allowBroadcast = isOwner`) and, in `postMessage`, whenever the target isn't the current channel — **owner included** (`allowBroadcast = isOwner && target === currentChannel`). `neutralizeBroadcastDeep` does the same for every string in a Block Kit payload.
-- **`postMessage` can send Block Kit**: an optional `blocks` param (JSON array string, ≤50 blocks, `parseBlocks`) replaces the markdown body; `message` stays required as the notification fallback (`PostContent.fallbackText`).
-- **`postMessage` identity override is OWNER-ONLY** (`lib/post-identity.ts`): `asName`+`asIcon` post under a custom name/avatar, or `asUser` mirrors a person/bot's name+avatar. A non-owner can't use it — wearing another member's name is the impersonation vector. The identity rides through the confirm-post gate (`PendingPost.identity`); Slack still tags a customized bot post as an app.
+- **`postMessage` can send Block Kit**: an optional `blocks` param (≤50 blocks) replaces the markdown body; `message` stays required as the notification fallback.
+- **`postMessage` identity override is OWNER-ONLY** (`lib/post-identity.ts`): `asName`+`asIcon` post under a custom name/avatar, or `asUser` mirrors a person/bot. A non-owner can't use it — wearing another member's name is the impersonation vector. The identity rides through the confirm-post gate (`PendingPost.identity`).
 - **Wearing a real person's face needs THAT PERSON's yes, not the owner's** (owner's call, 2026-07-30). `resolvePostIdentity` reports `mirroredUserId` when `asUser` named a real user, and that person becomes the row's `approverUserId`: the Confirm/Cancel goes to them (DM fallback), naming who asked. **A mirrored post waits even SAME-CHANNEL** — that instant path was the one place kyto could impersonate someone with nobody but the requester agreeing. Nobody to ask (a `B…` bot id, a plain name, an invented `asName`/`asIcon`, or mirroring yourself) keeps the owner's gate.
 - **Broadcast rendering**: Slack's `markdown` block does NOT resolve control mentions, so `ThreadHandle.post` detects a `CONTROL_MENTION` token and posts a `section`+`mrkdwn` block instead. The core prompt tells the model to ping with `<@id>` and broadcast with raw `<!channel>` tokens.
 - **Cross-channel posting is owner-gated** (`tools/post-message.ts`): a non-owner may only post back into the channel kyto was mentioned in — a DM (`type:'user'`) is the one exception, routed to the confirm-post gate below rather than refused. **Send/edit-as-owner** (`sendAsUser`/`editAsUser`, via `SLACK_USER_TOKEN`) is only **registered** for the owner and each re-checks at execute time; `sendAsUser` can also DM a person from the owner's account, and both accept Block Kit `blocks` (cross-channel/DM sends get `neutralizeBroadcast[Deep]`).
 - **Outward-facing posts need a human confirm click** (`lib/confirm-post/`, `features/confirm-post/`): a cross-channel/DM `postMessage`, a post wearing someone's face, and EVERY `sendAsUser`/`editAsUser` stash the pending post (`stashPendingPost`, 10-min TTL, single-use) and show its **approver** a **Confirm & send / Cancel** in-thread (DM fallback, summary naming the requester). The send fires only in `confirm_post_send`, which **re-checks the clicker against the row's `approverUserId`** — an injection can *request* an outward post but can't press the button. That right is checked BEFORE the row is claimed (`peekPendingPost`). Other same-channel replies post immediately.
-- **Opt-in gating** (`OPT_IN_CHANNEL`): an un-opted-in user who @s kyto gets `offerOptIn` (`lib/onboarding.ts`) — an in-thread reply with an "i accept" button. Membership of that channel is the allowlist (`lib/allowed-users.ts`).
+- **Opt-in gating** (`OPT_IN_CHANNEL`): an un-opted-in user who @s kyto gets `offerOptIn` — an in-thread reply with an "i accept" button. Membership of that channel is the allowlist (`lib/allowed-users.ts`).
 - **Command prefix — `@kyto!focusmode @person`** (`lib/commands.ts`, owner's ask 2026-08-05). A message whose body (after leading mentions) starts `!word` is answered by the HARNESS: `runCommandOrTurn` calls `handleCommand` first and returns the moment it says true, so a command **costs no model turn and never touches an in-flight turn's controller** — `stop` is the only one that deliberately reaches into a running turn. `!focusmode @a @b` / bare (= focus on me) / `!focusmode off`; same `thread.setFocus` state as the tool, so the owner stays exempt. `!` is the ONLY prefix (`?` was accepted for two days by mistake); an UNKNOWN `!word` falls through to a normal turn. A non-focused user can't clear a focus (they're filtered in `bot.ts` before this runs); that is the point of focus, not a bug.
+- **`@kyto!secret <question>` answers privately and leaves no trace** (`lib/secret.ts` + the `secret` path in `agent/index.ts`, owner's ask 2026-08-07). Three things together, or it isn't private: the QUESTION is deleted with the asker's OWN Slack token (a bot token deletes only its own messages; the owner's admin token would attribute every deletion to him), the answer is one ephemeral with **no DM fallback** (a DM to kyto is a thread kyto can read back), and the turn persists **no `thread_thinking`**, so "what did you just say?" next turn finds nothing. The delete happens BEFORE the model runs — a turn takes minutes and the question is the public part. A user who hasn't connected an account is **REFUSED with a link**, never answered: a half-secret leaves the private thing typed in the channel. When the deleted message was the thread ROOT the ephemeral goes to the CHANNEL, since `thread_ts` no longer resolves.
+- **Per-user Slack OAuth** (`lib/slack-oauth/`, `user_slack_grants`): a person authorizes kyto to act as THEM. Gated on `BYOK_ENCRYPTION_KEY` **plus** `SLACK_CLIENT_ID`/`SLACK_CLIENT_SECRET`; stores only AES-256-GCM ciphertext. The `state` is ENCRYPTED (not signed) and carries the user id the link was minted for — the callback refuses a grant whose authorizing account doesn't match, so a leaked link can't bind someone's token to another user's kyto identity. There is deliberately **no public `start` route**: the link is handed to that person in Slack, else anyone could mint one for any user id.
 - **`<>` at the front means "only the agents I mentioned"** (`isAddressedOnly`, owner's ask 2026-08-07). In a room with several bots, a message opening `<>` is answered ONLY if kyto was mentioned in that same message; other people's agents follow the same convention. Applied uniformly, DMs included. It suppresses the REPLY only — unlike `##`, the message stays in context. Slack escapes the characters, so `&lt;&gt;` is matched too.
 - **`##` messages are invisible to kyto.** A message that **starts with** `##` (after stripping leading mentions) is a human-only side-channel: `isHiddenFromBot` makes `shouldIgnore` skip it AND `buildPrompt` filter it out of replayed history. Only the FIRST content line counts — a `##` later (e.g. a markdown heading) does NOT hide it.
 - **No channel-join greeting, ever.** The `member_joined_channel` handler posts **nothing** — kyto once auto-joined a post-restricted channel, its greeting posted where normal members can't, and it got banned. Do NOT re-add any `member_joined_channel` post. **kyto only ever speaks in reply to being invoked, never unsolicited.**
-- **The bot's Slack username is a gorkie-era handle** (`gorkie__devansh_`, immutable) but its **display name is `kyto`**, so `@kyto` resolves to this bot (`U0BD3555UCQ`, app `A0BCA6D6GAV`). `auth.test`'s `user` field returns the username, not the display name — `annotateMentions` special-cases the bot's own id as `kyto`.
+- **The bot's Slack username is a gorkie-era handle** (`gorkie__devansh_`, immutable) but its **display name is `kyto`** (`U0BD3555UCQ`, app `A0BCA6D6GAV`). `auth.test`'s `user` field returns the username, so `annotateMentions` special-cases the bot's own id as `kyto`.
 - **Kyto is AGPL-3.0 and the repo is PUBLIC** (owner's call, 2026-07-31), at `github.com/Devansh-awat/kyto`, git history included. `LICENSE` is the AGPL text, `NOTICE` the copyright + attributions, gorkie-derived code stays MIT (`LICENSE-gorkie-MIT`), the AI SDK Apache-2.0. `prompts/slack.ts` points users at that repo and states the terms — keep that line truthful, and do NOT point anyone at `imdevarsh/gorkie-slack` as "kyto's source". Detail: `docs/reference/publishing.md`.
 - **Owner grounding**: `RequestHints.ownerUserId` renders into the context block as a plain statement of who owns/built kyto — without it kyto confabulated an origin and disputed the real owner's correction.
 
@@ -192,18 +186,36 @@ Read it before touching a tool. **Not loaded automatically** (same convention as
 - **A spent ChatGPT plan quota is PARKED, not retried** (`quota_resets_at`): the 429 carries a reset time, so the account is skipped until then rather than prepending a doomed attempt to every walk. Separate from `validationStatus` — a 429 is not an invalid login.
 - **A GATEWAY failure is replayed before it can cost a fallback** (`gateway-retry.ts`): a gateway-status response (408/502/503/504/520/522/524) is re-sent up to 2× inside the per-attempt fetch — safe because the model never ran. Every other failure routes away on the first try (`maxRetries` stays 1).
 - **The model can escalate itself to a stronger rung** (`upgradeModel`, core tool): the call ends the attempt like `skip`, and the turn continues on kimi-k3 → claude-sonnet-5 with the work so far replayed as carryover. Capped at ONCE per turn and 8 per UTC day workspace-wide — those rungs are ~20-50x the primary on the same $3/day cap. Every call is logged so the prompt can be tuned. **An upgrade STICKS to its thread** (`claimStickyUpgrade`, 30-min idle window): escalation used to last one turn, so the next message went back to the model that had just said it couldn't do it. A sticky turn claims the SAME daily budget as an explicit one, so it cannot outrun the cap; when the budget is spent the thread quietly drops back to the primary. Detail in MODELS.md.
-- **A tool call truncated mid-JSON is repaired** (`repairTruncatedToolCall`) — a huge `writeFile`/`postMessage` arg can hit `MAX_OUTPUT_TOKENS` mid-string.
+- **A tool call truncated mid-JSON is repaired** (`repairTruncatedToolCall`) — a huge arg can hit `MAX_OUTPUT_TOKENS` mid-string.
 - **Prompt caching** (1h TTL) + **`maxOutputTokens: 8000`** on the metered proxies defuse HackClub's pessimistic spend projection. **Nothing volatile may enter the system prompt** — it is one string, so one changed byte throws away the whole system+tools prefix; the per-turn clock and message id live in the user message's volatile tail. **Tool schemas serialize BEFORE the messages**, so `stabilizeToolOrder` (tested) keeps a tool loaded mid-turn APPENDED rather than spliced in — otherwise every `loadTools` call cost the rest of the turn its cache (`divergedAt: "tools(48)", cacheable: "0%"`). `cache-probe.ts` logs any step whose prompt is not a pure append.
 - **Gemini requires `thought_signature` replay** or every multi-step tool turn 400s.
 - **Per-attempt STALL watchdog** (`ATTEMPT_TIMEOUT_MS`, default **5m**, env `AGENT_ATTEMPT_TIMEOUT_MS`): an IDLE budget re-armed on every text delta, tool call, and tool result — a long-but-working turn is NOT killed, only a genuine stall (frozen SSE, hung tool). Aborts ONLY the attempt signal (not the turn controller), so it's not mistaken for a user interrupt. The `wait` tool extends it.
 
-### BYOK — a user's own model key
+### BYOK and Sign in with ChatGPT — a user's own model access
 
-A user adds their own provider key from **App Home "Model keys"**; their turns run on **their** key and model. Two invariants live here because they are about SECRETS, not routing: the whole feature is **gated on `BYOK_ENCRYPTION_KEY`** (min 32 chars, scrypt → AES-256-GCM, `lib/byok/crypto.ts`; unset = no App Home section and no per-user routing, because a secret is never stored in the clear — and changing it makes every stored secret unreadable), and **`packages/db` never returns a plaintext key** except through `listUserModelCredentialSecrets`; a key is never logged, never put in a prompt or sandbox env, never in a modal's `private_metadata`, and the UI shows only a `…tail`. **Service-fallback defaults, validity marking, and the `generateImage` exception are in [`.claude/MODELS.md`](./MODELS.md).**
+Both let a user's turns run on **their** credential instead of kyto's shared
+models: BYOK is a provider API key (**App Home "Model keys"**), the ChatGPT link
+is an OAuth'd Plus/Pro/Team subscription (`packages/ai/src/providers/chatgpt.ts`,
+`apps/bot/src/lib/chatgpt/`, `user_chatgpt_accounts`). What lives here rather
+than in MODELS.md is the SECRET handling, because that is what must not regress:
 
-### Sign in with ChatGPT (OAuth)
+- Both are **gated on `BYOK_ENCRYPTION_KEY`** (min 32 chars, scrypt →
+  AES-256-GCM, `lib/byok/crypto.ts`). Unset = no App Home section and no
+  per-user routing at all, because a secret is never stored in the clear;
+  `chatgptConfigured()` === `byokConfigured()`. Changing the key makes every
+  stored secret unreadable.
+- **`packages/db` never returns a plaintext key** except through
+  `listUserModelCredentialSecrets` / `getChatgptAccountSecret`. A key is never
+  logged, never put in a prompt or a sandbox env, never in a modal's
+  `private_metadata`; the UI shows only a `…tail`.
+- Linking ChatGPT is a **manual code paste**: OpenAI's Codex client only
+  registers a `localhost:1455` redirect a server bot can't listen on.
 
-A user links their own ChatGPT account (Plus/Pro/Team) from **App Home**; their turns run on that subscription. Provider + PKCE/attempt builders in `packages/ai/src/providers/chatgpt.ts` (`CHATGPT_PROVIDER = 'chatgpt-oauth'`); OAuth/routing in `apps/bot/src/lib/chatgpt/`; storage in `user_chatgpt_accounts`. Two things live here: it is **gated on `BYOK_ENCRYPTION_KEY`** (same AES-256-GCM scheme, public read path omits the blob — `chatgptConfigured()` === `byokConfigured()`), and linking is a **manual code paste** because OpenAI's Codex client only registers a `localhost:1455` redirect a server bot can't listen on. **Everything else — Responses API, `store:false`, Codex headers, the `MAX_OUTPUT_TOKENS` exemption, per-user ordering, quota parking, the model-slug rule — is in [`.claude/MODELS.md`](./MODELS.md). Read it before touching the attempt.**
+**Everything else — service-fallback defaults, validity marking, the
+`generateImage` exception, the Responses API branch, `store:false`, Codex
+headers, the `MAX_OUTPUT_TOKENS` exemption, per-user ordering, quota parking,
+the model-slug rule — is in [`.claude/MODELS.md`](./MODELS.md). Read it before
+touching either attempt.**
 
 **Every routing failure above is readable from `journalctl -u kyto.service`** — the turn's lifecycle lines and what each one tells you are in MODELS.md ("Turn logging").
 
@@ -212,28 +224,25 @@ A user links their own ChatGPT account (Plus/Pro/Team) from **App Home**; their 
 Config in `packages/sandbox/src/config.ts`. E2B backs the `bash`/file tools and the host tools that opt in (`browser`, `deploySite`, `getFile`, `uploadFile`).
 - **Lazy** (`LazySandbox`): `Sandbox.create` is deferred until a tool touches it, so chat-only turns cost zero E2B.
 - **Persistent per thread**: `destroy()` **pauses** rather than kills, the thread's `sandbox_id` is remembered in `thread_sandboxes`, and the next turn calls `Sandbox.connect(id)` (auto-resumes, ~450ms) for the same filesystem. This makes a **`bash` recurring reminder** useful (write/test a script, then schedule it) and is what `wait`'s `pauseSandbox` leans on.
-  - Persistence is opt-in via the injected **`SandboxStore`** (`load`/`save`/`clear`) so `packages/sandbox` stays DB-free. The bot's impl is `lib/sandbox/store.ts` (`threadSandboxStore`); a `LazySandbox` without a store is ephemeral.
+  - Persistence is opt-in via the injected **`SandboxStore`** so `packages/sandbox` stays DB-free (`lib/sandbox/store.ts`); a `LazySandbox` without a store is ephemeral.
   - **A thread, not a "conversation."** Every message roots its own thread, so a new top-level DM gets a **new** sandbox.
   - **The create-time `envs` are stale on a resumed sandbox.** Per-command env IS re-sent on every `run()`, so the short-lived Slack and GitHub proxy tokens stay fresh.
   - **A thread's sandbox is one mutable machine**; a live turn and a `bash`/`agent` reminder both reach for it. `acquireThreadSandbox`/`withThreadSandbox` serialize them (a turn holds the lock its whole duration).
   - **A paused sandbox costs storage**, so `startSandboxReaper()` (hourly) kills anything untouched for **30 days** (`SANDBOX_TTL_DAYS`). It is ACTIVITY-based (`touchThreadSandbox`), so a sandbox kept warm never ages out — that is how long a compromised one survives. `runOnce()` spins a throwaway sandbox for callers with no thread.
   - **ONE shared virtual display** (`packages/sandbox/src/display.ts`, `kyto-display` on PATH, installed at every materialization): the headful browser needs X, and letting each caller start its own had the tool's `xvfb-run -a` and a model script's `Xvfb :99` killing each other and leaving `/tmp/.X99-lock` behind, after which every start failed "Server is already active". The helper is idempotent and clears a stale lock; nothing else may start an X server.
-- **Memory = the Slack thread.** `buildPrompt` feeds the whole thread (`slack.fetchMessages`, capped); no verbatim TRANSCRIPT is persisted (the sandbox persists a *filesystem*, `langfuse` stays disabled). kyto DOES persist three kinds of DERIVED text — `thread_thinking` and `thread_summaries` (~30-day retention) and `memories` (until deleted) — all can paraphrase message content. Deliberate, not an oversight: the owner signed off and cleared it with Hack Club. Full position in `docs/reference/security.md`.
+- **Memory = the Slack thread.** `buildPrompt` feeds the whole thread (`slack.fetchMessages`, capped); no verbatim TRANSCRIPT is persisted. kyto DOES persist three kinds of DERIVED text — `thread_thinking`, `thread_summaries` (~30-day retention) and `memories` (until deleted) — all of which can paraphrase message content. Deliberate: the owner signed off and cleared it with Hack Club. Full position in `docs/reference/security.md`.
 - **…plus the last few turns' THINKING** (`lib/agent/thinking.ts`). Slack records only what kyto *said*, so without this every turn re-derived the previous turn's conclusions. `renderStream`'s `onReasoning` collects it; `rememberThinking` keeps the last 3 turns per thread, injected as `<your_previous_thinking>`. **Persisted** (`thread_thinking`, ~30-day retention, daily `startThinkingReaper`) so it survives a restart. Only the attempt that ANSWERED leaves its thinking, so a spiral can't seed the next turn.
 - **…plus a COMPACTED digest of whatever no longer fits** (`lib/agent/compaction.ts` + `compaction-plan.ts`, `thread_summaries`). `buildPrompt` fetches up to `MAX_COMPACTION_MESSAGES` (400), replays the newest `MAX_THREAD_MESSAGES` (100) verbatim, and folds the rest into a running summary injected as `<earlier_in_this_thread>` — past the cap, messages used to just vanish and the model contradicted decisions it could no longer see. **The block ALWAYS states the count**, summary or not. **Incremental**: only newly-overflowed messages are folded, once `COMPACT_BATCH` (25) accumulate (a thread's FIRST overflow compacts immediately). Runs on `subagentAttempt` (the Gemini key), NOT the HackClub cap. Reaped by `startSummaryReaper`; erased like `thread_thinking`.
-
-## Owner dashboard
-
-`lib/dashboard/`, mounted on the **sites** Bun.serve at **`/_dashboard`** (shares `SITES_PUBLIC_HOST`; the sites name regex can't produce `_dashboard`, so no collision). Server-rendered HTML, no client framework or external assets.
-
-- **Gated on `DASHBOARD_PASSWORD`** (min 12 chars). Unset = the route returns null and the sites server falls through, as if never mounted.
-- One password stands between the public internet and a privilege grant: constant-time compare, **global lockout after 8 failures** (one legitimate user, so a global lock costs nothing and no per-IP bookkeeping can be spoofed), in-memory sessions (12h), `HttpOnly; Secure; SameSite=Strict` cookie, **per-session CSRF token on every mutation**.
-- Two jobs: **promote a memory to global** (read the body first — it becomes prompt text on everyone's turns) and **grant/revoke GitHub trust**, incl. queued `github_requests`.
-- **Approving a GitHub request grants trust and stops there** — it does NOT replay the command (composed by a model in a thread that has since moved on; re-running it blind turns a click into an action nobody reviewed). The person asks kyto again.
 
 ## Operations — manifest, host, debugging, database
 
 Moved to **[`.claude/OPS.md`](./OPS.md)** (not loaded automatically). Read it when
 you are: syncing `slack-manifest.json` or adding a Slack scope; touching anything
-host- or deploy-shaped; diagnosing "kyto isn't responding"; or adding a table or
-column. The after-every-change workflow at the top of this file is unaffected.
+host- or deploy-shaped; diagnosing "kyto isn't responding"; adding a table or
+column; or touching the **owner dashboard** (`/_dashboard`), whose whole section
+moved there. Its two load-bearing rules stay here: one password stands between
+the public internet and a privilege grant (constant-time compare, global lockout
+after 8 failures, per-session CSRF on every mutation), and **approving a queued
+GitHub request grants trust and stops there** — it does NOT replay the command,
+because re-running a model's command from a thread that has moved on turns a
+click into an action nobody reviewed.

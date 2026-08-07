@@ -27,3 +27,12 @@
 ## Database notes
 
 New tables/columns are pushed with one-off SQL — `drizzle-kit push` prompts interactively (a rename decision) and hangs in a non-TTY shell. Use `ALTER TABLE … ADD COLUMN IF NOT EXISTS` / `CREATE TABLE IF NOT EXISTS`; `db:generate`/`db:push` work for a human at the CLI. `authorization` is reserved — quote it in DDL. `sandbox_sessions` is **orphaned scaffolding**; `thread_sandboxes` is live.
+
+## Owner dashboard
+
+`lib/dashboard/`, mounted on the **sites** Bun.serve at **`/_dashboard`** (shares `SITES_PUBLIC_HOST`; the sites name regex can't produce `_dashboard`, so no collision). Server-rendered HTML, no client framework or external assets.
+
+- **Gated on `DASHBOARD_PASSWORD`** (min 12 chars). Unset = the route returns null and the sites server falls through, as if never mounted.
+- One password stands between the public internet and a privilege grant: constant-time compare, **global lockout after 8 failures** (one legitimate user, so a global lock costs nothing and no per-IP bookkeeping can be spoofed), in-memory sessions (12h), `HttpOnly; Secure; SameSite=Strict` cookie, **per-session CSRF token on every mutation**.
+- Two jobs: **promote a memory to global** (read the body first — it becomes prompt text on everyone's turns) and **grant/revoke GitHub trust**, incl. queued `github_requests`.
+- **Approving a GitHub request grants trust and stops there** — it does NOT replay the command (composed by a model in a thread that has since moved on; re-running it blind turns a click into an action nobody reviewed). The person asks kyto again.
