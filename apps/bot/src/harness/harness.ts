@@ -27,6 +27,11 @@ interface RawSlackFile {
 
 const USER_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
+// Slack's own ceiling on `limit` for the conversations.* read methods. Asking
+// for more is not an error, it just silently returns fewer — so paging a long
+// thread with a bigger number costs the same calls and looks like it worked.
+const SLACK_MAX_PAGE = 1000;
+
 // Slack keeps a single native stream (chat.startStream → appendStream) open only
 // ~5 minutes; past that the stream expires and further appends are dropped. A
 // turn that runs a long stretch of tools would otherwise have its live plan card
@@ -256,6 +261,12 @@ export class SlackHarness {
    * Thread history, oldest first within the returned slice. The default
    * `backward` direction keeps the NEWEST `limit` messages (following cursors
    * to the end of the thread, bounded); `forward` returns the first page.
+   *
+   * `oldest` starts the walk at a Slack ts instead of the top of the thread,
+   * which is what makes reading "everything since X" cheap: Slack can only page
+   * a thread FORWARD, so without it the cost of reaching the newest message is
+   * the whole thread every time. A returned `nextCursor` means the page budget
+   * ran out before the end — the caller did NOT get the tail.
    */
   async fetchMessages(
     threadId: string,
@@ -263,24 +274,30 @@ export class SlackHarness {
       cursor,
       direction = 'backward',
       limit = 100,
+      maxPages,
+      oldest,
     }: {
       cursor?: string;
       direction?: 'backward' | 'forward';
       limit?: number;
+      maxPages?: number;
+      oldest?: string;
     } = {}
   ): Promise<{ messages: Message[]; nextCursor?: string }> {
     const { channel, threadTs } = this.decodeThreadId(threadId);
     if (!threadTs) {
       return { messages: [] };
     }
-    const maxPages = direction === 'backward' ? 10 : 1;
+    const pages = maxPages ?? (direction === 'backward' ? 10 : 1);
+    const pageSize = Math.min(Math.max(limit, 1), SLACK_MAX_PAGE);
     let raw: RawSlackMessage[] = [];
     let nextCursor = cursor;
-    for (let page = 0; page < maxPages; page += 1) {
+    for (let page = 0; page < pages; page += 1) {
       const result = await this.webClient.conversations.replies({
         channel,
         ...(nextCursor ? { cursor: nextCursor } : {}),
-        limit,
+        ...(oldest ? { oldest } : {}),
+        limit: pageSize,
         ts: threadTs,
       });
       raw = raw.concat((result.messages ?? []) as RawSlackMessage[]);

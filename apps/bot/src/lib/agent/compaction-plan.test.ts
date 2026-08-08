@@ -14,83 +14,120 @@ function messages(count: number, offset = 0): CompactableMessage[] {
   }));
 }
 
+/** Slack ids are timestamps, which is what the incremental fetch relies on. */
+function timestamps(count: number, offset = 0): CompactableMessage[] {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `17108186${String(offset + index).padStart(4, '0')}.000100`,
+    rendered: `@someone: message ${offset + index}`,
+  }));
+}
+
 describe('planCompaction', () => {
-  test('does nothing when there is no overflow', () => {
+  test('does nothing when there is nothing earlier at all', () => {
     expect(planCompaction({ overflow: [] })).toBeUndefined();
   });
 
   test('summarizes everything the first time a thread overflows', () => {
-    const overflow = messages(30);
-    const plan = planCompaction({ overflow });
-    expect(plan?.kind).toBe('summarize');
-    if (plan?.kind !== 'summarize') {
-      throw new Error('expected a summarize plan');
-    }
-    expect(plan.batch).toHaveLength(30);
-    expect(plan.previous).toBeUndefined();
-    expect(plan.throughMessageId).toBe('m29');
+    const plan = planCompaction({ overflow: messages(30) });
+    expect(plan?.count).toBe(30);
+    expect(plan?.passes).toHaveLength(1);
+    expect(plan?.passes[0]).toHaveLength(30);
+    expect(plan?.previous).toBeUndefined();
   });
 
   test('summarizes a first overflow even below the batch threshold', () => {
     // No stored summary means the thread has NEVER been compacted, so waiting
     // would leave the model with a bare count for the next 24 turns.
-    const plan = planCompaction({ overflow: messages(1) });
-    expect(plan?.kind).toBe('summarize');
+    expect(planCompaction({ overflow: messages(1) })?.passes).toHaveLength(1);
   });
 
   test('reuses the stored summary until enough new messages accumulate', () => {
-    const overflow = messages(COMPACT_BATCH + 5);
     const plan = planCompaction({
-      overflow,
-      stored: { summary: 'earlier stuff', throughMessageId: 'm5' },
+      overflow: messages(COMPACT_BATCH + 5),
+      stored: {
+        coveredCount: 6,
+        summary: 'earlier stuff',
+        throughMessageId: 'm5',
+      },
     });
     // 24 pending (m6..m29) is under the threshold.
-    expect(plan).toEqual({ kind: 'reuse', summary: 'earlier stuff' });
+    expect(plan?.passes).toEqual([]);
+    expect(plan?.previous).toBe('earlier stuff');
+    // The count still moves even though the digest does not.
+    expect(plan?.count).toBe(30);
   });
 
   test('folds new messages into the stored summary once the batch fills', () => {
-    const overflow = messages(60);
     const plan = planCompaction({
-      overflow,
-      stored: { summary: 'earlier stuff', throughMessageId: 'm9' },
+      overflow: messages(60),
+      stored: {
+        coveredCount: 10,
+        summary: 'earlier stuff',
+        throughMessageId: 'm9',
+      },
     });
-    if (plan?.kind !== 'summarize') {
-      throw new Error('expected a summarize plan');
-    }
-    expect(plan.previous).toBe('earlier stuff');
+    expect(plan?.previous).toBe('earlier stuff');
     // Only m10..m59 — the already-covered prefix is not paid for twice.
-    expect(plan.batch).toHaveLength(50);
-    expect(plan.batch[0]?.id).toBe('m10');
-    expect(plan.throughMessageId).toBe('m59');
+    expect(plan?.passes[0]).toHaveLength(50);
+    expect(plan?.passes[0]?.[0]?.id).toBe('m10');
   });
 
-  test('treats an unlocatable stored summary as covering nothing', () => {
-    // The row aged out or the thread changed underneath us. Folding new messages
-    // into a summary whose starting point we cannot find would double-count or
-    // skip a stretch, so start over rather than guess.
-    const overflow = messages(40);
+  test('counts what an earlier turn digested and never re-fetched', () => {
+    // The whole point of the incremental fetch: `overflow` holds only the
+    // messages since the last pass, so the block's count has to come from the
+    // stored total plus those, not from what happens to be in hand.
+    const plan = planCompaction({
+      overflow: messages(30, 900),
+      stored: {
+        coveredCount: 900,
+        summary: 'the first 900',
+        throughMessageId: 'm899',
+      },
+    });
+    expect(plan?.count).toBe(930);
+  });
+
+  test('ignores messages the digest already covers, by timestamp', () => {
+    // conversations.replies prepends the thread ROOT to every page, so an
+    // incremental read always hands back one message from before the boundary.
+    const overflow = timestamps(40);
     const plan = planCompaction({
       overflow,
-      stored: { summary: 'stale', throughMessageId: 'not-in-this-thread' },
+      stored: {
+        coveredCount: 10,
+        summary: 'earlier stuff',
+        throughMessageId: overflow[9]?.id ?? '',
+      },
     });
-    if (plan?.kind !== 'summarize') {
-      throw new Error('expected a summarize plan');
-    }
-    expect(plan.previous).toBeUndefined();
-    expect(plan.batch).toHaveLength(40);
+    expect(plan?.passes[0]).toHaveLength(30);
+    expect(plan?.passes[0]?.[0]?.id).toBe(overflow[10]?.id);
+    expect(plan?.count).toBe(40);
   });
 
-  test('caps one pass and keeps the messages nearest the live conversation', () => {
-    const overflow = messages(MAX_MESSAGES_PER_PASS + 50);
-    const plan = planCompaction({ overflow });
-    if (plan?.kind !== 'summarize') {
-      throw new Error('expected a summarize plan');
-    }
-    expect(plan.batch).toHaveLength(MAX_MESSAGES_PER_PASS);
-    expect(plan.batch.at(-1)?.id).toBe(`m${MAX_MESSAGES_PER_PASS + 49}`);
-    // The pass is capped, but the marker still advances to the newest message —
-    // otherwise the skipped prefix would be retried forever.
-    expect(plan.throughMessageId).toBe(`m${MAX_MESSAGES_PER_PASS + 49}`);
+  test('treats an unlocatable stored summary as covering nothing new', () => {
+    // The thread changed underneath us. Folding into a digest whose starting
+    // point we cannot find would double-count or skip a stretch.
+    const plan = planCompaction({
+      overflow: messages(40),
+      stored: {
+        coveredCount: 0,
+        summary: 'stale',
+        throughMessageId: 'not-in-this-thread',
+      },
+    });
+    expect(plan?.passes[0]).toHaveLength(40);
+  });
+
+  test('splits a backlog into passes instead of dropping all but one', () => {
+    // The old behaviour clamped to the newest MAX_MESSAGES_PER_PASS and moved
+    // the marker past the rest, so a long-idle thread lost everything in
+    // between — permanently, since the marker never went back.
+    const total = MAX_MESSAGES_PER_PASS * 2 + 50;
+    const plan = planCompaction({ overflow: messages(total) });
+    expect(plan?.passes).toHaveLength(3);
+    expect(plan?.passes.flat()).toHaveLength(total);
+    expect(plan?.passes[0]?.[0]?.id).toBe('m0');
+    expect(plan?.passes.at(-1)?.at(-1)?.id).toBe(`m${total - 1}`);
   });
 });
 
@@ -115,6 +152,21 @@ describe('renderCompactedBlock', () => {
     });
     expect(block).toContain('devansh asked for X');
     expect(block).toContain('compacted digest, not a transcript');
+  });
+
+  test('says how much of the history the digest does not cover yet', () => {
+    const block = renderCompactedBlock({
+      count: 1500,
+      summary: 'the first 300',
+      undigested: 1200,
+    });
+    expect(block).toContain('1500 earlier message(s)');
+    expect(block).toContain('1200 most recent of those are not in the digest');
+  });
+
+  test('stays quiet about the gap when there is none', () => {
+    const block = renderCompactedBlock({ count: 10, summary: 'all of it' });
+    expect(block).not.toContain('not in the digest');
   });
 
   test('tells the model the replay is not the start of the conversation', () => {

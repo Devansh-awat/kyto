@@ -3,11 +3,12 @@ import {
   mrkdwnToMarkdown,
   type ThreadHandle as Thread,
 } from '@/harness';
-import { compactOverflow } from '@/lib/agent/compaction';
+import { compactOverflow, loadThreadSummary } from '@/lib/agent/compaction';
 import { isFocusAllowed } from '@/lib/agent/focus';
 import { annotateMentions } from '@/lib/agent/mentions';
 import { recallThinking, renderThinking } from '@/lib/agent/thinking';
 import { slack } from '@/lib/chat';
+import logger from '@/lib/logger';
 import { isHiddenFromBot, rawSlackText } from '@/lib/utils/message';
 
 // We never persist a session, so the whole Slack thread is the agent's only
@@ -19,11 +20,17 @@ const MAX_THREAD_MESSAGES = 100;
 // tail of a conversation with no indication it had a beginning, and cheerfully
 // contradicted decisions made earlier in the same thread.
 //
-// Bounded, not unlimited: `fetchMessages` pages until this many are in hand, so
-// a bigger number is real Slack API work on every turn. 4x the replay window
-// covers any thread anyone has actually held with kyto; past it the very oldest
-// messages are still lost, and the block's count says how many were kept.
-const MAX_COMPACTION_MESSAGES = 400;
+// The whole thread, up to a ceiling. It used to be 400 — four times the replay
+// window — which meant a 1,500-message thread had ~1,100 messages that were not
+// summarized and not counted, just absent. They are only read ONCE: after the
+// first pass the read starts at the last digested message (`oldest` below), so
+// the steady-state cost is the replay window, not the thread.
+const MAX_HISTORY_MESSAGES = 20_000;
+// Slack can only page a thread forward, so reaching the newest message of a
+// never-compacted thread costs one call per 1,000 messages. This bounds that
+// first walk. Past it the fetch stops short of the end — logged, because the
+// replay window would then not be the live conversation.
+const MAX_HISTORY_PAGES = 20;
 // The bot's Slack username is a leftover gorkie-era handle; label its own
 // authored messages as kyto so it doesn't think "gorkie" spoke (mirrors the
 // same special-case in annotateMentions).
@@ -70,9 +77,23 @@ export async function buildPrompt(
     // sees what other people said in a focused thread (not just declines to
     // reply). Its own messages and the owner's are always kept.
     const focusState = await thread.state.catch(() => null);
+    // Start the read at the newest message an earlier turn already digested.
+    // Everything before it is in the summary, so re-reading it would be Slack
+    // API work whose only output we already have written down.
+    const stored = await loadThreadSummary(thread.id);
     const fetched = await slack
-      .fetchMessages(thread.id, { limit: MAX_COMPACTION_MESSAGES })
+      .fetchMessages(thread.id, {
+        limit: MAX_HISTORY_MESSAGES,
+        maxPages: MAX_HISTORY_PAGES,
+        ...(stored ? { oldest: stored.throughMessageId } : {}),
+      })
       .catch(() => undefined);
+    if (fetched?.nextCursor) {
+      logger.warn(
+        { threadId: thread.id },
+        '[prompt] thread is longer than the history ceiling; the oldest part was not read'
+      );
+    }
     const prior = (fetched?.messages ?? []).filter(
       (entry): entry is Message =>
         entry.id !== message.id &&
@@ -88,7 +109,7 @@ export async function buildPrompt(
       0,
       Math.max(prior.length - replayed.length, 0)
     );
-    if (overflow.length > 0) {
+    if (overflow.length > 0 || stored) {
       const rendered = await Promise.all(
         overflow.map(async (entry) => ({
           id: entry.id,
@@ -98,6 +119,7 @@ export async function buildPrompt(
       compacted = await compactOverflow({
         overflow: rendered,
         threadId: thread.id,
+        ...(stored ? { stored } : {}),
       });
     }
     if (replayed.length > 0) {
