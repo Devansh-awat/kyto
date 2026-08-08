@@ -252,38 +252,58 @@ days, each paying full price for its whole remaining length.
 `stabilizeToolOrder` now appends instead. Watch
 `journalctl -u kyto.service | grep 'prompt prefix changed'`: it should go quiet.
 
-**Compaction on the 1500-message thread WORKS, with one real limit
-(checked 2026-08-07).** `slack:C0BDH1FNCTX:1785766068.566799` carries a
-1,648-char summary covering 298 messages. But `MAX_COMPACTION_MESSAGES` is 400
-and `MAX_THREAD_MESSAGES` is 100, so kyto fetches at most the last 400 and folds
-~300 of them — everything older than that is not summarized, it is simply never
-seen. At 1500 messages that is ~1100 invisible. The block's count is honest
-about what it covers, but it does NOT say "and there are 1100 more". Two options
-when you want to fix it: raise the fetch cap (more Slack API calls per turn), or
-make the summary genuinely running by folding each batch into the previous
-summary as the thread grows past 400. The second is the right one.
-regarding this, compacter should see the full history, or incase compaction is running the second or later time, all history from the last compaction
+**Compaction now reads the WHOLE thread (done 2026-08-08).** Your note — "the
+compacter should see the full history, or if it is running the second or later
+time, all history from the last compaction" — is exactly what shipped, and the
+second half is what makes the first affordable. The read now STARTS at the
+newest message the stored digest already covers (`fetchMessages`'s `oldest`), so
+a thread's history is read once and every turn after that costs about the replay
+window. The old cap of 400 is gone; the ceiling is 20,000 messages, and past
+that kyto logs that it could not reach the tail. A backlog is split into passes
+that each extend the previous digest and each SAVE, so a long-idle thread
+catches up over a few turns instead of losing everything but the newest 200, and
+more than one pass runs in the background so it never stalls a reply. The block
+now counts the whole history, not the slice in hand, and says how much of it is
+not digested yet.
 
-what is the difference betweek slackscript tool and slack cli, and maybe we should tell model how to use as this happens
-Running commandcd /home/user && slack conversations.replies '{"channel":"C06QV2T1P4G","ts":"1710818631.730789"…
-Error: The socket connection was closed unexpectedly. For more information, pass `verbose: …
-ThinkingHmm, the slack proxy may be having issues. Let me try a simpler call.
-Running commandcd /home/user && slack conversations.replies '{"channel":"C06QV2T1P4G","ts":"1710818631.730789"…
-Completed.
-ThinkingHmm, empty output with exit code 0. Let me check verbose.
-Running commandcd /home/user && slack conversations.replies --verbose '{"channel":"C06QV2T1P4G","ts":"17108186…
-Completed.
-Thinkinginvalid_json_body. Hmm, maybe the ts field format. Let me try with the slashes url format. Actually the previous turn suggested using chat SDK ids. The readConversationHistory tool works. But for aggregate counting, I need the API directly.
+The 1500-message thread will fix itself on its next turn: its stored digest
+covers 298 messages, and the fetch will now start there and fold in the ~1,200
+after it, six passes in the background. Watch
+`journalctl -u kyto.service | grep '\[compaction\]'`.
 
-The slack CLI with conversations.replies gives invalid_json_body. Maybe the channel needs to be C... and ts as string. Let me try different arg format. Maybe it expects the args differently. Let me check how slack CLI works. Let me try slack conversations.replies '{"channel":"C06QV2T1P4G","ts":1710818631.730789}'. The ts as float.
+**Your 1-million-message thread question, answered.** If you mention kyto near
+the END of a huge thread, it sees your message verbatim — the last 100 messages
+are always replayed in full, so nothing about compaction can hide the thing you
+just said. What compaction changes is everything OLDER. It would compact, but
+honestly: Slack can only page a thread forward, so reading a million messages is
+a thousand API calls. Kyto stops at 20,000 and logs it. In that (unreal) case
+the digest would cover the oldest 20k rather than the newest, which is the wrong
+end — if a thread that big ever shows up, the fix is to anchor the first read
+near the end rather than raising the ceiling.
 
-Actually invalid_json_body suggests JSON parse error. Maybe the CLI takes args differently, like separate. Let me check the slack CLI usage.
-Running commandcd /home/user && slack --help 2>&1 | head -40; echo "==="; slack conversations.replies '{"chann…
-Completed.
-ThinkingThe slack CLI seems to only allow certain methods (read-only proxy). conversations.replies maybe not allowed/not proxied. Let me use the slackScript tool instead, which runs a read-only bash script against the Slack API. Let me load it.
+**The `slack` CLI vs the `slackScript` tool, answered — and the CLI now explains
+itself (2026-08-08).** They are not alternatives: `slackScript` is the TOOL that
+runs a bash script in the sandbox, and `slack` is the COMMAND that script calls.
+The same command is on PATH for the plain `bash` tool and for scheduled `bash`
+reminders. Both go through the same host-side read-only proxy, so neither can
+post anything and neither holds the Slack token.
 
-Actually, let me check what methods the slack CLI supports by trying to see. Let me use slackScript tool. Load tools first.
+What went wrong in the turn you pasted was smaller than it looked. The model
+tried `slack conversations.replies --verbose '{...}'`; the helper takes exactly
+two arguments, so `--verbose` became the request body, and the proxy correctly
+answered `invalid_json_body`. The model read that as "conversations.replies is
+not proxied" — it is, and always was — and spent three more steps guessing at
+the argument format. So the helper now behaves like a real command: `slack
+--help` prints the usage and every allowed method, a flag is rejected as a flag,
+a method that is not proxied is named locally with the list, and a second
+argument that is not valid JSON says so. The tool description and the sandbox
+prompt now say "no flags, this is not curl and not the official Slack CLI".
 
-secondly i mentioned it in a 1mil message thread(not in orignal post but later near end) would it compact then?
-
-remove anything saying coding agent from the docs, and fix README.md as i think they say imdevarsh repo
+**The docs described a runtime that no longer exists (fixed 2026-08-08).** README
+and everything under `docs/` still described the Vercel Chat SDK, AI SDK Harness
+and Pi — all removed in the rewrite — so pages like "Pi provides the coding
+tools" were fiction on a public repo. README also pointed at
+`imdevarsh/kyto-slack` for cloning and claimed MIT; it now points at
+`Devansh-awat/kyto` and states AGPL-3.0. `docs/reference/harness.md` keeps the
+phrase "coding agents" on purpose: there it means Claude Code, Codex and
+OpenCode, which is what kyto is being compared against.
