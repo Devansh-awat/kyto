@@ -3,12 +3,23 @@ title: Streaming
 description: Assistant text, task rows, and Slack limits.
 ---
 
-Kyto renders a turn through two Slack output paths:
+Kyto renders a turn through two Slack output paths, both on Slack's native
+streaming API (`chat.startStream` / `appendStream`):
 
-- assistant text is posted as normal Slack replies through `createReply`;
-- reasoning and tool activity are rendered as task rows through Chat SDK `StreamingPlan`.
+- assistant text is streamed as the reply, split across Slack messages at
+  natural boundaries;
+- reasoning and tool activity are rendered as task cards — `task_update` chunks
+  in plan display mode — above it.
 
-> **Slack message limits:** Long native Slack stream buffers can fail with `msg_too_long`. Kyto keeps assistant text outside the native stream buffer so long answers can be split into multiple Slack messages.
+> **Slack message limits:** a long native stream buffer fails with
+> `msg_too_long`, so assistant text is kept out of one unbounded buffer and long
+> answers are split into several Slack messages.
+
+The full detail of how a turn renders — multi-block segmentation, the Thinking
+card's lifecycle and its `· upgraded` / `· fallback` titles, the reasoning-row
+open/close invariant, stream-card rotation before Slack's ~5-minute expiry, both
+skip paths, hidden hallucinated calls, and the usage footer — lives in
+[`.claude/STREAMING.md`](https://github.com/Devansh-awat/kyto/blob/main/.claude/STREAMING.md).
 
 ## Text Replies
 
@@ -29,7 +40,7 @@ flowchart TD
 
 ## Task Rows
 
-`apps/bot/src/lib/ai/stream/index.ts` consumes AI SDK stream parts and turns reasoning and tool activity into Chat SDK task updates. These rows render above the assistant reply.
+`apps/bot/src/lib/ai/stream/index.ts` consumes the AI SDK `fullStream` and turns reasoning and tool activity into task rows. These render above the assistant reply.
 
 | Stream part | Slack behavior |
 | --- | --- |

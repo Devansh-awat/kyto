@@ -11,7 +11,7 @@ Kyto runs as a long-lived Bun process from `apps/bot`. It uses Slack Socket Mode
 - PostgreSQL
 - a Slack app created from `slack-manifest.json`
 - an E2B API key
-- provider keys for the configured Pi attempts
+- at least one model provider key (see `packages/ai/src/providers/`)
 - an Exa API key
 
 ## Local Run
@@ -56,11 +56,7 @@ The template installs the runtime environment used by every sandbox: Linux packa
 
 ## Reference Source
 
-When behavior is unclear, inspect upstream source:
-
-| Topic | Upstream source |
-| --- | --- |
-| Chat routing and subscriptions | `vercel/chat` |
-| Chat tools and StreamingPlan | `vercel/chat` |
-| HarnessAgent lifecycle | `vercel/ai` |
-| Pi harness adapter | `vercel/ai` |
+The Slack harness and the agent loop are this repo's own code — there is no
+upstream framework to consult for them. Read `apps/bot/src/harness/` and
+`apps/bot/src/lib/agent/`. For the model layer, the upstream is the Vercel AI
+SDK (`vercel/ai`): `streamText`, `fullStream` parts, and tool definitions.

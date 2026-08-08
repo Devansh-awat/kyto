@@ -1,60 +1,60 @@
 ---
-title: Sandbox And Sessions
-description: E2B lifecycle, session files, recovery, and skills.
+title: Sandbox
+description: E2B lifecycle, per-thread persistence, and how it reaches Slack and GitHub.
 ---
 
-Each Slack conversation gets a persistent E2B Linux workspace. Pi runs on the bot host and uses the sandbox for file and shell operations.
+Each Slack **thread** gets its own E2B Linux workspace. The agent loop runs on
+the bot host and uses the sandbox for file and shell operations, through the
+`bash`, `readFile`, `writeFile` and `editFile` tools plus the host tools that
+opt in (`browser`, `deploySite`, `getFile`, `uploadFile`, `codeMode`).
 
-## Runtime Layout
+Configuration lives in `packages/sandbox/src/config.ts`.
 
-```mermaid
-flowchart TB
-  subgraph Host["bot host"]
-    Pi["Pi Node library"]
-    Mirror["host workspace mirror"]
-    Sessions["host session files"]
-  end
+## Lazy
 
-  subgraph E2B["E2B sandbox"]
-    Workdir["/home/user/pi-<thread>"]
-    Skills["/home/user/.agents/skills"]
-    Files["workspace files"]
-  end
+`LazySandbox` defers `Sandbox.create` until a tool actually touches the sandbox,
+so a chat-only turn costs no E2B time at all.
 
-  Pi --> Mirror
-  Pi --> Sessions
-  Mirror <-->|sync| Workdir
-  Pi -->|read/write/edit/bash| E2B
-  Skills --> Pi
-  Files --> Workdir
-```
+## Persistent Per Thread
 
-## Sandbox Provider
+Ending a turn **pauses** the sandbox rather than killing it. The thread's
+`sandbox_id` is remembered in `thread_sandboxes`, and the next turn connects to
+the same id — it auto-resumes in around half a second, with the same filesystem.
+That is what makes a recurring `bash` reminder useful: write and test a script
+once, then schedule it, and every fire runs in the same box.
 
-`packages/sandbox/src/provider.ts` implements the Harness sandbox provider. It can create a sandbox, resume one by id, detect a stale or missing sandbox, create a replacement, pause it, and update the `sandbox_sessions` row.
+- A **thread**, not a "conversation": every message roots its own thread, so a
+  new top-level DM gets a new sandbox.
+- Persistence is opt-in through an injected `SandboxStore`, so
+  `packages/sandbox` stays free of the database.
+- The create-time environment is stale on a resumed sandbox, so per-command env
+  is re-sent on every run. That is how short-lived proxy tokens stay fresh.
+- One sandbox is one mutable machine, and a live turn and a scheduled job can
+  both reach for it, so access is serialized per thread.
+- A paused sandbox costs storage, so an hourly reaper kills anything untouched
+  for 30 days. It is **activity**-based, so a sandbox kept warm never ages out.
+- There is ONE shared virtual display (`kyto-display` on PATH). The headful
+  browser needs X, and letting each caller start its own left stale locks that
+  broke every later start.
 
-`packages/sandbox/src/session.ts` adapts E2B to the sandbox operations the agent needs: read files, write files, run commands, spawn processes, and restrict paths.
+## Reaching Slack And GitHub
 
-## Session Persistence
+No credential enters the sandbox.
 
-There are two related pieces of state:
+- **Slack**: a `slack <method> '<json>'` command on PATH posts to a host-side
+  proxy that forwards only allow-listed READ-ONLY methods and attaches the bot
+  token itself. Even a leaked per-turn proxy secret can never post or delete.
+  It is on PATH, not injected as a shell function, so the plain `bash` tool and
+  a scheduled reminder can use it too. Run `slack --help` in the sandbox for the
+  usage and the method list.
+- **GitHub**: `gh` and `git` are pointed at a host-side proxy that speaks the
+  GitHub Enterprise API shape. The host classifies each request, applies the
+  write gate, and attaches the PAT. A bare `curl api.github.com` from inside the
+  sandbox is anonymous.
 
-| State | Purpose |
-| --- | --- |
-| `resumeState` | Harness/Pi pointer used to reopen a session. |
-| Pi session file | Actual transcript and tool history, mirrored into Postgres for recovery. |
-
-1. Load the stored resume state and session-file mirror.
-2. Create or resume the E2B sandbox.
-3. Re-seed the mirrored Pi session file when the sandbox needs it.
-4. Open the Harness session.
-5. Detach, mirror the updated session file, store resume state, and pause the sandbox.
-
-## Skills
-
-Skill instructions live on the host under `packages/sandbox/skills/`. They are passed into Harness as skills, and the Pi adapter materializes them inside the sandbox under `$HOME/.agents/skills`.
-
-The E2B template installs the runtime packages those skills need, such as `agent-browser` and `agentmail`. The template does not need to be the source of truth for `SKILL.md` files.
+A git repo that lands in the sandbox is disarmed by code, not by asking the
+model: hooks are disabled globally and stripped per repo, and command-executing
+config keys are removed.
 
 ## Template Build
 
@@ -64,4 +64,5 @@ Build the E2B template when sandbox runtime dependencies change:
 bun run build:template
 ```
 
-The build script loads `apps/bot/.env` through `dotenv` so `E2B_API_KEY` stays outside tracked files.
+The build script loads `apps/bot/.env` through `dotenv`, so `E2B_API_KEY` stays
+out of tracked files.

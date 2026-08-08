@@ -1,67 +1,70 @@
 ---
 title: Bot Runtime
-description: How chat events become Kyto turns.
+description: How Slack events become Kyto turns.
 ---
 
-Slack events enter through Chat SDK's Slack adapter in Socket Mode. The adapter normalizes Slack events into `Thread` and `Message` objects; `apps/bot` decides whether to answer and starts the agent turn.
+`apps/bot/src/bot.ts` owns the Socket Mode connection and routes every event.
+`apps/bot/src/harness/` is the Slack layer under it: the Web API facade, thread
+handles, and the mrkdwn↔markdown conversion.
 
 ## Entry Points
 
-| Handler | Purpose |
-| --- | --- |
-| `onNewMention` | A user mentioned Kyto. |
-| `onDirectMessage` | A user sent Kyto a DM. |
-| `onSubscribedMessage` | A message arrived in a thread Kyto follows. |
-| `onAction('stop_turn')` | A user clicked the active-turn stop button. |
+Everything routes off `message` events. `app_mention` events are deliberately
+**ignored** — a mention is just a `message` whose text contains the bot id, and
+handling both is what caused the old duplicate-reply problem.
 
 ```mermaid
 flowchart TD
-  Event["chat event"] --> Ignore{"ignore?"}
+  Event["message event"] --> Ignore{"ignore?"}
   Ignore -->|yes| End["return"]
-  Ignore -->|no| Route{"event kind"}
-  Route --> Mention["mention"]
-  Route --> DM["direct message"]
-  Route --> Subscribed["subscribed thread"]
-  Mention --> Root{"thread root?"}
-  Root -->|yes| Subscribe["subscribe thread"]
-  Root -->|no| Turn["run turn"]
-  Subscribe --> Turn
-  DM --> Turn
-  Subscribed --> Allowed{"thread opted in or message mentions bot?"}
-  Allowed -->|yes| Turn
-  Allowed -->|no| End
+  Ignore -->|no| Command{"starts with !word?"}
+  Command -->|yes| Handled["harness answers it — no model turn"]
+  Command -->|no| Turn["run turn"]
 ```
 
-## Ignore
+**Every message threads.** A top-level DM or channel message roots its own
+thread (`thread_ts = event.thread_ts || event.ts`), and the prompt is scoped to
+that thread alone. Kyto therefore has no memory of the rest of a DM by default —
+it pulls earlier history on purpose, with `searchSlack`, when it needs it.
 
-Any message with a line that starts with `##` is ignored. Leading Slack mention tokens are stripped before this check, so `@kyto ## ignore this` is ignored too.
+## Ignore Rules
 
-Messages from bots and messages from Kyto itself are ignored.
+- A message that **starts with** `##` (after leading mentions) is invisible: it
+  is not answered, and it is filtered out of replayed history. Only the first
+  content line counts, so a markdown heading later in a message is fine.
+- A message that starts with `<>` is answered **only if kyto was mentioned in
+  that same message**. It is a convention for rooms with several bots: address
+  the ones you mean, and the others stay quiet. Unlike `##` the message stays in
+  context — it suppresses the reply, not the reading.
+- Messages from bots, and from kyto itself, are ignored.
+- **Kyto never speaks unsolicited.** There is no channel-join greeting: it once
+  auto-joined a post-restricted channel, greeted it where normal members cannot
+  post, and was banned.
+
+## Commands
+
+A message whose body starts with `!word` is answered by the harness itself —
+no model turn, and no interference with a turn already running.
+
+| Command | Effect |
+| --- | --- |
+| `!focusmode [@people]` | Only those people (and the owner) are seen in this thread. Bare means "focus on me"; `off` clears it. |
+| `!secret <question>` | Answered privately: the question is deleted with the asker's own Slack token, the answer is a single ephemeral, and nothing is persisted. |
+| `!stop` | Stops the turn currently running in this thread. |
+
+`!` is the only prefix, and an unknown `!word` falls through to a normal turn.
 
 ## Access Control
 
-When `OPT_IN_CHANNEL` is set, only members of that channel may use Kyto. The channel is how users accept the terms of service: the terms are posted there, and joining the channel is the opt-in that grants access. With `OPT_IN_CHANNEL` unset, Kyto is open to everyone.
+When `OPT_IN_CHANNEL` is set, membership of that channel is the allowlist: the
+terms are posted there, and joining is the opt-in. Someone who has not opted in
+gets an in-thread "i accept" button instead of an answer.
 
-The member list is cached in memory at startup and extended live as users join. Slack has no member-left event, so a user who leaves keeps access until the next restart — an acceptable over-permission for an opt-in gate.
+The member list is cached at startup and extended as people join. Slack has no
+member-left event, so someone who leaves keeps access until the next restart —
+acceptable over-permission for an opt-in gate.
 
-## Thread Opt-In
+## Private Context
 
-A root mention opts the thread into follow-up responses. Kyto stores that state on the Chat SDK thread and subscribes to future replies.
-
-A mention inside an existing thread is treated as a one-off request unless the thread was already opted in.
-
-## DMs
-
-DMs are direct intent. Kyto subscribes to the DM thread and answers.
-
-> **Private context:** Reader tools must stay scoped. A user should not be able to use Kyto to read another user's private DM or private-channel context.
-
-## Slack APIs
-
-Chat SDK handles the normal platform shape, including cards, modals, file uploads, and scheduled messages. Kyto still uses raw Slack APIs for Slack-only behavior the SDK does not model:
-
-- native assistant thinking status and suggested prompts;
-- App Home customizations (views publish/open/update);
-- assistant search;
-- channel and workspace name lookups;
-- the opt-in channel member list.
+Reader tools stay scoped to what the asker can already see. A user must not be
+able to use kyto to read another user's DM or private channel.

@@ -33,6 +33,7 @@ export default defineConfig({
     'FNCTX',
     'GHES',
     'ephemerals',
+    'esac',
     'unbypassable',
     'AGENTMAIL',
     'Kiro',

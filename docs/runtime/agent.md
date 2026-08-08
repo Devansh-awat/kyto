@@ -1,46 +1,73 @@
 ---
 title: Agent Runtime
-description: How HarnessAgent and Pi run a turn.
+description: How a turn runs, and how it survives a model dying halfway.
 ---
 
-The agent runtime is built around AI SDK `HarnessAgent` with the Pi harness. The bot creates one agent for a turn, opens the thread's session, streams the response, detaches the session, and stores enough state to resume later.
+The agent loop is this repo's own code: `apps/bot/src/lib/agent/index.ts` around
+`streamAttempt` in `packages/ai/src/agent.ts`, which is a thin wrapper over AI
+SDK `streamText`. One turn is a multi-step tool loop with a very high step
+ceiling — the real bounds are the watchdog, the degenerate-output guard, and the
+model's own `skip`, because a hard step cap used to strand long jobs mid-solve.
 
-## What Gets Built
+## An Attempt
 
-`packages/ai/src/agent.ts` creates:
+Each attempt is one model on one provider, with its own `@ai-sdk/openai-compatible`
+provider instance and a per-request `fetch` that tunes the body for that
+provider. An attempt is **handled** if and only if it produced reply text or a
+deliberate `skip`. A model that ran tools but wrote nothing gets one nudge to
+finish — with its tools still on, so it can — before the turn moves on.
 
-- a Pi harness from the selected provider attempt;
-- a `HarnessAgent` with Pi, the sandbox provider, host tools, skills, and `permissionMode: 'allow-all'`;
-- an `onSandboxSession` hook that writes the system prompt and syncs the Pi session file into the sandbox.
+## Fallback
 
-```mermaid
-flowchart LR
-  Attempt["provider attempt"] --> Pi["createPi"]
-  Pi --> Harness["HarnessAgent"]
-  Sandbox["E2B provider"] --> Harness
-  Skills["Harness skills"] --> Harness
-  Tools["host tools"] --> Harness
-  Prompt["system prompt"] --> Harness
-```
+`buildFallbackQueue` walks by tier, best-first within each tier. It must not
+pivot on the primary's rank: an earlier version walked "up from the pivot",
+which reversed the leaderboard and fell back worst-first.
 
-## Turn Runner
+A turn that has **already streamed text** can still fall back, for exactly three
+reasons:
 
-`apps/bot/src/lib/agent/index.ts` owns the app side of a turn:
+- a degenerate loop (`degenerate.ts` — repeated lines caught before Slack sees
+  them);
+- a stall (the per-attempt idle watchdog, re-armed on every text delta, tool
+  call and tool result, so a slow-but-working turn is never killed);
+- `StreamInterruptedError` — a provider dying mid-stream does not throw, the SDK
+  turns it into an `error` part and ends the stream, which once left turns
+  silently unfinished while looking handled.
 
-1. set Slack assistant status to thinking;
-2. load request hints and skills;
-3. create the HarnessAgent;
-4. open the persisted session;
-5. seed Slack attachments into the sandbox;
-6. stream text and task events;
-7. flush Slack replies;
-8. detach and persist the session;
-9. pause the sandbox.
+The next model is handed a continuation notice plus carryover: what was said,
+and what tools already ran, so it does not repeat a side effect.
 
-## Attempts
+A gateway-status failure (408/502/503/504/520/522/524) is replayed inside the
+same attempt before it is allowed to cost a fallback — the model never ran, so a
+replay is safe. Everything else routes away on the first try.
 
-`packages/ai/src/providers/pi.ts` exports ordered provider attempts. Each attempt supplies the model id and custom environment passed into Pi.
+## Escalation
 
-The turn runner uses the first configured attempt. If an attempt fails before anything is streamed, it can fall back to the next attempt. Once text or task UI has reached Slack, the runner does not silently switch models, because that would create two partial answers for one user message.
+The model can call `upgradeModel` to move itself to a stronger rung. The call
+ends the attempt like `skip` and the turn continues with the work so far as
+carryover. It is capped per turn and per day, because those rungs cost tens of
+times the primary against a shared budget — and an upgrade **sticks to its
+thread** for a short idle window, since escalation that lasted one turn sent the
+next message straight back to the model that had just said it could not do it.
 
-Turn interruption, stop, and shutdown behavior is covered in [Turn Controls](./controls).
+## Context For A Turn
+
+`buildPrompt` assembles, in cache-friendly order:
+
+- the system prompt and tool schemas (stable — nothing volatile may enter them);
+- a compacted digest of the part of the thread that no longer fits;
+- the thread replayed verbatim, oldest first;
+- what kyto was thinking on its last few turns;
+- the volatile tail: the clock and the current message.
+
+Order matters because the whole thing is cached as a prefix: one changed byte
+near the front throws away everything after it. `cache-probe.ts` logs any step
+whose prompt is not a pure append of the previous one.
+
+## What Is Tested
+
+The IO is not easily testable; the decisions are. The pure halves live in their
+own modules with tests — `routing.ts` (fallback order), `segmentation.ts` (block
+splitting), `carryover.ts` (what a fallback model is told), `compaction-plan.ts`,
+`thinking-render.ts`, `degenerate.ts`. These are the rules that broke in ways
+users saw. `index.ts` calls into them; none of them should be inlined back.

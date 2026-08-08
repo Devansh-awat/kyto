@@ -18,7 +18,7 @@
 
 - [ ] Changes are limited to a single feature, bugfix or chore (split larger changes into separate PRs)
 - [ ] `bun check` without any issues
-- [ ] I have reviewed [contributor guidelines](https://github.com/imdevarsh/kyto-slack/blob/main/CONTRIBUTING.md)
+- [ ] I have read [AGENTS.md](../AGENTS.md) (the code standards) and [DEVELOPMENT.md](../DEVELOPMENT.md)
 
 ### Additional Notes
 

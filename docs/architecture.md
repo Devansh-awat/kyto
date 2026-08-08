@@ -9,23 +9,29 @@ Slack is the interface. The agent is the brain. The sandbox is the workspace.
 
 ## Mental Model
 
-Pi is created by the bot process through AI SDK Harness. It is not a daemon inside E2B. When Pi reads a file, writes a file, edits code, or runs a shell command, the Harness/Pi adapter forwards that operation to the sandbox session.
+The agent loop runs in the bot process. The sandbox is not a daemon and does not
+run a copy of the agent — it is a remote Linux box the loop drives through the
+`bash`, `readFile`, `writeFile` and `editFile` tools.
 
-That split keeps secrets on the host and keeps execution isolated:
+That split is what keeps secrets on the host while execution stays isolated:
 
 - model provider keys stay in the bot process;
-- Slack tokens stay in the bot process;
-- host tools can call Slack, Exa, image generation, and file upload APIs directly;
+- Slack and GitHub credentials stay in the bot process — a sandbox reaches
+  either service only through a host-side proxy that classifies the request,
+  enforces the gates, and attaches the credential itself;
+- host tools call Slack, Exa, image generation, and upload APIs directly;
 - E2B only handles filesystem and command execution;
-- a missing or stale sandbox can be recreated without changing Slack routing.
+- a lost sandbox can be recreated without touching Slack routing.
 
 ```mermaid
 flowchart LR
-  Slack["Slack"] --> Bot["apps/bot\nChat SDK runtime"]
-  Bot --> Agent["packages/ai\nHarnessAgent + Pi"]
-  Agent --> Sandbox["packages/sandbox\nE2B workspace"]
-  Bot --> DB["packages/db\nstate + recovery"]
-  Agent --> DB
+  Slack["Slack"] --> Harness["apps/bot/src/harness"]
+  Harness --> Loop["apps/bot/src/lib/agent"]
+  Loop --> Attempts["packages/ai\nprovider attempts"]
+  Loop --> Sandbox["packages/sandbox\nE2B workspace"]
+  Sandbox -. read-only proxy .-> Harness
+  Loop --> DB["packages/db"]
+  Harness --> DB
 ```
 
 ## Turn Flow
@@ -33,49 +39,52 @@ flowchart LR
 ```mermaid
 sequenceDiagram
   participant Slack
-  participant Chat as Chat SDK
-  participant Bot as apps/bot
-  participant Agent as HarnessAgent/Pi
+  participant Bot as apps/bot (harness)
+  participant Loop as agent loop
   participant E2B as E2B
   participant DB as Postgres
 
-  Slack->>Chat: message event
-  Chat->>Bot: normalized Thread and Message
-  Bot->>Bot: route and ignore checks
-  Bot->>DB: load state and resume data
-  Bot->>E2B: create or resume sandbox
-  Bot->>Agent: create session
-  Agent->>E2B: run file and shell tools
-  Agent->>Bot: text, reasoning, tool events
-  Bot->>Slack: replies and task rows
-  Bot->>Agent: detach session
-  Bot->>DB: store resume state and session mirror
+  Slack->>Bot: message event (Socket Mode)
+  Bot->>Bot: routing and ignore checks
+  Bot->>DB: thread state, summary, previous thinking
+  Bot->>Loop: prompt + tools
+  Loop->>Slack: streamed reply and plan card
+  Loop->>E2B: create or resume sandbox, run tools
+  Loop-->>Loop: fallback to the next model on failure
+  Loop->>DB: store thinking, summary, tool state
   Bot->>E2B: pause sandbox
 ```
 
 ## Package Ownership
 
-`apps/bot` owns Slack runtime behavior: adapter setup, routing, App Home, stop controls, line replies, Chat SDK tool selection, bot-owned tools, and turn orchestration.
+`apps/bot` owns everything Slack-shaped: the Socket Mode connection and event
+routing (`src/harness`), the turn loop and its recovery rules (`src/lib/agent`),
+the tool surface (`src/lib/ai`), App Home and interactive features
+(`src/features`), and the host-side Slack, GitHub and OAuth endpoints served on
+its public port (`src/lib/slack-proxy`, `src/lib/github-proxy`,
+`src/lib/slack-oauth`, `src/lib/sites`).
 
-`packages/ai` owns platform-neutral agent setup: HarnessAgent creation, Pi creation, prompts, model attempts, and session persistence.
+`packages/ai` owns what is not Slack-specific: provider attempts and the
+fallback tiers, the system prompts, and `streamAttempt` — the single call every
+model request goes through.
 
-`packages/sandbox` owns the E2B Harness sandbox provider, E2B session adapter, template build, and vendored skill loading.
+`packages/sandbox` owns E2B lifecycle: lazy creation, pause/resume per thread,
+the template build, and the shared virtual display.
 
-`packages/db` owns the Drizzle schema, Postgres client, and queries.
+`packages/db` owns the Drizzle schema, the Postgres client, and queries.
 
 ## Code Map
 
 | Area | Files |
 | --- | --- |
-| Slack event routing | `apps/bot/src/bot.ts` |
-| Chat SDK setup | `apps/bot/src/lib/chat.ts` |
-| Turn orchestration | `apps/bot/src/lib/agent/index.ts` |
-| Turn interruption and stop controls | `apps/bot/src/lib/agent/steering.ts`, `apps/bot/src/lib/agent/controls.ts` |
-| Slack reply chunking | `apps/bot/src/lib/agent/reply.ts` |
+| Slack connection and event routing | `apps/bot/src/bot.ts`, `apps/bot/src/harness/**` |
+| Turn orchestration and fallback | `apps/bot/src/lib/agent/index.ts` |
+| The decisions worth testing | `apps/bot/src/lib/agent/{routing,segmentation,carryover,compaction-plan,degenerate}.ts` |
+| Prompt assembly and compaction | `apps/bot/src/lib/agent/{prompt,compaction,thinking}.ts` |
 | Stream and task rendering | `apps/bot/src/lib/ai/stream/**` |
-| Host tools | `apps/bot/src/lib/ai/tools/**`, `apps/bot/src/lib/ai/toolset.ts` |
-| Agent construction | `packages/ai/src/agent.ts` |
-| Prompts and request hints | `packages/ai/src/prompts/**`, `apps/bot/src/lib/ai/hints.ts` |
-| Session persistence | `packages/ai/src/sessions.ts`, `packages/ai/src/files/**` |
-| E2B provider | `packages/sandbox/src/**` |
-| Database schema and queries | `packages/db/src/**` |
+| Tools | `apps/bot/src/lib/ai/tools/**`, `apps/bot/src/lib/ai/toolset.ts` |
+| Gates (approval, confirm-post, GitHub, ownership) | `apps/bot/src/lib/{approvals,confirm-post,github}/**` |
+| Host-side proxies | `apps/bot/src/lib/{slack-proxy,github-proxy}/**` |
+| Provider attempts and prompts | `packages/ai/src/{agent.ts,providers/**,prompts/**}` |
+| E2B lifecycle | `packages/sandbox/src/**` |
+| Schema and queries | `packages/db/src/**` |

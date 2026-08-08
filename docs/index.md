@@ -3,48 +3,59 @@ title: Overview
 description: The shortest useful explanation of how Kyto works.
 ---
 
-Kyto is an AI assistant for Slack. It can answer normally, use Slack context, search the web, run code, create files, generate images, and upload results back into the conversation.
+Kyto is an AI assistant for Slack. It can answer normally, read Slack context,
+search the web, run code, work with GitHub, create files, generate images, and
+upload results back into the conversation.
 
-> **Mental Model:** Pi runs on the bot machine. E2B is the remote Linux workspace where file and shell operations happen.
+> **Mental Model:** the agent loop runs on the bot machine. E2B is a remote
+> Linux workspace it drives — one per Slack thread, paused between turns.
+> Secrets stay on the host: neither the Slack token nor a GitHub credential
+> ever enters a sandbox.
 
-Each Slack conversation gets its own agent session and sandbox workspace. The agent loop, model configuration, prompts, Slack tools, and session recovery live in the bot process. The sandbox gives that process a safe place to run commands and keep working files.
+Every Slack message roots its own thread, and that thread is the agent's memory
+— there is no separate session store. What no longer fits in the replay window
+is folded into a running summary instead of being dropped.
 
 ```mermaid
 flowchart LR
-  Slack["Slack"] --> Chat["Chat SDK"]
-  Chat --> Bot["apps/bot"]
-  Bot --> Agent["HarnessAgent + Pi"]
-  Agent --> Tools["Slack, web, image, file tools"]
-  Agent --> Sandbox["E2B sandbox"]
-  Agent --> Data["Postgres session state"]
+  Slack["Slack"] --> Harness["apps/bot/src/harness\nSocket Mode + Web API"]
+  Harness --> Loop["apps/bot/src/lib/agent\nturn loop"]
+  Loop --> Tools["Slack, web, GitHub, email, file tools"]
+  Loop --> Sandbox["packages/sandbox\nE2B workspace"]
+  Loop --> Data["packages/db\nPostgres"]
 ```
 
 ## Start Here
 
-- [Architecture](./architecture): System boundaries, request flow, and package ownership.
-- [Bot Runtime](./runtime/bot): How chat events become Kyto turns.
-- [Agent Runtime](./runtime/agent): How HarnessAgent and Pi run a turn.
-- [Sandbox And Sessions](./runtime/sandbox): E2B lifecycle, session files, recovery, and skills.
-- [Streaming](./runtime/streaming): Assistant text, task rows, stop controls, and Slack limits.
-- [Turn Controls](./runtime/controls): Interruption, stop, shutdown, and session parking.
-- [Tools](./reference/tools): The model-facing tool surface and safety boundaries.
-- [Prompts](./reference/prompts): How the system prompt is assembled.
-- [Data Model](./reference/data-model): What Postgres stores and why.
+- [Architecture](./architecture): boundaries, turn flow, and package ownership.
+- [Tools](./reference/tools): the model-facing tool surface and its gates.
+- [Prompts](./reference/prompts): how the system prompt is assembled.
+- [Data Model](./reference/data-model): what Postgres stores and why.
+- [Security](./reference/security): what kyto keeps, and what it refuses to do.
+- [Harness assessment](./reference/harness): how this harness compares with the
+  coding agents it borrows ideas from.
 
 ## Main Flow
 
-1. A chat adapter sends a message event through Chat SDK.
-2. `apps/bot` decides whether Kyto should answer.
-3. The bot creates or resumes the thread's E2B sandbox.
-4. `packages/ai` builds a HarnessAgent with Pi, prompts, tools, skills, and resume state.
-5. Pi streams text, reasoning, and tool activity.
-6. The bot renders assistant text and task rows back into Slack.
-7. The session is detached, mirrored, stored, and the sandbox is paused.
+1. A Slack `message` event arrives over Socket Mode.
+2. `apps/bot/src/bot.ts` decides whether kyto should answer at all — opt-in,
+   focus mode, `##` hiding, `<>` addressing, and command prefixes.
+3. `buildPrompt` replays the thread, plus a compacted digest of anything older
+   and kyto's own thinking from recent turns.
+4. The agent loop streams from the first available model, rendering text and a
+   live plan card into Slack as it goes.
+5. Tools run on the host, or inside this thread's E2B sandbox (created lazily
+   on first use).
+6. A failure mid-turn falls back to the next model with the work so far
+   replayed; a stall trips the watchdog.
+7. The sandbox is paused, and what kyto was thinking is stored for next turn.
 
 ## Boundaries
 
-- Slack routing and UI live in `apps/bot`.
-- Agent construction and prompts live in `packages/ai`.
+- Slack routing, rendering, and the turn loop live in `apps/bot`.
+- Provider attempts, prompts, and the shared streaming primitive live in
+  `packages/ai`. Nothing Slack-only goes there.
 - E2B sandbox lifecycle lives in `packages/sandbox`.
-- Database schema and queries live in `packages/db`.
-- The sandbox does not receive model keys or Slack secrets.
+- Schema and queries live in `packages/db`.
+- The sandbox never receives model keys, the Slack token, or GitHub
+  credentials. It reaches both services only through host-side proxies.

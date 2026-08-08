@@ -3,77 +3,60 @@ title: Data Model
 description: What Postgres stores and why.
 ---
 
-Kyto stores app-owned runtime state in `packages/db`. Chat SDK also stores adapter state through `@chat-adapter/state-pg`; those tables are owned by the adapter package and are not defined in this repo.
+Everything Kyto persists is defined in `packages/db/src/schema/`, one file per
+area, with the queries beside them in `packages/db/src/queries/`. Those files are
+the reference for columns and indexes — this page is the map of what exists and
+why it is kept, which is the part that is not obvious from a schema.
 
-## App-Owned Tables
+There is deliberately **no conversation store**. The Slack thread is the memory;
+what kyto persists about a conversation is derived text, and it is bounded.
 
-```mermaid
-erDiagram
-  sandbox_sessions {
-    text thread_id PK
-    text sandbox_id
-    text session_id
-    text resume_state
-    jsonb session
-    sandbox_status status
-    timestamp paused_at
-    timestamp resumed_at
-    timestamp destroyed_at
-    timestamp created_at
-    timestamp updated_at
-  }
+## Conversation State
 
-  user_customizations {
-    text user_id PK
-    text prompt
-    timestamp created_at
-    timestamp updated_at
-  }
-```
-
-## `sandbox_sessions`
-
-Defined in `packages/db/src/schema/sandbox.ts`.
-
-| Column | Type | Meaning |
-| --- | --- | --- |
-| `thread_id` | `text` primary key | Chat SDK thread id and Harness session id. |
-| `sandbox_id` | `text not null` | E2B sandbox id. |
-| `session_id` | `text not null` | Harness session id. |
-| `resume_state` | `text` | JSON string returned by Harness detach. |
-| `session` | `jsonb` | Pi transcript mirror: `{ file, data }`. |
-| `status` | `sandbox_status not null default 'creating'` | Sandbox lifecycle state. |
-| `paused_at` | `timestamp with time zone` | Last pause timestamp. |
-| `resumed_at` | `timestamp with time zone` | Last resume timestamp. |
-| `destroyed_at` | `timestamp with time zone` | Future destroy timestamp. |
-| `created_at` | `timestamp with time zone not null default now()` | Row creation timestamp. |
-| `updated_at` | `timestamp with time zone not null default now()` | Auto-updated row timestamp. |
-
-Indexes:
-
-| Index | Columns |
+| Table | Why it exists |
 | --- | --- |
-| `sandbox_sessions_status_idx` | `status` |
-| `sandbox_sessions_paused_idx` | `paused_at` |
-| `sandbox_sessions_updated_idx` | `updated_at` |
+| `thread_subscriptions` | Per-thread state: whether kyto is following, focus mode, and small per-thread flags. |
+| `thread_thinking` | The last few turns' reasoning per thread. Slack records only what kyto *said*, so without this every turn re-derives the previous turn's conclusions. Kept ~30 days, reaped daily. |
+| `thread_summaries` | The compacted digest of the part of a thread that no longer fits in the replay window, with how far it has been folded in. Kept ~30 days. |
+| `thread_sandboxes` | Which E2B sandbox belongs to which thread, and when it was last touched — how a paused sandbox is found again next turn, and how the reaper knows what is idle. |
+| `sandbox_sessions` | Legacy sandbox lifecycle rows from before per-thread persistence. |
 
-Enum:
+Both `thread_thinking` and `thread_summaries` can paraphrase what people said,
+which is why they expire and why a user can erase their own.
 
-| Enum | Values |
+## People
+
+| Table | Why it exists |
 | --- | --- |
-| `sandbox_status` | `creating`, `active`, `paused`, `destroyed` |
+| `user_customizations` | App Home instructions and presets. |
+| `memories` | Saved facts. **Private to their author** until the bot owner promotes one, because a global memory is a standing instruction to kyto for everyone. |
+| `user_model_credentials` | BYOK provider keys, AES-256-GCM ciphertext only. |
+| `user_chatgpt_accounts` | Sign in with ChatGPT: an OAuth'd subscription, ciphertext only, plus when a spent quota resets. |
+| `user_slack_grants` | A person's own Slack token, ciphertext only — what lets kyto act as *them* where they have asked it to. |
+| `user_mcp_servers` | Per-user remote MCP servers added from App Home. |
+| `identity_profiles` | Owner-configured icons per message type. |
 
-## `user_customizations`
+No table returns a plaintext secret except through the one query written to
+fetch it, and a secret is never logged, prompted, or passed into a sandbox.
 
-Defined in `packages/db/src/schema/customizations.ts`.
+## Gates And Permissions
 
-| Column | Type | Meaning |
-| --- | --- | --- |
-| `user_id` | `text` primary key | Slack user id. |
-| `prompt` | `text not null` | Saved App Home custom instructions. |
-| `created_at` | `timestamp with time zone not null default now()` | Row creation timestamp. |
-| `updated_at` | `timestamp with time zone not null default now()` | Auto-updated row timestamp. |
+| Table | Why it exists |
+| --- | --- |
+| `approval_requests` | The persisted approval queue: a non-owner's cross-channel post, a broadcast, a third-party GitHub write. Public buttons, but only the entitled approver's click counts. |
+| `github_repos` | Which Slack user a repo is claimed by. Kyto has ONE GitHub identity, so this is what keeps two people's repos apart. |
+| `github_trust` | Owner-granted trust for writing outside kyto's namespace. |
+| `github_requests` | Third-party write attempts that were queued rather than refused. |
 
-## Chat SDK Tables
+## Things Kyto Made
 
-Chat SDK stores its own Slack adapter state in the same Postgres database: subscriptions, locks, dedupe, and thread state. Kyto uses that state through Chat SDK APIs instead of defining those tables in `packages/db`.
+| Table | Why it exists |
+| --- | --- |
+| `reminders` | One-off and recurring jobs, including the ones that run a script or a whole agent turn. |
+| `sites` | Hosted static sites and who may edit them. |
+
+## Migrations
+
+New tables and columns go in as one-off
+`CREATE TABLE IF NOT EXISTS` / `ALTER TABLE … ADD COLUMN IF NOT EXISTS` SQL.
+`drizzle-kit push` prompts interactively and hangs in a non-TTY shell.

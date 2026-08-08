@@ -1,48 +1,58 @@
 ---
 title: Turn Controls
-description: Interruption, stop, shutdown, and session parking.
+description: Interruption, stop, stalls, and shutdown.
 ---
 
-Kyto can end a running turn for three reasons: a newer user message, a stop button click, or process shutdown.
+A running turn ends for one of five reasons: it finished, a newer user message
+interrupted it, someone stopped it, the watchdog decided it had stalled, or the
+process is shutting down. `apps/bot/src/lib/agent/steering.ts` owns the abort
+plumbing; `turns.ts` tracks what is active per thread.
 
 ## Interruption
 
-If a user sends another message while a turn is active, Kyto interrupts the current turn and restarts from the newest queued message.
-
-The interrupted turn still parks its session state. The sandbox stays warm because the next turn starts immediately.
+A new message in a thread with an active turn aborts that turn and restarts from
+the newest queued message.
 
 ```mermaid
 sequenceDiagram
   participant User
   participant Bot
-  participant Agent
-  participant Sandbox
+  participant Turn
 
-  User->>Bot: new message during active turn
-  Bot->>Agent: abort with interrupt
-  Agent->>Sandbox: persist session state
-  Bot->>Bot: keep latest queued message
-  Bot->>Agent: start next turn
+  User->>Bot: new message during an active turn
+  Bot->>Turn: abort with reason "interrupt"
+  Bot->>Bot: keep the latest queued message
+  Bot->>Turn: start the next turn
 ```
 
-Only the latest queued follow-up is replayed. Earlier messages in the same burst are superseded by the newest one.
+Only the latest queued follow-up is replayed — earlier messages in the same
+burst are superseded by the newest one, and all of them are still in the thread
+the next prompt replays.
 
 ## Stop
 
-The stop button is a Slack control message posted while a response is active. It aborts the turn with reason `stop`, deletes the control message, persists the session, and pauses the sandbox.
+`!stop`, and the stop button on an active response, abort the turn with reason
+`stop`. This is the one control that deliberately reaches into a running turn;
+every other `!command` is answered by the harness without touching it.
 
-The button is separate from the final task list because users need it during the active response, not after streaming finishes.
+## The Watchdog
+
+Each **attempt** has an idle budget, re-armed on every text delta, tool call and
+tool result. It fires only on a genuine stall — a frozen stream or a hung tool —
+so a long-but-working turn is never killed. It aborts only the attempt's own
+signal, never the turn controller, so a stall is not mistaken for a user
+interrupt and the turn can fall back to another model. The `wait` tool extends
+it, for a tool that legitimately needs longer.
 
 ## Shutdown
 
-Shutdown aborts every active turn with reason `shutdown`. Those turns persist their session state and do not replay queued messages.
+Shutdown aborts every active turn with reason `shutdown`. Those turns do not
+replay queued messages.
 
-## Session Parking
+## What Survives
 
-All abort paths try to persist the Harness/Pi session. The difference is sandbox lifecycle:
-
-| Reason | Replay queued message? | Pause sandbox? |
-| --- | --- | --- |
-| `interrupt` | Yes, latest only | No |
-| `stop` | No | Yes |
-| `shutdown` | No | Yes |
+There is no session to park: the Slack thread is the memory. What a turn leaves
+behind is the sandbox (paused, and reconnected next turn) and, if it answered,
+its thinking — stored so the next turn does not re-derive it. A turn that was
+interrupted or stopped leaves no thinking, so a dead end cannot seed the next
+turn.
