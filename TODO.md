@@ -271,15 +271,25 @@ covers 298 messages, and the fetch will now start there and fold in the ~1,200
 after it, six passes in the background. Watch
 `journalctl -u kyto.service | grep '\[compaction\]'`.
 
-**Your 1-million-message thread question, answered.** If you mention kyto near
-the END of a huge thread, it sees your message verbatim — the last 100 messages
-are always replayed in full, so nothing about compaction can hide the thing you
-just said. What compaction changes is everything OLDER. It would compact, but
-honestly: Slack can only page a thread forward, so reading a million messages is
-a thousand API calls. Kyto stops at 20,000 and logs it. In that (unreal) case
-the digest would cover the oldest 20k rather than the newest, which is the wrong
-end — if a thread that big ever shows up, the fix is to anchor the first read
-near the end rather than raising the ceiling.
+**Your huge-thread question, answered — and it was not hypothetical.** The
+thread kyto was struggling with, `C06QV2T1P4G:1710818631.730789`, is **25,000+
+messages**, running since March 2024. Measured today.
+
+If you mention kyto near the END of a thread that size, it sees your message
+verbatim: the last 100 messages are always replayed in full, so nothing about
+compaction can hide what you just said. What compaction changes is everything
+OLDER.
+
+The thread did expose a real hazard, now fixed. Slack can only page a thread
+FORWARD, so a first read of 25,000 messages runs out of budget partway — and the
+"last 100 messages" of a partial read are from the MIDDLE of the thread, i.e.
+2024, replayed as if they were live. Kyto now notices the walk did not reach the
+end, re-reads anchored a week before your message (which always reaches the
+end), and says plainly that the thread is too long to see in full rather than
+folding a slice that does not join onto its digest. That thread has a stored
+digest, so it takes the cheap incremental path anyway: **3,718 messages since
+its last compaction, 4 API calls instead of 25+**, folded in nineteen background
+passes on its next turn.
 
 **The `slack` CLI vs the `slackScript` tool, answered — and the CLI now explains
 itself (2026-08-08).** They are not alternatives: `slackScript` is the TOOL that

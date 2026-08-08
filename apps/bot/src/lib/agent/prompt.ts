@@ -4,6 +4,7 @@ import {
   type ThreadHandle as Thread,
 } from '@/harness';
 import { compactOverflow, loadThreadSummary } from '@/lib/agent/compaction';
+import { renderUnreadableBlock } from '@/lib/agent/compaction-plan';
 import { isFocusAllowed } from '@/lib/agent/focus';
 import { annotateMentions } from '@/lib/agent/mentions';
 import { recallThinking, renderThinking } from '@/lib/agent/thinking';
@@ -31,10 +32,34 @@ const MAX_HISTORY_MESSAGES = 20_000;
 // first walk. Past it the fetch stops short of the end — logged, because the
 // replay window would then not be the live conversation.
 const MAX_HISTORY_PAGES = 20;
+// How far back to re-anchor when even that budget does not reach the end of the
+// thread. Short enough to always reach the newest message, long enough that the
+// replay window is still full.
+const RECENT_WINDOW_SECONDS = 7 * 24 * 60 * 60;
 // The bot's Slack username is a leftover gorkie-era handle; label its own
 // authored messages as kyto so it doesn't think "gorkie" spoke (mirrors the
 // same special-case in annotateMentions).
 const BOT_NAME = 'kyto';
+
+function readThread(
+  threadId: string,
+  oldest?: string
+): Promise<{ messages: Message[]; nextCursor?: string } | undefined> {
+  return slack
+    .fetchMessages(threadId, {
+      limit: MAX_HISTORY_MESSAGES,
+      maxPages: MAX_HISTORY_PAGES,
+      ...(oldest ? { oldest } : {}),
+    })
+    .catch(() => undefined);
+}
+
+/** A Slack ts a week before the message being answered. */
+function recentAnchor(messageId: string): string {
+  const at = Number(messageId);
+  const from = Number.isFinite(at) ? at : Date.now() / 1000;
+  return (from - RECENT_WINDOW_SECONDS).toFixed(6);
+}
 
 function authorLabel(message: Message): string {
   if (slack.botUserId && message.author.userId === slack.botUserId) {
@@ -81,18 +106,24 @@ export async function buildPrompt(
     // Everything before it is in the summary, so re-reading it would be Slack
     // API work whose only output we already have written down.
     const stored = await loadThreadSummary(thread.id);
-    const fetched = await slack
-      .fetchMessages(thread.id, {
-        limit: MAX_HISTORY_MESSAGES,
-        maxPages: MAX_HISTORY_PAGES,
-        ...(stored ? { oldest: stored.throughMessageId } : {}),
-      })
-      .catch(() => undefined);
+    let fetched = await readThread(thread.id, stored?.throughMessageId);
+    // A cursor left over means the walk ran out of budget BEFORE the end of the
+    // thread — so what we hold is a middle slice, and replaying its last 100
+    // messages would hand the model a conversation from months ago as if it
+    // were live. A real thread hit this: 25,000+ messages. Re-anchor near now,
+    // which always reaches the end, and give up on compaction for this turn
+    // rather than fold a slice that does not join onto the stored digest.
+    let contiguous = true;
     if (fetched?.nextCursor) {
+      const recent = await readThread(thread.id, recentAnchor(message.id));
       logger.warn(
         { threadId: thread.id },
-        '[prompt] thread is longer than the history ceiling; the oldest part was not read'
+        '[prompt] thread is longer than the history ceiling; reading only recent messages'
       );
+      if (recent) {
+        fetched = recent;
+        contiguous = false;
+      }
     }
     const prior = (fetched?.messages ?? []).filter(
       (entry): entry is Message =>
@@ -109,7 +140,11 @@ export async function buildPrompt(
       0,
       Math.max(prior.length - replayed.length, 0)
     );
-    if (overflow.length > 0 || stored) {
+    if (!contiguous) {
+      compacted = renderUnreadableBlock({
+        summary: stored?.summary,
+      });
+    } else if (overflow.length > 0 || stored) {
       const rendered = await Promise.all(
         overflow.map(async (entry) => ({
           id: entry.id,

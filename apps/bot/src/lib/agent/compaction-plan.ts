@@ -118,6 +118,28 @@ export function planCompaction({
 }
 
 /**
+ * The block for a thread too long to read to the end.
+ *
+ * There is no count here on purpose: kyto genuinely does not know how many
+ * messages it did not see, and inventing a number would be worse than saying
+ * so. Compaction is skipped for such a turn, because a slice that does not join
+ * onto the stored digest cannot be folded into it — so a digest from before,
+ * when there is one, is shown as-is.
+ */
+export function renderUnreadableBlock({
+  summary,
+}: {
+  summary?: string;
+}): string {
+  const header =
+    '<earlier_in_this_thread>\nThis thread is far too long to read in full — you are seeing only its most recent messages, and there is a large amount of earlier conversation you cannot see. Do not treat the replay below as the beginning.';
+  const digest = summary
+    ? `\n\nA digest of an earlier part of it:\n\n${summary}`
+    : '';
+  return `${header}${digest}\n\nUse the Slack history tools to read a specific stretch if you need it, and say plainly that you cannot see the whole thread rather than guessing.\n</earlier_in_this_thread>`;
+}
+
+/**
  * The prompt block. It ALWAYS states the count, with or without a summary —
  * that is the whole point of this feature. Silent truncation is what it
  * replaces, so a failed summary must still leave the model knowing the

@@ -5,6 +5,7 @@ import {
   MAX_MESSAGES_PER_PASS,
   planCompaction,
   renderCompactedBlock,
+  renderUnreadableBlock,
 } from './compaction-plan';
 
 function messages(count: number, offset = 0): CompactableMessage[] {
@@ -167,6 +168,14 @@ describe('renderCompactedBlock', () => {
   test('stays quiet about the gap when there is none', () => {
     const block = renderCompactedBlock({ count: 10, summary: 'all of it' });
     expect(block).not.toContain('not in the digest');
+  });
+
+  test('an unreadable thread claims no count and no completeness', () => {
+    const block = renderUnreadableBlock({ summary: 'what happened in 2024' });
+    expect(block).toContain('far too long to read in full');
+    expect(block).toContain('what happened in 2024');
+    // Inventing a number for history it never read would be worse than saying so.
+    expect(block).not.toMatch(/\d+ earlier message/);
   });
 
   test('tells the model the replay is not the start of the conversation', () => {
