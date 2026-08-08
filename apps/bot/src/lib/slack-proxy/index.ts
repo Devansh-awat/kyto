@@ -157,16 +157,90 @@ export function slackHelperInstall(): string {
   return `cat > /usr/local/bin/slack <<'KYTO_SLACK_HELPER'
 #!/usr/bin/env bash
 set -euo pipefail
+
+# Every method the host-side proxy will forward. Checked here as well as there,
+# so a wrong guess costs a local error naming the alternatives instead of a
+# round trip that comes back as a bare 403.
+METHODS="${readOnlySlackMethods().join(' ')}"
+
+usage() {
+  cat <<'KYTO_SLACK_USAGE'
+slack — query the Slack Web API, READ-ONLY, through kyto's host-side proxy.
+
+  usage:  slack <api.method> ['<json arguments>']
+
+  There are NO options. This is not curl and not the official Slack CLI: the
+  only arguments are an API method name and, optionally, ONE single-quoted JSON
+  object. It prints the raw JSON response on stdout.
+
+  examples:
+    slack auth.test
+    slack conversations.replies '{"channel":"C0123","ts":"1710818631.730789"}'
+    slack conversations.list '{"limit":1000,"types":"public_channel"}' | jq '.channels | length'
+    slack users.info '{"user":"U0123"}' | jq -r '.user.profile.real_name'
+
+  paging:   pass .response_metadata.next_cursor back as {"cursor":"..."}
+  writing:  impossible. Posting, editing, deleting and every admin method are
+            not proxied at all, and the Slack token is not in this sandbox.
+
+  methods:
+KYTO_SLACK_USAGE
+  printf '    %s\\n' $METHODS
+}
+
+if [ "$#" -eq 0 ] || [ "\${1:-}" = "--help" ] || [ "\${1:-}" = "-h" ] || [ "\${1:-}" = "help" ]; then
+  usage
+  exit 0
+fi
+
+case "$1" in
+  -*)
+    echo "slack: '$1' is not an option — this command takes no flags." >&2
+    usage >&2
+    exit 2
+    ;;
+esac
+
+method="$1"
+case " $METHODS " in
+  *" $method "*) ;;
+  *)
+    echo "slack: '$method' is not available (read-only proxy)." >&2
+    echo "slack: available methods:" >&2
+    printf '    %s\\n' $METHODS >&2
+    exit 2
+    ;;
+esac
+
+if [ "$#" -gt 2 ]; then
+  echo "slack: expected at most 2 arguments, got $#. Wrap the JSON in SINGLE quotes so the shell passes it as one argument." >&2
+  exit 2
+fi
+
+if [ "$#" -eq 2 ]; then body="$2"; else body='{}'; fi
+case "$body" in
+  '{'*'}') ;;
+  *)
+    echo "slack: the second argument must be a JSON object like '{\\"channel\\":\\"C0123\\"}' — got: $body" >&2
+    exit 2
+    ;;
+esac
+if command -v jq >/dev/null 2>&1 && ! printf '%s' "$body" | jq -e . >/dev/null 2>&1; then
+  echo "slack: the second argument is not valid JSON: $body" >&2
+  exit 2
+fi
+
 if [ -z "\${KYTO_SLACK_PROXY:-}" ] || [ -z "\${KYTO_SLACK_PROXY_TOKEN:-}" ]; then
   echo '{"ok":false,"error":"slack proxy is not available in this context"}' >&2
   exit 1
 fi
-method="\${1:?usage: slack <method> [jsonArgs]}"
-body="\${2:-{}}"
-curl -sS -X POST "$KYTO_SLACK_PROXY/$method" \\
+
+# --max-time so a hung proxy fails the command instead of holding the whole turn.
+curl -sS --max-time 60 -X POST "$KYTO_SLACK_PROXY/$method" \\
   -H "Authorization: Bearer $KYTO_SLACK_PROXY_TOKEN" \\
   -H 'Content-Type: application/json' \\
   -d "$body"
+printf '\\n'
 KYTO_SLACK_HELPER
 chmod +x /usr/local/bin/slack`;
 }
