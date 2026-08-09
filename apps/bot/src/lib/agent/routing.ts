@@ -6,6 +6,7 @@ import {
   GEMINI_PROVIDER,
   HACKCLUB_PROVIDER,
   MEBBO_PROVIDER,
+  OPENCODE_PROVIDER,
 } from '@repo/ai/providers/names';
 
 // The order kyto falls back in. Split out of the agent loop because this is
@@ -24,7 +25,10 @@ export function attemptKey(attempt: ModelAttempt): string {
  *      models, deliberately no longer the arena's expensive top end);
  *   2. the free mebbo tier (a friend's self-hosted OpenWebUI) — costs nothing,
  *      so it is worth a try before spending quota, but it is a hobby box;
- *   3. the owner's Gemini key, the cheap last resort.
+ *   3. OpenCode Zen's free models — free in money, but their terms allow the
+ *      free tier's traffic to train the model, and a turn carries other
+ *      people's Slack messages, so it deliberately sits this low;
+ *   4. the owner's Gemini key, the cheap last resort.
  *
  * Within each tier, the list's own order decides.
  *
@@ -44,6 +48,7 @@ export function buildFallbackQueue(
   return [
     ...tier(HACKCLUB_PROVIDER),
     ...tier(MEBBO_PROVIDER),
+    ...tier(OPENCODE_PROVIDER),
     ...tier(GEMINI_PROVIDER),
   ];
 }

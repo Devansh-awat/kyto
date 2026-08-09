@@ -1,5 +1,10 @@
 import { keys } from '../keys';
-import { GEMINI_PROVIDER, HACKCLUB_PROVIDER, MEBBO_PROVIDER } from './names';
+import {
+  GEMINI_PROVIDER,
+  HACKCLUB_PROVIDER,
+  MEBBO_PROVIDER,
+  OPENCODE_PROVIDER,
+} from './names';
 
 const env = keys();
 
@@ -8,7 +13,12 @@ const GEMINI_BASE_URL =
   env.GEMINI_BASE_URL ??
   'https://generativelanguage.googleapis.com/v1beta/openai/';
 
-export { GEMINI_PROVIDER, HACKCLUB_PROVIDER, MEBBO_PROVIDER } from './names';
+export {
+  GEMINI_PROVIDER,
+  HACKCLUB_PROVIDER,
+  MEBBO_PROVIDER,
+  OPENCODE_PROVIDER,
+} from './names';
 
 const MEBBO_BASE_URL = env.MEBBO_BASE_URL ?? 'https://chat.mebbo.cloud/api';
 
@@ -149,6 +159,44 @@ const mebboAttempts: ModelAttempt[] = env.MEBBO_API_KEY
     }))
   : [];
 
+// OpenCode Zen's FREE models (opencode.ai/zen). The paid catalogue there needs a
+// payment method the workspace has not attached — every paid slug answers
+// `CreditsError: No payment method` — but the free slugs need nothing at all.
+//
+// Measured 2026-08-09, seven checks each (letter counting, the bat-and-ball
+// trap, a memoized-fib one-liner, weekday arithmetic 100 days back, exact
+// instruction following, compact-JSON output, and one real tool call):
+//
+//   big-pickle              7/7, 8.5s avg   ← the owner guessed right
+//   deepseek-v4-flash-free  7/7, 9.5s       ← the SAME model as the primary, free
+//   longcat-2.0-free        7/7, 11.3s
+//   nemotron-3-ultra-free   6/7, 17.0s      (fell for the bat and ball)
+//   mimo-v2.5-free          5/7, 10.2s
+//   laguna-s-2.1-free       4/7, 12.9s
+//   north-mini-code-free, ling-3.0-flash-free — upstream 500s, unusable
+//
+// Only the three that scored 7/7 are wired, best first. THE COST IS NOT MONEY:
+// their docs say that during the free period "collected data may be used to
+// improve the model", and a kyto turn carries other people's Slack messages. So
+// the owner's call (2026-08-09) was "last resort, not as last as gemini" — it
+// sits below mebbo and above the Gemini key, so it only ever runs on a turn
+// every paid and free-but-private tier has already failed.
+const OPENCODE_BASE_URL = 'https://opencode.ai/zen/v1';
+const OPENCODE_MODELS = [
+  'big-pickle',
+  'deepseek-v4-flash-free',
+  'longcat-2.0-free',
+] as const;
+
+const opencodeAttempts: ModelAttempt[] = env.OPENCODE_API_KEY
+  ? OPENCODE_MODELS.map((model) => ({
+      apiKey: env.OPENCODE_API_KEY as string,
+      baseURL: OPENCODE_BASE_URL,
+      model,
+      provider: OPENCODE_PROVIDER,
+    }))
+  : [];
+
 // Models that CANNOT accept image input. The deepseek-v4-flash primary is served
 // by Cloudflare, which is text-only: any turn carrying an image 404s ("No
 // endpoints found that support image input") and burns a doomed attempt before
@@ -275,5 +323,9 @@ export const LEADERBOARD_FALLBACK: ModelAttempt[] = [
   // costs nothing at all, so it is worth trying before spending Gemini quota,
   // but it is a hobby box and cannot be relied on to hold a turn.
   ...mebboAttempts,
+  // OpenCode Zen's free models, below mebbo because they are free in money but
+  // not in privacy (see OPENCODE_MODELS), and above the Gemini key because a
+  // turn reaching this far has already lost every other option.
+  ...opencodeAttempts,
   ...geminiAttempts,
 ];
