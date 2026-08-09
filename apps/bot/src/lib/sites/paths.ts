@@ -56,9 +56,15 @@ export function sitesRoot(): string {
   return nodePath.resolve(env.SITES_ROOT);
 }
 
-/** Absolute directory that holds a single site's files. */
+/**
+ * Absolute directory that holds a single site's files.
+ *
+ * Guarded on SERVABLE rather than deployable, since kyto's own `embeds`
+ * directory is served from here too — what makes it reserved is that nobody can
+ * deploy OVER it, not that it cannot be read.
+ */
 export function siteRoot(name: string): string {
-  if (!isValidSiteName(name)) {
+  if (!isServableSiteName(name)) {
     throw new Error(`Invalid site name: ${name}`);
   }
   return nodePath.join(sitesRoot(), name);
