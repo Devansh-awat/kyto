@@ -307,6 +307,19 @@ async function executeTurn(
     await sandboxSession.destroy().catch(() => undefined);
   };
 
+  // How many plan cards fit in the plan message currently open. A turn is
+  // rendered across SEVERAL messages (a segment split here, a 4.5-minute
+  // rotation inside harness.stream), and a card id only exists in the message it
+  // was appended to — so the budget is reset at each boundary rather than lasting
+  // the whole attempt. See lib/ai/stream/cards.ts for what that used to look
+  // like: every message after the first showed only "N more tool calls".
+  //
+  // Declared HERE, above the try, not next to the helpers below: the helpers are
+  // hoisted function declarations but a `const` is not, so a copy sitting after
+  // the try/finally is still in its temporal dead zone while the turn runs and
+  // every attempt dies with "Cannot access 'cards' before initialization".
+  const cards = createCardBudget();
+
   // Hold this thread's sandbox for the whole turn, so a bash reminder firing on
   // the scheduler can't pause the sandbox out from under a running command.
   const releaseSandbox = await acquireThreadSandbox(threadId);
@@ -400,14 +413,6 @@ async function executeTurn(
       });
     }
   }
-
-  // How many plan cards fit in the plan message currently open. A turn is
-  // rendered across SEVERAL messages (a segment split here, a 4.5-minute
-  // rotation inside harness.stream), and a card id only exists in the message it
-  // was appended to — so the budget is reset at each boundary rather than lasting
-  // the whole attempt. See lib/ai/stream/cards.ts for what that used to look
-  // like: every message after the first showed only "N more tool calls".
-  const cards = createCardBudget();
 
   async function* renderTurn({
     message: turnMessage,
