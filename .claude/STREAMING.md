@@ -25,6 +25,34 @@ stream order; `createReply` posts it (length-splitting, fence/table healing).
   are not the same event and must not read the same — an escalation the model
   asked for is not kyto recovering from a broken provider.
 
+## The visible-card budget is PER PLAN MESSAGE
+
+`lib/ai/stream/cards.ts` (tested). 45 tool cards and 45 reasoning cards, counted
+**per plan message**, and the CALLER owns the budget because renderStream cannot
+see where a message ends — `streamSegmented` cuts one on every split and
+`harness.stream` cuts one every `STREAM_ROTATE_MS`.
+
+- It used to live inside `renderStream` for the whole attempt, so a long turn
+  spent all 45 tool slots in its FIRST message and every message after that could
+  only render the overflow row: a Thinking card, no tool cards, and a bare
+  "38 more tool calls". Reported for a MONTH.
+- `endMessage()` is called at both boundaries. It resets the counters **and**
+  returns a `complete` for every card still mid-flight — a card id only exists
+  inside the `chatStream` it was appended to, so one left `in_progress` can never
+  be updated again and a collapsed plan renders it as broken.
+- Two overflow rows, never one: a shared counter mixed hidden tool calls with
+  hidden thinking blocks, which read as kyto narrating step counts.
+
+## Tool-call markup never reaches the reply
+
+`lib/ai/stream/tool-markup.ts` (tested). When a provider fails to parse a model's
+tool calls, the model writes its NATIVE markup into the text channel instead —
+a real turn ended with screens of `<｜DSML｜invoke name="postMessage">` repeated
+six times, because the harness never answered a call it never saw. The tell is
+**U+FF5C right after `<`**, which no reply should ever contain; from there on the
+attempt's text is dropped (not trimmed tag by tag — the arguments are the bulk of
+it) and a warning names the cause, since those calls never executed.
+
 ## Reasoning rows
 
 `Reasoning` renders under `Thinking`, one row per BLOCK, and **every block that
