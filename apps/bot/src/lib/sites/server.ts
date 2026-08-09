@@ -4,17 +4,32 @@ import nodePath from 'node:path';
 import { promisify } from 'node:util';
 import { env } from '@/env';
 import { handleDashboard } from '@/lib/dashboard';
+import { ensureEmbedAssets } from '@/lib/embeds';
 import { handleGithubProxy } from '@/lib/github-proxy';
 import logger from '@/lib/logger';
 import { handleSlackOauth } from '@/lib/slack-oauth';
 import { handleSlackProxy } from '@/lib/slack-proxy';
-import { isValidSiteName, resolveWithin, siteRoot, sitesRoot } from './paths';
+import {
+  EMBED_SITE_NAME,
+  isServableSiteName,
+  resolveWithin,
+  siteRoot,
+  sitesRoot,
+} from './paths';
 
 const execFileAsync = promisify(execFile);
 
 const SECURITY_HEADERS: Record<string, string> = {
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'SAMEORIGIN',
+  'Referrer-Policy': 'no-referrer',
+};
+
+// Embed pages only (lib/embeds): Slack renders them in an iframe, so the frame
+// guard has to go. They carry no session and no form, so there is nothing for a
+// clickjack to steal — unlike every other path this server answers.
+const FRAMEABLE_HEADERS: Record<string, string> = {
+  'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
 };
 
@@ -65,7 +80,7 @@ async function resolveSiteFile(pathname: string): Promise<string | null> {
   const remainder = pathname.replace(/^\/+/, '');
   const slash = remainder.indexOf('/');
   const name = slash === -1 ? remainder : remainder.slice(0, slash);
-  if (!isValidSiteName(name)) {
+  if (!isServableSiteName(name)) {
     return null;
   }
 
@@ -111,6 +126,8 @@ export async function startSitesServer(): Promise<void> {
 
   try {
     await mkdir(sitesRoot(), { recursive: true });
+    // The shared embed thumbnail, so a video block never points at a 404.
+    await ensureEmbedAssets();
     // Behind a TLS-terminating proxy (e.g. Nest) the container must speak plain
     // HTTP; serving HTTPS there makes the proxy fail upstream with 502.
     const tls = env.SITES_TLS ? await ensureSelfSignedCert() : undefined;
@@ -161,7 +178,14 @@ export async function startSitesServer(): Promise<void> {
         if (!filePath) {
           return notFound();
         }
-        return new Response(Bun.file(filePath), { headers: SECURITY_HEADERS });
+        // An embed page exists to be iframed by Slack, so it is the one place
+        // X-Frame-Options must not apply. Everything else — the dashboard above
+        // most of all — keeps it, because a frameable password form is a
+        // clickjacking target.
+        const framed = pathname.startsWith(`/${EMBED_SITE_NAME}/`);
+        return new Response(Bun.file(filePath), {
+          headers: framed ? FRAMEABLE_HEADERS : SECURITY_HEADERS,
+        });
       },
       port: env.SITES_PORT,
       ...(tls ? { tls } : {}),

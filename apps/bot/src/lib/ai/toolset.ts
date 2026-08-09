@@ -37,6 +37,7 @@ import {
   replyEmailTool,
   sendEmailTool,
 } from './tools/email';
+import { embedTool, removeEmbedTool } from './tools/embed';
 import {
   lookupEmojiTool,
   removeEmojiTool,
@@ -313,6 +314,15 @@ export async function buildTools({
     lookupEmoji: {
       summary: 'see what a workspace custom emoji actually depicts',
       tool: lookupEmojiTool(),
+    },
+    embed: {
+      summary:
+        'post a LIVE interactive page (custom HTML, or a whiteboard) inside a Slack message',
+      tool: embedTool({ requestedBy: authorUserId, thread }),
+    },
+    removeEmbed: {
+      summary: 'delete an embed page kyto published',
+      tool: removeEmbedTool(),
     },
     slackDocs: {
       summary:

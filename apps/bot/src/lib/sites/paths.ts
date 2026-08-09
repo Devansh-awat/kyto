@@ -10,14 +10,32 @@ import { env } from '@/env';
  * be proven to stay inside their intended directory before any fs access.
  */
 
+// Where kyto's own embeddable pages live (lib/embeds). Reserved so `deploySite`
+// can never take the name and replace the lot: a whole-site deploy swaps the
+// directory, which would delete every live embed in the workspace.
+export const EMBED_SITE_NAME = 'embeds';
+
 // Reserved directory names used internally under SITES_ROOT; never a site.
-export const RESERVED_SITE_NAMES = new Set(['.tls', '.staging']);
+export const RESERVED_SITE_NAMES = new Set([
+  '.tls',
+  '.staging',
+  EMBED_SITE_NAME,
+]);
 
 // Lowercase DNS-label style: 1–63 chars, alphanumeric, internal hyphens only.
 const SITE_NAME_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
+/**
+ * A name the router may serve. Shape only, plus the internal directories —
+ * `embeds` IS served (that is the point of it), it just cannot be deployed to.
+ */
+export function isServableSiteName(name: string): boolean {
+  return SITE_NAME_RE.test(name) && !name.startsWith('.');
+}
+
+/** A name a user may deploy to: servable, and not one of kyto's own. */
 export function isValidSiteName(name: string): boolean {
-  return SITE_NAME_RE.test(name) && !RESERVED_SITE_NAMES.has(name);
+  return isServableSiteName(name) && !RESERVED_SITE_NAMES.has(name);
 }
 
 /**
