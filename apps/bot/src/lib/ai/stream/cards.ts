@@ -26,15 +26,19 @@
 
 import type { StreamChunk } from '@/harness';
 
-// Per PLAN MESSAGE, not per turn. Slack renders a long plan as a scrolling
-// list, so this is a readability limit rather than an API one.
-export const MAX_VISIBLE_TOOL_CARDS = 45;
-// Reasoning ("Thinking") cards get their OWN budget. They used to share one
-// 45-slot set with tool cards, so a turn with many tool calls exhausted it on
-// tool activity and every later thinking block was folded into a step count
-// instead of shown — the model's reasoning vanished on exactly the long turns
-// where it matters most.
-export const MAX_VISIBLE_REASONING_CARDS = 45;
+// NO CAP (owner's call, 2026-08-09: "i want ZERO budget"). Every tool call and
+// every thinking block gets its own row, however long the turn runs.
+//
+// There used to be 45 of each. It was only ever a readability guess — Slack has
+// no documented per-message card limit — and it cost the thing people actually
+// want from the plan: seeing what kyto did. A turn that hid its work behind
+// "38 more tool calls" was the single most-reported annoyance with the UI.
+//
+// The overflow machinery below is KEPT, not deleted: a caller can still pass a
+// limit (and the tests exercise one), so re-capping is a one-line change if a
+// real Slack ceiling ever turns up. What changed is the default.
+export const MAX_VISIBLE_TOOL_CARDS = Number.POSITIVE_INFINITY;
+export const MAX_VISIBLE_REASONING_CARDS = Number.POSITIVE_INFINITY;
 
 export type CardKind = 'reasoning' | 'tool';
 

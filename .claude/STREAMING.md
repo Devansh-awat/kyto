@@ -27,15 +27,19 @@ stream order; `createReply` posts it (length-splitting, fence/table healing).
 
 ## The visible-card budget is PER PLAN MESSAGE
 
-`lib/ai/stream/cards.ts` (tested). 45 tool cards and 45 reasoning cards, counted
-**per plan message**, and the CALLER owns the budget because renderStream cannot
-see where a message ends — `streamSegmented` cuts one on every split and
-`harness.stream` cuts one every `STREAM_ROTATE_MS`.
+`lib/ai/stream/cards.ts` (tested). **There is NO cap** (owner's call, 2026-08-09:
+"i want ZERO budget") — every tool call and every thinking block gets its own row.
+The machinery is kept because a caller can still pass a limit, and because the
+per-message reset is what fixes the bug below; the DEFAULT is unlimited.
 
-- It used to live inside `renderStream` for the whole attempt, so a long turn
-  spent all 45 tool slots in its FIRST message and every message after that could
-  only render the overflow row: a Thinking card, no tool cards, and a bare
-  "38 more tool calls". Reported for a MONTH.
+- The budget is counted **per plan message**, and the CALLER owns it because
+  renderStream cannot see where a message ends — `streamSegmented` cuts one on
+  every split, `harness.stream` cuts one every `STREAM_ROTATE_MS`. It used to
+  live inside `renderStream` for the whole attempt with a cap of 45, so a long
+  turn spent every slot in its FIRST message and each one after that could only
+  render the overflow row: a Thinking card, no tool cards, and a bare "38 more
+  tool calls". Reported for a MONTH. Both halves are fixed — the reset, and then
+  the cap itself.
 - `endMessage()` is called at both boundaries. It resets the counters **and**
   returns a `complete` for every card still mid-flight — a card id only exists
   inside the `chatStream` it was appended to, so one left `in_progress` can never

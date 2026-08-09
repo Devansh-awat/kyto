@@ -139,3 +139,19 @@ describe('overflowRow', () => {
     );
   });
 });
+
+describe('the default budget', () => {
+  test('hides nothing, however long the turn runs', () => {
+    // Owner's call: no cap at all. The overflow row is now something only an
+    // explicitly limited caller can ever produce.
+    const cards = createCardBudget();
+    for (let at = 0; at < 500; at++) {
+      expect(cards.show({ id: `t${at}`, kind: 'tool', title: 'x' })).toBe(true);
+      expect(
+        cards.show({ id: `r${at}`, kind: 'reasoning', title: 'Thinking' })
+      ).toBe(true);
+    }
+    expect(cards.hiddenCount('tool')).toBe(0);
+    expect(cards.hiddenCount('reasoning')).toBe(0);
+  });
+});
