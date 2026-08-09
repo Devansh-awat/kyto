@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { env } from '@/env';
 import type { KytoBot, Message, ThreadHandle } from '@/harness';
 import { buildMcpTools } from '@/lib/ai/mcp';
+import { emojiUploadConfigured } from '@/lib/emoji-upload';
 import logger from '@/lib/logger';
 import { recallLoadedTools, rememberLoadedTools } from './loaded-tools';
 import { askQuestionTool } from './tools/ask-question';
@@ -36,7 +37,11 @@ import {
   replyEmailTool,
   sendEmailTool,
 } from './tools/email';
-import { lookupEmojiTool, submitEmojiTool } from './tools/emoji';
+import {
+  lookupEmojiTool,
+  removeEmojiTool,
+  submitEmojiTool,
+} from './tools/emoji';
 import { deleteFileTool, fileStatTool } from './tools/files';
 import { focusModeTool } from './tools/focus';
 import { generateImageTool } from './tools/generate-image';
@@ -439,15 +444,29 @@ export async function buildTools({
     // comment because `filesUploadV2` bypasses `ThreadHandle.post`, and a
     // journal line naming the Slack user who asked — the CHANNEL only ever sees
     // "kyto", so that log line is the whole audit trail.
-    ...(env.EMOJI_REQUEST_CHANNEL
+    ...(env.EMOJI_REQUEST_CHANNEL || emojiUploadConfigured()
       ? {
           submitEmoji: {
-            summary: 'submit a new custom emoji to the emoji-request channel',
+            summary: 'add a new custom emoji to the workspace',
             tool: submitEmojiTool({
-              channelId: env.EMOJI_REQUEST_CHANNEL,
               getSandboxContext,
               requestedBy: authorUserId,
+              ...(env.EMOJI_REQUEST_CHANNEL
+                ? { channelId: env.EMOJI_REQUEST_CHANNEL }
+                : {}),
             }),
+          },
+        }
+      : {}),
+    // Removal is the owner's alone: every emoji kyto adds goes in under HIS
+    // account (Slack has no app-level API), and Slack only lets the adding
+    // account remove one — so an open version would let anyone delete anything
+    // kyto has ever added for anyone.
+    ...(isOwner && emojiUploadConfigured()
+      ? {
+          removeEmoji: {
+            summary: 'remove a custom emoji kyto added',
+            tool: removeEmojiTool({ requestedBy: authorUserId }),
           },
         }
       : {}),

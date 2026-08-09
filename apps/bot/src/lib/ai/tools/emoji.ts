@@ -9,6 +9,11 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { neutralizeBroadcast } from '@/harness';
 import { slack } from '@/lib/chat';
+import {
+  addEmoji,
+  emojiUploadConfigured,
+  removeEmoji,
+} from '@/lib/emoji-upload';
 import logger from '@/lib/logger';
 import { errorMessage } from '@/lib/utils/error';
 
@@ -245,18 +250,41 @@ async function awaitVerdict(
   return { permalink };
 }
 
+/** Slack's own `emoji.add` error codes, in words the model can act on. */
+function describeUploadError(code: string | undefined): string {
+  switch (code) {
+    case 'error_name_taken':
+    case 'error_name_taken_i18n':
+      return 'That emoji name is already taken. Pick another.';
+    case 'error_bad_name_i18n':
+      return 'Slack rejected that name. Use lowercase letters, digits, hyphens and underscores.';
+    case 'error_bad_wide':
+    case 'error_too_big':
+      return 'The image is too large for Slack. Resize it to 128x128 and under 128KB, then try again.';
+    case 'invalid_auth':
+    case 'not_authed':
+      return "Kyto's emoji session has expired — the bot owner needs to refresh it. Tell the user that, and do not retry.";
+    case 'kyto_daily_limit':
+      return 'That user has hit the daily limit for adding emoji through kyto. Tell them to try tomorrow.';
+    case 'ratelimited':
+      return 'Slack is rate limiting emoji uploads right now. Wait a minute and try again.';
+    default:
+      return `Slack refused the emoji upload: ${code ?? 'unknown error'}.`;
+  }
+}
+
 export function submitEmojiTool({
   channelId,
   getSandboxContext,
   requestedBy,
 }: {
-  /** The workspace's emoji-request channel. */
-  channelId: string;
+  /** The workspace's emoji-request channel, when there is one to fall back to. */
+  channelId?: string;
   getSandboxContext: () => SandboxContext;
   requestedBy: string;
 }) {
   return tool({
-    description: `Add a new custom emoji to the workspace. It posts the image into the emoji channel with the name as the message text, which is the exact shape the emoji bot there reads — it does the adding. The image must already be in your sandbox: generate or edit one first (generateImage), or download the one you were given. Slack's limits are 128x128 pixels and 128KB, so resize it first if it is bigger (ImageMagick: \`convert in.png -resize 128x128 out.png\`); this refuses anything over 128KB rather than posting something that gets thrown away. One emoji per call — the bot rejects a message carrying more than one image. It waits for the emoji bot's reply and hands it back, so read the result before telling anyone the emoji exists: that bot sometimes asks the poster to pick an option instead of adding it, and since the poster is me and Slack has no way for an app to press another app's button, only a human in that channel can finish it.`,
+    description: `Add a new custom emoji to the workspace. Where possible kyto adds it DIRECTLY and it is live immediately (it goes in under the bot owner's Slack account, because Slack has no app-level API for adding emoji — say so if anyone asks who added it). Otherwise it falls back to posting the image into the emoji channel with the name as the message text, which is the exact shape the emoji bot there reads — it does the adding. The image must already be in your sandbox: generate or edit one first (generateImage), or download the one you were given. Slack's limits are 128x128 pixels and 128KB, so resize it first if it is bigger (ImageMagick: \`convert in.png -resize 128x128 out.png\`); this refuses anything over 128KB rather than posting something that gets thrown away. One emoji per call — the bot rejects a message carrying more than one image. It waits for the emoji bot's reply and hands it back, so read the result before telling anyone the emoji exists: that bot sometimes asks the poster to pick an option instead of adding it, and since the poster is me and Slack has no way for an app to press another app's button, only a human in that channel can finish it.`,
     inputSchema: z.object({
       name: z
         .string()
@@ -301,6 +329,47 @@ export function submitEmojiTool({
           };
         }
         const extension = nodePath.extname(resolved) || '.png';
+        // The direct path, when the owner's emoji session is configured: add it
+        // ourselves rather than posting into a channel and hoping a bot picks
+        // it up. Everything below is the fallback for when it is not.
+        if (emojiUploadConfigured()) {
+          const existing = await emojiList().catch(
+            (): Record<string, string> => ({})
+          );
+          if (existing[cleaned]) {
+            return {
+              error: `\`:${cleaned}:\` already exists in this workspace. Pick another name.`,
+              submitted: false,
+            };
+          }
+          const result = await addEmoji({
+            bytes,
+            filename: `${cleaned}${extension}`,
+            name: cleaned,
+            requestedBy,
+          });
+          if (result.ok) {
+            // The list is now stale, and lookupEmoji is what people use to
+            // check whether the thing they just asked for exists.
+            cache = undefined;
+            return {
+              name: cleaned,
+              submitted: true,
+              summary: `Added \`:${cleaned}:\` to the workspace for <@${requestedBy}>. It is live now — anyone can use it. It was added through the bot owner's Slack account, since Slack has no app-level API for adding emoji, so it shows as his in the emoji list.`,
+            };
+          }
+          return {
+            error: describeUploadError(result.error),
+            submitted: false,
+          };
+        }
+        if (!channelId) {
+          return {
+            error:
+              'Kyto cannot add emoji right now: its emoji session is not configured and this workspace has no emoji-request channel set. Tell the user to ask the bot owner.',
+            submitted: false,
+          };
+        }
         await slack.webClient.filesUploadV2({
           channel_id: channelId,
           file_uploads: [
@@ -369,6 +438,51 @@ export function submitEmojiTool({
         logger.warn({ err: error, name: cleaned }, '[emoji] submission failed');
         return { error: errorMessage(error), submitted: false };
       }
+    },
+  });
+}
+
+/**
+ * Remove a custom emoji. OWNER ONLY, and registered only for him.
+ *
+ * Two reasons it is not open like adding is. Slack only lets the account that
+ * added an emoji remove it, and every emoji kyto adds goes in under the owner's
+ * account — so "remove it" would mean anyone in the workspace could delete
+ * anything kyto has ever added, for anyone. And removal is the destructive half:
+ * an emoji someone is using in a saved message just disappears.
+ */
+export function removeEmojiTool({ requestedBy }: { requestedBy: string }) {
+  return tool({
+    description:
+      'Remove a custom emoji from the workspace. Only works for emoji that were added through kyto (Slack only allows the adding account to remove one), and only the bot owner may do this. Destructive and immediate: the emoji vanishes from every message already using it, so confirm the name first with lookupEmoji.',
+    inputSchema: z.object({
+      name: z
+        .string()
+        .min(2)
+        .max(40)
+        .describe('The emoji name, lowercase, no colons.'),
+    }),
+    execute: async ({ name }) => {
+      const cleaned = name.replace(/:/g, '').trim().toLowerCase();
+      if (!EMOJI_NAME.test(cleaned)) {
+        return { error: 'Invalid emoji name.', removed: false };
+      }
+      const result = await removeEmoji({ name: cleaned, requestedBy });
+      if (!result.ok) {
+        return {
+          error:
+            result.error === 'emoji_not_found'
+              ? `There is no custom emoji called \`:${cleaned}:\`.`
+              : describeUploadError(result.error),
+          removed: false,
+        };
+      }
+      cache = undefined;
+      return {
+        name: cleaned,
+        removed: true,
+        summary: `Removed \`:${cleaned}:\` from the workspace.`,
+      };
     },
   });
 }
