@@ -51,6 +51,7 @@ import { startThinking } from '@/lib/agent/utils';
 import { promptWithAttachments, seedAttachments } from '@/lib/ai/attachments';
 import { requestHints } from '@/lib/ai/hints';
 import { renderStream, type StreamError } from '@/lib/ai/stream';
+import { createCardBudget } from '@/lib/ai/stream/cards';
 import {
   claimStickyUpgrade,
   type Escalation,
@@ -399,6 +400,14 @@ async function executeTurn(
       });
     }
   }
+
+  // How many plan cards fit in the plan message currently open. A turn is
+  // rendered across SEVERAL messages (a segment split here, a 4.5-minute
+  // rotation inside harness.stream), and a card id only exists in the message it
+  // was appended to — so the budget is reset at each boundary rather than lasting
+  // the whole attempt. See lib/ai/stream/cards.ts for what that used to look
+  // like: every message after the first showed only "N more tool calls".
+  const cards = createCardBudget();
 
   async function* renderTurn({
     message: turnMessage,
@@ -791,6 +800,7 @@ async function executeTurn(
           tools: built.tools,
         });
         for await (const chunk of renderStream({
+          budget: cards,
           context: {
             ...attemptLog(currentAttempt),
             threadId,
@@ -1370,13 +1380,22 @@ async function executeTurn(
             continue;
           }
           if (action === 'split') {
+            // This message is done and the next card belongs to the one after
+            // it. Settle up first, or a card mid-flight stays spinning in a
+            // message nothing can update again.
+            yield* cards.endMessage();
             return;
           }
           yield value as StreamChunk;
           pending = await nextRendered();
         }
+        // The stream ended inside this segment; renderStream has already
+        // yielded its own closers, so there is nothing left to settle here.
       };
       await slack.stream(threadId, segment(), {
+        // A rotation cuts a new plan message just like a split does, but from
+        // inside the harness, where the budget is not visible.
+        onRotate: () => cards.endMessage(),
         recipientTeamId: slack.teamId ?? '',
         recipientUserId: turnMessage.author.userId,
         taskDisplayMode: 'plan',

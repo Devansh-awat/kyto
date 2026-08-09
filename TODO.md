@@ -317,3 +317,284 @@ tools" were fiction on a public repo. README also pointed at
 `Devansh-awat/kyto` and states AGPL-3.0. `docs/reference/harness.md` keeps the
 phrase "coding agents" on purpose: there it means Claude Code, Codex and
 OpenCode, which is what kyto is being compared against.
+
+For emoji uploads #emojibot uses https://github.com/taciturnaxolotl/emojibot so we just gotta copy its method, pls explain how to do it, it uses a user token copied from devtools or something
+
+pasted from a full thread. only last thinking block is expanded, as that shows 39 steps and no details. for some reason direct json or stuff came as main output, is it issue with model or harness?
+devansh  [12:37 PM]
+@kyto pls test ALL your tools, all parameter options, EVERYTHING
+kyto  [12:37 PM]
+kyto  [12:37 PM]
+On it — running a full tool sweep. Starting with the read-only batch in parallel, then working through the write tools one at a time. Give me a bit.
+kyto  [12:37 PM]
+kyto  [12:37 PM]
+Read-only batch all green. Sweeping the next set of tools now.
+kyto  [12:37 PM]
+kyto  [12:38 PM]
+Core reads and sandbox all working. Now the write / interactive tools, one at a time. Starting with codeMode (sandbox scripting) and the sandbox's read-only slack proxy.
+kyto  [12:38 PM]
+kyto  [12:38 PM]
+No bun in the image. Installing it so codeMode can run, then re-running the test.
+kyto  [12:38 PM]
+kyto  [12:38 PM]
+codeMode's shell doesn't pick up the bun PATH. Making bun available globally.
+kyto  [12:38 PM]
+kyto  [12:38 PM]
+codeMode itself works — my test just called a method the read-only proxy doesn't forward (it helpfully listed what it does). Re-running with a valid one to confirm end-to-end.
+kyto  [12:38 PM]
+kyto  [12:39 PM]
+codeMode fully verified (shell, slack proxy, fetch, math all good). Now the state-changing tools one at a time. React first:
+kyto  [12:39 PM]
+kyto  [12:39 PM]
+react/unreact ✓. Now the memory tools (save → fetch → edit → delete), which are private to you:
+kyto  [12:39 PM]
+kyto  [12:39 PM]
+Memory tools full cycle ✓. Now generateImage (posts to this thread), then I'll use the file to also test viewImage + uploadFile + image editing:
+kyto  [12:39 PM]
+kyto  [12:39 PM]
+Generated image
+kyto-image-1.png kyto  [12:39 PM]
+viewImage ✓. Now image editing (generateImage with editPaths) using that same file:
+kyto  [12:39 PM]
+kyto  [12:40 PM]
+Image edit ✓. Now uploadFile — creating a small artifact and uploading it to the thread:
+kyto  [12:40 PM]
+kyto  [12:40 PM]
+Tool sweep test file
+tool-sweep-upload.txt 
+
+hello from the tool-sweep
+line 2: uploadFile test artifact
+
+
+
+kyto  [12:40 PM]
+uploadFile ✓. Now getFile — testing it by pulling a file from Slack (I'll grab content from a known file/canvas id):
+kyto  [12:40 PM]
+kyto  [12:40 PM]
+getFile ✓. Now mermaid (renders + uploads to thread):
+kyto  [12:40 PM]
+kyto  [12:40 PM]
+Tool sweep flowchart
+diagram.png kyto  [12:40 PM]
+mermaid ✓. Now textToSpeech (renders + uploads mp3):
+kyto  [12:40 PM]
+kyto  [12:40 PM]
+Generated audio
+MP3 kyto-speech-1786259448629.mp30:05(89 kB)0:051xkyto  [12:40 PM]
+textToSpeech ✓. Now postMessage — sending a test message into the channel (clearly marked as a test):
+
+
+
+
+
+<｜DSML｜tool_calls>
+<｜DSML｜invoke name="postMessage">
+<｜DSML｜parameter name="id" string="true">slack:C0BDH1FNCTX</｜DSML｜parameter>
+<｜DSML｜parameter name="message" string="true">Posting as a tool test (owner asked me to verify every tool). This is a postMessage smoke test with a blocks payload below. Nothing to do here.</｜DSML｜parameter>
+<｜DSML｜parameter name="type" string="true">channel</｜DSML｜parameter>
+<｜DSML｜parameter name="blocks" string="false">[{"type":"section","text":{"type":"mrkdwn","text":"Tool test: postMessage → channel, with a Block Kit section block."}},{"type":"context","elements":[{"type":"mrkdwn","text":"blocks render ✓ · this message is a test and can be ignored"}}<｜DSML｜tool_calls>
+<｜DSML｜invoke name="postMessage">
+<｜DSML｜parameter name="id" string="true">slack:C0BDH1FNCTX</｜DSML｜parameter>
+<｜DSML｜parameter name="message" string="true">Posting as a tool test (owner asked me to verify every tool). This is a postMessage smoke test with a blocks payload below. Nothing to do here.</｜DSML｜parameter>
+<｜DSML｜parameter name="type" string="true">channel</｜DSML｜parameter>
+<｜DSML｜parameter name="blocks" string="false">[{"type":"section","text":{"type":"mrkdwn","text":"Tool test: postMessage → channel, with a Block Kit section block."}},{"type":"context","elements":[{"type":"mrkdwn","text":"blocks render ✓ · this message is a test and can be ignored"}}]<｜DSML｜tool_calls>
+<｜DSML｜invoke name="postMessage">
+<｜DSML｜parameter name="id" string="true">slack:C0BDH1FNCTX</｜DSML｜parameter>
+<｜DSML｜parameter name="message" string="true">Posting as a tool test (owner asked me to verify every tool). This is a postMessage smoke test with a blocks payload below. Nothing to do here.</｜DSML｜parameter>
+<｜DSML｜parameter name="type" string="true">channel</｜DSML｜parameter>
+<｜DSML｜parameter name="blocks" string="false">[{"type":"section","text":{"type":"mrkdwn","text":"Tool test: postMessage → channel, with a Block Kit section block."}},{"type":"context","elements":[{"type":"mrkdwn","text":"blocks render ✓ · this message is a test and can be ignored"}}]}]<｜DSML｜tool_calls>
+<｜DSML｜invoke name="postMessage">
+<｜DSML｜parameter name="id" string="true">slack:C0BDH1FNCTX</｜DSML｜parameter>
+<｜DSML｜parameter name="message" string="true">Posting as a tool test (owner asked me to verify every tool). This is a postMessage smoke test with a blocks payload below. Nothing to do here.</｜DSML｜parameter>
+<｜DSML｜parameter name="type" string="true">channel</｜DSML｜parameter>kyto  [12:40 PM]
+<｜DSML｜parameter name="blocks" string="false">[{"type":"section","text":{"type":"mrkdwn","text":"Tool test: postMessage → channel, with a Block Kit section block."}},{"type":"context","elements":[{"type":"mrkdwn","text":"blocks render ✓ · this message is a test and can be ignored"}}]}]</<｜DSML｜tool_calls>
+<｜DSML｜invoke name="postMessage">
+<｜DSML｜parameter name="id" string="true">slack:C0BDH1FNCTX</｜DSML｜parameter>
+<｜DSML｜parameter name="message" string="true">Posting as a tool test (owner asked me to verify every tool). This is a postMessage smoke test with a blocks payload below. Nothing to do here.</｜DSML｜parameter>
+<｜DSML｜parameter name="type" string="true">channel</｜DSML｜parameter>
+<｜DSML｜parameter name="blocks" string="false">[{"type":"section","text":{"type":"mrkdwn","text":"Tool test: postMessage → channel, with a Block Kit section block."}},{"type":"context","elements":[{"type":"mrkdwn","text":"blocks render ✓ · this message is a test and can be ignored"}}]}]</｜DSML｜<｜DSML｜tool_calls>
+<｜DSML｜invoke name="postMessage">
+<｜DSML｜parameter name="id" string="true">slack:C0BDH1FNCTX</｜DSML｜parameter>
+<｜DSML｜parameter name="message" string="true">Posting as a tool test (owner asked me to verify every tool). This is a postMessage smoke test with a blocks payload below. Nothing to do here.</｜DSML｜parameter>
+<｜DSML｜parameter name="type" string="true">channel</｜DSML｜parameter>
+<｜DSML｜parameter name="blocks" string="false">[{"type":"section","text":{"type":"mrkdwn","text":"Tool test: postMessage → channel, with a Block Kit section block."}},{"type":"context","elements":[{"type":"mrkdwn","text":"blocks render ✓ · this message is a test and can be ignored"}}]}]</｜DSML｜parameter
+kyto  [12:40 PM]
+kyto  [12:41 PM]
+blocks needs to be a JSON string. Retrying:
+kyto  [12:41 PM]
+kyto  [12:41 PM]
+Malformed JSON in my block. Fixing:
+kyto  [12:41 PM]
+kyto  [12:41 PM]
+postMessage + blocks ✓. Now pin / unpin on that test message:
+kyto  [12:41 PM]
+kyto  [12:41 PM]
+Likely the slack: prefix. Using the raw channel id:
+kyto  [12:41 PM]
+kyto  [12:41 PM]
+pin/unpin ✓ (note: takes the raw C… channel id, not slack: prefix — good to know). Now canvas create → read → delete:
+kyto  [12:41 PM]
+kyto  [12:41 PM]
+canvasWrite (create + edit) and canvasRead ✓. Cleaning up the test canvas:
+kyto  [12:41 PM]
+kyto  [12:41 PM]
+Canvas full cycle ✓. Now deploySite — building a tiny static site, deploying, verifying, then removing it:
+kyto  [12:41 PM]
+kyto  [12:41 PM]
+Site is live and serving ✓. Now testing the page parameter (sub-path publish into the same site):
+kyto  [12:41 PM]
+kyto  [12:42 PM]
+page param ✓. Now removeSite — first the sub page, then the whole site:
+kyto  [12:42 PM]
+orpheus  [12:42 PM]
+page param . now
+removesite first the sub
+page then the whole site
+– a haiku by @kyto, 2026
+kyto  [12:42 PM]
+Deploy/remove cycle ✓. Now email — sending to my own inbox, then reading it back:
+kyto  [12:42 PM]
+kyto  [12:42 PM]
+Email round-trip ✓ (also confirms the inbox has real GitHub notification traffic — noted). Now the browser tool:
+kyto  [12:42 PM]
+kyto  [12:42 PM]
+Browser ✓ (open + snapshot). Now gh (GitHub CLI):
+kyto  [12:42 PM]
+kyto  [12:43 PM]
+gh ✓ (authenticated as kyto-agent, 11 public repos). Now background process management (run → poll → kill):
+kyto  [12:43 PM]
+kyto  [12:43 PM]
+run/getProcessOutput ✓. Now killProcess — starting a long sleep and killing it:
+kyto  [12:43 PM]
+kyto  [12:43 PM]
+killProcess ✓ (the killed proc is gone). Now slackScript (read-only aggregate queries):
+kyto  [12:43 PM]
+kyto  [12:43 PM]
+slackScript ✓. Now lookupEmoji (reading a real workspace custom emoji):
+kyto  [12:43 PM]
+kyto  [12:43 PM]
+:bar_chart:  Tool-sweep poll: does everything look green?All green
+░░░░░░░░░░  0 votes · 0%
+
+Green but loud
+░░░░░░░░░░  0 votes · 0%
+
+Still testing
+░░░░░░░░░░  0 votes · 0%:ballot_box_with_ballot: Click an option to vote · click again to undo · 0 total voteskyto  [12:43 PM]
+lookupEmoji ✓. Now poll (posts an interactive card to this thread — one tap to vote, then it's done):
+kyto  [12:43 PM]
+kyto  [12:43 PM]
+poll ✓. Now recurring reminder (create → list → cancel):
+kyto  [12:43 PM]
+kyto  [12:43 PM]
+Recurring create → cancel ✓. Now one-time scheduleReminder (this DMs you a small test note in a couple minutes — as requested):
+kyto  [12:43 PM]
+kyto subagent sweep-probe  [12:44 PM]
+kyto  [12:44 PM]
+scheduleReminder ✓. Now subagents — spawning a quick background one and collecting its report:
+kyto  [12:44 PM]
+kyto  [12:44 PM]
+Subagent ✓. Now the focus/participation control tools — testing joinThread + leaveThread, and focusMode set + clear:
+kyto  [12:44 PM]
+kyto  [12:44 PM]
+All control tools ✓. Final cleanup verification (sites back to baseline) plus confirming the scratch DM reminder was logged:
+kyto  [12:44 PM]
+kyto  [12:44 PM]
+Full sweep done. Everything's clean. Here's the report.
+
+
+Tool sweep — everything tested :white_check_mark:Read tools (all returned live data):
+getUser, getChannelInfo, listThreads, readConversationHistory, summarizeThread, getPermalink, canvasList, canvasRead, searchWeb, fetchUrl, searchSlack, listSites, listReminders, getFile, viewImage, lookupEmoji, listThreads
+sendEmail → checkInbox → readEmail round-tripped (sent to my own inbox and read it back)
+gh works, authed as kyto-agent (11 public repos)
+kyto  [12:44 PM]
+Write / interactive tools (all executed + reverted where applicable):
+react/unreact (add + remove ✓)
+Memory lifecycle: saveMemory → fetchMemory → editMemory → deleteMemory all ✓
+generateImage (posted a green-check tile to this thread), then image edit via editPaths (checkmark → red, blue border, saved not posted)
+uploadFile (my .txt artifact is up in the thread), getFile (downloaded a canvas by file id)
+mermaid (diagram up), textToSpeech (mp3 up)
+postMessage with Block Kit blocks ✓, then pinMessage/unpinMessage on it
+canvasWrite create → edit → canvasRead → canvasDelete all ✓
+deploySite (live at kyto.dino.icu/tool-sweep-test/), page sub-path publish, then removeSite (page + whole site) — back to the original 4 sites
+runBackgroundProcess → getProcessOutput (ran to DONE) → killProcess (killed a 5-min sleep)
+slackScript aggregate query ✓
+poll (3-option card is in the thread)
+scheduleRecurringReminder create (kind=message) → cancelReminder ✓, and scheduleReminder (one-time, DMing you ~07:16 UTC)
+runSubagent (background) → checkSubagent → got its report ✓
+focusMode set+clear, joinThread+leaveThread ✓
+codeMode (bun sandbox: shell + read-only slack proxy + fetch + math) ✓
+kyto  [12:44 PM]
+Findings worth flagging
+codeMode needed manual fix — bun wasn't on PATH, so the tool failed with "bun: command not found". I installed it and symlinked /home/user/.bun/bin/bun to /usr/local/bin/bun. It works now, but it'll break again on a fresh sandbox unless that's baked into the image.
+pinMessage/unpinMessage need the raw channel id (C0BDH1FNCTX), not the slack: prefixed form — that error shape is a bit confusing (channel_not_found).
+Canvas edit minor bug — appending markdown that contains blank lines writes them as literal \n text instead of rendering line breaks (my append test shows ---\n\nEdit test… as raw text). Newlines inside content don't become paragraph breaks.
+gh auth status warns the enterprise token (GH_ENTERPRISE_TOKEN) is missing read:org scope. Ordinary repo/API calls work, but org-scoped things may not.
+slackScript's read-only proxy rejected channels.info (correct method is conversations.info) — expected, it's a hard whitelist; confirmed the full allowed-method list is intact.
+kyto  [12:44 PM]
+Skipped deliberately (not broken, just noisy/blocking): askQuestion (blocks up to 10 min for a human to answer), sendAsUser/editAsUser (would post as you), submitEmoji (real submission), and upgradeModel (one-shot, expensive, not a smoke-test target). scheduleRecurringReminder variants kind=agent/bash/script I didn't fire (the agent one you already have running as your daily check-in proves that path).
+kyto  [12:44 PM]
+Nothing is broken. The purple flag is #1 — you'll want bun in the base image. Want me to fix the canvas newline handling or dig into the gh read:org scope?kyto  [12:44 PM]
+39 more tool calls39 more tool calls ran and are not shown individually, to keep this list readable.
+kyto  [12:44 PM]
+14,139 tokens · 32 tok/s
+
+above, in same conversation one expanded block shows thinking, but no tool calls and instead 38 more tool calls. this is happening since like a month, every time i tell you to fix, still happens, explain the bug and FIX
+38 more tool calls (running)ThinkingAll control tools work. Let me also quickly test askQuestion? It blocks up to 10 min waiting for a response. That's heavy. I could test it with a quick question to devansh and allowOther. But it blocks. Given owner wants "EVERYTHING", maybe worth a quick one with a short answer. Actually askQuestion can block for up to 10 min. That slows the whole turn. I'll note it as not tested to avoid the block, or I can test it since devansh is right here and can click. Hmm, risky to block. I'll skip askQuestion to keep the turn snappy, or... Let me test it but it might hang. I think it's acceptable to note askQuestion wasn't executed because it blocks waiting for a human response. Actually let me test it — owner is present. But it could block the whole turn 10 min. I'd rather test it with a question they'd answer quickly. But if they don't answer, I wait 10 min. That's a long time. I'll skip it and report.
+
+Let me now also verify the remaining read tools I haven't: getFile via URL (done via id), listSites (done), canvasList (done), getChannelInfo (done), summarizeThread (done), readConversationHistory (done), listThreads (done), searchSlack (done), getAllPermalink (done).
+
+Also test deploySite editors param? Not necessary.
+
+Also should I test the scheduleReminder already fired? It fires at 07:16. Fine.
+
+Let me also test gh a bit more meaningful — maybe list repos. Already fine.
+
+Let me also test uploadFile with an image (I uploaded text). Already tested uploadFile.
+
+Let me test generateImage upload:true already did (the first one uploaded). Good.
+
+Let me test the browser further? open/snapshot enough.
+
+Let me test sendAsUser/editAsUser? Those are owner-posted messages; risky. Owner said test everything. sendAsUser posts as owner. I'd rather not post as owner without being sure... Actually owner is the one asking. But sendAsUser is "send a Slack message AS the owner". Testing it would post a message looking like Devansh. That could be confusing/spammy. I'll skip and note.
+
+Let me also test submitEmoji? That submits to emoji-request channel - a real side effect, skip.
+
+Let me test textToSpeech done.
+
+Now, one more: I should verify the getFile with a real uploaded image too — done with canvas.
+
+I think I've tested everything reasonable. Let me also confirm listSites after removing (should be back to 4). And check the poll/reminder fired? reminder fires at 07:16:27, not yet.
+
+Let me do a final listSites to confirm cleanup, then write up the report.
+
+Actually also: searchWeb done, fetchUrl done.
+
+Let me also test deploySite editors param quickly? It requires naming editors. Skip.
+
+Let me verify listSites cleanup and then compile the report. Also confirm the message I posted (blocks) and poll/tts/images are visible in thread.
+
+Let me run listSites.
+
+Dint we make it use user token for search if action token expired?
+devansh  [12:38 PM]
+@kyto wait 3 mins then try slack search need to see if i fixed expiring token
+kyto  [12:38 PM]
+kyto  [12:38 PM]
+OK, waiting 3 minutes then I'll try a search.
+kyto  [12:38 PM]
+kyto  [12:41 PM]
+3 minutes are up, running a search now.
+kyto  [12:41 PM]
+kyto  [12:41 PM]
+Tried it right after the 3-minute wait and it's still failing:
+
+Error: An API error occurred: invalid_action_tokenkyto  [12:41 PM]
+The invalid_action_token error is back the moment I call search, so the fix doesn't seem to have taken effect yet. Want me to try again in a bit, or is there something on your end you want to double-check first?kyto  [12:41 PM]
+327 tokens · 1.7 tok/s
+
+regarding the opencode key, only some free models will work, check their docs and try
+
+http://github.com/toeknee-top/Forkie is my first fork
+https://github.com/itzmetanjim/coolton is another agent see if we can take inspiration

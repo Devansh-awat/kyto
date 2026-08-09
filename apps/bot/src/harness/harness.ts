@@ -469,6 +469,11 @@ export class SlackHarness {
       recipientTeamId: string;
       recipientUserId: string;
       taskDisplayMode?: 'plan';
+      // Called when the card is about to rotate, i.e. a new plan MESSAGE is
+      // starting. Whatever it returns is appended to the message being closed —
+      // a task card only exists inside the stream it was appended to, so
+      // anything still mid-flight has to be finished here or it spins forever.
+      onRotate?: () => StreamChunk[];
       // Per-message identity override (needs chat:write.customize). Used so a
       // subagent's own streamed message posts as "kyto subagent" + its icon.
       username?: string;
@@ -499,6 +504,21 @@ export class SlackHarness {
     // it (both on rotation and at the end). Reset on each rotation.
     let currentHasContent = false;
     let structuredSupported = true;
+    const appendChunk = async (chunk: StreamChunk): Promise<void> => {
+      if (!structuredSupported) {
+        return;
+      }
+      try {
+        await streamer.append({ chunks: [chunk] as never });
+        currentHasContent = true;
+      } catch (error) {
+        structuredSupported = false;
+        this.logger.warn(
+          { err: error },
+          '[harness] structured stream chunk rejected; text-only fallback'
+        );
+      }
+    };
     const stopStreamer = async (): Promise<void> => {
       if (!currentHasContent) {
         return;
@@ -513,6 +533,12 @@ export class SlackHarness {
     const rotateIfStale = async (): Promise<void> => {
       if (Date.now() - streamStartedAt < STREAM_ROTATE_MS) {
         return;
+      }
+      // Settle the outgoing message BEFORE stopping it: this is the caller's
+      // only chance to finish cards it opened here, since the next append goes
+      // to a message where those ids do not exist.
+      for (const chunk of options.onRotate?.() ?? []) {
+        await appendChunk(chunk);
       }
       await stopStreamer();
       streamer = startStreamer();
@@ -530,21 +556,7 @@ export class SlackHarness {
           }
           continue;
         }
-        if (!structuredSupported) {
-          continue;
-        }
-        try {
-          await streamer.append({
-            chunks: [chunk] as never,
-          });
-          currentHasContent = true;
-        } catch (error) {
-          structuredSupported = false;
-          this.logger.warn(
-            { err: error },
-            '[harness] structured stream chunk rejected; text-only fallback'
-          );
-        }
+        await appendChunk(chunk);
       }
     } finally {
       await stopStreamer();

@@ -3,22 +3,19 @@ import type { StreamChunk } from '@/harness';
 import logger from '@/lib/logger';
 import { deepErrorText, errorStatus } from '@/lib/utils/error';
 import { clamp } from '@/lib/utils/text';
+import { type CardBudget, createCardBudget } from './cards';
 import { createInlineReasoningSplitter } from './inline-reasoning';
 import {
   type ClosedReasoning,
   createReasoningTracker,
 } from './reasoning-tracker';
 import { renderTask } from './tasks';
+import { createToolMarkupFilter } from './tool-markup';
 
-const MAX_VISIBLE_TASKS = 45;
-// Reasoning ("Thinking") cards get their OWN visibility budget, separate from
-// tool-call cards. They used to share one 45-slot set, so a turn with many tool
-// calls exhausted the budget on tool cards and every later THINKING block was
-// folded into the generic "N more steps" counter instead of shown — the model's
-// reasoning vanished behind a step count on exactly the long turns where it
-// matters most. A separate budget means tool activity can never starve it.
-const MAX_VISIBLE_REASONING = 45;
 const REASONING_OUTPUT_MAX_LENGTH = 2800;
+// How much leaked tool markup to keep in the log line. Enough to see which
+// tool the model was trying to call without dumping a Block Kit payload.
+const MARKUP_LOG_MAX_LENGTH = 400;
 
 // Opt-in raw-stream dump for diagnosing the Thinking card (e.g. "N more steps"
 // showing where reasoning should be). Set KYTO_LOG_FULLSTREAM=1 and restart to
@@ -69,6 +66,7 @@ export interface StreamError {
 }
 
 export async function* renderStream({
+  budget,
   context,
   emitText = false,
   knownTools,
@@ -82,6 +80,13 @@ export async function* renderStream({
   onTally,
   stream,
 }: {
+  /**
+   * Which plan cards fit in the plan message currently open. Owned by the
+   * CALLER, because a plan message ends where renderStream cannot see (a
+   * segment split, a 4.5-minute card rotation) — see cards.ts. A caller that
+   * renders into exactly one message can leave it out.
+   */
+  budget?: CardBudget;
   /** Attempt identity (model/provider/threadId) folded into every log line. */
   context?: Record<string, unknown>;
   /** Receives the attempt's tally once the stream ends (for the caller's log). */
@@ -138,15 +143,11 @@ export async function* renderStream({
   // it enforces — a card id per BLOCK, and every block closed — are in
   // reasoning-tracker.ts, where they have tests.
   const reasoningTracker = createReasoningTracker();
-  const visibleTaskIds = new Set<string>();
-  // Reasoning cards' own visibility budget (see MAX_VISIBLE_REASONING).
-  const visibleReasoningIds = new Set<string>();
-  // Two overflow rows, not one. They used to share a counter, so a long turn
-  // showed a single "N more steps (running)" that mixed hidden tool calls with
-  // hidden thinking blocks — the owner read it as kyto narrating step counts
-  // instead of reasoning. Counted apart, each row says which kind it is.
-  let hiddenToolCount = 0;
-  let hiddenReasoningCount = 0;
+  const cards = budget ?? createCardBudget();
+  // Tool-call markup the model wrote into its TEXT instead of its tool_calls
+  // field. Never part of a reply (see tool-markup.ts).
+  const toolMarkup = createToolMarkupFilter();
+  let droppedMarkup = '';
   let skipped = false;
   let droppedTextDeltas = 0;
   // Reasoning that arrived inline in the TEXT stream (see inline-reasoning.ts),
@@ -184,7 +185,8 @@ export async function* renderStream({
     if (closed.text) {
       onReasoning?.(closed.text);
     }
-    if (!visibleReasoningIds.has(closed.id)) {
+    cards.finish(closed.id);
+    if (!cards.isVisible(closed.id)) {
       return;
     }
     yield {
@@ -247,6 +249,11 @@ export async function* renderStream({
           if (split.reasoning) {
             inlineReasoningText += split.reasoning;
           }
+          // …and a model whose tool calls failed to be parsed writes its own
+          // call markup here instead. That is never a reply (tool-markup.ts).
+          const clean = toolMarkup.push(split.text);
+          droppedMarkup += clean.dropped;
+          split.text = clean.text;
           // A skipped turn intentionally produces no reply, and some providers
           // emit placeholder garbage (e.g. "(Empty response: ...)") in this slot
           // when the model returned only a thinking block — never forward either.
@@ -271,19 +278,8 @@ export async function* renderStream({
           // Text is collected for EVERY reasoning block, including one whose plan
           // card is hidden (the visible-task budget is a UI limit; a thought kyto
           // had is still a thought it should remember next turn — see onReasoning).
-          if (
-            !showTask({
-              id,
-              max: MAX_VISIBLE_REASONING,
-              visibleIds: visibleReasoningIds,
-            })
-          ) {
-            hiddenReasoningCount += 1;
-            yield hiddenTaskUpdate({
-              count: hiddenReasoningCount,
-              done: false,
-              kind: 'thinking',
-            });
+          if (!cards.show({ id, kind: 'reasoning', title: 'Thinking' })) {
+            yield cards.overflow('reasoning');
             break;
           }
           yield {
@@ -331,18 +327,13 @@ export async function* renderStream({
             toolName: part.toolName,
           });
           if (
-            !showTask({
+            !cards.show({
               id: part.toolCallId,
-              max: MAX_VISIBLE_TASKS,
-              visibleIds: visibleTaskIds,
+              kind: 'tool',
+              title: rendered.title,
             })
           ) {
-            hiddenToolCount += 1;
-            yield hiddenTaskUpdate({
-              count: hiddenToolCount,
-              done: false,
-              kind: 'tool',
-            });
+            yield cards.overflow('tool');
             break;
           }
           yield {
@@ -389,7 +380,8 @@ export async function* renderStream({
             toolName: part.toolName,
           });
           toolInputs.delete(part.toolCallId);
-          if (!visibleTaskIds.has(part.toolCallId)) {
+          cards.finish(part.toolCallId);
+          if (!cards.isVisible(part.toolCallId)) {
             break;
           }
           yield {
@@ -423,7 +415,8 @@ export async function* renderStream({
             toolName: part.toolName,
           });
           toolInputs.delete(part.toolCallId);
-          if (!visibleTaskIds.has(part.toolCallId)) {
+          cards.finish(part.toolCallId);
+          if (!cards.isVisible(part.toolCallId)) {
             break;
           }
           yield {
@@ -455,13 +448,28 @@ export async function* renderStream({
   {
     const rest = inlineReasoning.flush();
     inlineReasoningText += rest.reasoning;
-    if (rest.text && !skipped && !isPlaceholderText(rest.text)) {
-      tally.textChars += rest.text.length;
-      await onTextDelta?.(rest.text);
+    const clean = toolMarkup.flush();
+    droppedMarkup += clean.dropped;
+    if (clean.text && !skipped && !isPlaceholderText(clean.text)) {
+      tally.textChars += clean.text.length;
+      await onTextDelta?.(clean.text);
       if (emitText) {
-        yield rest.text;
+        yield clean.text;
       }
     }
+  }
+  if (droppedMarkup) {
+    // Worth a loud line: it means the provider failed to parse the model's tool
+    // calls, so every call in that stretch was never executed and the model was
+    // retrying into a void. The reply just lost the evidence, not the cause.
+    logger.warn(
+      {
+        ...context,
+        chars: droppedMarkup.length,
+        markup: clamp(droppedMarkup, MARKUP_LOG_MAX_LENGTH),
+      },
+      '[stream] model wrote tool-call markup as text; kept it out of the reply'
+    );
   }
   const inlineTrimmed = inlineReasoningText.trim();
   if (inlineTrimmed) {
@@ -475,19 +483,10 @@ export async function* renderStream({
       '[stream] model emitted reasoning inline in its text; kept it out of the reply'
     );
   }
-  if (hiddenToolCount > 0) {
-    yield hiddenTaskUpdate({
-      count: hiddenToolCount,
-      done: true,
-      kind: 'tool',
-    });
-  }
-  if (hiddenReasoningCount > 0) {
-    yield hiddenTaskUpdate({
-      count: hiddenReasoningCount,
-      done: true,
-      kind: 'thinking',
-    });
+  // This is the last plan message of the attempt, so close it out here: any
+  // card still mid-flight, then the final overflow rows.
+  for (const chunk of cards.endMessage()) {
+    yield chunk;
   }
   logger.info(
     { ...context, ...tally, droppedTextDeltas },
@@ -503,51 +502,4 @@ const PLACEHOLDER_TEXT = /^\s*\(empty (response|completion):/i;
 
 function isPlaceholderText(text: string): boolean {
   return PLACEHOLDER_TEXT.test(text);
-}
-
-function showTask({
-  id,
-  visibleIds,
-  max,
-}: {
-  id: string;
-  visibleIds: Set<string>;
-  max: number;
-}): boolean {
-  if (visibleIds.has(id)) {
-    return true;
-  }
-  if (visibleIds.size < max) {
-    visibleIds.add(id);
-    return true;
-  }
-  return false;
-}
-
-// The overflow row, shown once the plan is already MAX_VISIBLE_TASKS long. It
-// is read by people scrolling a Slack thread, not by us reading a log, so it
-// says what it means: "Activity: 25 / Ran 25 additional activity items" told
-// nobody anything, and looked like a bug in a turn that had gone fine.
-function hiddenTaskUpdate({
-  count,
-  done,
-  kind,
-}: {
-  count: number;
-  done: boolean;
-  kind: 'thinking' | 'tool';
-}): StreamChunk {
-  const noun =
-    kind === 'tool'
-      ? `tool call${count === 1 ? '' : 's'}`
-      : `thinking step${count === 1 ? '' : 's'}`;
-  return {
-    id: kind === 'tool' ? 'hidden-activity' : 'hidden-reasoning',
-    output: done
-      ? `${count} more ${noun} ran and are not shown individually, to keep this list readable.`
-      : undefined,
-    status: done ? 'complete' : 'in_progress',
-    title: done ? `${count} more ${noun}` : `${count} more ${noun} (running)`,
-    type: 'task_update',
-  };
 }
