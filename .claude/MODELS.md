@@ -75,33 +75,18 @@ Moved out of CLAUDE.md to hold its 40k budget; the secrets-handling half stays t
 - A key is marked **invalid only on a 401/402/403** (`recordByokOutcome`) — a 429/5xx says nothing; marked valid when it completes a turn; checked with a real 1-token completion when saved.
 - `generateImage` stays on the **service** provider even on a BYOK turn (a chat-completions key can't serve images).
 
-## OpenCode Zen — the free tier below mebbo (2026-08-09)
+## OpenCode Zen — WIRED, THEN REMOVED (2026-08-09 → 2026-08-11)
 
-`opencode.ai/zen/v1`, `OPENCODE_API_KEY`. Only the FREE slugs are usable: every
-paid one answers `CreditsError: No payment method`. All eight free slugs were
-measured with seven checks each (letter counting, the bat-and-ball trap, a
-memoized-fib one-liner, weekday arithmetic 100 days back, exact instruction
-following, compact-JSON output, one real tool call):
+Three free slugs (`big-pickle`, `deepseek-v4-flash-free`, `longcat-2.0-free`)
+each scored 7/7 on the seven checks and ran as the tier below mebbo. **They are
+gone, and must not come back**: their docs say free-tier traffic "may be used to
+improve the model", and Hack Club's scraping policy (in force since 2026-06-15)
+allows training on Slack messages ONLY with every message author's explicit
+consent. A kyto turn carries other people's messages, so no position in the
+queue makes that lawful — "last resort" is still a resort. The owner's call,
+2026-08-11.
 
-| model | score | avg |
-|---|---|---|
-| `big-pickle` | 7/7 | 8.5s |
-| `deepseek-v4-flash-free` | 7/7 | 9.5s |
-| `longcat-2.0-free` | 7/7 | 11.3s |
-| `nemotron-3-ultra-free` | 6/7 | 17.0s |
-| `mimo-v2.5-free` | 5/7 | 10.2s |
-| `laguna-s-2.1-free` | 4/7 | 12.9s |
-| `north-mini-code-free`, `ling-3.0-flash-free` | upstream 500 | — |
-
-Only the three 7/7 models are wired, best first. `deepseek-v4-flash-free` is the
-SAME model as the primary, free, on a different provider.
-
-**Its position is a PRIVACY decision, not a price one** (owner's call: "last
-resort, not as last as gemini"). Their docs say free-tier traffic "may be used to
-improve the model", and two slugs say outright not to submit confidential data —
-but a kyto turn carries other people's Slack messages. So the tier sits BELOW
-mebbo and ABOVE the Gemini key, reached only when every private tier has already
-failed. Do not promote it for being fast and free; that is not the constraint.
-
-Note Cloudflare fronts the endpoint and 403s (`error code: 1010`) on some
-user-agents — Bun's fetch is fine, Python's `urllib` default is not.
+The same clause is why the fallback queue is an **allowlist of tiers**
+(`buildFallbackQueue`): a provider nobody chose is dropped, not tried last. That
+is tested. Before adding ANY new tier, read its terms for a training clause and
+for what it retains — price is not the only constraint.

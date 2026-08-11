@@ -15,7 +15,3 @@ export const HACKCLUB_PROVIDER = 'hackclub';
 // A friend's self-hosted OpenWebUI (chat.mebbo.cloud), re-exposing free
 // upstream endpoints on ONE key shared with everyone he gave it to.
 export const MEBBO_PROVIDER = 'mebbo';
-// OpenCode Zen (opencode.ai/zen), an OpenAI-compatible endpoint. Only its FREE
-// models are used; the paid ones need a payment method the workspace has not
-// attached.
-export const OPENCODE_PROVIDER = 'opencode';

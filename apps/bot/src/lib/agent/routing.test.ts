@@ -29,15 +29,6 @@ function mebbo(model: string): ModelAttempt {
   };
 }
 
-function opencode(model: string): ModelAttempt {
-  return {
-    apiKey: 'k',
-    baseURL: 'https://opencode.ai/zen/v1',
-    model,
-    provider: 'opencode',
-  };
-}
-
 // Mirrors the shape of LEADERBOARD_FALLBACK: HackClub rungs in rank order,
 // Gemini appended at the bottom.
 const leaderboard: ModelAttempt[] = [
@@ -45,7 +36,6 @@ const leaderboard: ModelAttempt[] = [
   hackclub('anthropic/claude-opus-4.8'),
   hackclub('anthropic/claude-sonnet-5'),
   mebbo('deepseek-ai/deepseek-v4-pro'),
-  opencode('big-pickle'),
   gemini('gemini-3.1-flash-lite'),
   gemini('gemini-2.5-flash'),
 ];
@@ -57,7 +47,6 @@ describe('buildFallbackQueue', () => {
       'anthropic/claude-opus-4.8',
       'anthropic/claude-sonnet-5',
       'deepseek-ai/deepseek-v4-pro',
-      'big-pickle',
       'gemini-3.1-flash-lite',
       'gemini-2.5-flash',
     ]);
@@ -80,10 +69,15 @@ describe('buildFallbackQueue', () => {
     expect(firstGemini).toBeGreaterThan(lastHackclub);
   });
 
-  test('drops a provider the leaderboard does not have', () => {
+  test('drops a provider that is not one of the named tiers', () => {
+    // The queue is an ALLOWLIST of tiers, which is what keeps a provider
+    // nobody chose off the walk: a turn carries other people's Slack messages, and
+    // Hack Club's scraping policy forbids handing those to a service that may
+    // train on them without every author's consent. A provider nobody vetted is
+    // dropped, not tried last.
     const queue = buildFallbackQueue([
       hackclub('a'),
-      { apiKey: 'k', baseURL: 'x', model: 'ghost', provider: 'retired-tier' },
+      { apiKey: 'k', baseURL: 'x', model: 'ghost', provider: 'trains-on-it' },
     ]);
     expect(queue.map((a) => a.model)).toEqual(['a']);
   });
@@ -198,20 +192,5 @@ describe('isPromptConstructionError', () => {
     const loop = new Error('loop') as Error & { cause?: unknown };
     loop.cause = loop;
     expect(isPromptConstructionError(loop)).toBe(false);
-  });
-});
-
-describe('the OpenCode Zen tier', () => {
-  test('sits below mebbo and above Gemini', () => {
-    // Its models are free in money but not in privacy: the free tier's traffic
-    // may be used to train, and a turn carries other people's Slack messages.
-    // So it must never be reached before a tier that keeps the content private.
-    const providers = buildFallbackQueue(leaderboard).map((a) => a.provider);
-    expect(providers.indexOf('opencode')).toBeGreaterThan(
-      providers.lastIndexOf('mebbo')
-    );
-    expect(providers.indexOf('opencode')).toBeLessThan(
-      providers.indexOf('gemini')
-    );
   });
 });
