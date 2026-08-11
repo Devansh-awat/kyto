@@ -397,24 +397,32 @@ message shows.
   requires both, and keeping it to one domain means kyto can never be talked
   into embedding an arbitrary site). DONE!
 
-**The whiteboard: built, worked, and then PULLED — tldraw will not let us
-(2026-08-11).** The multiplayer part was real and it worked: tldraw's own sync
-server ran inside kyto, two clients shared one document, cursors and all, saved
-across restarts. What you saw — it loads and then dies — is tldraw's licence
-enforcement, and I reproduced it in a headless browser: their `LicenseProvider`
-runs `shouldHideEditorAfterDelay`, and **five seconds** after load on any host
-that is not localhost it replaces the whole editor with an empty div. Their
-licence says it in words too: "Not to use the Software in Production
-Environments" without a paid key, where production means anything serving end
-users. Pinning the old 3.7.0 (which only drew a watermark) is not a way out —
-the same licence also says not to interfere with the key enforcement.
+**The whiteboard is real, and it is Excalidraw now (2026-08-11).** What you saw
+— it loads then dies — was tldraw's licence enforcement, reproduced in a
+headless browser: their `LicenseProvider` blanks the whole editor **5 seconds**
+after load on any host that is not localhost, and their licence says outright
+"Not to use the Software in Production Environments" without a paid key, plus
+not to interfere with the key check (so pinning the old 3.7.0, which only
+watermarked, is not a way round it either).
 
-So the tldraw whiteboard is **removed**: the `whiteboard` kind, the sync server,
-the client bundle, the five packages. `embed` still posts live HTML pages, which
-is untouched. **I need your call on the replacement — see the question I asked
-alongside this.** Excalidraw is MIT and has no gate of any kind; the socket
-server, the room persistence and the publish gate I built are all reusable, only
-tldraw's protocol goes.
+So the canvas is Excalidraw: MIT, no key, no gate, no watermark, and yours to
+modify. The multiplayer is ours rather than a vendor's — four messages, and the
+one rule that matters (which copy of a shape wins) lives in one tested file that
+both the server and the browser import, because two versions of that rule
+disagreeing is exactly how a shared board silently forks. Verified end to end on
+the live host: two browsers, one draws a rectangle, the other shows it, the
+cursor badge counts the other person, and it is still there after a
+`systemctl restart`.
+
+**How coolton did it, since you asked: they didn't.** `send_whiteboard_embed`
+is 22 lines — pick `random.randint(100000, 999999)`, point a Slack video block
+at `https://whiteboard.felix.hackclub.app/{that number}`, done. No hosting, no
+sync, no persistence: felix's server does all of it, and coolton just links to
+it. Which also means the licence problem is felix's, not theirs — his instance
+is tldraw 5.0.0, and it still renders today (I checked), so whatever changed in
+tldraw's enforcement landed after 5.0. Kyto could have done the same thing in an
+afternoon; the reason it doesn't is that it would put every board kyto posts on
+someone else's box, under their uptime and their rules.
 
 **OpenCode Zen is REMOVED — you are right about training (2026-08-11).** Their
 free tier's terms let the traffic improve the model, HC's scraping policy allows
