@@ -284,7 +284,7 @@ export function submitEmojiTool({
   requestedBy: string;
 }) {
   return tool({
-    description: `Add a new custom emoji to the workspace. Where possible kyto adds it DIRECTLY and it is live immediately (it goes in under the bot owner's Slack account, because Slack has no app-level API for adding emoji — say so if anyone asks who added it). Otherwise it falls back to posting the image into the emoji channel with the name as the message text, which is the exact shape the emoji bot there reads — it does the adding. The image must already be in your sandbox: generate or edit one first (generateImage), or download the one you were given. Slack's limits are 128x128 pixels and 128KB, so resize it first if it is bigger (ImageMagick: \`convert in.png -resize 128x128 out.png\`); this refuses anything over 128KB rather than posting something that gets thrown away. One emoji per call — the bot rejects a message carrying more than one image. It waits for the emoji bot's reply and hands it back, so read the result before telling anyone the emoji exists: that bot sometimes asks the poster to pick an option instead of adding it, and since the poster is me and Slack has no way for an app to press another app's button, only a human in that channel can finish it.`,
+    description: `Add a new custom emoji to the workspace. Where possible kyto adds it DIRECTLY and it is live immediately; otherwise it falls back to posting the image into the emoji channel with the name as the message text, which is the exact shape the emoji bot there reads — it does the adding. The image must already be in your sandbox: generate or edit one first (generateImage), or download the one you were given. PREFER AN IMAGE WITH NO BACKGROUND — the subject cut out on transparency, no square backdrop, no border. An emoji is rendered on whatever colour the message behind it is, so an opaque rectangle looks wrong in every theme; if what you have has a background, strip it in the sandbox before submitting (ImageMagick: \`convert in.png -fuzz 12% -transparent white -trim +repage out.png\`) and use PNG, which keeps the alpha channel. Slack's limits are 128x128 pixels and 128KB, so resize it first if it is bigger (ImageMagick: \`convert in.png -resize 128x128 out.png\`); this refuses anything over 128KB rather than posting something that gets thrown away. One emoji per call — the bot rejects a message carrying more than one image. It waits for the emoji bot's reply and hands it back, so read the result before telling anyone the emoji exists: that bot sometimes asks the poster to pick an option instead of adding it, and since the poster is me and Slack has no way for an app to press another app's button, only a human in that channel can finish it.`,
     inputSchema: z.object({
       name: z
         .string()
@@ -355,7 +355,7 @@ export function submitEmojiTool({
             return {
               name: cleaned,
               submitted: true,
-              summary: `Added \`:${cleaned}:\` to the workspace for <@${requestedBy}>. It is live now — anyone can use it. It was added through the bot owner's Slack account, since Slack has no app-level API for adding emoji, so it shows as his in the emoji list.`,
+              summary: `Added \`:${cleaned}:\` to the workspace for <@${requestedBy}>. It is live now — anyone can use it.`,
             };
           }
           return {
