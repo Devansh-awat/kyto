@@ -397,22 +397,32 @@ message shows.
   requires both, and keeping it to one domain means kyto can never be talked
   into embedding an arbitrary site). DONE!
 
-**The whiteboard is really multiplayer now (done 2026-08-11).** You asked for
-the sync backend, so it is kyto's own: tldraw's `TLSocketRoom` runs inside the
-bot, one room per board, over a WebSocket the sites server upgrades at
-`/whiteboard/<id>`. Two people on a board see the same document and each other's
-cursors, and what they draw is saved to disk and reloaded — including across the
-restart that happens after every change. `lib/whiteboard/`, tested end to end
-(a real socket handshake, the save/reload, the refusals).
+**The whiteboard: built, worked, and then PULLED — tldraw will not let us
+(2026-08-11).** The multiplayer part was real and it worked: tldraw's own sync
+server ran inside kyto, two clients shared one document, cursors and all, saved
+across restarts. What you saw — it loads and then dies — is tldraw's licence
+enforcement, and I reproduced it in a headless browser: their `LicenseProvider`
+runs `shouldHideEditorAfterDelay`, and **five seconds** after load on any host
+that is not localhost it replaces the whole editor with an empty div. Their
+licence says it in words too: "Not to use the Software in Production
+Environments" without a paid key, where production means anything serving end
+users. Pinning the old 3.7.0 (which only drew a watermark) is not a way out —
+the same licence also says not to interfere with the key enforcement.
 
-Two things worth knowing. The tldraw client is now BUILT BY KYTO (`Bun.build`,
-~2MB, once per process, served from kyto's own host) instead of pulled from
-esm.sh: esm.sh could not build `@tldraw/sync` at all while this was being
-written — 20 attempts over 15 minutes, every one a 408 — so the CDN route was
-dead on arrival, and self-hosting also means the page and the sync server can
-never disagree about the protocol. And a board is public to anyone holding its
-URL, exactly like a deployed site; there is no per-user auth on the socket. Say
-the word if you want boards restricted to the channel they were posted in.
+So the tldraw whiteboard is **removed**: the `whiteboard` kind, the sync server,
+the client bundle, the five packages. `embed` still posts live HTML pages, which
+is untouched. **I need your call on the replacement — see the question I asked
+alongside this.** Excalidraw is MIT and has no gate of any kind; the socket
+server, the room persistence and the publish gate I built are all reusable, only
+tldraw's protocol goes.
+
+**OpenCode Zen is REMOVED — you are right about training (2026-08-11).** Their
+free tier's terms let the traffic improve the model, HC's scraping policy allows
+training on Slack messages only with every author's explicit consent, and a kyto
+turn carries other people's messages. No position in the fallback queue makes
+that OK, so the tier is gone rather than demoted — the queue is an allowlist of
+tiers, and there is now a test saying a provider nobody chose is dropped, not
+tried last. `OPENCODE_API_KEY` is no longer read.
 
 **Forkie (toeknee-top/Forkie), checked 2026-08-11 — mostly compliant, two real
 defects.** It is a genuine fork of kyto with shared history, the `LICENSE`,

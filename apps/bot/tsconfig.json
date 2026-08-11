@@ -9,6 +9,5 @@
       "@/*": ["./src/*"]
     },
     "strictNullChecks": true
-  },
-  "exclude": ["src/lib/whiteboard/client.browser.ts"]
+  }
 }

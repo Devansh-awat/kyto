@@ -39,8 +39,6 @@ export default defineConfig({
     'longcat',
     'nemotron',
     'tldraw',
-    'tlschema',
-    'TLDOCUMENT',
     'Forkie',
     'xoxc',
     'xoxd',

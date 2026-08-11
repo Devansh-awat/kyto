@@ -10,11 +10,6 @@ import logger from '@/lib/logger';
 import { handleSlackOauth } from '@/lib/slack-oauth';
 import { handleSlackProxy } from '@/lib/slack-proxy';
 import {
-  upgradeWhiteboardSocket,
-  WHITEBOARD_SOCKET_PREFIX,
-  whiteboardSocketHandlers,
-} from '@/lib/whiteboard';
-import {
   EMBED_SITE_NAME,
   isServableSiteName,
   resolveWithin,
@@ -138,14 +133,8 @@ export async function startSitesServer(): Promise<void> {
     const tls = env.SITES_TLS ? await ensureSelfSignedCert() : undefined;
 
     Bun.serve({
-      fetch: async (request, server) => {
+      fetch: async (request) => {
         const { pathname } = new URL(request.url);
-
-        // A whiteboard's live sync socket (lib/whiteboard). First, because an
-        // upgrade is a GET that must never be answered with a file.
-        if (pathname.startsWith(WHITEBOARD_SOCKET_PREFIX)) {
-          return await upgradeWhiteboardSocket({ request, server });
-        }
 
         // Read-only Slack proxy (secret-gated) for sandbox scripts. Handled
         // before the static GET-only path since it's a POST endpoint.
@@ -200,9 +189,6 @@ export async function startSitesServer(): Promise<void> {
       },
       port: env.SITES_PORT,
       ...(tls ? { tls } : {}),
-      // Every socket this server accepts is a whiteboard sync session; the
-      // upgrade above is the only place one is created.
-      websocket: whiteboardSocketHandlers,
     });
     logger.info(
       { port: env.SITES_PORT, tls: Boolean(tls) },

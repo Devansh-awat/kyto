@@ -19,11 +19,6 @@
       ]
     },
     "apps/bot": {
-      "entry": [
-        "src/index.ts",
-        "src/scripts/*.ts",
-        "src/lib/whiteboard/client.browser.ts"
-      ],
       "project": ["src/**/*.ts"]
     },
     "packages/ai": {
