@@ -317,6 +317,14 @@ and every upload logs who asked. Removal is yours alone (Slack only lets the
 adding account remove one). It dies when you log out of that browser session;
 `invalid_auth` in the journal means re-copy it.
 
+**Kyto is no longer told whose account an emoji goes in under (2026-08-11).**
+Both places that said so are gone — the tool description told it to say so if
+anyone asked, and the success message repeated it — so it can no longer volunteer
+your name in a channel. It is still true and still in the journal; kyto just has
+no reason to know. The same tool now tells it to prefer a cut-out image with a
+TRANSPARENT background (no square backdrop, no border) and how to strip one in
+the sandbox, since an emoji renders on whatever colour is behind it.
+
 **The "38 more tool calls" bug is FIXED (2026-08-09) — here is what it actually
 was.** Not a model problem. The visible-card budget (45 tool cards, 45 thinking
 cards) lived in `renderStream` for the whole ATTEMPT, but a turn is not rendered
@@ -387,9 +395,49 @@ message shows.
 - **Needs a reinstall** — the manifest now asks for `links.embed:write` and
   `links:read`, and registers `kyto.dino.icu` as the only unfurl domain (Slack
   requires both, and keeping it to one domain means kyto can never be talked
-  into embedding an arbitrary site).
-- The whiteboard saves **per browser**, not live between people — tldraw's local
-  persistence. The page says so on its own face. Real multiplayer needs a sync
-  backend; say the word if you want one.
-- `Forkie` (toeknee-top/Forkie) noted, nothing to do with it yet.
+  into embedding an arbitrary site). DONE!
 
+**The whiteboard is really multiplayer now (done 2026-08-11).** You asked for
+the sync backend, so it is kyto's own: tldraw's `TLSocketRoom` runs inside the
+bot, one room per board, over a WebSocket the sites server upgrades at
+`/whiteboard/<id>`. Two people on a board see the same document and each other's
+cursors, and what they draw is saved to disk and reloaded — including across the
+restart that happens after every change. `lib/whiteboard/`, tested end to end
+(a real socket handshake, the save/reload, the refusals).
+
+Two things worth knowing. The tldraw client is now BUILT BY KYTO (`Bun.build`,
+~2MB, once per process, served from kyto's own host) instead of pulled from
+esm.sh: esm.sh could not build `@tldraw/sync` at all while this was being
+written — 20 attempts over 15 minutes, every one a 408 — so the CDN route was
+dead on arrival, and self-hosting also means the page and the sync server can
+never disagree about the protocol. And a board is public to anyone holding its
+URL, exactly like a deployed site; there is no per-user auth on the socket. Say
+the word if you want boards restricted to the channel they were posted in.
+
+**Forkie (toeknee-top/Forkie), checked 2026-08-11 — mostly compliant, two real
+defects.** It is a genuine fork of kyto with shared history, the `LICENSE`,
+`LICENSE-gorkie-MIT` and `NOTICE` files are byte-identical to ours, your
+copyright line is intact, and both the README and `AGENTS.md` say it is forked
+from kyto and link this repo. But:
+- **Its README's own License section says "This project is under the MIT
+  license"**, contradicting the AGPL-3.0 `LICENSE` file sitting next to it. They
+  cannot relicense AGPL-derived code that way, so it reads as a copy-paste
+  slip — but anyone trusting the prose is being told they have rights they do
+  not have.
+- **The deployed bot still points users at OUR repo as its source.**
+  `prompts/slack.ts` and `core.ts` are untouched, so it still says "You're Kyto"
+  and hands out `github.com/Devansh-awat/kyto`. Only the owner-grounding line
+  carries their name. Since Forkie's code genuinely differs, AGPL §13's
+  network-source obligation is not met by that link.
+Both are one-line fixes on their side; worth a friendly message rather than
+anything heavier.
+
+What they ADDED is one feature: a config-driven sandbox provider
+(`createSandbox()` → SSH to your own box → E2B → in-process local), so the bot
+can run without an E2B account. Nothing else — no new tools, no new features, no
+routing changes. Note for us: they forked BEFORE the GitHub proxy, their new
+sandbox backends never receive `GIT_HARDEN_COMMAND` or a GitHub token, and
+`LocalSandbox` runs model-driven shell commands in the bot's own container. The
+provider abstraction is worth stealing if kyto ever wants an E2B-optional path,
+but only after wiring those two in. Their code comments also mention a
+"QuackX" — there may be a third kyto fork about.

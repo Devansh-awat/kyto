@@ -11,54 +11,15 @@ import {
 } from '@/lib/embeds';
 import logger from '@/lib/logger';
 import { errorMessage } from '@/lib/utils/error';
+import {
+  ensureWhiteboardAssets,
+  renderWhiteboardPage,
+} from '@/lib/whiteboard/page';
+import { deleteWhiteboard, registerWhiteboard } from '@/lib/whiteboard/room';
 
 // A live page inside a Slack message. See lib/embeds for what Slack requires
-// and why the page is hosted on kyto's own domain rather than a third party's.
-
-// tldraw, loaded from its CDN as an ES module. Pinned: an embed published today
-// must still open next month, and tldraw's latest tag has broken its own API
-// between minors before.
-const TLDRAW_VERSION = '3.7.0';
-
-/**
- * A shared whiteboard page.
- *
- * tldraw's `persistenceKey` keeps the drawing in the VIEWER's browser, so this
- * is a board you can open, draw on, close and come back to — not a live
- * multiplayer canvas. That difference is stated on the page itself rather than
- * left for someone to discover: promising collaboration and delivering a
- * private copy is worse than promising nothing.
- */
-function whiteboardPage(id: string, title: string): string {
-  const safeTitle = title.replace(/[<&>]/g, '');
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>${safeTitle}</title>
-<link rel="stylesheet" href="https://esm.sh/tldraw@${TLDRAW_VERSION}/tldraw.css"/>
-<style>
-  html, body, #root { margin: 0; height: 100%; background: #101214; }
-  #note { position: fixed; bottom: 8px; left: 10px; z-index: 9; color: #9aa0a6;
-          font: 12px Helvetica, Arial, sans-serif; pointer-events: none; }
-</style>
-</head>
-<body>
-<div id="root"></div>
-<div id="note">kyto whiteboard · ${safeTitle} · saved in this browser, not shared live</div>
-<script type="module">
-  import React from 'https://esm.sh/react@18.3.1';
-  import { createRoot } from 'https://esm.sh/react-dom@18.3.1/client';
-  import { Tldraw } from 'https://esm.sh/tldraw@${TLDRAW_VERSION}?deps=react@18.3.1,react-dom@18.3.1';
-  createRoot(document.getElementById('root')).render(
-    React.createElement(Tldraw, { persistenceKey: ${JSON.stringify(`kyto-${id}`)} })
-  );
-</script>
-</body>
-</html>
-`;
-}
+// and why the page is hosted on kyto's own domain rather than a third party's;
+// see lib/whiteboard for how a board is shared between the people looking at it.
 
 export function embedTool({
   requestedBy,
@@ -69,7 +30,7 @@ export function embedTool({
 }) {
   return tool({
     description:
-      "Post a LIVE, interactive page inside a Slack message — it renders in the message itself and people can click and type in it, rather than following a link. Two kinds: `html`, where you write a complete self-contained HTML page (inline all CSS/JS; it is hosted on kyto's own domain), and `whiteboard`, which gives a tldraw drawing canvas. Use it for anything better seen than described: a chart, an interactive demo, a diagram people should be able to pan, a scratch canvas. ALWAYS set an explicit background-color AND text color in your CSS — the embed inherits nothing from Slack, so default-coloured text can come out invisible. Re-publishing the same `id` swaps what an existing embed shows; the Slack message keeps working. This is NOT a website people can keep visiting and sharing — use deploySite for that.",
+      "Post a LIVE, interactive page inside a Slack message — it renders in the message itself and people can click and type in it, rather than following a link. Two kinds: `html`, where you write a complete self-contained HTML page (inline all CSS/JS; it is hosted on kyto's own domain), and `whiteboard`, which gives a real-time SHARED drawing canvas — everyone who opens it is on the same board, sees each other's cursors live, and what they draw is kept between visits, so it is a good answer to someone wanting to sketch an idea out together. Use it for anything better seen than described: a chart, an interactive demo, a diagram people should be able to pan, a scratch canvas. ALWAYS set an explicit background-color AND text color in your CSS — the embed inherits nothing from Slack, so default-coloured text can come out invisible. Re-publishing the same `id` swaps what an existing embed shows; the Slack message keeps working. This is NOT a website people can keep visiting and sharing — use deploySite for that.",
     inputSchema: z.object({
       html: z
         .string()
@@ -89,7 +50,7 @@ export function embedTool({
         .enum(['html', 'whiteboard'])
         .default('html')
         .describe(
-          '"html" for a page you wrote, "whiteboard" for a tldraw canvas.'
+          '"html" for a page you wrote, "whiteboard" for a shared live drawing canvas everyone in the channel edits together.'
         ),
       post: z
         .boolean()
@@ -119,8 +80,14 @@ export function embedTool({
         };
       }
       try {
-        const page =
-          kind === 'whiteboard' ? whiteboardPage(slug, title) : (html ?? '');
+        let page = html ?? '';
+        if (kind === 'whiteboard') {
+          const assets = await ensureWhiteboardAssets();
+          page = renderWhiteboardPage({ assets, id: slug, title });
+          // Before publishing: the marker is what lets the sync socket open
+          // this board, and a page that loads before it exists cannot connect.
+          await registerWhiteboard(slug);
+        }
         const url = await publishEmbed({ html: page, id: slug });
         if (!post) {
           return {
@@ -149,7 +116,7 @@ export function embedTool({
           published: true,
           summary:
             kind === 'whiteboard'
-              ? `Posted a whiteboard (${url}). Each person's drawing is saved in their own browser — it is a canvas to sketch on, not a shared live board, so say that rather than implying collaboration.`
+              ? `Posted a whiteboard (${url}). It is genuinely shared: everyone in the channel draws on the same board and sees each other's cursors as it happens, and it is kept between visits.`
               : `Posted the embed (${url}). It renders live in the message.`,
           url,
         };
@@ -174,6 +141,9 @@ export function removeEmbedTool() {
         return { error: 'Invalid id.', removed: false };
       }
       await deleteEmbed(slug);
+      // A whiteboard also has a live room and a saved document; deleting only
+      // the page would leave both behind, and everything drawn on it on disk.
+      await deleteWhiteboard(slug);
       return {
         removed: true,
         summary: `Deleted the embed ${slug} (${embedUrl(slug)} is gone).`,

@@ -9,6 +9,7 @@ import { startReminderScheduler } from '@/lib/reminders/scheduler';
 import { startSandboxReaper } from '@/lib/sandbox/store';
 import { startSitesServer } from '@/lib/sites/server';
 import { ensureChannelIndex } from '@/lib/slack/channel-links';
+import { flushWhiteboards } from '@/lib/whiteboard/room';
 
 let shuttingDown = false;
 
@@ -19,6 +20,11 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   stopAllTurns();
   logger.info({ signal }, '[bot] shutting down');
+  // Kyto is restarted after every change; without this the last few seconds of
+  // everyone's drawing (the save debounce) would go with it.
+  await flushWhiteboards().catch((error: unknown) => {
+    logger.error({ err: error }, '[bot] failed to save whiteboards');
+  });
   await bot.shutdown().catch((error: unknown) => {
     logger.error({ err: error }, '[bot] error during shutdown');
   });
