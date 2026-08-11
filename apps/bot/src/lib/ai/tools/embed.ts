@@ -11,17 +11,22 @@ import {
 } from '@/lib/embeds';
 import logger from '@/lib/logger';
 import { errorMessage } from '@/lib/utils/error';
+import {
+  ensureWhiteboardAssets,
+  renderWhiteboardPage,
+} from '@/lib/whiteboard/page';
+import { deleteWhiteboard, registerWhiteboard } from '@/lib/whiteboard/room';
 
 // A live page inside a Slack message. See lib/embeds for what Slack requires
-// and why the page is hosted on kyto's own domain rather than a third party's.
+// and why the page is hosted on kyto's own domain rather than a third party's,
+// and lib/whiteboard for how a board is shared between the people drawing on it.
 //
-// There was a `whiteboard` kind here, backed by tldraw. It is gone: the tldraw
-// license forbids use in a "Production Environment" — anything serving end
-// users — without a paid key, and 5.x enforces that in code by replacing the
-// editor with a blank page five seconds after it loads on a non-localhost
-// domain. Do NOT bring it back by pinning an older version; that is the same
-// licence and it says not to interfere with the key enforcement. A replacement
-// has to be a canvas whose license actually permits this (Excalidraw is MIT).
+// The whiteboard was tldraw once. It is Excalidraw (MIT) now, because tldraw's
+// licence forbids use in a "Production Environment" — anything serving end
+// users — without a paid key, and 5.x enforces that by replacing the editor
+// with a blank page five seconds after it loads anywhere but localhost. Do NOT
+// bring tldraw back by pinning an older version: same licence, and it also says
+// not to interfere with the key enforcement.
 
 export function embedTool({
   requestedBy,
@@ -32,13 +37,14 @@ export function embedTool({
 }) {
   return tool({
     description:
-      "Post a LIVE, interactive page inside a Slack message — it renders in the message itself and people can click and type in it, rather than following a link. You write a complete self-contained HTML page (inline all CSS/JS; it is hosted on kyto's own domain). Use it for anything better seen than described: a chart, an interactive demo, a diagram people should be able to pan, a scratch canvas. ALWAYS set an explicit background-color AND text color in your CSS — the embed inherits nothing from Slack, so default-coloured text can come out invisible. Re-publishing the same `id` swaps what an existing embed shows; the Slack message keeps working. This is NOT a website people can keep visiting and sharing — use deploySite for that.",
+      "Post a LIVE, interactive page inside a Slack message — it renders in the message itself and people can click and type in it, rather than following a link. Two kinds: `html`, where you write a complete self-contained HTML page (inline all CSS/JS; it is hosted on kyto's own domain), and `whiteboard`, a real-time SHARED drawing canvas — everyone who opens it is on the same board, sees each other's cursors live, and what they draw is kept between visits, so it is a good answer when people want to sketch something out together. Use it for anything better seen than described: a chart, an interactive demo, a diagram people should be able to pan, a scratch canvas. ALWAYS set an explicit background-color AND text color in your CSS — the embed inherits nothing from Slack, so default-coloured text can come out invisible. Re-publishing the same `id` swaps what an existing embed shows; the Slack message keeps working. This is NOT a website people can keep visiting and sharing — use deploySite for that.",
     inputSchema: z.object({
       html: z
         .string()
         .max(MAX_EMBED_BYTES)
+        .optional()
         .describe(
-          'The complete HTML page. Self-contained: inline the CSS and JS.'
+          'The complete HTML page, for kind "html". Self-contained: inline the CSS and JS.'
         ),
       id: z
         .string()
@@ -46,6 +52,12 @@ export function embedTool({
         .max(60)
         .describe(
           'Slug for this embed, lowercase with hyphens. Reusing one replaces what that embed shows.'
+        ),
+      kind: z
+        .enum(['html', 'whiteboard'])
+        .default('html')
+        .describe(
+          '"html" for a page you wrote, "whiteboard" for a shared live drawing canvas everyone in the channel edits together.'
         ),
       post: z
         .boolean()
@@ -59,7 +71,7 @@ export function embedTool({
         .default('kyto embed')
         .describe('Title shown on the embed card in Slack.'),
     }),
-    execute: async ({ html, id, post, title }) => {
+    execute: async ({ html, id, kind, post, title }) => {
       const slug = id.trim().toLowerCase();
       if (!isValidEmbedId(slug)) {
         return {
@@ -68,14 +80,22 @@ export function embedTool({
           published: false,
         };
       }
-      if (!html.trim()) {
+      if (kind === 'html' && !html?.trim()) {
         return {
-          error: 'An embed needs an html page. Write the whole document.',
+          error: 'kind "html" needs an html page. Write the whole document.',
           published: false,
         };
       }
       try {
-        const url = await publishEmbed({ html, id: slug });
+        let page = html ?? '';
+        if (kind === 'whiteboard') {
+          const assets = await ensureWhiteboardAssets();
+          page = renderWhiteboardPage({ assets, id: slug, title });
+          // Before publishing: the marker is what lets the sync socket open
+          // this board, and a page that loads before it exists cannot connect.
+          await registerWhiteboard(slug);
+        }
+        const url = await publishEmbed({ html: page, id: slug });
         if (!post) {
           return {
             published: true,
@@ -98,10 +118,13 @@ export function embedTool({
           // that cannot render the block at all.
           fallbackText: `${title} — ${url}`,
         });
-        logger.info({ id: slug, requestedBy }, '[embed] posted');
+        logger.info({ id: slug, kind, requestedBy }, '[embed] posted');
         return {
           published: true,
-          summary: `Posted the embed (${url}). It renders live in the message.`,
+          summary:
+            kind === 'whiteboard'
+              ? `Posted a whiteboard (${url}). It is genuinely shared: everyone in the channel draws on the same board and sees each other's cursors as it happens, and it is kept between visits.`
+              : `Posted the embed (${url}). It renders live in the message.`,
           url,
         };
       } catch (error) {
@@ -125,6 +148,9 @@ export function removeEmbedTool() {
         return { error: 'Invalid id.', removed: false };
       }
       await deleteEmbed(slug);
+      // A whiteboard also has a saved drawing and a marker; deleting only the
+      // page would leave both behind, and everything drawn on it on disk.
+      await deleteWhiteboard(slug);
       return {
         removed: true,
         summary: `Deleted the embed ${slug} (${embedUrl(slug)} is gone).`,
