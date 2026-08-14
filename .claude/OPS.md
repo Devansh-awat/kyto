@@ -36,3 +36,20 @@ New tables/columns are pushed with one-off SQL — `drizzle-kit push` prompts in
 - One password stands between the public internet and a privilege grant: constant-time compare, **global lockout after 8 failures** (one legitimate user, so a global lock costs nothing and no per-IP bookkeeping can be spoofed), in-memory sessions (12h), `HttpOnly; Secure; SameSite=Strict` cookie, **per-session CSRF token on every mutation**.
 - Two jobs: **promote a memory to global** (read the body first — it becomes prompt text on everyone's turns) and **grant/revoke GitHub trust**, incl. queued `github_requests`.
 - **Approving a GitHub request grants trust and stops there** — it does NOT replay the command (composed by a model in a thread that has since moved on; re-running it blind turns a click into an action nobody reviewed). The person asks kyto again.
+
+## The `banned_users` table (2026-08-14)
+
+```sql
+CREATE TABLE IF NOT EXISTS banned_users (
+  user_id text PRIMARY KEY,
+  reason text NOT NULL,
+  expires_at timestamptz,
+  banned_by text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+```
+
+One row per banned user, replaced on a re-ban and deleted on an unban — a ban is
+a current state, not a history, so there is deliberately no record of who has
+ever been banned. `expires_at` null means indefinite; an expired row simply stops
+applying (`listBans` filters on it), so nothing sweeps it.

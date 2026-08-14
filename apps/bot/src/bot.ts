@@ -2,6 +2,7 @@ import type { Message, ThreadHandle as Thread } from '@/harness';
 import { runTurn, stopTurn } from '@/lib/agent';
 import { isFocusAllowed } from '@/lib/agent/focus';
 import { isUserAllowed } from '@/lib/allowed-users';
+import { activeBan, banNotice, runBanCommand } from '@/lib/bans';
 import { bot, slack } from '@/lib/chat';
 import { handleCommand } from '@/lib/commands';
 import logger from '@/lib/logger';
@@ -27,6 +28,9 @@ bot.onNewMention(async (thread, message) => {
   if (!isFocusAllowed(await thread.state, message.author.userId)) {
     return;
   }
+  if (await refuseBanned(thread, message)) {
+    return;
+  }
   if (!(await isUserAllowed(message.author.userId))) {
     await offerOptIn(thread, message.author);
     return;
@@ -40,6 +44,9 @@ bot.onNewMention(async (thread, message) => {
 
 bot.onDirectMessage(async (thread, message) => {
   if (shouldIgnore(message)) {
+    return;
+  }
+  if (await refuseBanned(thread, message)) {
     return;
   }
   if (!(await isUserAllowed(message.author.userId))) {
@@ -62,11 +69,24 @@ bot.onSubscribedMessage(async (thread, message) => {
     shouldIgnore(message) ||
     !(shouldRespondToThread || message.isMention) ||
     !isFocusAllowed(state, message.author.userId) ||
+    (await activeBan(message.author.userId)) !== null ||
     !(await isUserAllowed(message.author.userId))
   ) {
     return;
   }
   await runCommandOrTurn(thread, message);
+});
+
+// `/kyto ban @someone 1d reason`, `/kyto unban @someone`, `/kyto bans`. The
+// same three run as `@kyto!ban …` (lib/commands); this is the form the owner
+// asked for, and it costs no model turn either.
+bot.onSlashCommand(async ({ text, userId }) => {
+  const [word = '', ...rest] = text.trim().split(/\s+/);
+  const action = word.toLowerCase();
+  if (action === 'ban' || action === 'unban' || action === 'bans') {
+    return await runBanCommand({ action, args: rest.join(' '), userId });
+  }
+  return;
 });
 
 bot.onAction('opt_in_accept', acceptOptIn);
@@ -107,6 +127,34 @@ async function runCommandOrTurn(
     return;
   }
   await runTurn({ message, thread });
+}
+
+/**
+ * A banned person gets one ephemeral saying so, and nothing else — no turn, no
+ * opt-in prompt, no reply. Ephemeral rather than a public reply so a ban is not
+ * announced to the channel every time they type.
+ */
+async function refuseBanned(
+  thread: Thread,
+  message: Message
+): Promise<boolean> {
+  const ban = await activeBan(message.author.userId);
+  if (!ban) {
+    return false;
+  }
+  logger.info(
+    { threadId: thread.id, userId: message.author.userId },
+    '[bans] ignored a banned user'
+  );
+  await thread
+    .postEphemeral(message.author, banNotice(ban), { fallbackToDM: false })
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), userId: message.author.userId },
+        '[bans] could not tell them they are banned'
+      );
+    });
+  return true;
 }
 
 function shouldIgnore(message: Message): boolean {

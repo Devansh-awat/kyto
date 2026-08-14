@@ -20,6 +20,11 @@ type ThreadMessageHandler = (
   message: Message
 ) => Promise<void>;
 type ActionHandler = (event: ActionEvent) => Promise<void>;
+/** Returns what to say back, or undefined for the default greeting. */
+type SlashCommandHandler = (command: {
+  text: string;
+  userId: string;
+}) => Promise<string | undefined>;
 type ModalSubmitHandler = (
   event: ModalSubmitEvent
 ) => Promise<ModalSubmitResult> | ModalSubmitResult;
@@ -52,6 +57,7 @@ export class KytoBot {
   private readonly dmHandlers: ThreadMessageHandler[] = [];
   private readonly subscribedHandlers: ThreadMessageHandler[] = [];
   private readonly actionHandlers = new Map<string, ActionHandler>();
+  private slashHandler: SlashCommandHandler | undefined;
   private readonly modalHandlers = new Map<string, ModalSubmitHandler>();
   private readonly appHomeHandlers: ((event: AppHomeEvent) => Promise<void>)[] =
     [];
@@ -91,6 +97,16 @@ export class KytoBot {
 
   onSubscribedMessage(handler: ThreadMessageHandler): void {
     this.subscribedHandlers.push(handler);
+  }
+
+  /**
+   * Answer `/kyto …`. There is exactly one slash command registered, so this
+   * takes the whole text and the app decides; the ACK is the reply, which is
+   * why the handler returns a string rather than posting one (Slack gives 3
+   * seconds, so nothing slow belongs in here).
+   */
+  onSlashCommand(handler: SlashCommandHandler): void {
+    this.slashHandler = handler;
   }
 
   onAction(actionId: string | string[], handler: ActionHandler): void {
@@ -193,17 +209,7 @@ export class KytoBot {
           this.handleInteractive(envelope);
           return;
         case 'slash_commands':
-          envelope
-            .ack({
-              response_type: 'ephemeral',
-              text: "hi, i'm kyto! just @mention me in a channel or DM me — no slash command needed.",
-            })
-            .catch((error: unknown) => {
-              this.slackLogger.warn(
-                { err: error },
-                '[harness] slash ack failed'
-              );
-            });
+          this.handleSlashCommand(envelope);
           return;
         default:
           envelope.ack().catch(() => undefined);
@@ -313,6 +319,28 @@ export class KytoBot {
     // Non-mention channel/group message: the subscribed handler gates on the
     // thread's stored respondOnThreadMessages state itself.
     await runAll2(this.subscribedHandlers, thread, message);
+  }
+
+  private handleSlashCommand(envelope: SocketEnvelope): void {
+    const body = envelope.body;
+    const text = typeof body.text === 'string' ? body.text : '';
+    const userId = typeof body.user_id === 'string' ? body.user_id : '';
+    const reply = this.slashHandler
+      ? this.slashHandler({ text, userId })
+      : Promise.resolve(undefined);
+    reply
+      .then((answer) =>
+        envelope.ack({
+          response_type: 'ephemeral',
+          text:
+            answer ??
+            "hi, i'm kyto! just @mention me in a channel or DM me — no slash command needed.",
+        })
+      )
+      .catch((error: unknown) => {
+        this.slackLogger.warn({ err: error }, '[harness] slash ack failed');
+        return envelope.ack().catch(() => undefined);
+      });
   }
 
   private handleInteractive(envelope: SocketEnvelope): void {

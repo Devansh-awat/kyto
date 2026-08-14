@@ -39,6 +39,8 @@ export default defineConfig({
     'longcat',
     'nemotron',
     'tldraw',
+    'smhdw',
+    'unban',
     'Forkie',
     'xoxc',
     'xoxd',

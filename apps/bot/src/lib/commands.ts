@@ -1,5 +1,6 @@
 import type { Message, ThreadHandle as Thread } from '@/harness';
 import { stopTurn } from '@/lib/agent';
+import { runBanCommand } from '@/lib/bans';
 import logger from '@/lib/logger';
 import { toLogError } from '@/lib/utils/error';
 import { rawText, withoutLeadingMentions } from '@/lib/utils/message';
@@ -25,7 +26,7 @@ import { rawText, withoutLeadingMentions } from '@/lib/utils/message';
 interface BotCommand {
   /** Everything after the command word, unparsed. */
   args: string;
-  type: 'focusmode' | 'stop';
+  type: 'ban' | 'bans' | 'focusmode' | 'stop' | 'unban';
 }
 
 // Slack user ids look like U0123ABCD / W0123ABCD, either as a real `<@U…>`
@@ -49,6 +50,20 @@ export async function handleCommand({
   }
   if (command.type === 'stop') {
     await runStop({ message, thread });
+    return true;
+  }
+  if (
+    command.type === 'ban' ||
+    command.type === 'unban' ||
+    command.type === 'bans'
+  ) {
+    // Same implementation as `/kyto ban …`, and owner-only inside it.
+    const text = await runBanCommand({
+      action: command.type,
+      args: command.args,
+      userId: message.author.userId,
+    });
+    await tell({ message, text, thread, what: 'ban feedback' });
     return true;
   }
   await runFocusMode({ args: command.args, message, thread });
@@ -171,6 +186,12 @@ function cmd(message: Message): BotCommand | null {
       return { args, type: 'focusmode' };
     case 'stop':
       return { args, type: 'stop' };
+    case 'ban':
+      return { args, type: 'ban' };
+    case 'unban':
+      return { args, type: 'unban' };
+    case 'bans':
+      return { args, type: 'bans' };
     // Anything else is not a command and must still reach the model — `!` opens
     // plenty of ordinary sentences too.
     default:
