@@ -88,8 +88,7 @@ Run these after each completed change, **without asking**:
 
 1. **Commit** locally, conventional-commit message, docs in the same commit. One logical change = one commit.
 2. **Sync the Slack manifest** if `slack-manifest.json` changed: `bun run sync:manifest` from `apps/bot`. (Scope changes need an app reinstall.)
-3. **Restart the bot**: `systemctl restart kyto.service`. Check `journalctl -u kyto.service -n 30 -o cat` (look for `kyto (…) is online`). **Never hand-launch `bun run start:bot`** — a second process opens a second Socket Mode connection and silently steals ~half the events. If `deploy/kyto.service` changed, `systemctl daemon-reload` first.
-4. **Push to `origin`** (`github.com/Devansh-awat/kyto.git`).
+3. **Push to `origin`** (`github.com/Devansh-awat/kyto.git`) — a GitHub webhook triggers an automatic Coolify redeploy on push to `main`. **Never run `bun run start:bot` anywhere** — kyto runs exclusively as a Coolify-managed Docker container (migrated off `kyto.service`/systemd 2026-08-15); a second process anywhere opens a second Socket Mode connection and silently steals ~half the events. To confirm a deploy landed: Coolify dashboard → kyto → Deployments/Logs, or `docker logs <container>` on the oracle server (look for `kyto (…) is online`). The old `kyto.service` unit is masked — leave it that way. See `OPS.md` for the full deploy-config detail.
 
 - **NEVER push to `upstream`** (`imdevarsh/gorkie-slack`, the fork source).
 - **Opening a PR still asks first.** Commit/restart/sync/push do not.
