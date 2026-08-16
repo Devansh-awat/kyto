@@ -14,6 +14,7 @@ import type { KytoBot, Message, ThreadHandle } from '@/harness';
 import { buildMcpTools } from '@/lib/ai/mcp';
 import { emojiUploadConfigured } from '@/lib/emoji-upload';
 import logger from '@/lib/logger';
+import { requestMcpPermission } from '@/lib/mcp-permissions/request';
 import { recallLoadedTools, rememberLoadedTools } from './loaded-tools';
 import { askQuestionTool } from './tools/ask-question';
 import { backgroundProcessTools } from './tools/background';
@@ -127,6 +128,7 @@ export async function buildTools({
   getSandboxContext,
   message,
   thread,
+  unattended = false,
 }: {
   bot: KytoBot;
   /**
@@ -145,6 +147,13 @@ export async function buildTools({
   getSandboxContext: () => SandboxContext;
   message: Message;
   thread: ThreadHandle;
+  /**
+   * Nobody is watching this run (a reminder firing, a subagent inside another
+   * turn). An MCP tool whose rule is `ask` then REFUSES instead of posting a
+   * button: there is no watchdog here to hold open for ten minutes while a person
+   * who may be asleep decides, and a silent stall is worse than a clear refusal.
+   */
+  unattended?: boolean;
 }): Promise<BuiltTools> {
   const authorUserId = message.author.userId;
   const isOwner =
@@ -508,10 +517,35 @@ export async function buildTools({
     logger.warn({ err: error, userId: authorUserId }, '[mcp] listing failed');
     return [];
   });
-  const mcp = await buildMcpTools({ logger, servers });
+  const mcp = await buildMcpTools({
+    logger,
+    // Only the person whose server it is is ever asked, and they are by definition
+    // the person speaking this turn — an MCP tool is only ever registered on its
+    // owner's turns, so there is no third party to route this to. Left undefined
+    // for an unattended run, which makes an `ask` tool refuse rather than hang.
+    requestPermission: unattended
+      ? undefined
+      : ({ abortSignal, args, ...gate }) =>
+          requestMcpPermission({
+            abortSignal,
+            approverUserId: authorUserId,
+            args,
+            extendAttemptDeadline,
+            gate,
+            thread,
+          }),
+    servers,
+  });
   for (const [name, mcpTool] of Object.entries(mcp.tools)) {
+    const gate = mcp.gates[name];
     deferred[name] = {
-      summary: `MCP tool (${name})`,
+      summary: gate
+        ? `MCP tool (${name}) — ${gate.category}${
+            gate.rule === 'ask'
+              ? ', needs the user to approve each call (they get a button)'
+              : ''
+          }`
+        : `MCP tool (${name})`,
       tool: mcpTool,
     };
   }
@@ -565,8 +599,19 @@ export async function buildTools({
     } as T;
   };
 
+  // Tools the user's MCP rules keep hidden. Stated so the model can say the
+  // category is switched off instead of confabulating a reason a tool it half
+  // remembers is missing — hidden tools are never registered, so it has no other
+  // way to know they exist.
+  const hiddenNote = mcp.blocked
+    .map(
+      (entry) =>
+        `\n(${entry.count} tool${entry.count === 1 ? '' : 's'} on the ${entry.server} MCP server are hidden by the user's own rules for ${entry.categories.join('/')} — tell them to change it in App Home if they need one.)`
+    )
+    .join('');
+
   const loadTools = tool({
-    description: `Load additional tools by name before using them (their schemas stay out of the prompt until needed). Available:\n${catalog || '- (none)'}`,
+    description: `Load additional tools by name before using them (their schemas stay out of the prompt until needed). Available:\n${catalog || '- (none)'}${hiddenNote}`,
     inputSchema: z.object({
       tools: z
         .array(z.string())

@@ -138,6 +138,45 @@ WAITS (up to 10 min) for an answer, then returns it.
   a working message. The waiting turn is in-memory — a turn doesn't survive a
   restart either.
 
+## Per-user MCP servers (`lib/ai/mcp.ts`, `lib/ai/mcp-permissions.ts`)
+
+Remote Streamable-HTTP servers a user adds in **App Home**. Hand-rolled JSON-RPC
+client, listings cached 10 min per URL+credential, tools namespaced
+`mcp_<server>_<tool>` and deferred behind `loadTools`. The security rules
+(`never` = never registered, who may click an `ask` prompt, no DM fallback,
+unattended refuses, fail-closed parsing) are in CLAUDE.md — read them before
+touching the gate. The mechanics:
+
+- **Classification** (`classifyMcpTool`, pure + tested) is layered because servers
+  disagree about how much they say: MCP `annotations.readOnlyHint` /
+  `destructiveHint` first, then the ability the description STATES
+  (`/requires? (the )?<ability> (ability|scope|permission)/i` → `sensitive` if it
+  contains "sensitive", `write` for `deploy|write|root|admin|manage|owner|delete|full`),
+  then name verbs, then a "returns a secret" word list (`logs`, `env`, `secrets`,
+  `tokens`, …) for reads that can leak. `write` beats `sensitive`; a name verb
+  outranks a bare `readOnlyHint: true` for sensitivity, because a read-only tool
+  can still be the one that hands back the credential. Unmatched stays `unknown`.
+  Coolify ships `annotations: {}` on all 45 tools, so a fully spec-shaped server
+  can still tell you nothing — the stated-ability layer is what carries it.
+- **Rules** are `allow | ask | never` per category, plus `tools: {name: rule}`
+  overrides that win over their category (`resolveMcpRule`). Stored in the
+  untyped `rules` jsonb column and parsed at the boundary, never cast.
+- **The modal does both jobs** (`buildMcpModal`): `callback_id` and submit label
+  flip between add and edit, the four category selects and the per-tool-pins
+  textarea are inline (no second configure step — owner's ask), and the row is
+  identified by the view's `private_metadata`. Pins round-trip as
+  `tool_name: rule` lines; a malformed line is REPORTED as a field error, since
+  silently dropping one leaves someone believing they blocked a tool.
+- **Token replace/clear**: the modal never shows a saved token back, so a blank
+  field means KEEP (`updateMcpServer` omits `authorization`) and removal is the
+  explicit `mcp_token_action: clear`. A two-option `static_select`, not a
+  checkbox — the harness reads `value ?? selected_option.value`, so a checkbox's
+  `selected_options` would arrive `undefined`.
+- **Always / Never on a prompt writes a per-tool pin** (`pinRule`,
+  read-modify-write off the fresh row so it can't clobber a category rule changed
+  while the prompt was open), then `forgetMcpFailure` so the next turn re-derives
+  the server instead of reporting a pre-decision verdict, then republishes Home.
+
 ## Approvals (`lib/approvals/`)
 
 Not a tool the model calls — a gate the tools go through. `approval_requests` is

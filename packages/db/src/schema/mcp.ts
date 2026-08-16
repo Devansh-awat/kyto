@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, unique } from 'drizzle-orm/pg-core';
+import { jsonb, pgTable, text, timestamp, unique } from 'drizzle-orm/pg-core';
 
 // Per-user remote MCP servers, managed from the App Home tab. Each user's
 // servers are connected lazily per turn and their tools exposed (namespaced)
@@ -16,6 +16,12 @@ export const userMcpServers = pgTable(
     url: text('url').notNull(),
     // Optional Authorization header value (e.g. "Bearer xyz"), stored as-is.
     authorization: text('authorization'),
+    // Per-server permission rules: which categories of tool may run, ask first,
+    // or stay hidden, plus per-tool pins. Deliberately untyped here so the bot
+    // parses it with Zod at the boundary (`lib/ai/mcp-permissions`) — the fallback
+    // for an unreadable value is the SAFE shape, not an open gate. Null means
+    // "never configured", which reads as the defaults.
+    rules: jsonb('rules'),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),

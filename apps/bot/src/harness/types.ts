@@ -114,6 +114,12 @@ export type ModalSubmitResult =
 
 export interface ModalSubmitEvent {
   callbackId: string;
+  /**
+   * The view's `private_metadata`, verbatim. Set by whoever built the modal, so a
+   * handler must PARSE it — it is Slack-round-tripped text, not trusted state.
+   * Never put a secret in it: it rides through the client.
+   */
+  privateMetadata?: string;
   raw: unknown;
   triggerId?: string;
   user: Author;

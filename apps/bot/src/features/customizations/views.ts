@@ -8,6 +8,17 @@ import type {
   UserModelCredential,
 } from '@repo/db/queries';
 import { mrkdwn, plainText } from '@/harness';
+import {
+  formatMcpRules,
+  formatToolOverrides,
+  MCP_CATEGORIES,
+  MCP_CATEGORY_LABELS,
+  MCP_RULE_LABELS,
+  MCP_RULES,
+  type McpCategory,
+  type McpRule,
+  parseMcpRules,
+} from '@/lib/ai/mcp-permissions';
 import { IDENTITY_TYPES, type IdentityType } from '@/lib/identity';
 import type { SlackBlock, SlackHomeView, SlackModalView } from '@/types/views';
 import type { ErasePreview } from './erase';
@@ -538,29 +549,47 @@ export function buildHomeView({
   );
   for (const server of mcpServers) {
     const failure = mcpFailures[server.name];
-    blocks.push({
-      accessory: {
-        action_id: 'home_remove_mcp',
-        confirm: {
-          confirm: plainText('Remove'),
-          deny: plainText('Keep'),
-          text: mrkdwn(`\`${escapeSlackText(server.name)}\` will be removed.`),
-          title: plainText('Remove MCP server?'),
-        },
-        style: 'danger',
-        text: plainText('Remove'),
-        type: 'button',
-        value: server.name,
+    const rules = parseMcpRules(server.rules);
+    blocks.push(
+      {
+        text: mrkdwn(
+          `\`${escapeSlackText(server.name)}\` — ${escapeSlackText(server.url)}${
+            server.authorization ? ' · :key: token saved' : ''
+          }\n_${escapeSlackText(formatMcpRules(rules))}_${
+            failure
+              ? `\n:warning: no tools loaded — ${escapeSlackText(failure)}`
+              : ''
+          }`
+        ),
+        type: 'section',
       },
-      text: mrkdwn(
-        `\`${escapeSlackText(server.name)}\` — ${escapeSlackText(server.url)}${
-          failure
-            ? `\n:warning: no tools loaded — ${escapeSlackText(failure)}`
-            : ''
-        }`
-      ),
-      type: 'section',
-    });
+      {
+        elements: [
+          {
+            action_id: 'home_edit_mcp',
+            text: plainText('Edit'),
+            type: 'button',
+            value: server.name,
+          },
+          {
+            action_id: 'home_remove_mcp',
+            confirm: {
+              confirm: plainText('Remove'),
+              deny: plainText('Keep'),
+              text: mrkdwn(
+                `\`${escapeSlackText(server.name)}\` will be removed.`
+              ),
+              title: plainText('Remove MCP server?'),
+            },
+            style: 'danger',
+            text: plainText('Remove'),
+            type: 'button',
+            value: server.name,
+          },
+        ],
+        type: 'actions',
+      }
+    );
   }
 
   // Recurring reminders: list + pause/resume/cancel (per user).
@@ -866,54 +895,151 @@ export function buildModelKeyModal(
   };
 }
 
-export function buildMcpModal(): SlackModalView {
+export function buildMcpModal({
+  server,
+}: {
+  server?: UserMcpServer | null;
+} = {}): SlackModalView {
+  const editing = Boolean(server);
+  const rules = parseMcpRules(server?.rules);
+  const blocks: SlackBlock[] = [];
+  if (server) {
+    blocks.push({
+      elements: [mrkdwn(`Editing \`${escapeSlackText(server.name)}\`.`)],
+      type: 'context',
+    });
+  } else {
+    blocks.push({
+      block_id: 'mcp_name',
+      element: {
+        action_id: 'name',
+        max_length: 32,
+        placeholder: plainText('e.g. github'),
+        type: 'plain_text_input',
+      },
+      hint: plainText('Short handle used to namespace the tools.'),
+      label: plainText('Name'),
+      type: 'input',
+    });
+  }
+  blocks.push({
+    block_id: 'mcp_url',
+    element: {
+      action_id: 'url',
+      ...(server ? { initial_value: server.url } : {}),
+      placeholder: plainText('https://example.com/mcp'),
+      type: 'plain_text_input',
+    },
+    hint: plainText(
+      'Streamable HTTP endpoint. Servers on your own machine are not reachable from Slack.'
+    ),
+    label: plainText('Server URL'),
+    type: 'input',
+  });
+  blocks.push({
+    block_id: 'mcp_authorization',
+    element: {
+      action_id: 'authorization',
+      placeholder: plainText('paste your API token'),
+      type: 'plain_text_input',
+    },
+    // The stored token is never rendered back, so a blank field on an edit has to
+    // mean "keep it" — otherwise opening the modal to change one rule would wipe
+    // the credential. Clearing is the separate control below.
+    hint: plainText(tokenHint(server)),
+    label: plainText(editing ? 'Replace API token' : 'Authorization'),
+    optional: true,
+    type: 'input',
+  });
+  if (server?.authorization) {
+    blocks.push({
+      block_id: 'mcp_token_action',
+      element: {
+        action_id: 'token_action',
+        initial_option: tokenActionOption('keep'),
+        options: [tokenActionOption('keep'), tokenActionOption('clear')],
+        type: 'static_select',
+      },
+      label: plainText('Saved token'),
+      type: 'input',
+    });
+  }
+  blocks.push(
+    { type: 'divider' },
+    {
+      elements: [
+        mrkdwn(
+          "*Permissions.* Kyto sorts each of the server's tools by what it does. Reads run freely; anything that can leak or change something asks you first, in the thread. *Never* hides those tools from Kyto entirely, so they cannot be reached at all."
+        ),
+      ],
+      type: 'context',
+    },
+    ...MCP_CATEGORIES.map((category) => ruleSelect(category, rules[category])),
+    {
+      block_id: 'mcp_tool_rules',
+      element: {
+        action_id: 'tool_rules',
+        ...(editing
+          ? { initial_value: formatToolOverrides(rules) || undefined }
+          : {}),
+        multiline: true,
+        placeholder: plainText('get_logs: never\ndeploy: ask'),
+        type: 'plain_text_input',
+      },
+      hint: plainText(
+        'One per line, "tool_name: allow | ask | never". Overrides the category above for that one tool. Use the server\'s own tool name.'
+      ),
+      label: plainText('Per-tool exceptions'),
+      optional: true,
+      type: 'input',
+    }
+  );
   return {
-    blocks: [
-      {
-        block_id: 'mcp_name',
-        element: {
-          action_id: 'name',
-          max_length: 32,
-          placeholder: plainText('e.g. github'),
-          type: 'plain_text_input',
-        },
-        hint: plainText('Short handle used to namespace the tools.'),
-        label: plainText('Name'),
-        type: 'input',
-      },
-      {
-        block_id: 'mcp_url',
-        element: {
-          action_id: 'url',
-          placeholder: plainText('https://example.com/mcp'),
-          type: 'plain_text_input',
-        },
-        hint: plainText(
-          'Streamable HTTP endpoint. Servers on your own machine are not reachable from Slack.'
-        ),
-        label: plainText('Server URL'),
-        type: 'input',
-      },
-      {
-        block_id: 'mcp_authorization',
-        element: {
-          action_id: 'authorization',
-          placeholder: plainText('paste your API token'),
-          type: 'plain_text_input',
-        },
-        hint: plainText(
-          'Optional. A bare token becomes "Bearer <token>"; write the scheme yourself for anything else (e.g. "Basic …").'
-        ),
-        label: plainText('Authorization'),
-        optional: true,
-        type: 'input',
-      },
-    ],
-    callback_id: 'home_add_mcp_server',
+    blocks,
+    callback_id: editing ? 'home_edit_mcp_server' : 'home_add_mcp_server',
     close: plainText('Cancel'),
-    submit: plainText('Add'),
-    title: plainText('Add MCP server'),
+    ...(server
+      ? { private_metadata: JSON.stringify({ name: server.name }) }
+      : {}),
+    submit: plainText(editing ? 'Save' : 'Add'),
+    title: plainText(editing ? 'Edit MCP server' : 'Add MCP server'),
     type: 'modal',
+  };
+}
+
+function tokenHint(server?: UserMcpServer | null): string {
+  if (!server) {
+    return 'Optional. A bare token becomes "Bearer <token>"; write the scheme yourself for anything else (e.g. "Basic …").';
+  }
+  return server.authorization
+    ? 'A token is saved. Leave blank to keep it, or paste a new one to replace it.'
+    : 'No token saved. Paste one to add it.';
+}
+
+function tokenActionOption(action: 'clear' | 'keep') {
+  return {
+    text: plainText(
+      action === 'keep' ? 'Keep the saved token' : 'Remove the saved token'
+    ),
+    value: action,
+  };
+}
+
+function ruleSelect(category: McpCategory, rule: McpRule): SlackBlock {
+  const option = (value: McpRule) => ({
+    text: plainText(MCP_RULE_LABELS[value]),
+    value,
+  });
+  return {
+    block_id: `mcp_rule_${category}`,
+    element: {
+      action_id: `rule_${category}`,
+      initial_option: option(rule),
+      options: MCP_RULES.map(option),
+      type: 'static_select',
+    },
+    label: plainText(MCP_CATEGORY_LABELS[category]),
+    type: 'input',
   };
 }
 

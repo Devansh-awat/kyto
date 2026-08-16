@@ -2,6 +2,13 @@ import type { UserMcpServer } from '@repo/db/queries';
 import type { Logger } from '@repo/logging/logger';
 import { jsonSchema, type Tool, tool } from 'ai';
 import { z } from 'zod';
+import {
+  classifyMcpTool,
+  type McpCategory,
+  type McpRule,
+  parseMcpRules,
+  resolveMcpRule,
+} from './mcp-permissions';
 
 // Minimal MCP client over the Streamable HTTP transport (JSON-RPC 2.0 via
 // POST). Hand-rolled on purpose: it is ~150 lines, has zero dependencies, and
@@ -26,6 +33,10 @@ const MAX_FAILURE_MESSAGE = 200;
 const toolListSchema = z.object({
   tools: z.array(
     z.looseObject({
+      // The MCP spec's behaviour hints (readOnlyHint / destructiveHint). Kept
+      // because they are the best classification signal there is — even though
+      // the server that prompted all this sends `{}` for every tool.
+      annotations: z.record(z.string(), z.unknown()).optional(),
       description: z.string().optional(),
       inputSchema: z.record(z.string(), z.unknown()).optional(),
       name: z.string(),
@@ -46,6 +57,7 @@ const callResultSchema = z.looseObject({
 });
 
 export interface McpToolInfo {
+  annotations?: Record<string, unknown>;
   description?: string;
   inputSchema?: Record<string, unknown>;
   name: string;
@@ -201,6 +213,7 @@ export class McpConnection {
       await this.rpc('tools/list', {}, { timeoutMs: CONNECT_TIMEOUT_MS })
     );
     const tools = result.tools.map((entry) => ({
+      annotations: entry.annotations as Record<string, unknown> | undefined,
       description: entry.description,
       inputSchema: entry.inputSchema as Record<string, unknown> | undefined,
       name: entry.name,
@@ -281,21 +294,59 @@ async function readSseResponse(
   throw new Error('MCP SSE response ended without a matching reply.');
 }
 
+export interface McpToolGate {
+  category: McpCategory;
+  rule: McpRule;
+  /** The server's handle, as registered in App Home. */
+  server: string;
+  /** The server's own name for the tool, un-namespaced. */
+  tool: string;
+}
+
+/**
+ * Ask the person whose server this is whether one call may go ahead. Supplied by
+ * the Slack layer (`lib/mcp-permissions`); absent for callers with nobody to ask
+ * (reminders, the subagent), where an `ask` tool therefore refuses.
+ */
+export type McpPermissionRequest = (
+  input: McpToolGate & { abortSignal?: AbortSignal; args: unknown }
+) => Promise<{ allowed: boolean; detail: string }>;
+
+export interface BuiltMcpTools {
+  /** Tools a server advertised that the user's rules keep hidden from the model. */
+  blocked: { categories: McpCategory[]; count: number; server: string }[];
+  close: () => Promise<void>;
+  /** By namespaced tool name, so the caller can describe what it exposed. */
+  gates: Record<string, McpToolGate>;
+  tools: Record<string, Tool>;
+}
+
 /**
  * Build namespaced ai tools for one user's MCP servers. Listing uses the
  * shared schema cache (one discovery round-trip per server per 10 minutes);
  * calls open a per-turn connection lazily. Returns the tools plus a `close`
  * to run at turn end. A dead server degrades that turn's toolset, not the bot.
+ *
+ * Every advertised tool is sorted into a category and checked against the
+ * server's rules: `allow` registers it as-is, `ask` wraps it so the call waits on
+ * a click, and `never` is NOT REGISTERED AT ALL — a hidden tool cannot be reached
+ * by a prompt injection, and its schema does not ride along in the prompt either.
+ * The count is reported back so the model can say the category is off rather than
+ * inventing a reason the tool is missing.
  */
 export async function buildMcpTools({
   logger,
+  requestPermission,
   servers,
 }: {
   logger: Logger;
+  requestPermission?: McpPermissionRequest;
   servers: UserMcpServer[];
-}): Promise<{ close: () => Promise<void>; tools: Record<string, Tool> }> {
+}): Promise<BuiltMcpTools> {
   const connections: McpConnection[] = [];
   const tools: Record<string, Tool> = {};
+  const gates: Record<string, McpToolGate> = {};
+  const blocked: BuiltMcpTools['blocked'] = [];
   await Promise.all(
     servers.map(async (server) => {
       const key = failureKey(server);
@@ -304,15 +355,31 @@ export async function buildMcpTools({
         return;
       }
       const connection = new McpConnection({ server });
+      const rules = parseMcpRules(server.rules);
+      const hidden = new Set<McpCategory>();
+      let hiddenCount = 0;
       try {
         const infos = await connection.listTools();
         connections.push(connection);
         failures.delete(key);
         for (const info of infos) {
+          const category = classifyMcpTool(info);
+          const rule = resolveMcpRule({ category, rules, tool: info.name });
+          if (rule === 'never') {
+            hidden.add(category);
+            hiddenCount += 1;
+            continue;
+          }
           const toolName = `mcp_${server.name}_${info.name}`.replaceAll(
             /[^\w-]/g,
             '_'
           );
+          gates[toolName] = {
+            category,
+            rule,
+            server: server.name,
+            tool: info.name,
+          };
           tools[toolName] = tool({
             description:
               info.description ??
@@ -323,8 +390,45 @@ export async function buildMcpTools({
                 type: 'object',
               }) as never
             ),
-            execute: (args: unknown) => connection.callTool(info.name, args),
+            execute: async (
+              args: unknown,
+              options?: { abortSignal?: AbortSignal }
+            ) => {
+              if (rule === 'ask') {
+                if (!requestPermission) {
+                  return `Not run. ${info.name} on the ${server.name} MCP server is set to ask permission first, and this turn has nobody to ask (it is running unattended). Tell the user to change the rule in App Home if they want it to run here.`;
+                }
+                const decision = await requestPermission({
+                  abortSignal: options?.abortSignal,
+                  args,
+                  category,
+                  rule,
+                  server: server.name,
+                  tool: info.name,
+                });
+                if (!decision.allowed) {
+                  return decision.detail;
+                }
+              }
+              return await connection.callTool(info.name, args);
+            },
           });
+        }
+        if (hiddenCount > 0) {
+          blocked.push({
+            categories: [...hidden].sort(),
+            count: hiddenCount,
+            server: server.name,
+          });
+          logger.info(
+            {
+              categories: [...hidden],
+              hidden: hiddenCount,
+              server: server.name,
+              userId: server.userId,
+            },
+            '[mcp] tools hidden by the user’s rules'
+          );
         }
       } catch (error) {
         // Recorded, not just logged: a dropped server produces zero tools and
@@ -345,9 +449,11 @@ export async function buildMcpTools({
     })
   );
   return {
+    blocked,
     close: async () => {
       await Promise.all(connections.map((connection) => connection.close()));
     },
+    gates,
     tools,
   };
 }

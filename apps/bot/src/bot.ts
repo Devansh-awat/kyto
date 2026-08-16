@@ -15,6 +15,7 @@ import '@/features/ask-question';
 import '@/features/assistant';
 import '@/features/confirm-post';
 import '@/features/customizations';
+import '@/features/mcp-permissions';
 import '@/features/poll';
 
 export { bot } from '@/lib/chat';

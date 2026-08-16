@@ -150,6 +150,10 @@ async function runAgent(
       getSandboxContext: () => sandboxContext,
       message,
       thread,
+      // A reminder fires on a schedule with nobody watching, so an MCP tool set
+      // to ask permission refuses here rather than posting a button and blocking
+      // the run for ten minutes on a click that may never come.
+      unattended: true,
     });
     close = built.close;
 

@@ -8,6 +8,7 @@ import {
   deleteUserModelCredential,
   getChatgptAccount,
   getIdentityProfiles,
+  getMcpServer,
   getUserCustomization,
   listUserModelCredentials,
   pauseReminder,
@@ -20,13 +21,22 @@ import {
   setUsageFooter,
   setUserCustomization,
   updateChatgptModel,
+  updateMcpServer,
   updateUserModelCredentialConfig,
   upsertUserModelCredential,
 } from '@repo/db/queries';
+import { z } from 'zod';
 import { env } from '@/env';
 import type { ModalSubmitEvent, ModalSubmitResult } from '@/harness';
 import { mrkdwn, plainText } from '@/harness';
 import { forgetMcpFailure, normalizeMcpAuthorization } from '@/lib/ai/mcp';
+import {
+  DEFAULT_MCP_RULES,
+  MCP_CATEGORIES,
+  MCP_RULES,
+  type McpServerRules,
+  parseToolOverrides,
+} from '@/lib/ai/mcp-permissions';
 import {
   byokConfigured,
   encryptSecret,
@@ -327,6 +337,36 @@ bot.onAction('home_add_mcp', async (event) => {
     });
 });
 
+bot.onAction('home_edit_mcp', async (event) => {
+  const name = event.value;
+  if (!(name && event.triggerId)) {
+    return;
+  }
+  const server = await getMcpServer({ name, userId: event.user.userId }).catch(
+    (error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), name, userId: event.user.userId },
+        'Failed to load MCP server for editing'
+      );
+      return null;
+    }
+  );
+  if (!server) {
+    return;
+  }
+  await slack.webClient.views
+    .open({
+      trigger_id: event.triggerId,
+      view: buildMcpModal({ server }) as never,
+    })
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), name, userId: event.user.userId },
+        'Failed to open MCP edit modal'
+      );
+    });
+});
+
 bot.onAction('home_remove_mcp', async (event) => {
   const name = event.value;
   if (!name) {
@@ -344,6 +384,45 @@ bot.onAction('home_remove_mcp', async (event) => {
       );
     });
 });
+
+const mcpMetadataSchema = z.object({ name: z.string().min(1).max(32) });
+
+function parseJson(text: string | undefined): unknown {
+  if (!text) {
+    return;
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return;
+  }
+}
+
+/**
+ * Read the permission controls out of an MCP modal. The four category selects
+ * always have a value (Slack sends the `initial_option` back), so an unreadable
+ * one falls back to the safe default rather than to whatever the row held.
+ */
+function readMcpRules(event: ModalSubmitEvent):
+  | { errors: Record<string, string> }
+  | {
+      rules: McpServerRules;
+    } {
+  const pins = parseToolOverrides(event.values.mcp_tool_rules);
+  if (pins.errors.length > 0) {
+    return {
+      errors: { mcp_tool_rules: pins.errors.join(' ').slice(0, 200) },
+    };
+  }
+  const rules = { ...DEFAULT_MCP_RULES, tools: pins.tools };
+  for (const category of MCP_CATEGORIES) {
+    const chosen = MCP_RULES.find(
+      (rule) => rule === event.values[`mcp_rule_${category}`]
+    );
+    rules[category] = chosen ?? DEFAULT_MCP_RULES[category];
+  }
+  return { rules };
+}
 
 bot.onModalSubmit(
   'home_add_mcp_server',
@@ -365,10 +444,15 @@ bot.onModalSubmit(
         errors: { mcp_url: 'Enter an http(s) URL.' },
       };
     }
+    const parsed = readMcpRules(event);
+    if ('errors' in parsed) {
+      return { action: 'errors', errors: parsed.errors };
+    }
     try {
       await addMcpServer({
         authorization,
         name,
+        rules: parsed.rules,
         url,
         userId: event.user.userId,
       });
@@ -384,6 +468,58 @@ bot.onModalSubmit(
     }
     // The saved entry gets a fresh verdict on the next turn; the old one
     // described credentials that no longer exist.
+    forgetMcpFailure({ name, userId: event.user.userId });
+    await publishHome({ userId: event.user.userId }).catch(() => undefined);
+    return;
+  }
+);
+
+bot.onModalSubmit(
+  'home_edit_mcp_server',
+  async (event: ModalSubmitEvent): Promise<ModalSubmitResult> => {
+    // The name is the namespace its tools are registered under, so it is not
+    // editable — it rides in `private_metadata` and identifies the row. Parsed
+    // rather than trusted: it round-trips through the client.
+    const name = mcpMetadataSchema.safeParse(parseJson(event.privateMetadata))
+      .data?.name;
+    if (!name) {
+      return {
+        action: 'errors',
+        errors: { mcp_url: 'Lost track of which server this was. Reopen it.' },
+      };
+    }
+    const url = event.values.mcp_url?.trim();
+    if (!(url && /^https?:\/\//.test(url))) {
+      return { action: 'errors', errors: { mcp_url: 'Enter an http(s) URL.' } };
+    }
+    const parsed = readMcpRules(event);
+    if ('errors' in parsed) {
+      return { action: 'errors', errors: parsed.errors };
+    }
+    const authorization = normalizeMcpAuthorization(
+      event.values.mcp_authorization
+    );
+    try {
+      await updateMcpServer({
+        // A blank token field means "keep what is stored" — the modal never shows
+        // it back, so treating blank as empty would silently break the server.
+        ...(authorization ? { authorization } : {}),
+        clearAuthorization: event.values.mcp_token_action === 'clear',
+        name,
+        rules: parsed.rules,
+        url,
+        userId: event.user.userId,
+      });
+    } catch (error) {
+      logger.warn(
+        { ...toLogError(error), name, userId: event.user.userId },
+        'Failed to update MCP server'
+      );
+      return {
+        action: 'errors',
+        errors: { mcp_url: 'Could not save this server. Try again.' },
+      };
+    }
     forgetMcpFailure({ name, userId: event.user.userId });
     await publishHome({ userId: event.user.userId }).catch(() => undefined);
     return;

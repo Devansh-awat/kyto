@@ -183,6 +183,10 @@ export function runSubagentTool({
               getSandboxContext: () => sandboxContext,
               message,
               thread,
+              // A subagent runs inside the parent's turn and has no watchdog of
+              // its own to hold open, so an MCP tool set to ask permission refuses
+              // here instead of stalling the parent behind a button.
+              unattended: true,
             });
             close = built.close;
             const knownTools = new Set(Object.keys(built.tools));

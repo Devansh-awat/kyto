@@ -411,6 +411,7 @@ export class KytoBot {
     const body = envelope.body;
     const view = (body.view ?? {}) as {
       callback_id?: string;
+      private_metadata?: string;
       state?: {
         values?: Record<string, Record<string, ModalStateElement>>;
       };
@@ -429,6 +430,7 @@ export class KytoBot {
     const user = (body.user ?? {}) as { id?: string; username?: string };
     const result = await handler({
       callbackId: view.callback_id ?? '',
+      privateMetadata: view.private_metadata,
       raw: body,
       triggerId: body.trigger_id ? String(body.trigger_id) : undefined,
       user: { userId: user.id ?? '', userName: user.username ?? user.id ?? '' },
