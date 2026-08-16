@@ -417,6 +417,7 @@ export function buildHomeView({
   chatgptAccount = null,
   identityProfiles = [],
   isOwner = false,
+  mcpFailures = {},
   mcpServers = [],
   modelCredentials = [],
   privacy,
@@ -435,6 +436,8 @@ export function buildHomeView({
   chatgptAccount?: ChatgptAccount | null;
   identityProfiles?: IdentityProfile[];
   isOwner?: boolean;
+  /** Server name → why its last listing failed, so a dead entry says so. */
+  mcpFailures?: Record<string, string>;
   mcpServers?: UserMcpServer[];
   modelCredentials?: UserModelCredential[];
   prompt: string | null;
@@ -534,6 +537,7 @@ export function buildHomeView({
     }
   );
   for (const server of mcpServers) {
+    const failure = mcpFailures[server.name];
     blocks.push({
       accessory: {
         action_id: 'home_remove_mcp',
@@ -549,7 +553,11 @@ export function buildHomeView({
         value: server.name,
       },
       text: mrkdwn(
-        `\`${escapeSlackText(server.name)}\` — ${escapeSlackText(server.url)}`
+        `\`${escapeSlackText(server.name)}\` — ${escapeSlackText(server.url)}${
+          failure
+            ? `\n:warning: no tools loaded — ${escapeSlackText(failure)}`
+            : ''
+        }`
       ),
       type: 'section',
     });
@@ -890,10 +898,12 @@ export function buildMcpModal(): SlackModalView {
         block_id: 'mcp_authorization',
         element: {
           action_id: 'authorization',
-          placeholder: plainText('Bearer …'),
+          placeholder: plainText('paste your API token'),
           type: 'plain_text_input',
         },
-        hint: plainText('Optional Authorization header value.'),
+        hint: plainText(
+          'Optional. A bare token becomes "Bearer <token>"; write the scheme yourself for anything else (e.g. "Basic …").'
+        ),
         label: plainText('Authorization'),
         optional: true,
         type: 'input',

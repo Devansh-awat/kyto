@@ -8,6 +8,7 @@ import {
   listUserReminders,
 } from '@repo/db/queries';
 import { env } from '@/env';
+import { getMcpFailure } from '@/lib/ai/mcp';
 import { byokConfigured } from '@/lib/byok';
 import { slack } from '@/lib/chat';
 import { slackOauthConfigured } from '@/lib/slack-oauth';
@@ -57,6 +58,12 @@ export async function publishHome({
       chatgptAccount: chatgptAccount ?? null,
       identityProfiles,
       isOwner,
+      mcpFailures: Object.fromEntries(
+        mcpServers.flatMap((server) => {
+          const failure = getMcpFailure({ name: server.name, userId });
+          return failure ? [[server.name, failure.message]] : [];
+        })
+      ),
       mcpServers,
       modelCredentials,
       privacy,

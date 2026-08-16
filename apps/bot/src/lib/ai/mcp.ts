@@ -14,6 +14,14 @@ const CONNECT_TIMEOUT_MS = 8000;
 const CALL_TIMEOUT_MS = 60_000;
 // Cached tool listings so turns don't pay a discovery round-trip per turn.
 const LIST_CACHE_TTL_MS = 10 * 60 * 1000;
+// A server that just failed is skipped for this long. Listing a broken server
+// costs up to two 8s timeouts, and `buildMcpTools` is awaited while the toolset
+// is assembled — so one dead entry used to add that to EVERY turn of that
+// user's, forever, silently.
+const FAILURE_TTL_MS = 60 * 1000;
+// An auth-scheme token followed by a credential (RFC 7235), e.g. `Bearer x`.
+const HAS_AUTH_SCHEME = /^[A-Za-z][\w-]*\s+\S/;
+const MAX_FAILURE_MESSAGE = 200;
 
 const toolListSchema = z.object({
   tools: z.array(
@@ -44,6 +52,62 @@ export interface McpToolInfo {
 }
 
 const listCache = new Map<string, { at: number; tools: McpToolInfo[] }>();
+
+export interface McpFailure {
+  at: number;
+  message: string;
+}
+
+// Why a user's server produced no tools, so App Home can say so. In memory on
+// purpose: it is a fact about the last attempt, not about the entry, and a
+// restart should re-derive it rather than show a stale complaint.
+const failures = new Map<string, McpFailure>();
+
+function failureKey({
+  name,
+  userId,
+}: {
+  name: string;
+  userId: string;
+}): string {
+  return `${userId}\n${name}`;
+}
+
+/**
+ * Turn what a person actually pastes into a usable `Authorization` header.
+ *
+ * The App Home field asks for a header *value*, but a bare API token is what
+ * every provider hands you and so what gets pasted. A token with no scheme
+ * makes a bearer-auth server answer 401, which this module then swallowed into
+ * silence — a Coolify entry with a perfectly valid token sat dead for a day for
+ * exactly this. A value that already names a scheme is left alone, so `Basic …`
+ * and custom schemes still work.
+ */
+export function normalizeMcpAuthorization(
+  value: string | null | undefined
+): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return;
+  }
+  return HAS_AUTH_SCHEME.test(trimmed) ? trimmed : `Bearer ${trimmed}`;
+}
+
+/** The last failure for one of a user's servers, for the App Home tab. */
+export function getMcpFailure(input: {
+  name: string;
+  userId: string;
+}): McpFailure | undefined {
+  return failures.get(failureKey(input));
+}
+
+/** Called when an entry is saved or removed: the old verdict no longer applies. */
+export function forgetMcpFailure(input: {
+  name: string;
+  userId: string;
+}): void {
+  failures.delete(failureKey(input));
+}
 
 export class McpConnection {
   private readonly server: UserMcpServer;
@@ -124,7 +188,11 @@ export class McpConnection {
   }
 
   async listTools(): Promise<McpToolInfo[]> {
-    const cached = listCache.get(this.server.url);
+    // Keyed by credential as well as URL: two users may register the same
+    // server with different tokens, and a token often decides which tools come
+    // back. Keying on the URL alone served one user's listing to another.
+    const cacheKey = `${this.server.url}\n${this.server.authorization ?? ''}`;
+    const cached = listCache.get(cacheKey);
     if (cached && Date.now() - cached.at < LIST_CACHE_TTL_MS) {
       return cached.tools;
     }
@@ -137,7 +205,7 @@ export class McpConnection {
       inputSchema: entry.inputSchema as Record<string, unknown> | undefined,
       name: entry.name,
     }));
-    listCache.set(this.server.url, { at: Date.now(), tools });
+    listCache.set(cacheKey, { at: Date.now(), tools });
     return tools;
   }
 
@@ -230,10 +298,16 @@ export async function buildMcpTools({
   const tools: Record<string, Tool> = {};
   await Promise.all(
     servers.map(async (server) => {
+      const key = failureKey(server);
+      const recent = failures.get(key);
+      if (recent && Date.now() - recent.at < FAILURE_TTL_MS) {
+        return;
+      }
       const connection = new McpConnection({ server });
       try {
         const infos = await connection.listTools();
         connections.push(connection);
+        failures.delete(key);
         for (const info of infos) {
           const toolName = `mcp_${server.name}_${info.name}`.replaceAll(
             /[^\w-]/g,
@@ -253,6 +327,16 @@ export async function buildMcpTools({
           });
         }
       } catch (error) {
+        // Recorded, not just logged: a dropped server produces zero tools and
+        // used to produce zero feedback too, so a bad entry was indistinguishable
+        // from a server with nothing to offer. App Home reads this back.
+        failures.set(key, {
+          at: Date.now(),
+          message: (error instanceof Error
+            ? error.message
+            : String(error)
+          ).slice(0, MAX_FAILURE_MESSAGE),
+        });
         logger.warn(
           { err: error, server: server.name, url: server.url },
           '[mcp] server unavailable this turn'

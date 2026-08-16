@@ -26,6 +26,7 @@ import {
 import { env } from '@/env';
 import type { ModalSubmitEvent, ModalSubmitResult } from '@/harness';
 import { mrkdwn, plainText } from '@/harness';
+import { forgetMcpFailure, normalizeMcpAuthorization } from '@/lib/ai/mcp';
 import {
   byokConfigured,
   encryptSecret,
@@ -332,7 +333,10 @@ bot.onAction('home_remove_mcp', async (event) => {
     return;
   }
   await removeMcpServer({ name, userId: event.user.userId })
-    .then(() => publishHome({ userId: event.user.userId }))
+    .then(() => {
+      forgetMcpFailure({ name, userId: event.user.userId });
+      return publishHome({ userId: event.user.userId });
+    })
     .catch((error: unknown) => {
       logger.warn(
         { ...toLogError(error), name, userId: event.user.userId },
@@ -346,7 +350,9 @@ bot.onModalSubmit(
   async (event: ModalSubmitEvent): Promise<ModalSubmitResult> => {
     const name = event.values.mcp_name?.trim().toLowerCase();
     const url = event.values.mcp_url?.trim();
-    const authorization = event.values.mcp_authorization?.trim() || undefined;
+    const authorization = normalizeMcpAuthorization(
+      event.values.mcp_authorization
+    );
     if (!(name && /^[\w-]+$/.test(name))) {
       return {
         action: 'errors',
@@ -376,6 +382,9 @@ bot.onModalSubmit(
         errors: { mcp_url: 'Could not save this server. Try again.' },
       };
     }
+    // The saved entry gets a fresh verdict on the next turn; the old one
+    // described credentials that no longer exist.
+    forgetMcpFailure({ name, userId: event.user.userId });
     await publishHome({ userId: event.user.userId }).catch(() => undefined);
     return;
   }
