@@ -1,4 +1,9 @@
-import type { GithubRequest, GithubTrust, Memory } from '@repo/db/queries';
+import type {
+  ChannelGroupWithChannels,
+  GithubRequest,
+  GithubTrust,
+  Memory,
+} from '@repo/db/queries';
 
 // Server-rendered HTML, no client framework and no external assets: the page is
 // served off the same host as user-deployed sites, so the less it loads the
@@ -89,10 +94,25 @@ function userLabel(userId: string, names?: Names): string {
     : escapeHtml(userId);
 }
 
+// A memory is in exactly one of four states, and the page has to say which:
+// private to its author, shared with one channel, shared with a channel group,
+// or global. Anything past "private" means the owner promoted it and custody
+// moved with it.
+function memoryScopeTag(memory: Memory): string {
+  if (memory.isGlobal) {
+    return '<span class="tag global">global</span>';
+  }
+  if (memory.scopeKind === 'channel') {
+    return `<span class="tag global">channel ${escapeHtml(memory.scopeId ?? '')}</span>`;
+  }
+  if (memory.scopeKind === 'group') {
+    return `<span class="tag global">group ${escapeHtml(memory.scopeId ?? '')}</span>`;
+  }
+  return '<span class="tag">private</span>';
+}
+
 function memoryCard(memory: Memory, names?: Names): string {
-  const tag = memory.isGlobal
-    ? '<span class="tag global">global</span>'
-    : '<span class="tag">private</span>';
+  const tag = memoryScopeTag(memory);
   return `<div class="card"><div class="row">
   <div><a href="/_dashboard/memory/${memory.id}">${escapeHtml(memory.title)}</a> ${tag}
     <div class="muted">${escapeHtml(memory.summary)}</div>
@@ -127,12 +147,14 @@ function trustRow(trust: GithubTrust, csrf: string, names?: Names): string {
 
 export function overviewPage({
   csrf,
+  groups,
   memories,
   requests,
   trust,
   names,
 }: {
   csrf: string;
+  groups?: ChannelGroupWithChannels[];
   memories: Memory[];
   requests: GithubRequest[];
   trust: GithubTrust[];
@@ -173,6 +195,21 @@ ${
     : pending.map((memory) => memoryCard(memory, names)).join('')
 }
 
+<h2>Channel groups (${(groups ?? []).length})</h2>
+<p class="muted">Made by anyone, from Kyto's App Home. The id is what a memory's "share with one room" box takes as <code>group:&lt;id&gt;</code>.</p>
+${
+  (groups ?? []).length === 0
+    ? '<p class="muted">None yet.</p>'
+    : (groups ?? [])
+        .map(
+          (group) =>
+            `<div class="card"><div><strong>${escapeHtml(group.name)}</strong> <span class="muted">${escapeHtml(group.id)}</span>
+    <div class="muted">${group.channelIds.length} channel${group.channelIds.length === 1 ? '' : 's'} · made by ${userLabel(group.createdBy, names)}</div>
+  </div></div>`
+        )
+        .join('')
+}
+
 <h2>Global memories (${global.length})</h2>
 ${
   global.length === 0
@@ -194,7 +231,7 @@ export function memoryPage({
   return page(
     memory.title,
     `<p class="muted"><a href="/_dashboard">&larr; back</a></p>
-<h1>${escapeHtml(memory.title)} ${memory.isGlobal ? '<span class="tag global">global</span>' : '<span class="tag">private</span>'}</h1>
+<h1>${escapeHtml(memory.title)} ${memoryScopeTag(memory)}</h1>
 <p class="muted">saved by ${userLabel(memory.createdBy, names)} · ${memory.createdAt.toISOString().replace('T', ' ').slice(0, 16)}${
       memory.promotedAt
         ? ` · promoted ${memory.promotedAt.toISOString().slice(0, 10)}`
@@ -212,6 +249,11 @@ ${
 }
   <form method="post" action="/_dashboard/memory/${memory.id}/delete">${hidden(csrf)}
     <button class="danger" type="submit">Delete</button></form>
-</div>`
+</div>
+<h2>Share with one room</h2>
+<p class="muted">Promote into a single channel or channel group instead of the whole workspace. Everyone there sees it on their turns, and it becomes yours to edit — the author can no longer change it. Leave the box empty and save to take it back to private.</p>
+<form method="post" action="/_dashboard/memory/${memory.id}/scope">${hidden(csrf)}
+  <input name="scope" placeholder="channel:C0123ABCD or group:&lt;group id&gt;" value="${escapeHtml(memory.scopeKind && memory.scopeId ? `${memory.scopeKind}:${memory.scopeId}` : '')}">
+  <button type="submit">Save scope</button></form>`
   );
 }

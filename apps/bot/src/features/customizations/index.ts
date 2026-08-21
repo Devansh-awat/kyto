@@ -2,22 +2,33 @@ import { isByokProviderId, personas } from '@repo/ai';
 import {
   addMcpServer,
   cancelReminder,
+  clearMemoryScopeForGroup,
   clearUserCustomization,
+  createChannelGroup,
+  deleteChannelGroup,
   deleteChatgptAccount,
   deleteSlackGrant,
   deleteUserModelCredential,
+  getChannelGroup,
+  getChannelGroupByName,
   getChatgptAccount,
   getIdentityProfiles,
   getMcpServer,
   getUserCustomization,
+  listChannelGroups,
+  listMcpServerShares,
   listUserModelCredentials,
   pauseReminder,
   removeMcpServer,
+  removeMcpSharesForGroup,
+  renameChannelGroup,
   resumeReminder,
+  setChannelGroupChannels,
   setChatgptChatgptFirst,
   setCredentialServiceFallback,
   setCredentialValidation,
   setIdentityProfile,
+  setMcpServerShares,
   setUsageFooter,
   setUserCustomization,
   updateChatgptModel,
@@ -37,6 +48,7 @@ import {
   type McpServerRules,
   parseToolOverrides,
 } from '@/lib/ai/mcp-permissions';
+import { checkMcpUrl } from '@/lib/ai/mcp-url';
 import {
   byokConfigured,
   encryptSecret,
@@ -63,6 +75,7 @@ import {
 } from './schema';
 import { publishHome } from './service';
 import {
+  buildChannelGroupModal,
   buildChatgptLinkModal,
   buildChatgptModelModal,
   buildIdentityModal,
@@ -70,6 +83,7 @@ import {
   buildModelKeyModal,
   buildPresetModal,
   buildPromptModal,
+  buildShareMcpModal,
 } from './views';
 
 // Slack rejects an input-block error string longer than this.
@@ -367,14 +381,323 @@ bot.onAction('home_edit_mcp', async (event) => {
     });
 });
 
+// ── Sharing an MCP server, and channel groups ───────────────────────────────
+//
+// Anyone may share a server they own with a channel or a channel group, and
+// anyone may create a group (owner's call, 2026-08-21). Two ownership checks
+// carry the whole feature and are both made against `event.user.userId`, which
+// Slack signs and the client cannot choose:
+//   * you can only share a server you own — `getMcpServer` is keyed by (name,
+//     userId), so another person's server simply does not resolve here;
+//   * you can only edit a group you made — checked explicitly below, because the
+//     group's id travels through the modal and a crafted payload could name any
+//     of them.
+
+bot.onAction('home_share_mcp', async (event) => {
+  const name = event.value;
+  if (!(name && event.triggerId)) {
+    return;
+  }
+  const server = await getMcpServer({ name, userId: event.user.userId }).catch(
+    () => null
+  );
+  if (!server) {
+    return;
+  }
+  const [shares, groups] = await Promise.all([
+    listMcpServerShares(server.id).catch(() => []),
+    listChannelGroups().catch(() => []),
+  ]);
+  await slack.webClient.views
+    .open({
+      trigger_id: event.triggerId,
+      view: buildShareMcpModal({ groups, server, shares }) as never,
+    })
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), name, userId: event.user.userId },
+        'Failed to open MCP share modal'
+      );
+    });
+});
+
+bot.onModalSubmit(
+  'home_share_mcp_server',
+  async (event: ModalSubmitEvent): Promise<ModalSubmitResult> => {
+    const metadata = mcpMetadataSchema.safeParse(
+      parseJson(event.privateMetadata)
+    );
+    if (!metadata.success) {
+      return {
+        action: 'errors',
+        errors: { share_channels: 'Lost track of which server this was.' },
+      };
+    }
+    const server = await getMcpServer({
+      name: metadata.data.name,
+      userId: event.user.userId,
+    }).catch(() => undefined);
+    if (!server) {
+      return {
+        action: 'errors',
+        errors: { share_channels: 'That server is not yours to share.' },
+      };
+    }
+    const channels = event.multiValues?.share_channels ?? [];
+    const groupIds = event.multiValues?.share_groups ?? [];
+    // Group ids come back from the client, so they are re-checked against real
+    // rows — a share pointing at a group that does not exist would be an entry
+    // nobody can see and nobody can revoke.
+    const known = new Set(
+      (await listChannelGroups().catch(() => [])).map((g) => g.id)
+    );
+    try {
+      await setMcpServerShares({
+        scopes: [
+          ...channels.map((scopeId) => ({
+            scopeId,
+            scopeKind: 'channel' as const,
+          })),
+          ...groupIds
+            .filter((scopeId) => known.has(scopeId))
+            .map((scopeId) => ({ scopeId, scopeKind: 'group' as const })),
+        ],
+        serverId: server.id,
+        sharedBy: event.user.userId,
+      });
+    } catch (error) {
+      logger.warn(
+        { ...toLogError(error), name: server.name, userId: event.user.userId },
+        'Failed to save MCP shares'
+      );
+      return {
+        action: 'errors',
+        errors: { share_channels: 'Could not save that. Try again.' },
+      };
+    }
+    logger.info(
+      {
+        channels: channels.length,
+        groups: groupIds.length,
+        server: server.name,
+        userId: event.user.userId,
+      },
+      '[mcp] shares updated'
+    );
+    await publishHome({ userId: event.user.userId }).catch(() => undefined);
+    return;
+  }
+);
+
+const groupMetadataSchema = z.object({ id: z.string().min(1).max(64) });
+
+bot.onAction('home_add_group', async (event) => {
+  if (!event.triggerId) {
+    return;
+  }
+  await slack.webClient.views
+    .open({
+      trigger_id: event.triggerId,
+      view: buildChannelGroupModal() as never,
+    })
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), userId: event.user.userId },
+        'Failed to open channel group modal'
+      );
+    });
+});
+
+bot.onAction('home_edit_group', async (event) => {
+  const id = event.value;
+  if (!(id && event.triggerId)) {
+    return;
+  }
+  const group = await getChannelGroup(id).catch(() => undefined);
+  if (!group) {
+    return;
+  }
+  if (
+    group.createdBy !== event.user.userId &&
+    !isOwnerUser(event.user.userId)
+  ) {
+    return;
+  }
+  await slack.webClient.views
+    .open({
+      trigger_id: event.triggerId,
+      view: buildChannelGroupModal({ group }) as never,
+    })
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), id, userId: event.user.userId },
+        'Failed to open channel group edit modal'
+      );
+    });
+});
+
+bot.onAction('home_delete_group', async (event) => {
+  const id = event.value;
+  if (!id) {
+    return;
+  }
+  const group = await getChannelGroup(id).catch(() => undefined);
+  if (
+    !group ||
+    (group.createdBy !== event.user.userId && !isOwnerUser(event.user.userId))
+  ) {
+    return;
+  }
+  // Everything pointing AT the group goes first. An orphaned share or a memory
+  // still carrying a dead group id is invisible and impossible to revoke — it resolves
+  // for nobody, so it fails closed, but it also cannot be found and cleaned up
+  // by the person who made it.
+  await removeMcpSharesForGroup(id).catch(() => undefined);
+  const demoted = await clearMemoryScopeForGroup(id).catch(() => 0);
+  await deleteChannelGroup(id).catch((error: unknown) => {
+    logger.warn(
+      { ...toLogError(error), id, userId: event.user.userId },
+      'Failed to delete channel group'
+    );
+  });
+  logger.info(
+    { demoted, group: group.name, userId: event.user.userId },
+    '[channel-groups] deleted'
+  );
+  await publishHome({ userId: event.user.userId }).catch(() => undefined);
+});
+
+function readGroupName(event: ModalSubmitEvent): string | undefined {
+  const name = event.values.group_name?.trim().toLowerCase();
+  return name && /^[\w-]{1,32}$/.test(name) ? name : undefined;
+}
+
+bot.onModalSubmit(
+  'home_add_group_save',
+  async (event: ModalSubmitEvent): Promise<ModalSubmitResult> => {
+    const name = readGroupName(event);
+    if (!name) {
+      return {
+        action: 'errors',
+        errors: { group_name: 'Use letters, digits, - or _ only.' },
+      };
+    }
+    const created = await createChannelGroup({
+      createdBy: event.user.userId,
+      name,
+    }).catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), name, userId: event.user.userId },
+        'Failed to create channel group'
+      );
+      return;
+    });
+    if (!created) {
+      return {
+        action: 'errors',
+        errors: { group_name: 'A group with that name already exists.' },
+      };
+    }
+    await setChannelGroupChannels({
+      addedBy: event.user.userId,
+      channelIds: event.multiValues?.group_channels ?? [],
+      groupId: created.id,
+    }).catch(() => undefined);
+    await publishHome({ userId: event.user.userId }).catch(() => undefined);
+    return;
+  }
+);
+
+bot.onModalSubmit(
+  'home_edit_group_save',
+  async (event: ModalSubmitEvent): Promise<ModalSubmitResult> => {
+    const metadata = groupMetadataSchema.safeParse(
+      parseJson(event.privateMetadata)
+    );
+    if (!metadata.success) {
+      return {
+        action: 'errors',
+        errors: { group_name: 'Lost track of which group this was.' },
+      };
+    }
+    const group = await getChannelGroup(metadata.data.id).catch(
+      () => undefined
+    );
+    // Re-checked at SUBMIT time, not only when the modal was opened: the id
+    // rides through the client, so opening someone else's group is one edited
+    // payload away.
+    if (
+      !group ||
+      (group.createdBy !== event.user.userId && !isOwnerUser(event.user.userId))
+    ) {
+      return {
+        action: 'errors',
+        errors: { group_name: 'That group is not yours to change.' },
+      };
+    }
+    const name = readGroupName(event);
+    if (!name) {
+      return {
+        action: 'errors',
+        errors: { group_name: 'Use letters, digits, - or _ only.' },
+      };
+    }
+    if (name !== group.name) {
+      const clash = await getChannelGroupByName(name).catch(() => undefined);
+      if (clash && clash.id !== group.id) {
+        return {
+          action: 'errors',
+          errors: { group_name: 'A group with that name already exists.' },
+        };
+      }
+      await renameChannelGroup({ id: group.id, name }).catch(() => undefined);
+    }
+    await setChannelGroupChannels({
+      addedBy: event.user.userId,
+      channelIds: event.multiValues?.group_channels ?? [],
+      groupId: group.id,
+    }).catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), id: group.id, userId: event.user.userId },
+        'Failed to save channel group'
+      );
+    });
+    logger.info(
+      {
+        channels: (event.multiValues?.group_channels ?? []).length,
+        group: name,
+        userId: event.user.userId,
+      },
+      '[channel-groups] updated'
+    );
+    await publishHome({ userId: event.user.userId }).catch(() => undefined);
+    return;
+  }
+);
+
+// A recorded failure is keyed by the server ROW (a shared server is one row seen
+// by several people), so saving an entry has to resolve the row before it can
+// drop the stale verdict.
+async function forgetSavedMcpFailure(input: {
+  name: string;
+  userId: string;
+}): Promise<void> {
+  const saved = await getMcpServer(input).catch(() => undefined);
+  if (saved) {
+    forgetMcpFailure(saved.id);
+  }
+}
+
 bot.onAction('home_remove_mcp', async (event) => {
   const name = event.value;
   if (!name) {
     return;
   }
   await removeMcpServer({ name, userId: event.user.userId })
-    .then(() => {
-      forgetMcpFailure({ name, userId: event.user.userId });
+    .then((serverId) => {
+      if (serverId) {
+        forgetMcpFailure(serverId);
+      }
       return publishHome({ userId: event.user.userId });
     })
     .catch((error: unknown) => {
@@ -438,11 +761,9 @@ bot.onModalSubmit(
         errors: { mcp_name: 'Use letters, digits, - or _ only.' },
       };
     }
-    if (!(url && /^https?:\/\//.test(url))) {
-      return {
-        action: 'errors',
-        errors: { mcp_url: 'Enter an http(s) URL.' },
-      };
+    const checkedUrl = checkMcpUrl(url);
+    if (!checkedUrl.ok) {
+      return { action: 'errors', errors: { mcp_url: checkedUrl.reason } };
     }
     const parsed = readMcpRules(event);
     if ('errors' in parsed) {
@@ -453,7 +774,7 @@ bot.onModalSubmit(
         authorization,
         name,
         rules: parsed.rules,
-        url,
+        url: checkedUrl.url.toString(),
         userId: event.user.userId,
       });
     } catch (error) {
@@ -468,7 +789,7 @@ bot.onModalSubmit(
     }
     // The saved entry gets a fresh verdict on the next turn; the old one
     // described credentials that no longer exist.
-    forgetMcpFailure({ name, userId: event.user.userId });
+    await forgetSavedMcpFailure({ name, userId: event.user.userId });
     await publishHome({ userId: event.user.userId }).catch(() => undefined);
     return;
   }
@@ -489,8 +810,9 @@ bot.onModalSubmit(
       };
     }
     const url = event.values.mcp_url?.trim();
-    if (!(url && /^https?:\/\//.test(url))) {
-      return { action: 'errors', errors: { mcp_url: 'Enter an http(s) URL.' } };
+    const checkedUrl = checkMcpUrl(url);
+    if (!checkedUrl.ok) {
+      return { action: 'errors', errors: { mcp_url: checkedUrl.reason } };
     }
     const parsed = readMcpRules(event);
     if ('errors' in parsed) {
@@ -507,7 +829,7 @@ bot.onModalSubmit(
         clearAuthorization: event.values.mcp_token_action === 'clear',
         name,
         rules: parsed.rules,
-        url,
+        url: checkedUrl.url.toString(),
         userId: event.user.userId,
       });
     } catch (error) {
@@ -520,7 +842,7 @@ bot.onModalSubmit(
         errors: { mcp_url: 'Could not save this server. Try again.' },
       };
     }
-    forgetMcpFailure({ name, userId: event.user.userId });
+    await forgetSavedMcpFailure({ name, userId: event.user.userId });
     await publishHome({ userId: event.user.userId }).catch(() => undefined);
     return;
   }

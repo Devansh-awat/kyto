@@ -5,10 +5,12 @@ import {
   getMemoryById,
   grantGithubTrust,
   listAllMemories,
+  listChannelGroups,
   listGithubRequests,
   listGithubTrust,
   revokeGithubTrust,
   setMemoryGlobal,
+  setMemoryScope,
 } from '@repo/db/queries';
 import { env } from '@/env';
 import logger from '@/lib/logger';
@@ -60,10 +62,11 @@ function redirect(location: string, extra?: Record<string, string>): Response {
 }
 
 async function overview(csrf: string): Promise<Response> {
-  const [memories, requests, trust] = await Promise.all([
+  const [memories, requests, trust, groups] = await Promise.all([
     listAllMemories(),
     listGithubRequests('pending'),
     listGithubTrust(),
+    listChannelGroups().catch(() => []),
   ]);
   // Resolve every Slack id on the page to a real name so a grant reads as a
   // person, not a `U…`. Best-effort: an unresolvable id falls back to itself.
@@ -72,7 +75,7 @@ async function overview(csrf: string): Promise<Response> {
     ...requests.map((request) => request.userId),
     ...trust.map((row) => row.userId),
   ]).catch(() => undefined);
-  return html(overviewPage({ csrf, memories, names, requests, trust }));
+  return html(overviewPage({ csrf, groups, memories, names, requests, trust }));
 }
 
 /** Every mutation funnels through here: live session + matching CSRF token. */
@@ -93,13 +96,33 @@ function authorizeMutation(
 async function handleMemoryAction({
   action,
   id,
+  scope,
 }: {
   action: string;
   id: number;
+  /** The `channel:C123` / `group:<id>` target of a "share with" promotion. */
+  scope?: string | null;
 }): Promise<Response> {
   if (action === 'promote' || action === 'demote') {
     await setMemoryGlobal({ id, isGlobal: action === 'promote' });
     logger.info({ action, memoryId: id }, '[dashboard] memory scope changed');
+    return redirect(`${DASHBOARD_PREFIX}/memory/${id}`);
+  }
+  if (action === 'scope') {
+    // Promoting into one room rather than to everybody. Parsed here rather than
+    // trusted: the form is the owner's own, but `scopeKind` is a closed set and
+    // an unrecognized value must demote, never widen.
+    const match = /^(channel|group):(\S{1,64})$/.exec(scope ?? '');
+    const kind = match?.[1] === 'group' ? 'group' : 'channel';
+    await setMemoryScope({
+      id,
+      scopeId: match ? (match[2] ?? null) : null,
+      scopeKind: match ? kind : null,
+    });
+    logger.info(
+      { memoryId: id, scope: match ? `${kind}:${match[2]}` : 'private' },
+      '[dashboard] memory room scope changed'
+    );
     return redirect(`${DASHBOARD_PREFIX}/memory/${id}`);
   }
   if (action === 'delete') {
@@ -178,11 +201,14 @@ async function handlePost(
     return redirect(DASHBOARD_PREFIX, { 'Set-Cookie': clearCookie() });
   }
 
-  const memoryAction = /^\/memory\/(\d+)\/(promote|demote|delete)$/.exec(path);
+  const memoryAction = /^\/memory\/(\d+)\/(promote|demote|delete|scope)$/.exec(
+    path
+  );
   if (memoryAction) {
     return await handleMemoryAction({
       action: memoryAction[2] ?? '',
       id: Number(memoryAction[1]),
+      scope: field('scope'),
     });
   }
 

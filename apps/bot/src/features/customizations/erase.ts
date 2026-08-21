@@ -19,6 +19,11 @@ import { bot } from '@/lib/chat';
 import logger from '@/lib/logger';
 import { errorMessage } from '@/lib/utils/error';
 
+/** Promoted past its author — global, or shared with a channel or group. */
+function isPromoted(memory: { isGlobal: boolean; scopeKind: string | null }) {
+  return memory.isGlobal || memory.scopeKind !== null;
+}
+
 /**
  * Self-serve erase: what kyto has derived from someone's conversations, removed
  * by that person, without the bot owner in the loop.
@@ -76,8 +81,12 @@ export async function previewUserData(userId: string): Promise<ErasePreview> {
     customInstructions: Boolean(customization?.prompt),
     mcpServers: mcpServers.length,
     modelKeys: modelKeys.length,
-    privateMemories: memories.filter((memory) => !memory.isGlobal).length,
-    promotedMemories: memories.filter((memory) => memory.isGlobal).length,
+    // "Promoted" is any memory the owner moved beyond its author — global, or
+    // into a channel or channel group. All of them transfer custody, so all of
+    // them survive an erase and all of them have to be REPORTED rather than
+    // quietly left behind.
+    privateMemories: memories.filter((memory) => !isPromoted(memory)).length,
+    promotedMemories: memories.filter((memory) => isPromoted(memory)).length,
   };
 }
 
@@ -100,7 +109,7 @@ export async function eraseUserData({
 }): Promise<EraseResult> {
   const authored = await listMemoriesByAuthor(userId).catch(() => []);
   const promotedMemories = authored
-    .filter((memory) => memory.isGlobal)
+    .filter((memory) => isPromoted(memory))
     .map((memory) => memory.title);
 
   const memoryCount = await deletePrivateMemoriesByAuthor(userId).catch(
@@ -275,7 +284,7 @@ export function summarize(result: EraseResult): string {
   );
   if (result.promotedMemories.length > 0) {
     lines.push(
-      `• ${result.promotedMemories.length} of your memories were promoted to workspace-wide and now belong to the bot owner, so only they can remove them: ${result.promotedMemories.map((title) => `\`${title}\``).join(', ')}`
+      `• ${result.promotedMemories.length} of your memories were promoted — to the whole workspace, or into a channel or channel group — and now belong to the bot owner, so only they can remove them: ${result.promotedMemories.map((title) => `\`${title}\``).join(', ')}`
     );
   }
   lines.push(

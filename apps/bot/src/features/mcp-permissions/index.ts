@@ -1,4 +1,4 @@
-import { getMcpServer, updateMcpServer } from '@repo/db/queries';
+import { getMcpServerById, updateMcpServer } from '@repo/db/queries';
 import { publishHome } from '@/features/customizations/service';
 import type { ActionEvent } from '@/harness';
 import { forgetMcpFailure, type McpToolGate } from '@/lib/ai/mcp';
@@ -60,20 +60,28 @@ async function pinRule({
   rule: McpRule;
   userId: string;
 }): Promise<boolean> {
-  const server = await getMcpServer({ name: gate.server, userId });
-  if (!server) {
+  // A STANDING rule belongs to whoever's credential the server runs on, even
+  // though anyone in the room may approve a single call on a shared server
+  // (owner's call, 2026-08-21). Person B saying "always" on person A's server
+  // would be person B editing person A's configuration, so it is refused here
+  // and the prompt does not offer them the button in the first place.
+  if (userId !== gate.ownerUserId) {
+    return false;
+  }
+  const server = await getMcpServerById(gate.serverId);
+  if (!server || server.userId !== userId) {
     return false;
   }
   const rules = parseMcpRules(server.rules);
   await updateMcpServer({
-    name: gate.server,
+    name: server.name,
     rules: { ...rules, tools: { ...rules.tools, [gate.tool]: rule } },
     userId,
   });
   // A hidden tool changes the shape of the toolset, and the listing is cached for
   // ten minutes; drop any recorded failure so the next turn re-derives the server
   // from scratch rather than reporting a verdict from before this decision.
-  forgetMcpFailure({ name: gate.server, userId });
+  forgetMcpFailure(server.id);
   return true;
 }
 

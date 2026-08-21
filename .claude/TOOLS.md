@@ -20,9 +20,39 @@ kyto genuinely SEES images. **The only channel that works is a USER message**: t
 - **`viewImage`** (`tools/view-image.ts`) lets the model look at a sandbox image (a screenshot, a generated/downloaded image). It buffers the bytes (`buildTools` → `drainImages`); `streamAttempt`'s `getFreshImages` is drained in `prepareStep`, appending the image as a **user message** for the next step (carries forward). `readFile` returns text — the sandbox prompt tells the model to `viewImage` instead of assuming it's blind. It also takes a **`question`**: with one, the image goes to the vision model (Gemini) and its ANSWER comes back in the tool result instead of the pixels being queued — that is how a text-only primary asks "what does this error say" / "transcribe the text", and a vision-capable primary gets it too, because a proper OCR read beats its own glance.
 - The **primary is TEXT-ONLY** (deepseek-v4-flash), so `modelSupportsVision` routes any image through `describeImages` on the owner's Gemini key first. Both the main loop and the subagent get `getFreshImages`.
 
-## Memory (workspace-global)
+## Memory (private by default, promoted by the owner)
 
-`saveMemory`/`fetchMemory`/`editMemory` (core, `tools/memory.ts`; `memories` table; `@repo/db` `listMemoryIndex`/`getMemory`/`createMemory`/`updateMemory`). Durable notes kyto writes for ITSELF after solving a big/non-obvious task, so a LATER thread reuses the solution. **Workspace-global, not per-user.** Every memory's `title` + one-line `summary` is injected into the system prompt as a `<memories>` block (`RequestHints.memories`, rendered in `prompts/context.ts`); the model calls `fetchMemory("<title>")` to pull the full `body` only when relevant. `saveMemory` is create-only (title unique; a clash tells the model to edit); `editMemory` patches in place. **There is deliberately NO delete tool** — the knowledge base only grows. Titles are the handle; keep them stable.
+`saveMemory`/`fetchMemory`/`editMemory`/`deleteMemory` (core, `tools/memory.ts`;
+`memories` table). Durable notes so a LATER thread reuses what this one worked
+out. Each visible memory's `title` is injected as a `<memories>` block
+(`RequestHints.memories`, rendered in `prompts/context.ts`); the model calls
+`fetchMemory("<title>")` for the body only when relevant. `saveMemory` is
+create-only (title unique PER AUTHOR; a clash tells the model to edit).
+
+- **Four visibility states**, decided in one place — `visibleTo` in
+  `packages/db/src/queries/memories.ts`: private to `createdBy`, `isGlobal`,
+  `scopeKind: 'channel'` + `scopeId`, `scopeKind: 'group'` + `scopeId`. The
+  scope arg is optional and every branch past "their own" needs an owner
+  promotion, so a caller that forgets to pass it sees LESS, never more.
+- **Only the owner promotes**, from the dashboard: `setMemoryGlobal` (which
+  CLEARS any room scope — the two are alternatives) or `setMemoryScope`
+  (`channel:C…` / `group:<id>`, empty box = back to private). The group ids are
+  listed on the dashboard overview so there is something to paste.
+- **Promotion transfers custody**, all three flavours: `canWrite` refuses the
+  author once `isPromoted(row)` (`isGlobal || scopeKind !== null`). A promoted
+  memory also survives a self-erase and is reported back by title.
+- **The `<memories>` block renders even when EMPTY**, because the block is mostly
+  the instruction to save and the person with no memories is who needs it.
+
+## Channel groups (`channel_groups`, `lib/…` App Home)
+
+A named set of channels, so one share covers several rooms. Anyone creates one;
+its creator (and the bot owner) is the only one who may rename it, delete it, or
+change its channels — checked at modal OPEN **and** SUBMIT, because the group id
+round-trips through the client. `listGroupIdsForChannel(channelId)` is the hot
+path (one indexed lookup, resolved once per turn in `buildTools` and reused by
+both the memory scope and the MCP toolset). Deleting a group drops the MCP shares
+pointing at it and demotes the memories scoped to it.
 
 ## Host-side tools and sandbox specifics
 
@@ -176,6 +206,22 @@ touching the gate. The mechanics:
   read-modify-write off the fresh row so it can't clobber a category rule changed
   while the prompt was open), then `forgetMcpFailure` so the next turn re-derives
   the server instead of reporting a pre-decision verdict, then republishes Home.
+  `pinRule` looks the row up by `gate.serverId` and REFUSES unless the clicker is
+  `gate.ownerUserId` — on a shared server anyone present may allow a single call,
+  but a standing rule belongs to whoever's credential it runs on.
+- **Sharing** (`mcp_server_shares`, `buildShareMcpModal`, `resolveTurnMcpServers`):
+  a `multi_conversations_select` for channels plus a `multi_static_select` for
+  groups, replacing that server's shares wholesale. `sharedBy` is written from
+  the acting user, never the form; group ids are re-checked against real rows.
+  The turn's list is `own ∪ shared`, de-duplicated by row id, own servers first
+  and keeping their names, collisions suffixed `_2`/`_3` — deterministic, so the
+  tool array does not reshuffle between turns and cost the thread its cache.
+  The multi-select values arrive on `ModalSubmitEvent.multiValues` (the flat
+  `values` map only carries `value`/`selected_option.value`).
+- **URL safety** (`lib/ai/mcp-url.ts`, tested): `checkMcpUrl` on save (scheme,
+  blocked hostnames/suffixes, private literals) and `assertPublicMcpHost` before
+  every JSON-RPC call (DNS resolve, 60s memo). Both, not either — a save-time
+  check alone loses to a hostname repointed afterwards.
 
 ## Approvals (`lib/approvals/`)
 

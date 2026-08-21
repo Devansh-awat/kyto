@@ -114,6 +114,8 @@ export type ModalSubmitResult =
 
 export interface ModalSubmitEvent {
   callbackId: string;
+  /** Multi-select state by block_id — channels picked, options picked. */
+  multiValues?: Record<string, string[]>;
   /**
    * The view's `private_metadata`, verbatim. Set by whoever built the modal, so a
    * handler must PARSE it — it is Slack-round-tripped text, not trusted state.

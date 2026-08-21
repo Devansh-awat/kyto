@@ -44,6 +44,16 @@ export const memories = pgTable(
     // Owner-set. False = private to `createdBy`. True = visible to everyone,
     // and thereafter editable/deletable only by the bot owner.
     isGlobal: boolean('is_global').notNull().default(false),
+    // The narrower half of the same promotion: null = not promoted to a room,
+    // 'channel' = visible on every turn in `scopeId`, 'group' = visible in every
+    // channel of the `channel_groups` row `scopeId` names. Owner-set, exactly
+    // like `isGlobal` — a memory reaching people who did not write it is the one
+    // persistent prompt-injection surface kyto has, and a channel is a smaller
+    // version of the same blast radius, not a different kind of thing. So the
+    // model cannot promote, the author cannot promote, and promotion transfers
+    // custody the same way (see canWrite in lib/ai/tools/memory.ts).
+    scopeKind: text('scope_kind'),
+    scopeId: text('scope_id'),
     // When the owner promoted it, for the dashboard's review list.
     promotedAt: timestamp('promoted_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true })

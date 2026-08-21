@@ -6,12 +6,18 @@ import {
   subagentAttempt,
   UPGRADE_TOOL_NAME,
 } from '@repo/ai';
-import { listMcpServers } from '@repo/db/queries';
+import {
+  listGroupIdsForChannel,
+  listMcpServers,
+  listSharedMcpServers,
+} from '@repo/db/queries';
 import { type Tool, type ToolSet, tool } from 'ai';
 import { z } from 'zod';
 import { env } from '@/env';
 import type { KytoBot, Message, ThreadHandle } from '@/harness';
 import { buildMcpTools } from '@/lib/ai/mcp';
+import { resolveTurnMcpServers } from '@/lib/ai/mcp-scope';
+import { slack } from '@/lib/chat';
 import { emojiUploadConfigured } from '@/lib/emoji-upload';
 import logger from '@/lib/logger';
 import { requestMcpPermission } from '@/lib/mcp-permissions/request';
@@ -161,6 +167,21 @@ export async function buildTools({
   const canActAsOwner = Boolean(env.SLACK_USER_TOKEN) && isOwner;
   const agentMailKey = env.AGENTMAIL_API_KEY;
 
+  // Where this turn is happening, and which channel groups that channel is in.
+  // Both the memory tools and the MCP toolset are scoped by it: a memory the
+  // owner promoted into this channel is readable here, and a server somebody
+  // shared with this channel (or with a group it belongs to) is callable here.
+  // Resolved ONCE — two tool families needing the same lookup is not a reason to
+  // make the same query twice a turn.
+  const channelId = slack.channelIdFromThreadId(thread.id);
+  const channelGroupIds = await listGroupIdsForChannel(channelId).catch(
+    (error: unknown) => {
+      logger.warn({ channelId, err: error }, '[channel-groups] lookup failed');
+      return [] as string[];
+    }
+  );
+  const memoryActor = { authorUserId, channelGroupIds, channelId, isOwner };
+
   // Images the model loaded with viewImage this turn, waiting to be injected
   // into the conversation as a user message on the next step (drainImages).
   const pendingImages: ImageInput[] = [];
@@ -234,10 +255,10 @@ export async function buildTools({
           }),
         }
       : {}),
-    saveMemory: saveMemoryTool({ authorUserId, isOwner }),
-    fetchMemory: fetchMemoryTool({ authorUserId, isOwner }),
-    editMemory: editMemoryTool({ authorUserId, isOwner }),
-    deleteMemory: deleteMemoryTool({ authorUserId, isOwner }),
+    saveMemory: saveMemoryTool(memoryActor),
+    fetchMemory: fetchMemoryTool(memoryActor),
+    editMemory: editMemoryTool(memoryActor),
+    deleteMemory: deleteMemoryTool(memoryActor),
     listThreads: listThreadsTool({ currentThreadId: thread.id }),
     readConversationHistory: readConversationHistoryTool({
       currentThreadId: thread.id,
@@ -344,7 +365,7 @@ export async function buildTools({
     },
     setChannelTopic: {
       summary: 'set a channel topic',
-      tool: setChannelTopicTool({ thread }),
+      tool: setChannelTopicTool({ isOwner, thread }),
     },
     bookmarkLink: {
       summary: 'add a bookmark to a channel',
@@ -394,7 +415,10 @@ export async function buildTools({
           slackScript: {
             summary:
               'run a read-only bash script against the Slack API (aggregate queries)',
-            tool: slackScriptTool({ getSandboxContext }),
+            tool: slackScriptTool({
+              getSandboxContext,
+              github: { isOwner, threadId: thread.id, userId: authorUserId },
+            }),
           },
         }
       : {}),
@@ -511,18 +535,34 @@ export async function buildTools({
       : {}),
   };
 
-  // The requesting user's remote MCP servers (added via kyto's App Home tab),
-  // also deferred behind loadTools.
-  const servers = await listMcpServers(authorUserId).catch((error: unknown) => {
-    logger.warn({ err: error, userId: authorUserId }, '[mcp] listing failed');
-    return [];
+  // The requesting user's own remote MCP servers (added from App Home), PLUS any
+  // server somebody has shared into this channel or into a group this channel
+  // belongs to. All deferred behind loadTools.
+  const [ownServers, sharedServers] = await Promise.all([
+    listMcpServers(authorUserId).catch((error: unknown) => {
+      logger.warn({ err: error, userId: authorUserId }, '[mcp] listing failed');
+      return [];
+    }),
+    listSharedMcpServers({ channelId, groupIds: channelGroupIds }).catch(
+      (error: unknown) => {
+        logger.warn({ channelId, err: error }, '[mcp] shared listing failed');
+        return [];
+      }
+    ),
+  ]);
+  const servers = resolveTurnMcpServers({
+    own: ownServers,
+    shared: sharedServers,
   });
   const mcp = await buildMcpTools({
     logger,
-    // Only the person whose server it is is ever asked, and they are by definition
-    // the person speaking this turn — an MCP tool is only ever registered on its
-    // owner's turns, so there is no third party to route this to. Left undefined
-    // for an unattended run, which makes an `ask` tool refuse rather than hang.
+    // The person SPEAKING decides an `ask`, even on a server someone else shared
+    // into the room — the owner's call (2026-08-21): "if person a adds and say
+    // write tool need ask, then person b can call kyto and for a write tool,
+    // person b can also approve it". What person B cannot do is change person
+    // A's standing rules; that check lives in features/mcp-permissions.
+    // Left undefined for an unattended run, which makes an `ask` tool refuse
+    // rather than hang on a button nobody is watching.
     requestPermission: unattended
       ? undefined
       : ({ abortSignal, args, ...gate }) =>

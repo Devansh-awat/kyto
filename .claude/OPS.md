@@ -32,6 +32,15 @@
 
 New tables/columns are pushed with one-off SQL — `drizzle-kit push` prompts interactively (a rename decision) and hangs in a non-TTY shell. Use `ALTER TABLE … ADD COLUMN IF NOT EXISTS` / `CREATE TABLE IF NOT EXISTS`; `db:generate`/`db:push` work for a human at the CLI. `authorization` is reserved — quote it in DDL. `sandbox_sessions` is **orphaned scaffolding**; `thread_sandboxes` is live.
 
+Live as of 2026-08-21 (channel-scoped config): `channel_groups(id, name UNIQUE,
+created_by, created_at)`, `channel_group_channels(group_id, channel_id, added_by,
+added_at, PK(group_id, channel_id))` + an index on `channel_id`,
+`mcp_server_shares(id, server_id, shared_by, scope_kind, scope_id, created_at)`
+with `UNIQUE(server_id, scope_kind, scope_id)` + an index on
+`(scope_kind, scope_id)`, and `memories.scope_kind` / `memories.scope_id` +
+an index on the pair. A `UNIQUE` constraint has no `IF NOT EXISTS` form — re-run
+the DDL and swallow "already exists".
+
 ## Owner dashboard
 
 `lib/dashboard/`, mounted on the **sites** Bun.serve at **`/_dashboard`** (shares `SITES_PUBLIC_HOST`; the sites name regex can't produce `_dashboard`, so no collision). Server-rendered HTML, no client framework or external assets.

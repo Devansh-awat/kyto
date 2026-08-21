@@ -459,3 +459,30 @@ sandbox backends never receive `GIT_HARDEN_COMMAND` or a GitHub token, and
 provider abstraction is worth stealing if kyto ever wants an E2B-optional path,
 but only after wiring those two in. Their code comments also mention a
 "QuackX" — there may be a third kyto fork about.
+
+**Per-channel customization shipped (2026-08-21) — and one half of it is not built yet.** MCP servers can be shared with a channel or a channel group, memories can be promoted into one, and channel groups exist so a share covers 5-7 rooms at once. What is NOT done from the older "per-CHANNEL customizations" idea is the per-channel PROMPT (the `user_customizations.prompt` merge order channel → user → default). That is a separate, smaller change: `requestHints` already has the channel id and the group ids in scope, so it needs a `channel_customizations` table and a merge, nothing more.
+
+**Two things about sharing worth watching now that it is live.**
+- A share with a GROUP follows the group. Its creator can add a channel later, and everyone's shares extend to it. The App Home copy says so, but nobody reads copy — if this ever bites, the fix is to make a group's channel list changeable only by its creator AND notify the people who have shared into it.
+- Watch `journalctl`/`docker logs` for `[mcp] shares updated` and `[channel-groups] updated` to see whether anyone actually uses it, before building more on top.
+
+**From the comprehensive safety review (2026-08-21) — what is FIXED.** Full write-up in the chat; the short list, so it is not re-found later:
+- `poll` could ping a whole channel. Its options are model text rendered as an mrkdwn section (the one Slack surface that resolves `<!channel>`) and it posts with `chat.postMessage` directly, so it never met the broadcast strip. Open to everyone, and reachable unattended through an `agent` reminder. Neutralized in `buildPollBlocks`.
+- An interrupt burst merged messages from DIFFERENT people under the last sender's identity — so a stranger's text could run at owner privilege. Now merges only the trailing same-author run (`lib/agent/steering.ts`, tested).
+- MCP server URLs had no SSRF guard: anyone could point one at `169.254.169.254` or a neighboring container and read the reply out of their own thread. Checked on save and again at connect time with a DNS resolve.
+- `slackScript` was a FIFTH shell with neither the GitHub guard nor the git-repo disarm. `codeMode` and `bash` reminders were missing the disarm too.
+- `git -C /repo push` parsed as verb `/repo`, so it was never flagged as mutating (the HTTP proxy still refused it; the local guard did not).
+- `setChannelTopic` could be aimed at ANY channel by id, by anyone. Now non-owners can only touch the channel kyto was invoked in.
+- A non-owner's `postMessage` no longer starts a top-level message — it lands in the invoking thread. This is the honest answer to "messaging in other channels where ppl cant type": Slack exposes no API for a channel's posting restrictions, so kyto puts the message where the asker demonstrably could have put it themselves.
+- A named reminder EDITOR can no longer change a reminder's `kind`/`command`/`url`. A reminder fires as its creator, so that was a way to run your instructions at someone else's permission level, on a timer.
+- `thread.schedule()` now strips broadcasts like `post` does (was inert, but it was one caller away from not being).
+
+**What the review did NOT find a way to do**, for the record: reach another user's MCP server or credential, promote a memory as anything but the owner, get a decrypted BYOK/ChatGPT/Slack-grant secret into a log, prompt, sandbox or modal, search Slack as somebody else, read an email with its credentials intact, or get a GitHub credential into a sandbox. The command-text GitHub guard IS defeatable several ways (quoting, `$( )`, base64+eval, dynamically-built commands) but every one of them still has to transit the host proxy, which classifies the real HTTP request — that is working as designed, and the local guard is a UX layer.
+
+**Still open from the review — decide these.**
+- `browser` downloads are never disarmed. Low risk (extracting or cloning through any shell triggers the disarm), but it is the one gap left in that control.
+- Nothing anywhere reads a channel's posting restrictions, because Slack has no API for it. The thread-redirect above is a mitigation, not a check.
+
+**Link rendering fixed (2026-08-21).** Both cases you saw were the same bug: Slack's `markdown` block auto-links a bare URL by running to the next whitespace and does not stop at a markdown delimiter, so the closing `**` and a following backtick were eaten INTO the href. A URL touching `*`, `_`, `~` or a backtick is now rewritten as an explicit `[url](url)` before posting (`disambiguateBareUrls`, tested). Only the ambiguous ones — a plain bare URL still posts bare, because Slack unfurls those and an explicit link loses the preview.
+
+**`.claude/CLAUDE.md` is ~49k characters against its own 40k budget.** It was already 44.7k before this pass. Worth a dedicated trim: the security-invariants list and the identity/gating list are each several thousand characters of prose that could move into TOOLS.md behind a pointer, the way MODELS.md and STREAMING.md already work.

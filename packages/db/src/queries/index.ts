@@ -1,5 +1,6 @@
 export * from './approvals';
 export * from './bans';
+export * from './channel-groups';
 export * from './chatgpt-accounts';
 export * from './customizations';
 export * from './github-repos';

@@ -23,6 +23,14 @@ import { IDENTITY_TYPES, type IdentityType } from '@/lib/identity';
 import type { SlackBlock, SlackHomeView, SlackModalView } from '@/types/views';
 import type { ErasePreview } from './erase';
 
+/** One channel group as App Home shows it: names resolved, ids kept for actions. */
+export interface RenderedChannelGroup {
+  channelIds: string[];
+  createdBy: string;
+  id: string;
+  name: string;
+}
+
 const maxHomePromptLength = 600;
 const maxPromptLength = 3000;
 const REMINDER_TEXT_MAX = 120;
@@ -425,11 +433,13 @@ function slackGrantBlocks(grant: SlackGrant | null): SlackBlock[] {
 
 export function buildHomeView({
   byokEnabled = false,
+  channelGroups = [],
   chatgptAccount = null,
   identityProfiles = [],
   isOwner = false,
   mcpFailures = {},
   mcpServers = [],
+  mcpShares = {},
   modelCredentials = [],
   privacy,
   prompt,
@@ -441,15 +451,19 @@ export function buildHomeView({
 }: {
   /** False when the host has no BYOK_ENCRYPTION_KEY: hide the section entirely. */
   byokEnabled?: boolean;
+  /** Every channel group in the workspace, with its channels rendered. */
+  channelGroups?: RenderedChannelGroup[];
   /** What an erase would remove, so the section can be specific about it. */
   privacy?: ErasePreview;
   /** The user's linked ChatGPT account, or null. Rendered under the BYOK gate. */
   chatgptAccount?: ChatgptAccount | null;
   identityProfiles?: IdentityProfile[];
   isOwner?: boolean;
-  /** Server name → why its last listing failed, so a dead entry says so. */
+  /** Server id → why its last listing failed, so a dead entry says so. */
   mcpFailures?: Record<string, string>;
   mcpServers?: UserMcpServer[];
+  /** Server id → human-readable list of where the user has shared it. */
+  mcpShares?: Record<string, string[]>;
   modelCredentials?: UserModelCredential[];
   prompt: string | null;
   reminders?: Reminder[];
@@ -542,20 +556,25 @@ export function buildHomeView({
         type: 'button',
       },
       text: mrkdwn(
-        '*MCP servers*\nConnect remote MCP servers (HTTP); their tools become available on your turns.'
+        '*MCP servers*\nConnect remote MCP servers (HTTP); their tools become available on your turns. Share one with a channel or a channel group and its tools work on *everyone’s* turns there, on your credential.'
       ),
       type: 'section',
     }
   );
   for (const server of mcpServers) {
-    const failure = mcpFailures[server.name];
+    const failure = mcpFailures[server.id];
     const rules = parseMcpRules(server.rules);
+    const shares = mcpShares[server.id] ?? [];
     blocks.push(
       {
         text: mrkdwn(
           `\`${escapeSlackText(server.name)}\` — ${escapeSlackText(server.url)}${
             server.authorization ? ' · :key: token saved' : ''
           }\n_${escapeSlackText(formatMcpRules(rules))}_${
+            shares.length > 0
+              ? `\n:busts_in_silhouette: shared with ${shares.map((share) => escapeSlackText(share)).join(', ')}`
+              : ''
+          }${
             failure
               ? `\n:warning: no tools loaded — ${escapeSlackText(failure)}`
               : ''
@@ -568,6 +587,12 @@ export function buildHomeView({
           {
             action_id: 'home_edit_mcp',
             text: plainText('Edit'),
+            type: 'button',
+            value: server.name,
+          },
+          {
+            action_id: 'home_share_mcp',
+            text: plainText(shares.length > 0 ? 'Sharing' : 'Share'),
             type: 'button',
             value: server.name,
           },
@@ -590,6 +615,70 @@ export function buildHomeView({
         type: 'actions',
       }
     );
+  }
+
+  // Channel groups: a named set of channels, so one share covers all of them.
+  // Anyone can create one (the owner's call); its creator is its custodian.
+  blocks.push(
+    { type: 'divider' },
+    {
+      accessory: {
+        action_id: 'home_add_group',
+        text: plainText('New group'),
+        type: 'button',
+      },
+      text: mrkdwn(
+        '*Channel groups*\nName a set of channels once, then share an MCP server with the group instead of with each channel. Anyone can make one; only the person who made it can change which channels are in it — so sharing with a group is trusting them to keep that list right.'
+      ),
+      type: 'section',
+    }
+  );
+  if (channelGroups.length === 0) {
+    blocks.push({
+      elements: [mrkdwn('_No channel groups yet._')],
+      type: 'context',
+    });
+  }
+  for (const group of channelGroups) {
+    const mine = group.createdBy === userId || isOwner;
+    blocks.push({
+      text: mrkdwn(
+        `\`${escapeSlackText(group.name)}\` — ${
+          group.channelIds.length > 0
+            ? group.channelIds.map((id) => `<#${id}>`).join(' ')
+            : '_no channels yet_'
+        }\n_made by <@${group.createdBy}>_`
+      ),
+      type: 'section',
+    });
+    if (mine) {
+      blocks.push({
+        elements: [
+          {
+            action_id: 'home_edit_group',
+            text: plainText('Edit'),
+            type: 'button',
+            value: group.id,
+          },
+          {
+            action_id: 'home_delete_group',
+            confirm: {
+              confirm: plainText('Delete'),
+              deny: plainText('Keep'),
+              text: mrkdwn(
+                `\`${escapeSlackText(group.name)}\` will be deleted. Any MCP server shared with it stops working there, and any memory shared with it goes back to private.`
+              ),
+              title: plainText('Delete channel group?'),
+            },
+            style: 'danger',
+            text: plainText('Delete'),
+            type: 'button',
+            value: group.id,
+          },
+        ],
+        type: 'actions',
+      });
+    }
   }
 
   // Recurring reminders: list + pause/resume/cancel (per user).
@@ -1139,6 +1228,135 @@ export function buildPresetModal({
     close: plainText('Back'),
     submit: plainText('Use this preset'),
     title: plainText(name),
+    type: 'modal',
+  };
+}
+
+/**
+ * The share modal for one MCP server: which channels and which channel groups
+ * its tools should work in, for everyone there.
+ *
+ * `multi_conversations_select` is Slack's own picker, so a person can only offer
+ * conversations Slack is willing to show them — but the wording still has to be
+ * blunt, because what is being handed over is a live credential, not a document.
+ */
+export function buildShareMcpModal({
+  groups,
+  server,
+  shares,
+}: {
+  groups: RenderedChannelGroup[];
+  server: UserMcpServer;
+  shares: { scopeId: string; scopeKind: string }[];
+}): SlackModalView {
+  const channelIds = shares
+    .filter((share) => share.scopeKind === 'channel')
+    .map((share) => share.scopeId);
+  const groupIds = new Set(
+    shares
+      .filter((share) => share.scopeKind === 'group')
+      .map((share) => share.scopeId)
+  );
+  const groupOptions = groups.map((group) => ({
+    text: plainText(group.name),
+    value: group.id,
+  }));
+  const selectedGroups = groupOptions.filter((option) =>
+    groupIds.has(option.value)
+  );
+  const blocks: SlackBlock[] = [
+    {
+      text: mrkdwn(
+        `Anyone in these channels can get Kyto to call \`${escapeSlackText(server.name)}\`’s tools, and every call runs on *your* credential under your account with that service. Your permission rules still apply, and a tool set to *Ask me first* asks whoever is talking — not you — so they can approve it themselves. Share only with rooms you would hand this token to.`
+      ),
+      type: 'section',
+    },
+    {
+      block_id: 'share_channels',
+      element: {
+        action_id: 'channels',
+        ...(channelIds.length > 0 ? { initial_conversations: channelIds } : {}),
+        type: 'multi_conversations_select',
+      },
+      label: plainText('Channels'),
+      optional: true,
+      type: 'input',
+    },
+  ];
+  if (groupOptions.length > 0) {
+    blocks.push({
+      block_id: 'share_groups',
+      element: {
+        action_id: 'groups',
+        options: groupOptions,
+        ...(selectedGroups.length > 0
+          ? { initial_options: selectedGroups }
+          : {}),
+        type: 'multi_static_select',
+      },
+      hint: plainText(
+        'A group’s channel list is kept by whoever made it, and a share follows it.'
+      ),
+      label: plainText('Channel groups'),
+      optional: true,
+      type: 'input',
+    });
+  }
+  return {
+    blocks,
+    callback_id: 'home_share_mcp_server',
+    close: plainText('Cancel'),
+    private_metadata: JSON.stringify({ name: server.name }),
+    submit: plainText('Save'),
+    title: plainText('Share MCP server'),
+    type: 'modal',
+  };
+}
+
+/** Create or edit a channel group: a name plus the channels in it. */
+export function buildChannelGroupModal({
+  group,
+}: {
+  group?: RenderedChannelGroup | null;
+} = {}): SlackModalView {
+  const blocks: SlackBlock[] = [
+    {
+      block_id: 'group_name',
+      element: {
+        action_id: 'name',
+        ...(group ? { initial_value: group.name } : {}),
+        max_length: 32,
+        placeholder: plainText('e.g. hq'),
+        type: 'plain_text_input',
+      },
+      hint: plainText('Lower-cased, and unique across the workspace.'),
+      label: plainText('Group name'),
+      type: 'input',
+    },
+    {
+      block_id: 'group_channels',
+      element: {
+        action_id: 'channels',
+        ...(group && group.channelIds.length > 0
+          ? { initial_conversations: group.channelIds }
+          : {}),
+        type: 'multi_conversations_select',
+      },
+      hint: plainText(
+        'Anything shared with this group reaches every channel on this list.'
+      ),
+      label: plainText('Channels'),
+      optional: true,
+      type: 'input',
+    },
+  ];
+  return {
+    blocks,
+    callback_id: group ? 'home_edit_group_save' : 'home_add_group_save',
+    close: plainText('Cancel'),
+    ...(group ? { private_metadata: JSON.stringify({ id: group.id }) } : {}),
+    submit: plainText('Save'),
+    title: plainText(group ? 'Edit channel group' : 'New channel group'),
     type: 'modal',
   };
 }

@@ -424,8 +424,11 @@ export class KytoBot {
       return;
     }
     const values: Record<string, string | undefined> = {};
+    const multiValues: Record<string, string[]> = {};
     for (const [blockId, actions] of Object.entries(view.state?.values ?? {})) {
-      values[blockId] = modalStateValue(Object.values(actions)[0]);
+      const element = Object.values(actions)[0];
+      values[blockId] = modalStateValue(element);
+      multiValues[blockId] = modalStateValues(element);
     }
     const user = (body.user ?? {}) as { id?: string; username?: string };
     const result = await handler({
@@ -433,6 +436,7 @@ export class KytoBot {
       privateMetadata: view.private_metadata,
       raw: body,
       triggerId: body.trigger_id ? String(body.trigger_id) : undefined,
+      multiValues,
       user: { userId: user.id ?? '', userName: user.username ?? user.id ?? '' },
       values,
     });
@@ -454,12 +458,32 @@ export class KytoBot {
  * dropped every select in a modal (they arrived as undefined).
  */
 interface ModalStateElement {
+  selected_conversations?: string[] | null;
   selected_option?: { value?: string } | null;
+  selected_options?: { value?: string }[] | null;
   value?: string | null;
 }
 
 function modalStateValue(element?: ModalStateElement): string | undefined {
   return element?.value ?? element?.selected_option?.value ?? undefined;
+}
+
+/**
+ * The MULTI-select flavours, which report a list and no `value` at all. Kept
+ * separate from `values` rather than joined into a string: a channel picker's
+ * result is a set of ids, and re-splitting a delimiter-joined string is how a
+ * channel whose id contains the delimiter would quietly go missing.
+ */
+function modalStateValues(element?: ModalStateElement): string[] {
+  if (element?.selected_conversations) {
+    return element.selected_conversations.filter(Boolean);
+  }
+  if (element?.selected_options) {
+    return element.selected_options
+      .map((option) => option.value)
+      .filter((value): value is string => Boolean(value));
+  }
+  return [];
 }
 
 async function runAll<T>(

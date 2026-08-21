@@ -33,6 +33,23 @@ interface SlackSelectElement {
   type: 'static_select';
 }
 
+// Slack's multi-selects. `multi_conversations_select` is the one that matters
+// here: it makes the person pick from conversations Slack is willing to show
+// THEM, so a channel picker never becomes a way to enumerate the workspace.
+interface SlackMultiConversationsElement {
+  action_id: string;
+  initial_conversations?: string[];
+  type: 'multi_conversations_select';
+}
+
+interface SlackMultiSelectElement {
+  action_id: string;
+  initial_options?: SlackSelectOption[];
+  options: SlackSelectOption[];
+  placeholder?: ReturnType<typeof plainText>;
+  type: 'multi_static_select';
+}
+
 interface SlackConfirm {
   confirm: ReturnType<typeof plainText>;
   deny: ReturnType<typeof plainText>;
@@ -63,7 +80,11 @@ export type SlackBlock =
     }
   | {
       block_id: string;
-      element: SlackSelectElement | SlackTextInputElement;
+      element:
+        | SlackMultiConversationsElement
+        | SlackMultiSelectElement
+        | SlackSelectElement
+        | SlackTextInputElement;
       hint?: ReturnType<typeof plainText>;
       label: ReturnType<typeof plainText>;
       optional?: boolean;

@@ -2,6 +2,8 @@ import type { UserMcpServer } from '@repo/db/queries';
 import type { Logger } from '@repo/logging/logger';
 import { jsonSchema, type Tool, tool } from 'ai';
 import { z } from 'zod';
+import type { McpServerForTurn } from '@/lib/ai/mcp-scope';
+import { assertPublicMcpHost } from '@/lib/ai/mcp-url';
 import {
   classifyMcpTool,
   type McpCategory,
@@ -75,14 +77,12 @@ export interface McpFailure {
 // restart should re-derive it rather than show a stale complaint.
 const failures = new Map<string, McpFailure>();
 
-function failureKey({
-  name,
-  userId,
-}: {
-  name: string;
-  userId: string;
-}): string {
-  return `${userId}\n${name}`;
+// Keyed by the server ROW, not by (user, name). A shared server is one row seen
+// by several people, and a failure on it is a fact about that row — keying it by
+// whoever's turn hit it would record the same outage once per user and show the
+// sharer nothing.
+function failureKey(serverId: string): string {
+  return serverId;
 }
 
 /**
@@ -106,19 +106,13 @@ export function normalizeMcpAuthorization(
 }
 
 /** The last failure for one of a user's servers, for the App Home tab. */
-export function getMcpFailure(input: {
-  name: string;
-  userId: string;
-}): McpFailure | undefined {
-  return failures.get(failureKey(input));
+export function getMcpFailure(serverId: string): McpFailure | undefined {
+  return failures.get(failureKey(serverId));
 }
 
 /** Called when an entry is saved or removed: the old verdict no longer applies. */
-export function forgetMcpFailure(input: {
-  name: string;
-  userId: string;
-}): void {
-  failures.delete(failureKey(input));
+export function forgetMcpFailure(serverId: string): void {
+  failures.delete(failureKey(serverId));
 }
 
 export class McpConnection {
@@ -137,6 +131,11 @@ export class McpConnection {
     { notification = false, timeoutMs = CALL_TIMEOUT_MS } = {}
   ): Promise<unknown> {
     const id = notification ? undefined : this.nextId++;
+    // Re-checked at CONNECT time, not only when the entry was saved: a hostname
+    // that resolved to a public address yesterday can resolve to 127.0.0.1
+    // today, and this fetch runs from inside kyto's own network with the
+    // response printed back into a Slack thread.
+    await assertPublicMcpHost(this.server.url);
     const response = await fetch(this.server.url, {
       body: JSON.stringify({
         jsonrpc: '2.0',
@@ -296,9 +295,20 @@ async function readSseResponse(
 
 export interface McpToolGate {
   category: McpCategory;
+  /** The Slack user whose credential this server runs on. */
+  ownerUserId: string;
   rule: McpRule;
   /** The server's handle, as registered in App Home. */
   server: string;
+  /** The `user_mcp_servers` row, so a standing rule edits the right one. */
+  serverId: string;
+  /**
+   * Set when this server is only in scope because someone shared it into the
+   * channel. Whoever's turn it is decides an `ask` (the owner's call — "person b
+   * can also approve it"), but a STANDING rule stays with the person whose
+   * credential it is, so the prompt hides those buttons.
+   */
+  sharedBy?: string;
   /** The server's own name for the tool, un-namespaced. */
   tool: string;
 }
@@ -341,15 +351,15 @@ export async function buildMcpTools({
 }: {
   logger: Logger;
   requestPermission?: McpPermissionRequest;
-  servers: UserMcpServer[];
+  servers: McpServerForTurn[];
 }): Promise<BuiltMcpTools> {
   const connections: McpConnection[] = [];
   const tools: Record<string, Tool> = {};
   const gates: Record<string, McpToolGate> = {};
   const blocked: BuiltMcpTools['blocked'] = [];
   await Promise.all(
-    servers.map(async (server) => {
-      const key = failureKey(server);
+    servers.map(async ({ namespace, server, sharedBy }) => {
+      const key = failureKey(server.id);
       const recent = failures.get(key);
       if (recent && Date.now() - recent.at < FAILURE_TTL_MS) {
         return;
@@ -370,20 +380,23 @@ export async function buildMcpTools({
             hiddenCount += 1;
             continue;
           }
-          const toolName = `mcp_${server.name}_${info.name}`.replaceAll(
+          const toolName = `mcp_${namespace}_${info.name}`.replaceAll(
             /[^\w-]/g,
             '_'
           );
           gates[toolName] = {
             category,
+            ownerUserId: server.userId,
             rule,
-            server: server.name,
+            server: namespace,
+            serverId: server.id,
+            ...(sharedBy ? { sharedBy } : {}),
             tool: info.name,
           };
           tools[toolName] = tool({
             description:
               info.description ??
-              `Tool ${info.name} on the ${server.name} MCP server.`,
+              `Tool ${info.name} on the ${namespace} MCP server.`,
             inputSchema: jsonSchema(
               (info.inputSchema ?? {
                 properties: {},
@@ -396,14 +409,17 @@ export async function buildMcpTools({
             ) => {
               if (rule === 'ask') {
                 if (!requestPermission) {
-                  return `Not run. ${info.name} on the ${server.name} MCP server is set to ask permission first, and this turn has nobody to ask (it is running unattended). Tell the user to change the rule in App Home if they want it to run here.`;
+                  return `Not run. ${info.name} on the ${namespace} MCP server is set to ask permission first, and this turn has nobody to ask (it is running unattended). Tell the user to change the rule in App Home if they want it to run here.`;
                 }
                 const decision = await requestPermission({
                   abortSignal: options?.abortSignal,
                   args,
                   category,
+                  ownerUserId: server.userId,
                   rule,
-                  server: server.name,
+                  server: namespace,
+                  serverId: server.id,
+                  ...(sharedBy ? { sharedBy } : {}),
                   tool: info.name,
                 });
                 if (!decision.allowed) {
@@ -418,13 +434,13 @@ export async function buildMcpTools({
           blocked.push({
             categories: [...hidden].sort(),
             count: hiddenCount,
-            server: server.name,
+            server: namespace,
           });
           logger.info(
             {
               categories: [...hidden],
               hidden: hiddenCount,
-              server: server.name,
+              server: namespace,
               userId: server.userId,
             },
             '[mcp] tools hidden by the user’s rules'
@@ -442,7 +458,7 @@ export async function buildMcpTools({
           ).slice(0, MAX_FAILURE_MESSAGE),
         });
         logger.warn(
-          { err: error, server: server.name, url: server.url },
+          { err: error, server: namespace, url: server.url },
           '[mcp] server unavailable this turn'
         );
       }

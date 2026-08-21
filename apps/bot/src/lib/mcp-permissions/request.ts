@@ -121,12 +121,19 @@ function promptBlocks({
 }): unknown[] {
   const preview = argsPreview(args);
   const tool = escapeSlackText(gate.tool);
+  const server = escapeSlackText(gate.server);
+  // A shared server is not the clicker's, so it is not "your" server and they
+  // cannot set a standing rule on it — only the person whose credential it runs
+  // on can. Saying whose it is is the point: approving a call here spends
+  // somebody else's access, and the clicker should know that before they do.
+  const shared = gate.sharedBy !== undefined;
+  const headline = shared
+    ? `:lock: Kyto wants to run \`${tool}\` on the \`${server}\` MCP server <@${gate.sharedBy}> shared with this channel — ${CATEGORY_REASON[gate.category]}. It runs on their credential.`
+    : `:lock: Kyto wants to run \`${tool}\` on your \`${server}\` MCP server — ${CATEGORY_REASON[gate.category]}.`;
   return [
     {
       text: mrkdwn(
-        `:lock: Kyto wants to run \`${tool}\` on your \`${escapeSlackText(gate.server)}\` MCP server — ${CATEGORY_REASON[gate.category]}.${
-          preview ? `\n\`\`\`${escapeSlackText(preview)}\`\`\`` : ''
-        }`
+        `${headline}${preview ? `\n\`\`\`${escapeSlackText(preview)}\`\`\`` : ''}`
       ),
       type: 'section',
     },
@@ -145,26 +152,32 @@ function promptBlocks({
           type: 'button',
           value: id,
         },
-        {
-          action_id: MCP_ALLOW_ALWAYS_ACTION,
-          text: plainText('Always allow this tool'),
-          type: 'button',
-          value: id,
-        },
-        {
-          action_id: MCP_DENY_ALWAYS_ACTION,
-          style: 'danger',
-          text: plainText('Never allow this tool'),
-          type: 'button',
-          value: id,
-        },
+        ...(shared
+          ? []
+          : [
+              {
+                action_id: MCP_ALLOW_ALWAYS_ACTION,
+                text: plainText('Always allow this tool'),
+                type: 'button',
+                value: id,
+              },
+              {
+                action_id: MCP_DENY_ALWAYS_ACTION,
+                style: 'danger',
+                text: plainText('Never allow this tool'),
+                type: 'button',
+                value: id,
+              },
+            ]),
       ],
       type: 'actions',
     },
     {
       elements: [
         mrkdwn(
-          '"Always" and "Never" are saved as a rule for this tool — change them any time in Kyto’s App Home.'
+          shared
+            ? 'Only the person who shared this server can set a standing rule for it, in their Kyto App Home.'
+            : '"Always" and "Never" are saved as a rule for this tool — change them any time in Kyto’s App Home.'
         ),
       ],
       type: 'context',
@@ -218,7 +231,9 @@ export async function requestMcpPermission({
   try {
     await thread.postEphemeral(
       approverUserId,
-      `Allow Kyto to run ${gate.tool} on your ${gate.server} MCP server?`,
+      gate.sharedBy
+        ? `Allow Kyto to run ${gate.tool} on the shared ${gate.server} MCP server?`
+        : `Allow Kyto to run ${gate.tool} on your ${gate.server} MCP server?`,
       { blocks: promptBlocks({ args, gate, id }) }
     );
   } catch (error) {
