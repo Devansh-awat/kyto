@@ -1,5 +1,10 @@
 import type { Reminder } from '@repo/db/queries';
-import { LazySandbox, runOnce } from '@repo/sandbox';
+import {
+  LazySandbox,
+  mayHaveFetchedRepo,
+  runOnce,
+  sanitizeGitRepos,
+} from '@repo/sandbox';
 import { env } from '@/env';
 import logger from '@/lib/logger';
 import { openSandboxProxies } from '@/lib/sandbox/proxies';
@@ -72,7 +77,18 @@ export async function runReminderBash(reminder: Reminder): Promise<string> {
       store: threadSandboxStore,
     });
     try {
-      return format(await sandbox.run({ command }));
+      const result = await sandbox.run({ command });
+      // Same disarm the `bash` tool does. A scheduled command is model-authored
+      // and runs unattended on a timer, so a repo it clones would sit armed in
+      // the thread's PERSISTENT sandbox until an ordinary git command in a later
+      // turn ran its config's command.
+      if (mayHaveFetchedRepo(command)) {
+        await sanitizeGitRepos({
+          dirs: [sandbox.workDir],
+          runner: sandbox,
+        }).catch(() => undefined);
+      }
+      return format(result);
     } finally {
       proxies.revoke();
       // Pauses (not kills) the thread's sandbox — same as a turn does.

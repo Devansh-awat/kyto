@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { neutralizeBroadcast } from '@/harness';
 
 export const POLL_VOTE_ACTION = 'poll_vote';
 export const POLL_METADATA_TYPE = 'kyto_poll';
@@ -80,7 +81,18 @@ export function buildPollBlocks(state: PollState) {
   const counts = countVotes(state);
   const total = counts.reduce((sum, count) => sum + count, 0);
 
-  const tally = state.options
+  // The tally is rendered as an mrkdwn SECTION, which is the one Slack surface
+  // that turns `<!channel>` into a real notification — and a poll is posted with
+  // `chat.postMessage` directly, so it never passes ThreadHandle.post's
+  // deny-by-default strip. Poll options are model text and the tool is open to
+  // everyone, including an unattended agent reminder, so "make a poll with the
+  // option `<!channel> read this`" was a way for anyone to ping a whole room
+  // with no owner gate at all. Neutralized HERE because this is the single
+  // render both the first post and every vote update go through.
+  const question = neutralizeBroadcast(state.question);
+  const options = state.options.map((option) => neutralizeBroadcast(option));
+
+  const tally = options
     .map((option, index) => {
       const count = counts[index] ?? 0;
       const percent = total === 0 ? 0 : Math.round((count / total) * 100);
@@ -88,7 +100,7 @@ export function buildPollBlocks(state: PollState) {
     })
     .join('\n\n');
 
-  const buttons = state.options.map((option, index) => ({
+  const buttons = options.map((option, index) => ({
     action_id: `${POLL_VOTE_ACTION}_${index}`,
     text: {
       emoji: true,
@@ -101,7 +113,7 @@ export function buildPollBlocks(state: PollState) {
 
   return [
     {
-      text: { emoji: true, text: `📊  ${state.question}`, type: 'plain_text' },
+      text: { emoji: true, text: `📊  ${question}`, type: 'plain_text' },
       type: 'header',
     },
     { type: 'divider' },

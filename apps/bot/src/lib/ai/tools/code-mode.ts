@@ -3,6 +3,7 @@ import type { SandboxContext } from '@repo/ai';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { guardGithubCommand } from '@/lib/github/guard';
+import { disarmFetchedRepos } from '@/lib/sandbox/git-safety';
 import { clamp } from '@/lib/utils/text';
 
 // Code Mode (the Cloudflare pattern): instead of calling one host tool per step
@@ -143,6 +144,14 @@ export function codeModeTool({
       if (result.exitCode === 0) {
         await guard?.claim();
       }
+      // Unconditionally, unlike `bash`, which skips the scan when its command
+      // obviously could not have fetched a repo. Here the program is a whole
+      // TypeScript file that shells out through a helper, so the command
+      // actually executed is `bun run run.ts` and the fetch is invisible from
+      // the outside. A repo cloned here and left armed runs its config's
+      // command on the next ordinary git operation in the thread, and nothing
+      // else in the stack catches that.
+      await disarmFetchedRepos({ abortSignal, context });
       return {
         exitCode: result.exitCode,
         stderr: clamp(result.stderr, OUTPUT_MAX),

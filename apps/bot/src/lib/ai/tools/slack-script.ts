@@ -1,6 +1,8 @@
 import type { SandboxContext } from '@repo/ai';
 import { tool } from 'ai';
 import { z } from 'zod';
+import { guardGithubCommand } from '@/lib/github/guard';
+import { disarmFetchedRepos } from '@/lib/sandbox/git-safety';
 import { readOnlySlackMethods } from '@/lib/slack-proxy';
 import { errorMessage } from '@/lib/utils/error';
 
@@ -17,10 +19,22 @@ function truncate(text: string): string {
     : text;
 }
 
+/**
+ * `script` is free-form bash in the SAME persistent sandbox the `bash` tool
+ * uses, so despite the tool's Slack-shaped description this is a fifth shell and
+ * has to carry the same two controls as the other four. It was missing both:
+ * a `gh pr merge …` here skipped the ownership pre-flight entirely (the host
+ * GitHub proxy still refused the write, but the refusal arrived as an opaque
+ * HTTP error instead of a clear reason), and a `git clone` here was never
+ * disarmed, so a repo-local `[filter] clean = curl …|sh` survived to run on the
+ * next ordinary git command in the thread. That second one has no backstop.
+ */
 export function slackScriptTool({
   getSandboxContext,
+  github,
 }: {
   getSandboxContext: () => SandboxContext;
+  github?: { isOwner: boolean; threadId: string; userId: string };
 }) {
   return tool({
     description: `Run a bash script in the sandbox that queries Slack READ-ONLY, for aggregate questions that would otherwise need many individual lookups — e.g. "who is in the most channels", "most active user in #x", "how many members does each channel have". This tool is the SCRIPT; the \`slack\` command on PATH is what the script calls. It prints the raw JSON API response, so compose loops, jq, sort, etc. around it. It is strictly read-only (posting/editing/deleting is impossible through it) and the Slack token never enters the sandbox. Handle pagination via response.response_metadata.next_cursor.
@@ -39,10 +53,30 @@ The same \`slack\` command is available to the plain \`bash\` tool and to recurr
     execute: async ({ script }, { abortSignal }) => {
       try {
         const context = getSandboxContext();
+        const guard = github
+          ? await guardGithubCommand({
+              command: script,
+              context,
+              isOwner: github.isOwner,
+              threadId: github.threadId,
+              userId: github.userId,
+            })
+          : null;
+        if (guard?.allowed === false) {
+          return { error: guard.reason, success: false };
+        }
         const result = await context.session.run({
           abortSignal,
           command: script,
           workingDirectory: context.sessionWorkDir,
+        });
+        if (result.exitCode === 0) {
+          await guard?.claim();
+        }
+        await disarmFetchedRepos({
+          abortSignal,
+          command: script,
+          context,
         });
         return {
           exitCode: result.exitCode,

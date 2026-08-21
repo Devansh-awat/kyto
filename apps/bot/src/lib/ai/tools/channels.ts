@@ -83,10 +83,16 @@ async function applyChannelField({
   return result.ok ? undefined : (result.error ?? 'unknown error');
 }
 
-export function setChannelTopicTool({ thread }: { thread: Thread }) {
+export function setChannelTopicTool({
+  isOwner,
+  thread,
+}: {
+  isOwner: boolean;
+  thread: Thread;
+}) {
   return tool({
     description:
-      "Set a Slack channel's topic and/or purpose. Provide topic, purpose, or both. Defaults to the current channel.",
+      "Set a Slack channel's topic and/or purpose. Provide topic, purpose, or both. Defaults to the current channel — and unless the bot owner is the one asking, the current channel is the ONLY channel you can set it on.",
     inputSchema: z.object({
       topic: z
         .string()
@@ -114,10 +120,23 @@ export function setChannelTopicTool({ thread }: { thread: Thread }) {
             success: false,
           };
         }
-        const targetChannel = channelId ?? channelIdFromThread(thread);
+        const currentChannel = channelIdFromThread(thread);
+        const targetChannel = channelId ?? currentChannel;
         if (!targetChannel) {
           return {
             error: 'Could not resolve a Slack channel.',
+            success: false,
+          };
+        }
+        // Same rule the postMessage tool follows: a non-owner may only act on
+        // the channel kyto was actually invoked in. A topic change posts a
+        // visible system message into the room, so an arbitrary channel id here
+        // let anyone edit — and announce into — a channel they may have no
+        // standing in and might not even be a member of.
+        if (!isOwner && targetChannel !== currentChannel) {
+          return {
+            error:
+              'Refused: only the bot owner can change another channel’s topic or purpose. Ask in that channel instead.',
             success: false,
           };
         }

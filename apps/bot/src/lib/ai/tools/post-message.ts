@@ -126,7 +126,7 @@ export function postMessageTool({
   const currentChannel = rawChannelOf(currentThreadId);
   const permission = isOwner
     ? 'Post to another target. Type must be thread, channel, or user.'
-    : "You may post into the current channel/thread (type thread or channel, the same channel you were mentioned in) freely. A DM to a user (type user) is held until the owner clicks Confirm, which can take a while or never come. Posting into a DIFFERENT channel is queued for the owner's approval — it is posted in this thread with Approve/Deny buttons, never expires, and nothing is sent unless they approve. Say it is waiting; do not claim it was sent, and do not look for another way to send it.";
+    : 'You may post into the current thread freely — and `type: "channel"` on the channel you were mentioned in is delivered as a reply in that thread, because starting a top-level post is the owner\'s alone. A DM to a user (type user) is held until the owner clicks Confirm, which can take a while or never come. Posting into a DIFFERENT channel is queued for the owner\'s approval — it is posted in this thread with Approve/Deny buttons, never expires, and nothing is sent unless they approve. Say it is waiting; do not claim it was sent, and do not look for another way to send it.';
   return tool({
     description: `Post a message. ${permission} Body is markdown; pass \`blocks\` to send Block Kit instead (the markdown body is then the notification fallback text). Broadcast pings (<!channel>/<!here>/<!everyone>) NEVER survive a post into a different channel or a DM — they are stripped to plain text there even for the owner, who can only broadcast in the channel kyto was invoked in.${
       isOwner
@@ -190,6 +190,20 @@ export function postMessageTool({
           error: `"${id}" is not a Slack channel/thread id — it looks like a message timestamp. Pass a channel id (C…/G…/D…), an <#channel> mention, or a slack:CHANNEL[:TS] thread id.`,
         };
       }
+      // A non-owner's "post to the channel" becomes a reply in the thread kyto
+      // was invoked in, rather than a new top-level message.
+      //
+      // Slack lets a channel be configured so ordinary members may reply in a
+      // thread but not start a post — an announcement channel. Kyto's own token
+      // is not necessarily under that restriction, so "same channel" was NOT
+      // the same as "something this person could have posted themselves": they
+      // could get a top-level announcement into a room they are only allowed to
+      // reply in. There is no API that reports a channel's posting
+      // restrictions, so the check cannot be "may they post here" — instead the
+      // post is placed where they demonstrably could have put it, which is the
+      // thread they are talking to kyto in.
+      const redirectedToThread =
+        !isOwner && type === 'channel' && target === currentChannel;
       const crossChannelForNonOwner =
         !(isOwner || type === 'user') && target !== currentChannel;
       // A non-owner asking to post into a DIFFERENT channel used to be refused
@@ -348,7 +362,7 @@ export function postMessageTool({
         });
       }
 
-      return await executePostMessage(bot, {
+      const sent = await executePostMessage(bot, {
         // Same-channel owner post: the only postMessage that may really ping.
         // A cross-channel/DM post never reaches here — it goes through the
         // confirm gate above, where allowBroadcast is left off.
@@ -356,8 +370,17 @@ export function postMessageTool({
         blocks,
         body,
         identity,
-        target: { id, type },
+        target: redirectedToThread
+          ? { id: currentThreadId, type: 'thread' }
+          : { id, type },
       });
+      return redirectedToThread
+        ? {
+            ...sent,
+            summary:
+              'Posted as a reply in this thread rather than as a new message in the channel — only the bot owner can have me start a top-level post. Say so if it matters; do not try another route.',
+          }
+        : sent;
     },
   });
 }

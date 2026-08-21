@@ -50,6 +50,38 @@ const READ_ONLY_GROUPS = new Set([
 // git subcommands that push to a remote. Everything else git does is local.
 const MUTATING_GIT = new Set(['push', 'send-pack']);
 
+// git's global options that take a SEPARATE value. `git -C /repo push` used to
+// read as verb `/repo` — the flag's value does not start with `-`, so the naive
+// "first non-flag token" scan stopped there and a push went entirely unflagged.
+const GIT_VALUE_FLAGS = new Set([
+  '-C',
+  '-c',
+  '--git-dir',
+  '--work-tree',
+  '--namespace',
+  '--exec-path',
+  '--config-env',
+]);
+
+/** The subcommand, skipping git's global flags AND the values they consume. */
+function gitVerb(tokens: string[]): string | undefined {
+  for (let index = 1; index < tokens.length; index++) {
+    const token = tokens[index];
+    if (token === undefined) {
+      continue;
+    }
+    if (GIT_VALUE_FLAGS.has(token)) {
+      index += 1;
+      continue;
+    }
+    if (token.startsWith('-')) {
+      continue;
+    }
+    return token;
+  }
+  return;
+}
+
 export interface ParsedGithubCommand {
   /** Repos this command would CREATE (claimed on success, never gated). */
   creates: string[];
@@ -178,7 +210,7 @@ export function parseGithubCommand(command: string): ParsedGithubCommand {
       continue;
     }
 
-    const verb = tokens.slice(1).find((token) => !token.startsWith('-'));
+    const verb = gitVerb(tokens);
     if (!(verb && MUTATING_GIT.has(verb))) {
       continue;
     }

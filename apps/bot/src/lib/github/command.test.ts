@@ -69,3 +69,22 @@ describe('parseGithubCommand', () => {
     expect(parsed.repos).toContain('kyto-agent/thing');
   });
 });
+
+describe('git global flags', () => {
+  // `-C <dir>` takes a separate value, and the old scan took that value as the
+  // subcommand — so `git -C /repo push` read as verb "/repo" and was not
+  // flagged as mutating at all.
+  test('sees the verb past a flag that consumes its value', () => {
+    expect(parseGithubCommand('git -C /repo push').mutating).toBe(true);
+    expect(
+      parseGithubCommand('git -c user.name=x -C /repo push').mutating
+    ).toBe(true);
+    expect(
+      parseGithubCommand('git --git-dir /repo/.git push origin main').mutating
+    ).toBe(true);
+  });
+
+  test('still ignores a read-only verb behind the same flags', () => {
+    expect(parseGithubCommand('git -C /repo status').mutating).toBe(false);
+  });
+});

@@ -354,6 +354,25 @@ You may only edit a reminder the person you are talking to created, or one they 
       if (!isReminderEditableBy(existing, message.author.userId, isOwner)) {
         return { error: NOT_ALLOWED, success: false };
       }
+      // A reminder always fires as the person who CREATED it — that is the only
+      // principal available once the turn is long gone. So what a named EDITOR
+      // may change stops short of what the job DOES: flipping a "remind me to
+      // stretch" into an `agent` or `bash` reminder would run their instructions
+      // under the creator's identity and permissions, on a timer, forever. An
+      // editor can re-time it, retitle it and cap it; changing its kind, its
+      // command or its script URL stays with the creator (and the bot owner).
+      const isCreator = existing.userId === message.author.userId || isOwner;
+      const changesWhatItDoes =
+        (kind !== undefined && kind !== existing.kind) ||
+        command !== undefined ||
+        url !== undefined;
+      if (changesWhatItDoes && !isCreator) {
+        return {
+          error:
+            "Refused: you're an editor on this reminder, so you can change its schedule, text and run cap — but not what it runs. It fires with the permissions of whoever created it, so only they (or the bot owner) can change its kind, command or script URL.",
+          success: false,
+        };
+      }
 
       const nextKind = kind ?? existing.kind;
       const nextCommand = command ?? existing.command;
