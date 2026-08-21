@@ -5,6 +5,7 @@ import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
 import { buildPollBlocks, buildPollMetadata } from '@/lib/slack/poll';
 import { errorMessage } from '@/lib/utils/error';
+import { resolvePollTarget } from './poll-target';
 
 const postMessageSchema = z.looseObject({
   error: z.string().optional(),
@@ -12,10 +13,16 @@ const postMessageSchema = z.looseObject({
   ts: z.string().optional(),
 });
 
-export function pollTool({ thread }: { thread: Thread }) {
+export function pollTool({
+  isOwner,
+  thread,
+}: {
+  isOwner: boolean;
+  thread: Thread;
+}) {
   return tool({
     description:
-      'Post an interactive poll card to the current thread. Members vote by clicking a button under their choice (click again to undo); the card shows live tallies with bars. No reactions involved.',
+      'Post an interactive poll card to the current thread, or to the top level of the current channel with postTo "channel" (owner only; anyone else\'s "channel" lands in the thread instead). Members vote by clicking a button under their choice (click again to undo); the card shows live tallies with bars. No reactions involved.',
     inputSchema: z.object({
       question: z.string().min(1).max(300).describe('The poll question.'),
       options: z
@@ -23,8 +30,14 @@ export function pollTool({ thread }: { thread: Thread }) {
         .min(2)
         .max(10)
         .describe('Between 2 and 10 answer options.'),
+      postTo: z
+        .enum(['thread', 'channel'])
+        .default('thread')
+        .describe(
+          'Where the poll card goes: "thread" (default) inside the current thread, or "channel" as a new top-level message in the current channel — use it when asked to put the poll in the channel itself rather than the thread.'
+        ),
     }),
-    execute: async ({ question, options }) => {
+    execute: async ({ options, postTo, question }) => {
       try {
         const [platform, channelId, threadTs] = thread.id.split(':');
         if (platform !== 'slack' || !channelId) {
@@ -34,6 +47,9 @@ export function pollTool({ thread }: { thread: Thread }) {
           };
         }
 
+        const { redirectedToThread, threadTs: targetThreadTs } =
+          resolvePollTarget(postTo, isOwner, threadTs);
+
         const state = { options, question, votes: {} };
         const posted = postMessageSchema.parse(
           await slack.webClient.apiCall('chat.postMessage', {
@@ -41,7 +57,7 @@ export function pollTool({ thread }: { thread: Thread }) {
             channel: channelId,
             metadata: buildPollMetadata(state),
             text: `Poll: ${question}`,
-            ...(threadTs && { thread_ts: threadTs }),
+            ...(targetThreadTs && { thread_ts: targetThreadTs }),
           })
         );
         if (!posted.ok) {
@@ -54,7 +70,9 @@ export function pollTool({ thread }: { thread: Thread }) {
         return {
           optionCount: options.length,
           success: true,
-          summary: `Posted an interactive poll with ${options.length} options.`,
+          summary: redirectedToThread
+            ? 'Posted the poll as a reply in this thread rather than as a new message in the channel — only the bot owner can have me start a top-level post. Say so if it matters; do not try another route.'
+            : `Posted an interactive poll with ${options.length} options.`,
         };
       } catch (error) {
         logger.warn({ error: errorMessage(error) }, '[poll] failed');

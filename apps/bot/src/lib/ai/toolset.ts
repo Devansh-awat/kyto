@@ -381,7 +381,7 @@ export async function buildTools({
     },
     poll: {
       summary: 'post an interactive poll',
-      tool: pollTool({ thread }),
+      tool: pollTool({ isOwner, thread }),
     },
     askQuestion: {
       summary:
