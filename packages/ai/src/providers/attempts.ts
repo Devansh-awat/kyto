@@ -202,22 +202,41 @@ export const UPGRADE_ATTEMPTS: ModelAttempt[] = [
   catalogAttempt('anthropic/claude-sonnet-5'),
 ];
 
-// The models a subagent runs on, best-value first: the owner's own Gemini key
-// (cheap, and a quota separate from HackClub's shared daily cap), then a single
-// HackClub rung as the floor. A subagent walks this list on failure OR on an
+// The models a subagent runs on: **the same model the main turn runs on**
+// (owner's call, 2026-08-21 — "subagent use same deepseek v4 flash"), with the
+// owner's Gemini key behind it. A subagent walks this list on failure OR on an
 // empty report — the cheap tier returns an empty completion often enough that a
 // single pinned model made a "herd" of subagents mostly report nothing back.
 //
-// The HackClub rung is last on purpose: it spends the same shared budget the
-// main turn needs. It is here so the subagent tool still works with no Gemini
-// key at all (an empty list disables the tool outright).
+// This ORDER was reversed on that date. Gemini used to lead because it spends a
+// quota separate from HackClub's shared daily cap, but a subagent is doing a
+// slice of the turn's own work and reporting back into it — a different model
+// class meant the delegated half came back in a different voice, and worse at
+// tool calling than the parent that delegated to it. It costs the shared cap;
+// that is the trade the owner chose.
 export const subagentAttempts: ModelAttempt[] = [
-  ...geminiAttempts,
   catalogAttempt(PRIMARY_MODEL),
+  ...geminiAttempts,
 ];
 
 /** The subagent's primary model; undefined = no subagent model configured. */
 export const subagentAttempt: ModelAttempt | undefined = subagentAttempts[0];
+
+// Compaction (lib/agent/compaction) deliberately did NOT follow the subagent
+// onto the primary. It is a different job: one pass digests up to 200 thread
+// messages, a long-idle thread catches up over MANY passes, and it runs in the
+// BACKGROUND where nobody is watching the bill. On the shared $3/day cap a
+// single 25k-message backlog could spend the day's budget on bookkeeping, so it
+// keeps the Gemini key first and only falls to HackClub if there is no Gemini
+// key at all. Owner's call, 2026-08-21.
+export const compactionAttempts: ModelAttempt[] = [
+  ...geminiAttempts,
+  catalogAttempt(PRIMARY_MODEL),
+];
+
+/** The model compaction runs on; undefined = no compaction model configured. */
+export const compactionAttempt: ModelAttempt | undefined =
+  compactionAttempts[0];
 
 // The HackClub rungs kyto falls back to, and the whole list is CHEAP ON PURPOSE
 // (owner's call, 2026-07-27). It used to be the owner's arena top 19 in rank

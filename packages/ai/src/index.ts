@@ -14,6 +14,7 @@ export {
 export { type Persona, personas } from './prompts/presets';
 export {
   catalogAttempt,
+  compactionAttempt,
   GEMINI_PROVIDER,
   HACKCLUB_PROVIDER,
   LEADERBOARD_FALLBACK,

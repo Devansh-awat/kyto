@@ -1,4 +1,4 @@
-import { streamAttempt, subagentAttempt } from '@repo/ai';
+import { compactionAttempt, streamAttempt } from '@repo/ai';
 import {
   getThreadSummary,
   pruneThreadSummaries,
@@ -70,7 +70,7 @@ async function summarize({
   messages: CompactableMessage[];
   previous?: string;
 }): Promise<string | undefined> {
-  if (!subagentAttempt) {
+  if (!compactionAttempt) {
     return;
   }
   const transcript = messages
@@ -92,7 +92,7 @@ async function summarize({
   try {
     const result = streamAttempt({
       abortSignal: AbortSignal.timeout(SUMMARY_TIMEOUT_MS),
-      attempt: subagentAttempt,
+      attempt: compactionAttempt,
       // Nothing reads the resolved model back off a compaction pass.
       holder: {},
       prompt,
