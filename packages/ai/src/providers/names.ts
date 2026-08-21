@@ -15,3 +15,8 @@ export const HACKCLUB_PROVIDER = 'hackclub';
 // A friend's self-hosted OpenWebUI (chat.mebbo.cloud), re-exposing free
 // upstream endpoints on ONE key shared with everyone he gave it to.
 export const MEBBO_PROVIDER = 'mebbo';
+// OpenCode Zen (opencode.ai/zen), an OpenAI-compatible gateway. Only its Ox
+// Alpha Free slug is wired, and only because THAT model's provider states a
+// zero-retention / no-training policy (Zen docs, checked 2026-08-21) — every
+// OTHER free slug on Zen may train on traffic and stays banned. See MODELS.md.
+export const OPENCODE_PROVIDER = 'opencode';

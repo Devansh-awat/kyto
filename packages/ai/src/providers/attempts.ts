@@ -1,5 +1,10 @@
 import { keys } from '../keys';
-import { GEMINI_PROVIDER, HACKCLUB_PROVIDER, MEBBO_PROVIDER } from './names';
+import {
+  GEMINI_PROVIDER,
+  HACKCLUB_PROVIDER,
+  MEBBO_PROVIDER,
+  OPENCODE_PROVIDER,
+} from './names';
 
 const env = keys();
 
@@ -8,9 +13,16 @@ const GEMINI_BASE_URL =
   env.GEMINI_BASE_URL ??
   'https://generativelanguage.googleapis.com/v1beta/openai/';
 
-export { GEMINI_PROVIDER, HACKCLUB_PROVIDER, MEBBO_PROVIDER } from './names';
+export {
+  GEMINI_PROVIDER,
+  HACKCLUB_PROVIDER,
+  MEBBO_PROVIDER,
+  OPENCODE_PROVIDER,
+} from './names';
 
 const MEBBO_BASE_URL = env.MEBBO_BASE_URL ?? 'https://chat.mebbo.cloud/api';
+
+const OPENCODE_BASE_URL = 'https://opencode.ai/zen/v1';
 
 /** One model attempt: an OpenAI-compatible endpoint + model slug. */
 export interface ModelAttempt {
@@ -34,41 +46,39 @@ export interface ModelAttempt {
 }
 
 /**
- * The primary model for the main query: DeepSeek V4 Flash (the 0731 retrain),
- * pinned, served by **HackClub** — owner's call (2026-08-01, "IT WORKED … we can
- * use it now"). It replaced `qwen/qwen3.7-plus`, which it beats on benchmarks
- * AND on cost: ~$0.14/M in and ~$0.28/M out (measured from a live proxy
- * completion, `upstream_inference_prompt_cost`) vs qwen's $0.32/$1.28. Verified
- * `tools`-capable and returning a real completion on ai.hackclub.com/proxy/v1.
- *
- * It was a fallback rung that 404'd for weeks ("No endpoints available matching
- * your guardrail restrictions and data policy") because its only OpenRouter
- * providers trained on prompts, which HackClub's account data policy forbids.
- * A no-train provider (Cloudflare) came online and the 404 became a 200 — the
- * signal MODELS.md said to watch for before promoting it to primary.
- *
- * CAVEAT — it is a REASONING model (emits `reasoning`/`reasoning_content`). Some
- * reasoning models think before their first token, and HackClub aborts an
- * upstream request that has not returned response HEADERS within 5s and turns it
- * into a 504 (`UPSTREAM_HEADER_TIMEOUT_MS`, hackclub/ai
- * `src/routes/proxy/v1/general.ts`) — so a slow first byte loses turns at the
- * proxy. The live probe returned fast and `gateway-retry.ts` replays a 504
- * before it can cost a fallback, but if 504s spike after this promotion, the
- * first-byte latency is the suspect and qwen3.7-plus (now the top fallback rung)
- * is the model to pin back. See MODELS.md.
- *
- * COST NOTE: **every turn spends HackClub's shared daily $3 cap**, so
- * `BudgetExhaustedError` is reachable in ordinary use. There used to be a
- * DigitalOcean tier (reached through an OpenRouter key with BYOK billing) that
- * absorbed the primary and the first fallback rungs for free; that account is
- * gone (2026-07-27), so HackClub is the only shared tier and the owner's own
- * Gemini key is the last resort.
- *
- * A single pinned model (this replaced `openrouter/auto`, whose per-request
- * re-routing produced empty completions and long fallback cascades), so 1-hour
- * prompt caching (addCacheControl in agent.ts) sticks across a thread's turns.
+ * The former primary: DeepSeek V4 Flash (0731 retrain) on **HackClub** —
+ * primary 2026-08-01 → 2026-08-21, now the top FALLBACK rung and the model to
+ * pin back when the Zen window below closes (or OPENCODE_API_KEY goes unset,
+ * which degrades to it automatically). Verified `tools`-capable; a REASONING
+ * model, so watch first-byte latency against HackClub's 5s header timeout.
  */
-export const PRIMARY_MODEL = 'deepseek/deepseek-v4-flash-0731';
+const FORMER_PRIMARY_MODEL = 'deepseek/deepseek-v4-flash-0731';
+
+/**
+ * The primary model for the main query: **Ox Alpha Free** (`x-preview-f-free`),
+ * a stealth model served FREE by OpenCode Zen (opencode.ai/zen, an
+ * OpenAI-compatible gateway) — owner's call 2026-08-21 ("0x alpha is unlimited
+ * as of now but will be removed from free tier in a week", after which kyto
+ * returns to HackClub). TEMPORARY by design: when the window closes, delete this
+ * block and point PRIMARY_ATTEMPT back at
+ * `catalogAttempt(FORMER_PRIMARY_MODEL)` — which is also what happens
+ * AUTOMATICALLY if OPENCODE_API_KEY is unset, so an expired/removed key can
+ * never break every turn.
+ *
+ * WHY THIS IS LAWFUL WHEN THE REST OF ZEN IS NOT: the whole Zen free tier was
+ * dropped on 2026-08-11 because its terms allowed training on what is sent, and
+ * Hack Club's scraping policy permits training on Slack messages only with
+ * every author's explicit consent — a kyto turn carries other people's
+ * messages. Ox Alpha's provider explicitly states a ZERO-RETENTION policy and
+ * does not use traffic for training (Zen docs, checked 2026-08-21), so the
+ * objection has no purchase HERE specifically. Every other Zen free slug stays
+ * banned; if this slug is ever served under different terms, drop it the same
+ * day. See MODELS.md.
+ *
+ * Modality UNVERIFIED for a stealth model, so it sits in TEXT_ONLY_MODELS:
+ * images are pre-described by Gemini rather than risking a doomed image turn.
+ */
+export const PRIMARY_MODEL = 'x-preview-f-free';
 
 // Cap output tokens on HackClub requests. OpenRouter enforces the daily spend
 // limit PESSIMISTICALLY: with no `max_tokens` it assumes the model could emit
@@ -149,12 +159,15 @@ const mebboAttempts: ModelAttempt[] = env.MEBBO_API_KEY
     }))
   : [];
 
-// Models that CANNOT accept image input. The deepseek-v4-flash primary is served
-// by Cloudflare, which is text-only: any turn carrying an image 404s ("No
+// Models that CANNOT accept image input. deepseek-v4-flash is served by
+// Cloudflare, which is text-only: any turn carrying an image 404s ("No
 // endpoints found that support image input") and burns a doomed attempt before
-// falling back. For a text-only model kyto pre-describes the image with Gemini
-// (see vision.ts) and feeds the description as text instead of the raw pixels.
-const TEXT_ONLY_MODELS = new Set<string>(['deepseek/deepseek-v4-flash-0731']);
+// falling back. x-preview-f-free's modality is UNVERIFIED (a stealth model), so
+// it is treated the same rather than risk a 404 per image turn. For either, kyto
+// pre-describes the image with Gemini (see vision.ts) and feeds the description
+// as text instead of the raw pixels. Verify Ox Alpha with a real image call
+// before removing it from this set.
+const TEXT_ONLY_MODELS = new Set<string>([FORMER_PRIMARY_MODEL, PRIMARY_MODEL]);
 
 /** True unless the model's endpoint is known to reject image input. */
 export function modelSupportsVision(model: string): boolean {
@@ -176,19 +189,28 @@ export const visionAttempt: ModelAttempt | undefined = env.GEMINI_API_KEY
   : undefined;
 
 /**
- * The attempt the main query starts on: PRIMARY_MODEL, served by HackClub.
- * HackClub is always configured, so this never degrades on a missing key.
+ * The attempt the main query starts on: Ox Alpha on Zen when OPENCODE_API_KEY
+ * is set; otherwise the former primary on HackClub, exactly as before
+ * 2026-08-21. HackClub is always configured, so this never degrades to nothing.
  */
-export const PRIMARY_ATTEMPT: ModelAttempt = catalogAttempt(PRIMARY_MODEL);
+export const PRIMARY_ATTEMPT: ModelAttempt = env.OPENCODE_API_KEY
+  ? {
+      apiKey: env.OPENCODE_API_KEY,
+      baseURL: OPENCODE_BASE_URL,
+      model: PRIMARY_MODEL,
+      provider: OPENCODE_PROVIDER,
+    }
+  : catalogAttempt(FORMER_PRIMARY_MODEL);
 
 /**
  * Where `upgradeModel` sends a turn: the rungs kyto escalates to when the model
  * itself says the task is beyond it (owner's call, 2026-08-05 — "model self
  * escalate whenever needed … anyone can escalate it").
  *
- * These are DEAR. kimi-k3 is $3/M in and $15/M out against the primary's
- * $0.14/$0.28 — roughly 20x and 50x — and the whole HackClub tier shares one
- * $3/day cap, so a single long escalated turn can eat most of a day's budget.
+ * These are DEAR. kimi-k3 is $3/M in and $15/M out against a FREE Zen primary
+ * (and ~20x/50x the HackClub rungs behind it) — and the whole HackClub tier
+ * shares one $3/day cap, so a single long escalated turn can eat most of a
+ * day's budget.
  * That is why escalation is capped per turn AND per day (see the upgradeModel
  * tool), and why the ladder is ordered cheapest-capable-first rather than
  * "best": claude-sonnet-5 ($2/$10) is the second rung, not the first, and
@@ -203,19 +225,19 @@ export const UPGRADE_ATTEMPTS: ModelAttempt[] = [
 ];
 
 // The models a subagent runs on: **the same model the main turn runs on**
-// (owner's call, 2026-08-21 — "subagent use same deepseek v4 flash"), with the
-// owner's Gemini key behind it. A subagent walks this list on failure OR on an
-// empty report — the cheap tier returns an empty completion often enough that a
-// single pinned model made a "herd" of subagents mostly report nothing back.
+// (owner's call, 2026-08-21 — "subagent use same deepseek v4 flash"), i.e.
+// PRIMARY_ATTEMPT itself — it followed the primary from HackClub's deepseek to
+// Zen's Ox Alpha when that was promoted, and follows whatever comes next. A
+// subagent walks this list on failure OR on an empty report — a single pinned
+// model made a "herd" of subagents mostly report nothing back.
 //
 // This ORDER was reversed on that date. Gemini used to lead because it spends a
 // quota separate from HackClub's shared daily cap, but a subagent is doing a
 // slice of the turn's own work and reporting back into it — a different model
 // class meant the delegated half came back in a different voice, and worse at
-// tool calling than the parent that delegated to it. It costs the shared cap;
-// that is the trade the owner chose.
+// tool calling than the parent that delegated to it.
 export const subagentAttempts: ModelAttempt[] = [
-  catalogAttempt(PRIMARY_MODEL),
+  PRIMARY_ATTEMPT,
   ...geminiAttempts,
 ];
 
@@ -225,13 +247,13 @@ export const subagentAttempt: ModelAttempt | undefined = subagentAttempts[0];
 // Compaction (lib/agent/compaction) deliberately did NOT follow the subagent
 // onto the primary. It is a different job: one pass digests up to 200 thread
 // messages, a long-idle thread catches up over MANY passes, and it runs in the
-// BACKGROUND where nobody is watching the bill. On the shared $3/day cap a
-// single 25k-message backlog could spend the day's budget on bookkeeping, so it
-// keeps the Gemini key first and only falls to HackClub if there is no Gemini
-// key at all. Owner's call, 2026-08-21.
+// BACKGROUND where nobody is watching the bill — so on a shared daily cap a
+// single 25k-message backlog could spend the day on bookkeeping. It keeps the
+// Gemini key first and only falls to HackClub (the FORMER primary, not the Zen
+// promo) if there is no Gemini key at all. Owner's call, 2026-08-21.
 export const compactionAttempts: ModelAttempt[] = [
   ...geminiAttempts,
-  catalogAttempt(PRIMARY_MODEL),
+  catalogAttempt(FORMER_PRIMARY_MODEL),
 ];
 
 /** The model compaction runs on; undefined = no compaction model configured. */
@@ -269,12 +291,15 @@ export const compactionAttempt: ModelAttempt | undefined =
 // provider keys rate-limited or in cooldown"). Re-add rungs here only after
 // verifying a real completion succeeds.
 export const LEADERBOARD_FALLBACK: ModelAttempt[] = [
-  // Qwen3.7 Plus ($0.32/M in, $1.28/M out, 1M ctx) — the former PRIMARY, demoted
-  // to the top fallback rung when deepseek-v4-flash was promoted over it
-  // (2026-08-01). It held the primary slot for weeks with no quality complaints,
-  // so it is the natural first fall-back and the model to pin BACK if the
-  // deepseek promotion turns out to lose turns at the proxy's 5s header timeout
-  // (deepseek is a reasoning model — see PRIMARY_MODEL's caveat). Verified
+  // The DEMOTED primary (2026-08-01 → 2026-08-21): Ox Alpha on Zen leads the
+  // turn now, and when that fails this is where the walk lands. Three weeks as
+  // primary with no quality complaints, verified `tools`-capable, and it costs
+  // nothing extra to reach since the HackClub tier is tried anyway.
+  catalogAttempt(FORMER_PRIMARY_MODEL),
+  // Qwen3.7 Plus ($0.32/M in, $1.28/M out, 1M ctx) — primary until deepseek
+  // v4-flash was promoted over it (2026-08-01), demoted one place again by the
+  // Zen promotion (2026-08-21). It held the primary slot for weeks with no
+  // quality complaints, so it remains a proven primary-class rung. Verified
   // `tools`-capable on ai.hackclub.com/proxy/v1/models.
   catalogAttempt('qwen/qwen3.7-plus'),
   // MiniMax M3 ($0.30/M in, $1.20/M out, 1M ctx) — cheap and the same 1M context
