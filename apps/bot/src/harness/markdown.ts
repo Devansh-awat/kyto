@@ -217,3 +217,89 @@ function countOccurrences(text: string, marker: string): number {
   }
   return count;
 }
+
+// Slack's `markdown` block auto-links a bare URL by running to the next
+// whitespace, and it does not stop at a markdown delimiter. So
+// `**Live: https://kyto.dino.icu/jacob-cv/**` linked to
+// `https://kyto.dino.icu/jacob-cv/*` — the closing bold marker was eaten INTO
+// the href — and a URL touching an inline code span linked to
+// ``https://…/pull/14`Add``. Both were reported as "links lead to the wrong
+// page", which is the real cost: the text reads right and the click 404s.
+//
+// A URL adjacent to `*`, `_`, `~` or a backtick is therefore rewritten as an
+// explicit `[url](url)`, which gives Slack an unambiguous boundary. Only the
+// ambiguous ones: a plain bare URL still posts bare, because Slack unfurls
+// those (canvas/file/message/profile previews) and an explicit link loses that.
+// `[` and `]` are excluded so the regex cannot run from an explicit link's
+// label straight through into its target — that made the rewrite non-idempotent.
+const URL_IN_TEXT = /https?:\/\/[^\s<>[\]]+/g;
+// The markdown delimiters Slack absorbs. `]` and `)` are excluded on purpose —
+// they are how an already-explicit link ends.
+const AMBIGUOUS_EDGE = /[*_~`]/;
+
+function trimUrlEdge(url: string): { rest: string; url: string } {
+  let end = url.length;
+  while (end > 0 && AMBIGUOUS_EDGE.test(url[end - 1] as string)) {
+    end -= 1;
+  }
+  return { rest: url.slice(end), url: url.slice(0, end) };
+}
+
+function disambiguateLine(line: string): string {
+  // Split on inline code spans so a URL quoted inside one is left alone, but
+  // resolve every neighbor against the WHOLE line: the reported case was a URL
+  // at the end of a segment whose next character is the opening backtick of the
+  // following span, which is invisible from inside the segment.
+  const segments = line.split(/(`[^`\n]*`)/);
+  const out: string[] = [];
+  let cursor = 0;
+  for (const [index, segment] of segments.entries()) {
+    const start = cursor;
+    cursor += segment.length;
+    if (index % 2 === 1) {
+      out.push(segment);
+      continue;
+    }
+    out.push(
+      segment.replace(URL_IN_TEXT, (match, offset: number) => {
+        // Already an explicit link target (`](url)`) or a Slack angle token —
+        // both carry their own boundary already.
+        const at = start + offset;
+        const before = line.slice(Math.max(0, at - 2), at);
+        if (before.endsWith('](') || before.endsWith('<')) {
+          return match;
+        }
+        const { rest, url } = trimUrlEdge(match);
+        const after = line[at + match.length] ?? '';
+        if (!(url && (rest !== '' || AMBIGUOUS_EDGE.test(after)))) {
+          return match;
+        }
+        return `[${url}](${url})${rest}`;
+      })
+    );
+  }
+  return out.join('');
+}
+
+/**
+ * Give Slack an unambiguous boundary for any bare URL that touches a markdown
+ * delimiter, so the delimiter cannot end up inside the href.
+ *
+ * Fenced code is skipped — a URL in a code block is being quoted, not linked.
+ * Idempotent: the URL inside an existing `[label](url)` is preceded by `](` and
+ * skipped, and the rewritten form's own label ends at `]`, which is not an
+ * ambiguous edge.
+ */
+export function disambiguateBareUrls(text: string): string {
+  const lines = text.split('\n');
+  let inFence = false;
+  return lines
+    .map((line) => {
+      if (FENCE.test(line)) {
+        inFence = !inFence;
+        return line;
+      }
+      return inFence ? line : disambiguateLine(line);
+    })
+    .join('\n');
+}

@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { neutralizeBroadcast, restoreAnnotatedMentions } from './markdown';
+import {
+  disambiguateBareUrls,
+  neutralizeBroadcast,
+  restoreAnnotatedMentions,
+} from './markdown';
 
 describe('restoreAnnotatedMentions', () => {
   // The bug this exists for: the agent is SHOWN "@devansh (U085KKYFA6Q)" and
@@ -58,5 +62,58 @@ describe('restoreAnnotatedMentions', () => {
     // broadcast strip that runs after it still holds.
     const restored = restoreAnnotatedMentions('@channel (U085KKYFA6Q) <!here>');
     expect(neutralizeBroadcast(restored)).not.toContain('<!here>');
+  });
+});
+
+describe('disambiguateBareUrls', () => {
+  // Reported twice: the link text read right and the click 404'd, because
+  // Slack's markdown block ran the autolink past the closing bold marker.
+  test('keeps a closing bold marker out of the href', () => {
+    expect(
+      disambiguateBareUrls('**Live: https://kyto.dino.icu/jacob-cv/**')
+    ).toBe(
+      '**Live: [https://kyto.dino.icu/jacob-cv/](https://kyto.dino.icu/jacob-cv/)**'
+    );
+  });
+
+  test('keeps a following code span out of the href', () => {
+    expect(
+      disambiguateBareUrls('The PR: https://github.com/o/r/pull/14`Add thing`')
+    ).toBe(
+      'The PR: [https://github.com/o/r/pull/14](https://github.com/o/r/pull/14)`Add thing`'
+    );
+  });
+
+  // A plain bare URL must stay bare: Slack unfurls those (canvas, file,
+  // message permalink, profile), and an explicit link loses the preview.
+  test('leaves an unambiguous bare URL alone', () => {
+    expect(disambiguateBareUrls('see https://example.com/x for more')).toBe(
+      'see https://example.com/x for more'
+    );
+    expect(disambiguateBareUrls('done: https://example.com/x.')).toBe(
+      'done: https://example.com/x.'
+    );
+  });
+
+  test('leaves an already-explicit link and a Slack angle token alone', () => {
+    expect(disambiguateBareUrls('*[label](https://example.com)*')).toBe(
+      '*[label](https://example.com)*'
+    );
+    expect(disambiguateBareUrls('<https://example.com|label>')).toBe(
+      '<https://example.com|label>'
+    );
+  });
+
+  test('is idempotent', () => {
+    const once = disambiguateBareUrls('**https://example.com/a**');
+    expect(disambiguateBareUrls(once)).toBe(once);
+  });
+
+  test('leaves fenced code and inline code untouched', () => {
+    const fenced = '```\ncurl https://example.com/a*\n```';
+    expect(disambiguateBareUrls(fenced)).toBe(fenced);
+    expect(disambiguateBareUrls('`https://example.com/a*`')).toBe(
+      '`https://example.com/a*`'
+    );
   });
 });

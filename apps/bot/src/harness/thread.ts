@@ -6,7 +6,11 @@ import {
 } from '@repo/db/queries';
 import type { Logger } from '@repo/logging/logger';
 import type { SlackHarness } from './harness';
-import { neutralizeBroadcast, neutralizeBroadcastDeep } from './markdown';
+import {
+  disambiguateBareUrls,
+  neutralizeBroadcast,
+  neutralizeBroadcastDeep,
+} from './markdown';
 import type {
   Author,
   ChannelMetadata,
@@ -123,7 +127,7 @@ export class ThreadHandle {
         ? [
             hasControlMention(markdown)
               ? { text: { text: markdown, type: 'mrkdwn' }, type: 'section' }
-              : { text: markdown, type: 'markdown' },
+              : { text: disambiguateBareUrls(markdown), type: 'markdown' },
           ]
         : undefined);
     const args = {
@@ -298,12 +302,22 @@ export class ThreadHandle {
     { postAt }: { postAt: Date }
   ): Promise<void> {
     const { channel, threadTs } = this.location;
-    const post: PostContent =
+    const raw: PostContent =
       typeof content === 'string' ? { markdown: content } : content;
+    // Same deny-by-default as `post`. Today's only caller schedules into the
+    // requester's own DM, so nothing here can currently notify a channel — but
+    // `post`'s own history is that the paths which forgot the strip were the
+    // ones nobody thinks of as "the model talking", and a scheduled message is
+    // exactly that shape.
+    const post = raw.allowBroadcast ? raw : stripBroadcasts(raw);
     const markdown = post.markdown?.slice(0, MARKDOWN_BLOCK_MAX);
     await this.adapter.webClient.chat.scheduleMessage({
       ...(markdown
-        ? { blocks: [{ text: markdown, type: 'markdown' }] as never }
+        ? {
+            blocks: [
+              { text: disambiguateBareUrls(markdown), type: 'markdown' },
+            ] as never,
+          }
         : {}),
       channel,
       post_at: Math.floor(postAt.getTime() / 1000),
