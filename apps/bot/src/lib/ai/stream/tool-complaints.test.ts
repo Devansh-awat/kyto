@@ -53,6 +53,35 @@ describe('isToolComplaint', () => {
     expect(isToolComplaint('loadTools is available.')).toBe(false);
     expect(isToolComplaint('I called getFile and it worked.')).toBe(false);
   });
+
+  // Pulled verbatim out of persisted thread_thinking. Every one is a real
+  // sentence about something OTHER than kyto's toolset, and an earlier draft of
+  // the identifier rule ate all of them: it carried an `i` flag, which makes
+  // `[a-z]` match capitals and so degraded "camelCase identifier" into "any
+  // capital-letter word near the word available".
+  test('keeps real "not available" sentences that are not about tools', () => {
+    const keep = [
+      "slack: 'admin.emoji.remove' is not available (read-only proxy).",
+      'Search token expired or not available.',
+      'Chat Not available in this workspace',
+      'If Porkbun says not available and the registry says taken, then likely reserved.',
+      'The domain example.dev is not available for registration.',
+    ];
+    for (const line of keep) {
+      expect(isToolComplaint(line)).toBe(false);
+    }
+  });
+
+  test('still catches a camelCase tool name the model reached for', () => {
+    for (const line of [
+      'getFile is not available.',
+      "loadTools isn't available either.",
+      'viewImage is not available.',
+      'searchWeb is not loaded.',
+    ]) {
+      expect(isToolComplaint(line)).toBe(true);
+    }
+  });
 });
 
 describe('createToolComplaintFilter', () => {

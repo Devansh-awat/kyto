@@ -42,8 +42,18 @@ const ABSENCE =
 // "getFile isn't available", "loadTools is not available" — the model naming a
 // specific camelCase tool it reached for. These never mention the word "tool",
 // which is exactly how the observed spiral slipped past a tool-word-only check.
+//
+// CASE-SENSITIVE ON PURPOSE — no `i` flag. camelCase is the whole signal, and an
+// `i` flag makes `[a-z]` match capitals too, which degraded this into "any
+// capital-letter word near the word available". Checked against real persisted
+// reasoning, the `i` version matched `slack: 'admin.emoji.remove' is not
+// available`, `Search token expired or not available`, `Chat Not available in
+// this workspace`, and `If Porkbun says not available and the registry says
+// taken` — every one a legitimate sentence about something other than kyto's
+// toolset. The gap is short for the same reason: the absence has to be ABOUT the
+// identifier, not merely in the same sentence as it.
 const IDENTIFIER_UNAVAILABLE =
-  /\b[a-z][a-z0-9]*[A-Z][A-Za-z0-9]*\b[^.!?\n]{0,40}?\b(?:is|are|was|were|seems? to be)?\s*(?:n'?t|not)?\s*(?:available|registered|enabled|accessible|working|there|loaded)\b/i;
+  /\b[a-z][a-z0-9]*[A-Z][A-Za-z0-9]*\b[^.!?\n]{0,24}?\b(?:is|are|was|were|seems? to be)?\s*(?:n['’]?t|not)?\s*(?:available|registered|enabled|accessible|working|there|loaded)\b/;
 
 /** Is this one sentence nothing but a complaint about tools being missing? */
 export function isToolComplaint(sentence: string): boolean {
