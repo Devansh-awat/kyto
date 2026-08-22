@@ -93,6 +93,16 @@ had touched.
   and a **camelCase identifier** plus absence (`getFile isn't available`) — the
   latter never says "tool", which is exactly how the observed spiral slipped past
   a tool-word-only check. Curly apostrophes count.
+- **The identifier rule is CASE-SENSITIVE, and must stay that way.** An `i` flag
+  makes `[a-z]` match capitals too, which degrades "a camelCase identifier" into
+  "any capital-letter word near the word available" — the first draft shipped that
+  way and, checked against real persisted reasoning, it ate `slack:
+  'admin.emoji.remove' is not available`, `Search token expired or not
+  available`, `Chat Not available in this workspace`, and `If Porkbun says not
+  available and the registry says taken`. Deleting a real answer is a far worse
+  bug than leaving a complaint in, so those four are pinned as tests. The
+  identifier→absence gap is capped at 24 chars for the same reason: the absence
+  has to be ABOUT the identifier, not merely in the same sentence.
 - It **logs** what it dropped (`[stream] model complained about having no tools on
   a no-tools call`). If that line is frequent, the recovery path that made the
   call is what to fix — the drop must not become the new invisible bug.
