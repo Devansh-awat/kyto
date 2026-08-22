@@ -1705,12 +1705,19 @@ const TRUNCATION_TAIL_CHARS = 2000;
  * available? That's strange", reasoning about a broken environment instead of
  * writing the two sentences it was asked for.
  *
+ * This wording is BELT, not braces. The braces are `stripToolComplaints`
+ * (ai/stream/tool-complaints.ts), which drops such a sentence out of the reply on
+ * any no-tools call — because no wording can guarantee a weak model's output, and
+ * this exact complaint has come back after every previous prompt-level fix. Note
+ * the notice used to end "if something is genuinely missing, say so in one short
+ * sentence and stop", which was an outright invitation to write it.
+ *
  * (Note: `synthesizeFinalAnswer` — the "tools ran but no reply" recovery — does
  * NOT use this. It keeps tools ON so the model can finish whatever work it had
  * left; see that function.)
  */
 const NO_TOOLS_NOTICE =
-  'You have NO TOOLS for this message — every tool has been switched off deliberately, and that is not an error or a broken environment. Do not try to call one, do not comment on their absence, and do not plan work that would need one. Answer from what is already in front of you; if something is genuinely missing, say so in one short sentence and stop.';
+  'You have NO TOOLS for this message — every tool has been switched off deliberately, and that is not an error or a broken environment. Do not try to call one, do not mention tools at all, and do not plan work that would need one. Write only the prose asked for, from what is already in front of you.';
 
 function renderTruncation(streamedText: string): string {
   const tail = streamedText.trim().slice(-TRUNCATION_TAIL_CHARS);

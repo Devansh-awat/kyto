@@ -9,6 +9,7 @@ import { LazySandbox } from '@repo/sandbox';
 import { env } from '@/env';
 import type { Message, ThreadHandle } from '@/harness';
 import { requestHints } from '@/lib/ai/hints';
+import { stripToolComplaints } from '@/lib/ai/stream/tool-complaints';
 import { bot } from '@/lib/chat';
 import logger from '@/lib/logger';
 import { openSandboxProxies } from '@/lib/sandbox/proxies';
@@ -32,8 +33,11 @@ Slack search (searchSlack) will not work here, as it needs a live user interacti
 </recurring_job>`;
 
 // Asked of the same model, tools off, when a run did work but wrote nothing.
+// "do not mention tools at all" rather than "do not comment on their absence":
+// the latter names the thing it forbids and weak models wrote it anyway. The
+// actual guarantee is stripToolComplaints below, not this sentence.
 const REPORT_NUDGE =
-  'You ran the job above but never wrote the message. Write it now, from what you just did: what you checked, what you found, and anything you changed. You have NO TOOLS for this message — that is deliberate, not an error, so do not try to call one or comment on their absence. Write only the message that should be posted.';
+  'You ran the job above but never wrote the message. Write it now, from what you just did: what you checked, what you found, and anything you changed. You have NO TOOLS for this message — that is deliberate, not an error, so do not try to call one and do not mention tools at all. Write only the message that should be posted.';
 
 /** The reminder's owner, as the author of the synthetic message driving it. */
 function syntheticMessage(reminder: Reminder, threadId: string): Message {
@@ -97,7 +101,10 @@ async function synthesizeReport({
         text += part.text;
       }
     }
-    return text.trim() || undefined;
+    // This call has no tools at all, so "no tools loaded" is junk by
+    // construction — and this report is posted verbatim as the reminder's
+    // message. See ai/stream/tool-complaints.ts.
+    return stripToolComplaints(text).trim() || undefined;
   } catch (error) {
     logger.warn(
       { err: error, reminderId: reminder.id },

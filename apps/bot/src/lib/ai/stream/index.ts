@@ -10,6 +10,7 @@ import {
   createReasoningTracker,
 } from './reasoning-tracker';
 import { renderTask } from './tasks';
+import { createToolComplaintFilter } from './tool-complaints';
 import { createToolMarkupFilter } from './tool-markup';
 
 const REASONING_OUTPUT_MAX_LENGTH = 2800;
@@ -148,6 +149,12 @@ export async function* renderStream({
   // field. Never part of a reply (see tool-markup.ts).
   const toolMarkup = createToolMarkupFilter();
   let droppedMarkup = '';
+  // "no tools loaded" — only on a call made with NO tools registered, where such
+  // a sentence is junk by construction. See tool-complaints.ts for why this is a
+  // drop rather than another attempt at prompt wording.
+  const noToolsCall = knownTools !== undefined && knownTools.size === 0;
+  const toolComplaints = noToolsCall ? createToolComplaintFilter() : undefined;
+  let droppedComplaints = '';
   let skipped = false;
   let droppedTextDeltas = 0;
   // Reasoning that arrived inline in the TEXT stream (see inline-reasoning.ts),
@@ -254,6 +261,13 @@ export async function* renderStream({
           const clean = toolMarkup.push(split.text);
           droppedMarkup += clean.dropped;
           split.text = clean.text;
+          // …and on a NO-TOOLS call, a model told to just finish the prose
+          // sometimes narrates the missing toolset instead ("no tools loaded").
+          if (toolComplaints) {
+            const kept = toolComplaints.push(split.text);
+            droppedComplaints += kept.dropped;
+            split.text = kept.text;
+          }
           // A skipped turn intentionally produces no reply, and some providers
           // emit placeholder garbage (e.g. "(Empty response: ...)") in this slot
           // when the model returned only a thinking block — never forward either.
@@ -450,13 +464,36 @@ export async function* renderStream({
     inlineReasoningText += rest.reasoning;
     const clean = toolMarkup.flush();
     droppedMarkup += clean.dropped;
-    if (clean.text && !skipped && !isPlaceholderText(clean.text)) {
-      tally.textChars += clean.text.length;
-      await onTextDelta?.(clean.text);
+    let text = clean.text;
+    // The complaint filter holds the tail after the last sentence boundary, so
+    // its flush is what judges a reply whose final sentence WAS the complaint —
+    // by far the commonest shape.
+    if (toolComplaints) {
+      const held = toolComplaints.push(text);
+      const tail = toolComplaints.flush();
+      droppedComplaints += held.dropped + tail.dropped;
+      text = `${held.text}${tail.text}`;
+    }
+    if (text && !skipped && !isPlaceholderText(text)) {
+      tally.textChars += text.length;
+      await onTextDelta?.(text);
       if (emitText) {
-        yield clean.text;
+        yield text;
       }
     }
+  }
+  if (droppedComplaints.trim()) {
+    // Worth a line, and worth keeping: this is the "no tools loaded" report the
+    // owner has raised repeatedly. Silence here would make the drop the new
+    // invisible bug — if this fires often, the recovery path that made the call
+    // is the thing to fix.
+    logger.warn(
+      {
+        ...context,
+        complaint: clamp(droppedComplaints.trim(), MARKUP_LOG_MAX_LENGTH),
+      },
+      '[stream] model complained about having no tools on a no-tools call; kept it out of the reply'
+    );
   }
   if (droppedMarkup) {
     // Worth a loud line: it means the provider failed to parse the model's tool

@@ -11,6 +11,7 @@ import { z } from 'zod';
 import type { KytoBot, Message, StreamChunk, ThreadHandle } from '@/harness';
 import { requestHints } from '@/lib/ai/hints';
 import { renderStream } from '@/lib/ai/stream';
+import { stripToolComplaints } from '@/lib/ai/stream/tool-complaints';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
 import { errorMessage } from '@/lib/utils/error';
@@ -555,7 +556,7 @@ async function synthesizeReport({
     abortSignal,
     attempt,
     holder: {},
-    prompt: `${task}\n\nYou already did the work above. Write your final report now — the findings, in full. Do not call any tools.`,
+    prompt: `${task}\n\nYou already did the work above. Write your final report now — the findings, in full. You have no tools for this message, so do not call one and do not mention tools at all.`,
     system,
     tools: {},
   });
@@ -563,5 +564,8 @@ async function synthesizeReport({
   for await (const delta of result.textStream) {
     text += delta;
   }
-  return text.trim();
+  // No tools are registered on this call, so a sentence about tools being
+  // missing is junk by construction — and this report is what the parent turn
+  // reads and relays. See ai/stream/tool-complaints.ts.
+  return stripToolComplaints(text).trim();
 }
