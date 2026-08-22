@@ -29,7 +29,7 @@ a test of nothing.
 | `lib/agent/compaction-plan.ts` | which overflowed messages get summarized, and that the block always states its count. |
 | `lib/sandbox/diagnostics.ts` | the post-edit checkers, run for real against a local shell — including a genuine `tsc` type error. |
 | `lib/ai/stream/reasoning-tracker.ts` | one plan row per reasoning BLOCK (providers reuse one id), and that every block which opens is closed — an open one is a card stuck on `in_progress`, which renders as a broken row in a collapsed plan. |
-| `lib/ai/stream/tool-complaints.ts` | "no tools loaded" is dropped from a reply on a no-tools call, and real prose that merely mentions tools is not. A regression here is user-visible and has recurred repeatedly. |
+| `lib/ai/stream/tool-complaints.ts` | "no tools loaded" is dropped from a prose-only call's reply, and real prose that merely mentions tools is not. A regression here is user-visible and has recurred repeatedly. |
 | `lib/agent/degenerate.ts`, `skip-text.ts`, `github/command.ts`, `byok/crypto.ts` | repetition guard, bare-`skip` detection, GitHub command parsing, BYOK encryption. |
 
 `bun test` works from the repo root and from `apps/bot`. Keep it that way: a test

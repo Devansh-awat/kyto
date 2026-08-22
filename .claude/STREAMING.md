@@ -59,31 +59,36 @@ it) and a warning names the cause, since those calls never executed.
 
 ## "no tools loaded" never reaches the reply
 
-`lib/ai/stream/tool-complaints.ts` (tested). kyto's recovery paths re-ask the SAME
-model with `tools: {}` — finish the sentence you were cut off mid-way through
+`lib/ai/stream/tool-complaints.ts` (tested). kyto has three PROSE-ONLY recovery
+calls — finish the sentence you were cut off mid-way through
 (`continueTruncatedReply`), write the report you skipped (an agent reminder's
-nudge, a subagent's) — because the work is already done and only prose is missing,
-so nothing may fire a side effect twice. But the system prompt those calls carry
-still describes fifty tools and tells the model to call `loadTools`, and weak
-models resolve the contradiction by narrating it: "no tools loaded", or the
-observed "getFile isn't available… loadTools isn't available either… No tools
-available? That's strange".
+nudge, a subagent's). Those used to be made with `tools: {}`, which contradicted
+the system prompt sitting right above them (it describes fifty tools and says to
+call `loadTools`), and weak models resolved the contradiction by narrating it:
+"no tools loaded", or the observed "getFile isn't available… loadTools isn't
+available either… No tools available? That's strange".
 
-**This is a DROP, not another prompt tweak, because prompt tweaks kept
-regressing.** It has been "fixed" at the wording level more than once (a notice
-saying tools are off deliberately; keeping tools ON for
-`synthesizeFinalAnswer` — commit `ea22baf`) and came back each time, for two
-reasons no rewording addresses: wording cannot guarantee a weak model's output,
-and each fix only covered the call site that happened to be hot that week —
-`continueTruncatedReply` was near-dormant until a cut-off Zen stream started
-routing into it, at which point the same sentence reappeared from a path nobody
-had touched.
+**The contradiction itself is now gone (owner's call 2026-08-22, "NEVER LAUNCH
+MODELS WITHOUT tools"): every one of those calls carries the REAL toolset**, and
+its prompt asks for prose without ever naming tools — naming the thing you forbid
+is how it kept ending up in the output. The one deliberate exception is
+compaction (`SUMMARY_SYSTEM`), whose standalone summarizer prompt never mentions a
+toolset, so there is nothing to narrate; handing IT tools would invite a
+background digest job to start calling them.
 
-- **Scope is what makes it safe**: it runs ONLY when `renderStream` was given a
-  `knownTools` set that is EMPTY, i.e. a call with no tools registered at all. On
-  such a call the model was asked for one specific piece of prose, so a sentence
-  about tool availability is junk by construction. A normal turn filters nothing,
-  so "which tools do you have?" still gets an honest answer.
+**And on top of that, a DROP, because three rounds of prompt fixes kept
+regressing** (a notice saying tools are off deliberately; keeping tools ON for
+`synthesizeFinalAnswer` — commit `ea22baf`; prose-only wording). Wording cannot
+guarantee a weak model's output, and each fix only covered the call site that
+happened to be hot that week — `continueTruncatedReply` was near-dormant until a
+cut-off Zen stream started routing into it, at which point the same sentence
+reappeared from a path nobody had touched.
+
+- **Scope is what makes it safe**: it runs ONLY where the CALLER declares the call
+  prose-only (`dropToolComplaints` on `renderStream`, or `stripToolComplaints`
+  over collected text). There such a sentence cannot be a legitimate answer — and
+  now that tools are always registered, it is also simply false. A normal turn
+  filters nothing, so "which tools do you have?" still gets an honest answer.
 - Sentence-level, and a complaint must be **short** (≤200 chars) — a real
   paragraph that happens to pair "tool" with absence language is left alone. The
   filter holds the tail after the last sentence boundary so a complaint is never
@@ -103,15 +108,14 @@ had touched.
   bug than leaving a complaint in, so those four are pinned as tests. The
   identifier→absence gap is capped at 24 chars for the same reason: the absence
   has to be ABOUT the identifier, not merely in the same sentence.
-- It **logs** what it dropped (`[stream] model complained about having no tools on
-  a no-tools call`). If that line is frequent, the recovery path that made the
-  call is what to fix — the drop must not become the new invisible bug.
-- `stripToolComplaints` applies the same rule to collected (non-streamed) text,
-  for the reminder and subagent report nudges.
-- The prompt wording is still there as belt (`NO_TOOLS_NOTICE`, `REPORT_NUDGE`),
-  now saying "do not mention tools at all". The old wording ended "if something is
-  genuinely missing, say so in one short sentence and stop", which was an outright
-  invitation to write the complaint.
+- It **logs** what it dropped. If that line is frequent, whatever made the model
+  say it is what to fix — the drop must not become the new invisible bug.
+- `stripToolComplaints` applies the same rule to collected (non-streamed) text:
+  the reminder and subagent report nudges, and compaction's digest.
+- The prose-only wording stays as belt (`PROSE_ONLY_NOTICE`, `REPORT_NUDGE`). The
+  old wording ANNOUNCED an empty toolset ("every tool has been switched off
+  deliberately… if something is genuinely missing, say so in one short sentence")
+  — naming the thing it forbade, then inviting exactly the complaint.
 
 ## Reasoning rows
 

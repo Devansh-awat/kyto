@@ -69,6 +69,7 @@ export interface StreamError {
 export async function* renderStream({
   budget,
   context,
+  dropToolComplaints = false,
   emitText = false,
   knownTools,
   onTextDelta,
@@ -90,6 +91,14 @@ export async function* renderStream({
   budget?: CardBudget;
   /** Attempt identity (model/provider/threadId) folded into every log line. */
   context?: Record<string, unknown>;
+  /**
+   * This call asked the model for PROSE ONLY — finish the cut-off sentence, write
+   * the report you skipped — so a sentence about tools being missing cannot be a
+   * legitimate answer and is dropped from the reply (see tool-complaints.ts).
+   * Off by default: on a normal turn "which tools do you have?" must still get an
+   * honest answer.
+   */
+  dropToolComplaints?: boolean;
   /** Receives the attempt's tally once the stream ends (for the caller's log). */
   onTally?: (tally: StreamTally) => void;
   // When true, reply text is ALSO yielded as plain strings (the message body),
@@ -149,11 +158,14 @@ export async function* renderStream({
   // field. Never part of a reply (see tool-markup.ts).
   const toolMarkup = createToolMarkupFilter();
   let droppedMarkup = '';
-  // "no tools loaded" — only on a call made with NO tools registered, where such
-  // a sentence is junk by construction. See tool-complaints.ts for why this is a
-  // drop rather than another attempt at prompt wording.
-  const noToolsCall = knownTools !== undefined && knownTools.size === 0;
-  const toolComplaints = noToolsCall ? createToolComplaintFilter() : undefined;
+  // "no tools loaded" — dropped only where the CALLER says a complaint about
+  // tools cannot be a legitimate answer (the prose-only recovery calls). It is
+  // NOT inferred from an empty toolset any more: every model call now launches
+  // WITH tools (owner's call 2026-08-22), so there is no empty toolset left to
+  // infer it from. See tool-complaints.ts.
+  const toolComplaints = dropToolComplaints
+    ? createToolComplaintFilter()
+    : undefined;
   let droppedComplaints = '';
   let skipped = false;
   let droppedTextDeltas = 0;

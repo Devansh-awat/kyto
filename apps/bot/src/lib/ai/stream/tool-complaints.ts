@@ -1,29 +1,35 @@
 // Keep "I have no tools" out of a reply a person reads.
 //
-// kyto's recovery paths re-ask the SAME model with `tools: {}` — finish the
-// sentence you were cut off mid-way through, write the report you skipped —
-// because the work is already done and only prose is missing, so nothing may
-// fire a side effect twice. But the system prompt those calls carry still
-// describes fifty tools and tells the model to call `loadTools`. Weaker models
-// resolve that contradiction by narrating it: "no tools loaded", or the observed
-// "getFile isn't available… loadTools isn't available either… No tools
-// available? That's strange".
+// kyto has three PROSE-ONLY recovery calls — finish the sentence you were cut off
+// mid-way through, write the report you skipped (a subagent's, an agent
+// reminder's) — where the work is already done and only the words are missing.
+// Those used to be made with `tools: {}`, which contradicted the system prompt
+// sitting right above them (it describes fifty tools and says to call
+// `loadTools`), and weaker models resolved the contradiction by narrating it:
+// "no tools loaded", or the observed "getFile isn't available… loadTools isn't
+// available either… No tools available? That's strange".
 //
-// This has been fixed at the PROMPT level more than once — adding a notice that
-// says tools are off deliberately, then keeping tools ON for the
-// synthesizeFinalAnswer path — and it came back each time, for two reasons that
-// no rewording fixes. Prompt wording cannot GUARANTEE anything about a weak
-// model's output, and each fix only covered whichever call site happened to be
-// hot that week: the truncated-reply continuation was near-dormant until a
-// cut-off Zen stream started routing into it, at which point the same sentence
-// reappeared from a path nobody had touched. A drop at the point where reply
-// text is emitted is the only version that cannot regress, so that is this.
+// **The contradiction itself is gone**: every one of those calls now carries the
+// REAL toolset (owner's call, 2026-08-22 — "NEVER LAUNCH MODELS WITHOUT tools"),
+// and their prompts ask for prose without ever mentioning tools, since naming the
+// thing you forbid is how it kept ending up in the output.
 //
-// SCOPE IS WHAT MAKES IT SAFE. It runs only when the call was made with NO tools
-// registered at all (renderStream's `knownTools` is present and empty). On such a
-// call the model was asked for one specific piece of prose, so a sentence about
-// tool availability is junk by construction. On a normal turn nothing is
-// filtered, so "which tools do you have?" still gets an honest answer.
+// This module is the part that CANNOT regress. It has been fixed at the prompt
+// level three times now — a notice saying tools are off deliberately, then
+// keeping tools ON for synthesizeFinalAnswer (ea22baf), then the above — and it
+// came back each time, for two reasons no rewording addresses. Prompt wording
+// cannot GUARANTEE anything about a weak model's output, and each fix only
+// covered whichever call site happened to be hot that week: the truncated-reply
+// continuation was near-dormant until a cut-off Zen stream started routing into
+// it, at which point the same sentence reappeared from a path nobody had touched.
+// So the guarantee lives at the point reply text is emitted.
+//
+// SCOPE IS WHAT MAKES IT SAFE. It runs only where the CALLER declares the call
+// prose-only (`dropToolComplaints`, or `stripToolComplaints` over collected text).
+// On such a call a sentence about tool availability cannot be a legitimate answer
+// — and now that tools are always registered, it is also simply false. On a normal
+// turn nothing is filtered, so "which tools do you have?" still gets an honest
+// answer.
 
 // A complaint is one short sentence. Anything longer is a real paragraph that
 // happens to mention tools, and eating it would be far worse than leaving it.

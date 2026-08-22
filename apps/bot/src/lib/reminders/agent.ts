@@ -6,6 +6,7 @@ import {
 } from '@repo/ai';
 import type { Reminder } from '@repo/db/queries';
 import { LazySandbox } from '@repo/sandbox';
+import type { ToolSet } from 'ai';
 import { env } from '@/env';
 import type { Message, ThreadHandle } from '@/harness';
 import { requestHints } from '@/lib/ai/hints';
@@ -32,12 +33,14 @@ ALWAYS leave a report. Even a run where nothing happened should say so ("checked
 Slack search (searchSlack) will not work here, as it needs a live user interaction to authorize it; prefer readConversationHistory, searchWeb, or bash.
 </recurring_job>`;
 
-// Asked of the same model, tools off, when a run did work but wrote nothing.
-// "do not mention tools at all" rather than "do not comment on their absence":
-// the latter names the thing it forbids and weak models wrote it anyway. The
-// actual guarantee is stripToolComplaints below, not this sentence.
+// Asked of the same model when a run did work but wrote nothing. It keeps its
+// REAL tools: an empty toolset contradicted the system prompt above it and weak
+// models narrated that ("no tools loaded") straight into the posted message
+// (owner's call 2026-08-22). So this says only what to DO, and never names tools
+// at all — naming the thing you forbid is how it kept ending up in the output.
+// stripToolComplaints is the backstop.
 const REPORT_NUDGE =
-  'You ran the job above but never wrote the message. Write it now, from what you just did: what you checked, what you found, and anything you changed. You have NO TOOLS for this message — that is deliberate, not an error, so do not try to call one and do not mention tools at all. Write only the message that should be posted.';
+  'You ran the job above but never wrote the message. Write it now, from what you just did: what you checked, what you found, and anything you changed. This message is prose only: do not call anything, do not start new work, and do not describe your setup or environment. Write only the message that should be posted.';
 
 /** The reminder's owner, as the author of the synthetic message driving it. */
 function syntheticMessage(reminder: Reminder, threadId: string): Message {
@@ -74,26 +77,29 @@ export async function runReminderAgent(reminder: Reminder): Promise<string> {
 }
 
 /**
- * Second chance at the message: same model, no tools, "write the report you
- * skipped". Best-effort — a failure here just falls through to the caller's
- * placeholder, which is still better than the run being silent.
+ * Second chance at the message: same model, its real tools still registered,
+ * "write the report you skipped". Best-effort — a failure here just falls through
+ * to the caller's placeholder, which is still better than the run being silent.
  */
 async function synthesizeReport({
   attempt,
+  built,
   hints,
   reminder,
 }: {
   attempt: NonNullable<typeof subagentAttempt>;
+  built: { activeTools: () => string[]; tools: ToolSet };
   hints: Awaited<ReturnType<typeof requestHints>>;
   reminder: Reminder;
 }): Promise<string | undefined> {
   try {
     const result = streamAttempt({
+      activeTools: built.activeTools,
       attempt,
       holder: {},
       prompt: `${reminder.text}\n\n${REPORT_NUDGE}`,
       system: `${subagentSystemPrompt({ hints })}${RECURRING_JOB_NOTE}`,
-      tools: {},
+      tools: built.tools,
     });
     let text = '';
     for await (const part of result.fullStream) {
@@ -101,9 +107,8 @@ async function synthesizeReport({
         text += part.text;
       }
     }
-    // This call has no tools at all, so "no tools loaded" is junk by
-    // construction — and this report is posted verbatim as the reminder's
-    // message. See ai/stream/tool-complaints.ts.
+    // This report is posted verbatim as the reminder's message, so a sentence
+    // about tools being missing must never survive into it.
     return stripToolComplaints(text).trim() || undefined;
   } catch (error) {
     logger.warn(
@@ -190,9 +195,15 @@ async function runAgent(
       // The job did real work and then said nothing, which used to post
       // "(Completed scheduled actions with no additional message.)" — a line
       // that tells its reader precisely nothing about what happened. Ask the
-      // same model to write the report it skipped, tools off so no side effect
-      // can fire a second time. Same nudge the live agent loop uses.
-      const nudged = await synthesizeReport({ attempt, hints, reminder });
+      // same model to write the report it skipped, keeping its real tools so it
+      // does not narrate an empty toolset into the posted message. Same nudge
+      // the live agent loop uses.
+      const nudged = await synthesizeReport({
+        attempt,
+        built,
+        hints,
+        reminder,
+      });
       if (nudged) {
         return nudged;
       }

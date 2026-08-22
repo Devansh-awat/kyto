@@ -1084,7 +1084,9 @@ async function executeTurn(
         // cut off with no finish reason at all (truncatedStream). Both leave the
         // user reading a dangling colon while the attempt counts as handled, and
         // both are fixed the same way: ask the SAME model to carry on from what
-        // the user was already shown, tools off so nothing can fire twice.
+        // the user was already shown. It keeps its real tools (a model launched
+        // with an empty toolset narrates that fact into the reply); the prompt is
+        // what tells it not to act, and the complaint filter is the backstop.
         //
         // Note the `length` case here is NOT the one the nudge above handles:
         // there the cap ate a tool call and no reply existed, here it ate the
@@ -1096,7 +1098,9 @@ async function executeTurn(
           for (let round = 0; round < MAX_CONTINUATIONS; round += 1) {
             let continuationFinish: string | undefined;
             yield* continueTruncatedReply({
+              activeTools: built.activeTools,
               attempt: currentAttempt,
+              knownTools,
               onFinish: (reason) => {
                 continuationFinish = reason;
               },
@@ -1109,6 +1113,7 @@ async function executeTurn(
               streamedText,
               system: systemPrompt({ hints }),
               task: messageText,
+              tools: built.tools,
             });
             // Whatever it just wrote fit, and arrived whole — the reply is
             // complete. `other` means this continuation was itself cut off, so
@@ -1627,6 +1632,9 @@ async function* synthesizeFinalAnswer({
       tools,
     });
     yield* renderStream({
+      // Tools ARE on for this one, so a sentence claiming they are missing is
+      // not merely unhelpful, it is false. Never let it reach the thread.
+      dropToolComplaints: true,
       emitText: true,
       knownTools,
       onTextDelta: onText,
@@ -1641,46 +1649,62 @@ async function* synthesizeFinalAnswer({
 }
 
 /**
- * Resume a reply that MAX_OUTPUT_TOKENS cut off mid-sentence. Same model, tools
- * off — the work is already done and the only thing missing is the rest of the
- * prose, so nothing here can repeat a side effect. Bounded by MAX_CONTINUATIONS
- * because a model that keeps producing exactly one cap's worth of text every
- * round would otherwise never terminate.
+ * Resume a reply that stopped mid-sentence — the output cap fell, or the stream
+ * was cut off. Same model, and **with its real tools**, because a model launched
+ * with an empty toolset against a system prompt describing fifty of them narrates
+ * the contradiction ("no tools loaded") into the user's reply. Owner's call,
+ * 2026-08-22: never launch a model without tools.
+ *
+ * Nothing here should NEED a tool — the work is done and only the prose is
+ * missing — so the prompt says so, and `renderTruncation` tells it not to act. The
+ * same trade was already made for `synthesizeFinalAnswer` (commit ea22baf) for
+ * exactly this reason. Bounded by MAX_CONTINUATIONS because a model that keeps
+ * producing exactly one cap's worth of text every round would never terminate.
  */
 async function* continueTruncatedReply({
+  activeTools,
   attempt,
+  knownTools,
   onFinish,
   onText,
   signal,
   streamedText,
   system,
   task,
+  tools,
 }: {
+  activeTools: () => string[];
   attempt: ModelAttempt;
+  knownTools: Set<string>;
   onFinish: (reason: string) => void;
   onText: (text: string) => void;
   signal: AbortSignal;
   streamedText: string;
   system: string;
   task: string;
+  tools: ToolSet;
 }): AsyncGenerator<string | StreamChunk> {
   logger.info(
     { model: attempt.model },
-    '[agent] reply hit the output cap mid-sentence; continuing it'
+    '[agent] reply stopped mid-sentence; continuing it'
   );
   const prompt = `${task}\n\n${renderTruncation(streamedText)}`;
   try {
     const result = streamAttempt({
       abortSignal: signal,
+      activeTools,
       attempt,
       holder: {},
       prompt,
       system,
-      tools: {},
+      tools,
     });
     yield* renderStream({
+      // Prose-only call: a sentence about missing tools cannot be a legitimate
+      // answer here, so it never reaches the thread even if the model writes one.
+      dropToolComplaints: true,
       emitText: true,
-      knownTools: new Set<string>(),
+      knownTools,
       onFinish,
       onTextDelta: onText,
       stream: result.fullStream,
@@ -1697,36 +1721,37 @@ async function* continueTruncatedReply({
 const TRUNCATION_TAIL_CHARS = 2000;
 
 /**
- * `continueTruncatedReply` runs with `tools: {}` on purpose — the work is already
- * done and only the prose needs finishing, so nothing may fire a second time.
- * But the system prompt still describes a full toolset, so a model that isn't
- * TOLD spends the whole call trying to use it: an observed turn burned its
- * budget on "getFile isn't available… loadTools isn't available either… No tools
- * available? That's strange", reasoning about a broken environment instead of
- * writing the two sentences it was asked for.
+ * What the continuation is told instead of "you have no tools".
  *
- * This wording is BELT, not braces. The braces are `stripToolComplaints`
- * (ai/stream/tool-complaints.ts), which drops such a sentence out of the reply on
- * any no-tools call — because no wording can guarantee a weak model's output, and
- * this exact complaint has come back after every previous prompt-level fix. Note
- * the notice used to end "if something is genuinely missing, say so in one short
- * sentence and stop", which was an outright invitation to write it.
+ * The old wording announced an empty toolset ("every tool has been switched off
+ * deliberately… do not mention tools at all") while the system prompt right above
+ * it described fifty tools and told the model to call `loadTools`. Weak models
+ * resolved that contradiction out loud — the observed turn burned its whole budget
+ * on "getFile isn't available… loadTools isn't available either… No tools
+ * available? That's strange". Worse, the notice used to end "if something is
+ * genuinely missing, say so in one short sentence and stop", which is an outright
+ * invitation to write the complaint.
  *
- * (Note: `synthesizeFinalAnswer` — the "tools ran but no reply" recovery — does
- * NOT use this. It keeps tools ON so the model can finish whatever work it had
- * left; see that function.)
+ * The contradiction is gone now: the call carries the REAL toolset (owner's call
+ * 2026-08-22, never launch a model without tools), so there is nothing to
+ * announce. This says only what the model should DO — write prose, don't act —
+ * without mentioning tools at all, because naming the thing you are forbidding is
+ * how it ended up in a reply three times.
+ *
+ * Belt only. The braces are the drop in ai/stream/tool-complaints.ts, since no
+ * wording can guarantee a weak model's output.
  */
-const NO_TOOLS_NOTICE =
-  'You have NO TOOLS for this message — every tool has been switched off deliberately, and that is not an error or a broken environment. Do not try to call one, do not mention tools at all, and do not plan work that would need one. Write only the prose asked for, from what is already in front of you.';
+const PROSE_ONLY_NOTICE =
+  'This message is prose only: everything that needed doing is already done, so do NOT call anything, do NOT start new work, and do NOT describe your setup or environment. Write only the words that finish the reply.';
 
 function renderTruncation(streamedText: string): string {
   const tail = streamedText.trim().slice(-TRUNCATION_TAIL_CHARS);
   return [
-    'IMPORTANT: you were cut off. You already did the work, and the user has ALREADY been shown the reply text below, which stops mid-thought because it hit the output limit:',
+    'IMPORTANT: you were cut off. You already did the work, and the user has ALREADY been shown the reply text below, which stops mid-thought:',
     '',
     tail,
     '',
-    NO_TOOLS_NOTICE,
+    PROSE_ONLY_NOTICE,
     '',
     'Write ONLY the continuation, starting exactly where that stops. Do not repeat any of it, do not restate the task, do not re-introduce yourself, and do not apologise or mention being cut off. If it broke off mid-sentence, finish that sentence. Keep it short.',
   ].join('\n');

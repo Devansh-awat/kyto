@@ -10,6 +10,7 @@ import {
   renderCompactedBlock,
   type StoredSummary,
 } from '@/lib/agent/compaction-plan';
+import { stripToolComplaints } from '@/lib/ai/stream/tool-complaints';
 import logger from '@/lib/logger';
 import { clamp } from '@/lib/utils/text';
 
@@ -97,9 +98,18 @@ async function summarize({
       holder: {},
       prompt,
       system: SUMMARY_SYSTEM,
+      // The ONE model call kyto makes with no tools, and the exception is
+      // deliberate: SUMMARY_SYSTEM is a standalone summarizer prompt that never
+      // mentions a toolset, so there is no contradiction for a model to narrate
+      // (which is what "never launch a model without tools" exists to prevent —
+      // see lib/ai/stream/tool-complaints.ts). Handing it kyto's real tools would
+      // instead invite a background digest job to start calling them.
       tools: {},
     });
-    const text = (await result.text).trim();
+    // Belt anyway: the digest is injected into later prompts as
+    // <earlier_in_this_thread>, so a stray complaint here would be read back as
+    // history by every subsequent turn of the thread.
+    const text = stripToolComplaints((await result.text).trim()).trim();
     return text ? (clamp(text, SUMMARY_MAX_CHARS) ?? text) : undefined;
   } catch (error) {
     logger.warn({ err: error }, '[compaction] summary failed');

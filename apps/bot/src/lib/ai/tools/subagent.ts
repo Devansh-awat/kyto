@@ -6,6 +6,7 @@ import {
   subagentAttempts,
   subagentSystemPrompt,
 } from '@repo/ai';
+import type { ToolSet } from 'ai';
 import { tool } from 'ai';
 import { z } from 'zod';
 import type { KytoBot, Message, StreamChunk, ThreadHandle } from '@/harness';
@@ -266,14 +267,19 @@ export function runSubagentTool({
                 }
                 // A model that ran tools but wrote nothing leaves the parent with
                 // "(Completed actions…)" — technically a success, useless as a
-                // report. Ask THIS model to write it up, with tools OFF so no side
-                // effect can fire twice. Same nudge the main turn uses.
+                // report. Ask THIS model to write it up. It keeps its real tools:
+                // launching one with an empty toolset against a system prompt
+                // describing them makes it narrate "no tools loaded" into the
+                // report (owner's call 2026-08-22). The prompt is what tells it
+                // not to act.
                 if (!report.trim() && ranTools) {
                   report = await synthesizeReport({
                     abortSignal,
+                    activeTools: built.activeTools,
                     attempt,
                     system,
                     task,
+                    tools: built.tools,
                   }).catch(() => '');
                 }
                 if (report.trim()) {
@@ -538,34 +544,43 @@ Nobody in the thread has seen any of this — the subagent posts nothing of its 
 }
 
 // A subagent that ran its tools and then stopped without writing anything gives
-// the parent nothing to work with. Re-ask the SAME model, once, with tools OFF:
-// it can only produce prose, so no side effect can happen twice, and the parent
-// gets the findings instead of "(Completed actions…)".
+// the parent nothing to work with. Re-ask the SAME model, once, for the write-up.
+//
+// It keeps its REAL tools. An empty toolset here contradicted the system prompt
+// sitting right above it, and weak models narrated that contradiction into the
+// report ("no tools loaded"), which the parent then relayed to a person. Owner's
+// call 2026-08-22: never launch a model without tools. Nothing here should need
+// one — the work is done — so the prompt says so, and stripToolComplaints is the
+// backstop for when a model says it anyway.
 async function synthesizeReport({
   abortSignal,
+  activeTools,
   attempt,
   system,
   task,
+  tools,
 }: {
   abortSignal?: AbortSignal;
+  activeTools: () => string[];
   attempt: ModelAttempt;
   system: string;
   task: string;
+  tools: ToolSet;
 }): Promise<string> {
   const result = streamAttempt({
     abortSignal,
+    activeTools,
     attempt,
     holder: {},
-    prompt: `${task}\n\nYou already did the work above. Write your final report now — the findings, in full. You have no tools for this message, so do not call one and do not mention tools at all.`,
+    prompt: `${task}\n\nYou already did the work above. Write your final report now — the findings, in full. This message is prose only: do not call anything, do not start new work, and do not describe your setup or environment.`,
     system,
-    tools: {},
+    tools,
   });
   let text = '';
   for await (const delta of result.textStream) {
     text += delta;
   }
-  // No tools are registered on this call, so a sentence about tools being
-  // missing is junk by construction — and this report is what the parent turn
-  // reads and relays. See ai/stream/tool-complaints.ts.
+  // This report is what the parent turn reads and relays to a person, so a
+  // sentence about tools being missing must never survive into it.
   return stripToolComplaints(text).trim();
 }
