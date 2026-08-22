@@ -121,6 +121,12 @@ const HACKCLUB_OUTAGE_THRESHOLD = 1;
 // keeps filling the budget exactly would otherwise continue forever.
 const MAX_CONTINUATIONS = 3;
 
+// How many times ONE attempt may be re-run in place after its stream was cut off
+// before the model said anything (see truncatedStream). A dropped connection says
+// nothing about the model, so it must not cost a fallback rung — but a provider
+// that truncates every single time has to be routed away from eventually.
+const MAX_TRUNCATION_RETRIES = 2;
+
 // How long a single attempt may go with NO sign of progress before it's aborted
 // (see the STALL watchdog below — it's re-armed on every streamed text delta,
 // tool call, and tool result, so this is an IDLE budget, not a cap on total turn
@@ -508,6 +514,12 @@ async function executeTurn(
     // doomed attempts (the "lots of Thinking · fallback" bug).
     let hackclubFailures = 0;
     let hackclubUnavailable = false;
+    // How many times the CURRENT attempt has been re-run in place because its
+    // stream was cut off mid-flight (see truncatedStream below). A dropped
+    // connection says nothing about the model, so it must not cost a fallback
+    // rung — but a provider that truncates every time has to be routed away from
+    // eventually, hence the cap.
+    let truncationRetries = 0;
     let attempt: ModelAttempt | undefined;
     // Set per attempt (the watchdog is armed inside the loop below), but the
     // toolset is built ONCE up front — so the tools get a stable indirection
@@ -622,7 +634,10 @@ async function executeTurn(
 
     while (attempt) {
       const currentAttempt = attempt;
-      const modelTaskId = `model-${attempts.length}`;
+      // Card id per attempt. `truncationRetries` is part of it because a retried
+      // attempt does not push onto `attempts` — without it the retry would try to
+      // re-open a card it had already completed.
+      const modelTaskId = `model-${attempts.length}-${truncationRetries}`;
       const attemptLabel = nextAttemptLabel;
       nextAttemptLabel = undefined;
       const modelTaskTitle = labelledThinking({
@@ -968,6 +983,20 @@ async function executeTurn(
           );
         }
 
+        // The provider CLOSED the SSE connection without ever sending a
+        // `finish_reason`, and without an error part either. The SDK's
+        // openai-compatible mapper leaves its default in place for that, so the
+        // attempt reports `other` — a finish reason no healthy completion ever
+        // produces (a real one is stop/length/tool_calls/content_filter).
+        // Measured on Zen: a long reply or a long reasoning block gets cut at
+        // ~100-220KB of stream with no trailing chunk and no `[DONE]`, ~35-45s
+        // in, on maybe a third of long turns. Nothing was wrong with the model —
+        // the transport dropped — so this must NOT cost a fallback rung: that is
+        // what sent live turns from a free unlimited primary onto the Gemini key,
+        // which then 429'd on its own quota.
+        const truncatedStream =
+          attemptFinishReason === 'other' && !attemptStreamError;
+
         // The model asked to be replaced by a stronger one. Route the turn onto
         // the escalation rung rather than letting the "ran tools, wrote nothing"
         // path treat it as a failure to recover from — the attempt did exactly
@@ -1050,18 +1079,20 @@ async function executeTurn(
           });
         }
 
-        // The model DID write a reply, but ran out of output budget partway
-        // through it. `length` means the sentence stopped where the token cap
-        // fell, not where the thought ended — observed as a turn that posted
-        // "here is the link and a summary of what i found:" and then nothing at
-        // all. Text had streamed, so the attempt counted as handled and the
-        // turn closed on a dangling colon.
+        // The model DID write a reply, but it stops before the thought does —
+        // either the output cap fell mid-sentence (`length`), or the stream was
+        // cut off with no finish reason at all (truncatedStream). Both leave the
+        // user reading a dangling colon while the attempt counts as handled, and
+        // both are fixed the same way: ask the SAME model to carry on from what
+        // the user was already shown, tools off so nothing can fire twice.
         //
-        // Note this is NOT the same as the `length` finish the nudge above
-        // handles: there the cap ate a tool call and no reply existed, here the
-        // cap ate the reply itself. Ask the same model to carry on from what the
-        // user was already shown, tools off so nothing can fire twice.
-        if (attemptText && attemptFinishReason === 'length') {
+        // Note the `length` case here is NOT the one the nudge above handles:
+        // there the cap ate a tool call and no reply existed, here it ate the
+        // reply itself.
+        if (
+          attemptText &&
+          (attemptFinishReason === 'length' || truncatedStream)
+        ) {
           for (let round = 0; round < MAX_CONTINUATIONS; round += 1) {
             let continuationFinish: string | undefined;
             yield* continueTruncatedReply({
@@ -1079,8 +1110,13 @@ async function executeTurn(
               system: systemPrompt({ hints }),
               task: messageText,
             });
-            // Whatever it just wrote fit — the reply is complete.
-            if (continuationFinish !== 'length') {
+            // Whatever it just wrote fit, and arrived whole — the reply is
+            // complete. `other` means this continuation was itself cut off, so
+            // it gets another round exactly like a `length` one does.
+            if (
+              continuationFinish !== 'length' &&
+              continuationFinish !== 'other'
+            ) {
               break;
             }
           }
@@ -1094,6 +1130,33 @@ async function executeTurn(
         // which replays the gathered tool results via renderCarryover rather than
         // re-running them.
         const handled = attemptText || skipped;
+        // …except when the stream was CUT OFF before the model got to say
+        // anything at all. That is the transport dropping, not the model failing:
+        // measured 11 times in 48h on the Zen primary, every one with textChars 0
+        // and toolCalls 0, each one spending a fallback rung (and landing on
+        // Gemini, which then 429'd on its own quota) for a request the model would
+        // have answered on a retry. Re-run THIS attempt in place instead — safe
+        // precisely because nothing ran: no text was shown and no tool fired, so
+        // there is no side effect to repeat and nothing for the user to read
+        // twice. An attempt that DID run tools keeps the old path (its synthesis
+        // nudge above already had a go, and re-running the whole attempt could
+        // fire a side effect a second time).
+        if (
+          !(handled || attemptToolActivity) &&
+          truncatedStream &&
+          truncationRetries < MAX_TRUNCATION_RETRIES
+        ) {
+          truncationRetries += 1;
+          logger.warn(
+            {
+              attempt: attemptLog(currentAttempt),
+              retry: truncationRetries,
+              threadId,
+            },
+            '[agent] stream was cut off before the model said anything; retrying the same model'
+          );
+          continue;
+        }
         if (!handled) {
           throw new Error(
             attemptToolActivity

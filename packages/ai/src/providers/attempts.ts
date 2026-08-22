@@ -135,20 +135,21 @@ const geminiAttempts: ModelAttempt[] = env.GEMINI_API_KEY
 // everyone he handed it to. Free and genuinely useful, but NOT primary material,
 // which is the call the owner asked for (2026-08-05, "if it has better models
 // than our deepseek v4 flash and also works well, use as primary, otherwise
-// before gemini"). Measured that day:
-//   - `deepseek-v4-pro` and `gpt-oss-120b` return real `tool_calls`, first byte
-//     in ~0.1-0.5s. Both are strictly better models than the flash primary.
-//   - but `glm-5.2` and `kimi-k3-free` HUNG — no bytes at all in 95s, which is
-//     worse than an error (an idle stall burns the watchdog);
-//   - and at 10 concurrent requests 2 of 10 came back 400 while latency for a
-//     five-token reply went to 18s. A kyto turn is one request per STEP, so a
-//     tool loop would sit on that limit constantly.
-// So: a fallback tier ahead of the Gemini key, carrying only the two models that
-// verified. Unset key = the tier simply isn't there.
-const MEBBO_MODELS = [
-  'deepseek-ai/deepseek-v4-pro',
-  'openai/gpt-oss-120b',
-] as const;
+// before gemini").
+//
+// EMPTY as of 2026-08-22: both rungs that verified on 2026-08-05 are now dead
+// from this host, so every fallback walk was paying two doomed attempts for them.
+//   - `deepseek-ai/deepseek-v4-pro` answers `400 {"detail":"Model not found"}` —
+//     it is no longer in the box's /models listing at all.
+//   - `openai/gpt-oss-120b` still answers a one-word probe, but its upstream
+//     (Groq, `service tier on_demand`) caps the key at 8000 tokens per minute and
+//     a kyto turn's prompt is 13-20k, so every REAL request 400s "Request too
+//     large … Limit 8000, Requested 19434". A rung that only passes a toy probe
+//     is not a rung; that is exactly why the note above says to verify with a
+//     real completion.
+// The tier stays wired (base URL, provider, the queue entry) so re-adding a slug
+// is one line — but verify it at KYTO's prompt size, not with "hi".
+const MEBBO_MODELS: readonly string[] = [];
 
 const mebboAttempts: ModelAttempt[] = env.MEBBO_API_KEY
   ? MEBBO_MODELS.map((model) => ({
