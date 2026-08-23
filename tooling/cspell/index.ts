@@ -109,7 +109,6 @@ export default defineConfig({
     'includeif',
     'textconv',
     'unxz',
-    'gaurd',
     'isabs',
     'isdir',
     'ghapi',
