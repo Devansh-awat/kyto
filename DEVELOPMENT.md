@@ -94,16 +94,11 @@ bun run check:spelling
 
 ## Deployment Notes
 
-`apps/bot` is a long-lived process on a persistent host, run under systemd
-(`deploy/kyto.service`, `Restart=always`). Configure the same variables as
-`apps/bot/.env.example` in the host environment.
+`apps/bot` runs as a Coolify-managed Docker container. Configure the same
+variables as `apps/bot/.env.example` in the Coolify service environment.
 
-```bash
-systemctl restart kyto.service
-journalctl -u kyto.service -f -o cat     # look for "kyto (…) is online"
-```
-
-If `deploy/kyto.service` changed, `systemctl daemon-reload` first.
+After pushing a change, check the Kyto service's Deployments or Logs in Coolify
+for `kyto (…) is online`.
 
 Postgres on the deploy host is local with no TLS, so `packages/db/src/client.ts`
 uses `ssl: false`.
@@ -117,4 +112,4 @@ uses `ssl: false`.
   `num_connections` should be 1.
 - **Silent but running**: a dropped WSS can stay TCP-established with a stuck
   send queue (`ss -tnp | grep :443`, non-zero Send-Q) while delivering nothing.
-  A restart re-establishes it.
+  Check the Coolify deployment logs and redeploy the service if needed.
