@@ -1,10 +1,5 @@
 import { keys } from '../keys';
-import {
-  GEMINI_PROVIDER,
-  HACKCLUB_PROVIDER,
-  MEBBO_PROVIDER,
-  OPENCODE_PROVIDER,
-} from './names';
+import { GEMINI_PROVIDER, HACKCLUB_PROVIDER, MEBBO_PROVIDER } from './names';
 
 const env = keys();
 
@@ -17,12 +12,9 @@ export {
   GEMINI_PROVIDER,
   HACKCLUB_PROVIDER,
   MEBBO_PROVIDER,
-  OPENCODE_PROVIDER,
 } from './names';
 
 const MEBBO_BASE_URL = env.MEBBO_BASE_URL ?? 'https://chat.mebbo.cloud/api';
-
-const OPENCODE_BASE_URL = 'https://opencode.ai/zen/v1';
 
 /** One model attempt: an OpenAI-compatible endpoint + model slug. */
 export interface ModelAttempt {
@@ -46,39 +38,15 @@ export interface ModelAttempt {
 }
 
 /**
- * The former primary: DeepSeek V4 Flash (0731 retrain) on **HackClub** —
- * primary 2026-08-01 → 2026-08-21, now the top FALLBACK rung and the model to
- * pin back when the Zen window below closes (or OPENCODE_API_KEY goes unset,
- * which degrades to it automatically). Verified `tools`-capable; a REASONING
- * model, so watch first-byte latency against HackClub's 5s header timeout.
+ * The primary model for main queries: GLM 5.3 Flash via the Hack Club
+ * OpenRouter-compatible gateway. Owner's call, 2026-08-26. It replaces the
+ * former unreleased stealth-model configuration and is cheap enough to lead the shared
+ * budget while providing a stronger general-purpose and agentic model.
  */
-const FORMER_PRIMARY_MODEL = 'deepseek/deepseek-v4-flash-0731';
+export const PRIMARY_MODEL = 'z-ai/glm-5.3-flash';
 
-/**
- * The primary model for the main query: **Ox Alpha Free** (`x-preview-f-free`),
- * a stealth model served FREE by OpenCode Zen (opencode.ai/zen, an
- * OpenAI-compatible gateway) — owner's call 2026-08-21 ("0x alpha is unlimited
- * as of now but will be removed from free tier in a week", after which kyto
- * returns to HackClub). TEMPORARY by design: when the window closes, delete this
- * block and point PRIMARY_ATTEMPT back at
- * `catalogAttempt(FORMER_PRIMARY_MODEL)` — which is also what happens
- * AUTOMATICALLY if OPENCODE_API_KEY is unset, so an expired/removed key can
- * never break every turn.
- *
- * WHY THIS IS LAWFUL WHEN THE REST OF ZEN IS NOT: the whole Zen free tier was
- * dropped on 2026-08-11 because its terms allowed training on what is sent, and
- * Hack Club's scraping policy permits training on Slack messages only with
- * every author's explicit consent — a kyto turn carries other people's
- * messages. Ox Alpha's provider explicitly states a ZERO-RETENTION policy and
- * does not use traffic for training (Zen docs, checked 2026-08-21), so the
- * objection has no purchase HERE specifically. Every other Zen free slug stays
- * banned; if this slug is ever served under different terms, drop it the same
- * day. See MODELS.md.
- *
- * Modality UNVERIFIED for a stealth model, so it sits in TEXT_ONLY_MODELS:
- * images are pre-described by Gemini rather than risking a doomed image turn.
- */
-export const PRIMARY_MODEL = 'x-preview-f-free';
+/** The previous primary remains the first proven, low-cost fallback rung. */
+const FORMER_PRIMARY_MODEL = 'deepseek/deepseek-v4-flash-0731';
 
 // Cap output tokens on HackClub requests. OpenRouter enforces the daily spend
 // limit PESSIMISTICALLY: with no `max_tokens` it assumes the model could emit
@@ -160,15 +128,10 @@ const mebboAttempts: ModelAttempt[] = env.MEBBO_API_KEY
     }))
   : [];
 
-// Models that CANNOT accept image input. deepseek-v4-flash is served by
-// Cloudflare, which is text-only: any turn carrying an image 404s ("No
-// endpoints found that support image input") and burns a doomed attempt before
-// falling back. x-preview-f-free's modality is UNVERIFIED (a stealth model), so
-// it is treated the same rather than risk a 404 per image turn. For either, kyto
-// pre-describes the image with Gemini (see vision.ts) and feeds the description
-// as text instead of the raw pixels. Verify Ox Alpha with a real image call
-// before removing it from this set.
-const TEXT_ONLY_MODELS = new Set<string>([FORMER_PRIMARY_MODEL, PRIMARY_MODEL]);
+// Models that cannot accept image input. DeepSeek V4 Flash is served by
+// Cloudflare, which is text-only: an image turn otherwise 404s before fallback.
+// GLM 5.3 Flash is vision-capable, so it is intentionally not in this set.
+const TEXT_ONLY_MODELS = new Set<string>([FORMER_PRIMARY_MODEL]);
 
 /** True unless the model's endpoint is known to reject image input. */
 export function modelSupportsVision(model: string): boolean {
@@ -189,26 +152,15 @@ export const visionAttempt: ModelAttempt | undefined = env.GEMINI_API_KEY
     }
   : undefined;
 
-/**
- * The attempt the main query starts on: Ox Alpha on Zen when OPENCODE_API_KEY
- * is set; otherwise the former primary on HackClub, exactly as before
- * 2026-08-21. HackClub is always configured, so this never degrades to nothing.
- */
-export const PRIMARY_ATTEMPT: ModelAttempt = env.OPENCODE_API_KEY
-  ? {
-      apiKey: env.OPENCODE_API_KEY,
-      baseURL: OPENCODE_BASE_URL,
-      model: PRIMARY_MODEL,
-      provider: OPENCODE_PROVIDER,
-    }
-  : catalogAttempt(FORMER_PRIMARY_MODEL);
+/** The main query always starts on the configured Hack Club gateway primary. */
+export const PRIMARY_ATTEMPT: ModelAttempt = catalogAttempt(PRIMARY_MODEL);
 
 /**
  * Where `upgradeModel` sends a turn: the rungs kyto escalates to when the model
  * itself says the task is beyond it (owner's call, 2026-08-05 — "model self
  * escalate whenever needed … anyone can escalate it").
  *
- * These are DEAR. kimi-k3 is $3/M in and $15/M out against a FREE Zen primary
+ * These are DEAR. kimi-k3 is $3/M in and $15/M out against the low-cost GLM Flash primary
  * (and ~20x/50x the HackClub rungs behind it) — and the whole HackClub tier
  * shares one $3/day cap, so a single long escalated turn can eat most of a
  * day's budget.
@@ -227,8 +179,8 @@ export const UPGRADE_ATTEMPTS: ModelAttempt[] = [
 
 // The models a subagent runs on: **the same model the main turn runs on**
 // (owner's call, 2026-08-21 — "subagent use same deepseek v4 flash"), i.e.
-// PRIMARY_ATTEMPT itself — it followed the primary from HackClub's deepseek to
-// Zen's Ox Alpha when that was promoted, and follows whatever comes next. A
+// PRIMARY_ATTEMPT itself, so subagents use the same GLM Flash model as the
+// parent and follow future primary changes automatically. A
 // subagent walks this list on failure OR on an empty report — a single pinned
 // model made a "herd" of subagents mostly report nothing back.
 //
@@ -250,8 +202,8 @@ export const subagentAttempt: ModelAttempt | undefined = subagentAttempts[0];
 // messages, a long-idle thread catches up over MANY passes, and it runs in the
 // BACKGROUND where nobody is watching the bill — so on a shared daily cap a
 // single 25k-message backlog could spend the day on bookkeeping. It keeps the
-// Gemini key first and only falls to HackClub (the FORMER primary, not the Zen
-// promo) if there is no Gemini key at all. Owner's call, 2026-08-21.
+// Gemini key first and only falls to HackClub's former primary if there is no
+// Gemini key at all. Owner's call, 2026-08-21.
 export const compactionAttempts: ModelAttempt[] = [
   ...geminiAttempts,
   catalogAttempt(FORMER_PRIMARY_MODEL),
@@ -292,14 +244,12 @@ export const compactionAttempt: ModelAttempt | undefined =
 // provider keys rate-limited or in cooldown"). Re-add rungs here only after
 // verifying a real completion succeeds.
 export const LEADERBOARD_FALLBACK: ModelAttempt[] = [
-  // The DEMOTED primary (2026-08-01 → 2026-08-21): Ox Alpha on Zen leads the
-  // turn now, and when that fails this is where the walk lands. Three weeks as
-  // primary with no quality complaints, verified `tools`-capable, and it costs
-  // nothing extra to reach since the HackClub tier is tried anyway.
+  // The former primary (2026-08-01 → 2026-08-21), now the first fallback after
+  // GLM Flash. It is proven tools-capable and remains inexpensive.
   catalogAttempt(FORMER_PRIMARY_MODEL),
   // Qwen3.7 Plus ($0.32/M in, $1.28/M out, 1M ctx) — primary until deepseek
   // v4-flash was promoted over it (2026-08-01), demoted one place again by the
-  // Zen promotion (2026-08-21). It held the primary slot for weeks with no
+  // GLM Flash promotion (2026-08-26). It held the primary slot for weeks with no
   // quality complaints, so it remains a proven primary-class rung. Verified
   // `tools`-capable on ai.hackclub.com/proxy/v1/models.
   catalogAttempt('qwen/qwen3.7-plus'),
