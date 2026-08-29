@@ -154,6 +154,12 @@ export interface ChannelMetadata {
   /** Raw channel id (C123…). */
   id: string;
   isDM: boolean;
+  /** Whether the bot is a member. Meaningful for external (Slack Connect)
+   * channels, where membership — not workspace visibility — decides
+   * readability. `conversations.info` only reports `is_member` for
+   * public/private channels of the bot's own workspace, so it is left
+   * undefined elsewhere. */
+  isMember?: boolean;
   memberCount?: number;
   name?: string;
 }

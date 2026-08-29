@@ -45,8 +45,17 @@ export async function assertReadableChannel(
   if (isCurrent) {
     return metadata;
   }
-  if (metadata.isDM || metadata.channelVisibility !== 'workspace') {
+  if (metadata.isDM) {
     throw new Error(UNREACHABLE_CONVERSATION);
+  }
+  // A Slack Connect channel is `external`, but it reads exactly like a normal
+  // channel once kyto is a member of it — `conversations.history` works. Only
+  // membership decides, so gate on that instead of blanket-rejecting external
+  // channels (which made kyto refuse a shared channel it had been added to).
+  if (metadata.channelVisibility === 'external' && metadata.isMember !== true) {
+    throw new Error(
+      `That is a Slack Connect channel shared with other workspace(s) (${raw}), and kyto is not a member of it. Someone in the channel has to add kyto; until then it is unreadable.`
+    );
   }
   return metadata;
 }
