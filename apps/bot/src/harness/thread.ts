@@ -341,6 +341,8 @@ export class ThreadHandle {
       channelVisibility,
       id: channel,
       isDM,
+      isMember: (conversation as { is_member?: boolean } | undefined)
+        ?.is_member,
       memberCount: (conversation as { num_members?: number } | undefined)
         ?.num_members,
       name: conversation?.name,
