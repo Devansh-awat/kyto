@@ -178,25 +178,26 @@ export function backgroundProcessTools({
     if (!proc) {
       return null;
     }
-    const [out, err, exit] = await Promise.all([
-      context.session.run({
-        command: `cat "${proc.outPath}" 2>/dev/null || true`,
-      }),
-      context.session.run({
-        command: `cat "${proc.errPath}" 2>/dev/null || true`,
-      }),
-      context.session.run({
-        command: `cat "${proc.exitPath}" 2>/dev/null || true`,
-      }),
-    ]);
-    const exitText = exit.stdout.trim();
+    // Do this in ONE sandbox command. `commands.run()` calls against one E2B
+    // session are not a safe concurrent transport: the old Promise.all could
+    // return one stream from a different poll while another was still being
+    // copied, which surfaced as mysteriously missing stdout. The completion
+    // marker is written after both streams, so a single, ordered snapshot also
+    // preserves the finished-command invariant.
+    const snapshot = await context.session.run({
+      command: `for path in "${proc.outPath}" "${proc.errPath}" "${proc.exitPath}"; do base64 -w0 "$path" 2>/dev/null || true; printf '\n'; done`,
+    });
+    const [stdout64 = '', stderr64 = '', exit64 = ''] = snapshot.stdout.split('\n');
+    const stdout = Buffer.from(stdout64, 'base64').toString();
+    const stderr = Buffer.from(stderr64, 'base64').toString();
+    const exitText = Buffer.from(exit64, 'base64').toString().trim();
     const finished = exitText !== '';
     const exitCode = finished ? Number.parseInt(exitText, 10) : undefined;
     return {
       exitCode: Number.isFinite(exitCode) ? exitCode : undefined,
       finished,
-      stderr: err.stdout,
-      stdout: out.stdout,
+      stderr,
+      stdout,
     };
   }
 
