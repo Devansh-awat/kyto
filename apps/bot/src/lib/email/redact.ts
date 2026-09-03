@@ -62,11 +62,21 @@ function isSensitiveUrl(raw: string): boolean {
 
 // A code stated near a word that introduces one: "your code is 123456",
 // "verification code: 84213". Bounded lookahead so it can't span paragraphs.
-const LABELLED_CODE =
-  /\b(?:code|otp|pin|passcode|password|token)\b[^\n]{0,40}?\b([A-Z0-9]{4,10})\b/gi;
+// Codes are often hyphen-separated by the provider (Slack sends XXX-XXX, e.g.
+// "393-403"), so an optional second segment is allowed; without it "393" (3
+// chars) and "393-403" (contains a dash) both slip through and leak.
+// The lookahead requires at least one digit: one-time codes always contain
+// one, and without it every ordinary word after "code" ("discount code
+// SPRING") or "password" ("password: https://…") gets eaten.
+const CODE = /(?=[A-Z0-9-]*\d)[A-Z0-9]{3,10}(?:[-–—][A-Z0-9]{3,10})?/i;
+const LABELLED_CODE = new RegExp(`\\b(?:code|otp|pin|passcode|password|token)\\b[^\\n]{0,40}?\\b(${CODE.source})\\b`, 'gi');
 
 // A code on a line of its own, which is how most providers present them.
-const LONE_CODE = /^\s*([0-9]{4,8}|[A-Z0-9]{6,8})\s*$/gm;
+// The hyphenated form (XXX-XXX) is the Slack convention.
+// [ \t], not \s: \s spans newlines, which would swallow the blank lines
+// around a standalone code line.
+const LONE_CODE =
+  /^[ \t]*([0-9]{4,8}|[A-Z0-9]{6,8}|[0-9]{3}[-–—][0-9]{3}|[A-Z0-9]{3,5}[-–—][A-Z0-9]{3,5})[ \t]*$/gm;
 
 export interface Redaction {
   redactions: number;
@@ -78,7 +88,18 @@ export function redactSecrets(input: string | undefined): Redaction {
     return { redactions: 0, text: '' };
   }
   let redactions = 0;
-  let text = input.replace(URL_RE, (match) => {
+  let text = input;
+  // Codes run BEFORE links: the link placeholder contains words ("redacted")
+  // that the labelled-code pass would otherwise treat as a token and re-wrap.
+  text = text.replace(LABELLED_CODE, (match, code: string) => {
+    redactions += 1;
+    return match.replace(code, REDACTED_CODE);
+  });
+  text = text.replace(LONE_CODE, () => {
+    redactions += 1;
+    return REDACTED_CODE;
+  });
+  text = text.replace(URL_RE, (match) => {
     // Trailing sentence punctuation is not part of the URL; keep it.
     const trailing = /[.,;:!?)]+$/.exec(match)?.[0] ?? '';
     const url = trailing ? match.slice(0, -trailing.length) : match;
@@ -87,14 +108,6 @@ export function redactSecrets(input: string | undefined): Redaction {
     }
     redactions += 1;
     return REDACTED_LINK + trailing;
-  });
-  text = text.replace(LABELLED_CODE, (match, code: string) => {
-    redactions += 1;
-    return match.replace(code, REDACTED_CODE);
-  });
-  text = text.replace(LONE_CODE, () => {
-    redactions += 1;
-    return REDACTED_CODE;
   });
   return { redactions, text };
 }
