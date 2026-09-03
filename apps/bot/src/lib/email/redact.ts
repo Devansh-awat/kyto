@@ -69,7 +69,10 @@ function isSensitiveUrl(raw: string): boolean {
 // one, and without it every ordinary word after "code" ("discount code
 // SPRING") or "password" ("password: https://…") gets eaten.
 const CODE = /(?=[A-Z0-9-]*\d)[A-Z0-9]{3,10}(?:[-–—][A-Z0-9]{3,10})?/i;
-const LABELLED_CODE = new RegExp(`\\b(?:code|otp|pin|passcode|password|token)\\b[^\\n]{0,40}?\\b(${CODE.source})\\b`, 'gi');
+const LABELLED_CODE = new RegExp(
+  `\\b(?:code|otp|pin|passcode|password|token)\\b[^\\n]{0,40}?\\b(${CODE.source})\\b`,
+  'gi'
+);
 
 // A code on a line of its own, which is how most providers present them.
 // The hyphenated form (XXX-XXX) is the Slack convention.

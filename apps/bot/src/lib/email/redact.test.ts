@@ -18,12 +18,18 @@ describe('redactSecrets', () => {
     const mail = 'Enter this code:\n\n482-915\n\nThanks!';
     const { redactions, text } = redactSecrets(mail);
     expect(redactions).toBe(1);
-    expect(text).toBe('Enter this code:\n\n[redacted: possible auth code]\n\nThanks!');
+    expect(text).toBe(
+      'Enter this code:\n\n[redacted: possible auth code]\n\nThanks!'
+    );
   });
 
   it('still redacts plain 4-8 digit codes and labelled tokens', () => {
-    expect(redactSecrets('your verification code: 84213').text).not.toContain('84213');
-    expect(redactSecrets('code\n\n123456\n').text).toContain('[redacted: possible auth code]');
+    expect(redactSecrets('your verification code: 84213').text).not.toContain(
+      '84213'
+    );
+    expect(redactSecrets('code\n\n123456\n').text).toContain(
+      '[redacted: possible auth code]'
+    );
   });
 
   it('does not redact ordinary prose near the word "code"', () => {
@@ -44,7 +50,8 @@ describe('redactSecrets', () => {
   });
 
   it('leaves ordinary links alone', () => {
-    const mail = 'Read the docs at https://example.com/docs/getting-started please.';
+    const mail =
+      'Read the docs at https://example.com/docs/getting-started please.';
     const { redactions, text } = redactSecrets(mail);
     expect(redactions).toBe(0);
     expect(text).toContain('https://example.com/docs/getting-started');

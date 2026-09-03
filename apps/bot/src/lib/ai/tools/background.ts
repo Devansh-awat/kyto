@@ -187,7 +187,8 @@ export function backgroundProcessTools({
     const snapshot = await context.session.run({
       command: `for path in "${proc.outPath}" "${proc.errPath}" "${proc.exitPath}"; do base64 -w0 "$path" 2>/dev/null || true; printf '\n'; done`,
     });
-    const [stdout64 = '', stderr64 = '', exit64 = ''] = snapshot.stdout.split('\n');
+    const [stdout64 = '', stderr64 = '', exit64 = ''] =
+      snapshot.stdout.split('\n');
     const stdout = Buffer.from(stdout64, 'base64').toString();
     const stderr = Buffer.from(stderr64, 'base64').toString();
     const exitText = Buffer.from(exit64, 'base64').toString().trim();
