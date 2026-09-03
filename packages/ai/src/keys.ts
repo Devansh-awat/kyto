@@ -10,6 +10,12 @@ export const keys = () =>
       GEMINI_BASE_URL: z.url().optional(),
       MEBBO_API_KEY: z.string().min(1).optional(),
       MEBBO_BASE_URL: z.url().optional(),
+      // TokenBom virtual key (tokenbom.com). Set => kyto's PRIMARY model runs
+      // there (claude-fable-5); unset => the primary degrades to the GLM Flash
+      // HackClub attempt, exactly as before this key existed. No prefix check:
+      // the marketplace can reissue keys in any shape.
+      TOKENBOM_API_KEY: z.string().min(1).optional(),
+      TOKENBOM_BASE_URL: z.url().optional(),
       EXA_API_KEY: z.string().min(1),
     },
     runtimeEnv: {
@@ -19,6 +25,8 @@ export const keys = () =>
       GEMINI_BASE_URL: process.env.GEMINI_BASE_URL,
       MEBBO_API_KEY: process.env.MEBBO_API_KEY,
       MEBBO_BASE_URL: process.env.MEBBO_BASE_URL,
+      TOKENBOM_API_KEY: process.env.TOKENBOM_API_KEY,
+      TOKENBOM_BASE_URL: process.env.TOKENBOM_BASE_URL,
       EXA_API_KEY: process.env.EXA_API_KEY,
     },
     emptyStringAsUndefined: true,

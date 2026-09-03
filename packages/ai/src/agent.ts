@@ -21,6 +21,7 @@ import {
   HACKCLUB_PROVIDER,
   MAX_OUTPUT_TOKENS,
   type ModelAttempt,
+  TOKENBOM_PROVIDER,
 } from './providers/attempts';
 import { CHATGPT_PROVIDER } from './providers/chatgpt';
 import { stabilizeToolOrder } from './tool-order';
@@ -257,10 +258,14 @@ export function streamAttempt({
   return streamText({
     ...promptInput,
     abortSignal,
-    // Cap output on every metered path: HackClub (pessimistic spend projection)
-    // and a user's own BYOK key (real tokens on THEIR account) — reasoning
-    // models otherwise burn unbounded thinking tokens on someone's bill.
+    // Cap output on every metered path: HackClub (pessimistic spend
+    // projection), TokenBom (real credits on the owner's marketplace balance,
+    // and `claude-fable-5` is a thinking model), and a user's own BYOK key
+    // (real tokens on THEIR account) — reasoning models otherwise burn
+    // unbounded thinking tokens on someone's bill. Raise MAX_OUTPUT_TOKENS if
+    // large single-step writes truncate (a truncated tool call is repaired).
     ...(attempt.provider === HACKCLUB_PROVIDER ||
+    attempt.provider === TOKENBOM_PROVIDER ||
     attempt.byokProvider !== undefined
       ? { maxOutputTokens: MAX_OUTPUT_TOKENS }
       : {}),
