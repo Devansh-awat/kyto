@@ -15,11 +15,3 @@ export const HACKCLUB_PROVIDER = 'hackclub';
 // A friend's self-hosted OpenWebUI (chat.mebbo.cloud), re-exposing free
 // upstream endpoints on ONE key shared with everyone he gave it to.
 export const MEBBO_PROVIDER = 'mebbo';
-// TokenBom (tokenbom.com), an OpenAI-compatible P2P "AI API quota marketplace":
-// third parties attach their own upstream keys and kyto's requests are proxied
-// through whichever one the market routes to. Wired as PRIMARY for the
-// `claude-fable-5` slug on the owner's explicit call (2026-09-03) — an OVERRIDE
-// of the standing "no train-permitting provider as a tier" rule, since TokenBom
-// gives no zero-retention / no-training guarantee and disclaims upstream
-// handling. See MODELS.md.
-export const TOKENBOM_PROVIDER = 'tokenbom';

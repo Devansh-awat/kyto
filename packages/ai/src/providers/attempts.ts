@@ -1,10 +1,5 @@
 import { keys } from '../keys';
-import {
-  GEMINI_PROVIDER,
-  HACKCLUB_PROVIDER,
-  MEBBO_PROVIDER,
-  TOKENBOM_PROVIDER,
-} from './names';
+import { GEMINI_PROVIDER, HACKCLUB_PROVIDER, MEBBO_PROVIDER } from './names';
 
 const env = keys();
 
@@ -17,12 +12,9 @@ export {
   GEMINI_PROVIDER,
   HACKCLUB_PROVIDER,
   MEBBO_PROVIDER,
-  TOKENBOM_PROVIDER,
 } from './names';
 
 const MEBBO_BASE_URL = env.MEBBO_BASE_URL ?? 'https://chat.mebbo.cloud/api';
-
-const TOKENBOM_BASE_URL = env.TOKENBOM_BASE_URL ?? 'https://tokenbom.com/v1';
 
 /** One model attempt: an OpenAI-compatible endpoint + model slug. */
 export interface ModelAttempt {
@@ -46,43 +38,13 @@ export interface ModelAttempt {
 }
 
 /**
- * The primary model for the main query: **Claude Opus 5** on **TokenBom**
- * (tokenbom.com/v1, provider `tokenbom`) — owner's call, 2026-09-03. Started as
- * `claude-fable-5` ("try out this tokenboom api key for fable 5… connect it to
- * kyto as primary"), switched to `claude-opus-5` the same day: Fable 5's
- * marketplace supply dropped to zero (`availability: needs_supply`) so every
- * turn was failing it and landing on Gemini, while `claude-opus-5` had `ample`
- * supply, `reliability: fair`, verified vision + tools + streaming, and is
- * CHEAPER in TokenBom credits (500/2500 per M vs Fable's 1000/5000). The second
- * key (`sk-sub-wkmZ…`) is not whitelist-restricted, so any slug is reachable —
- * change this constant and redeploy to switch (e.g. back to `claude-fable-5`
- * when its supply returns).
- *
- * TokenBom is an anonymous P2P "AI API quota marketplace": providers attach
- * their own upstream Anthropic/OpenAI keys and kyto's requests are proxied
- * through whichever one the market routes to. It gives **no zero-retention /
- * no-training guarantee** (its privacy policy keeps call metadata 6 months and
- * content-moderation excerpts up to 90 days, and disclaims whatever the
- * anonymous upstream account does with the prompt), it is Alpha with **no SLA**,
- * and marketplace supply for any given slug can evaporate hour to hour. Wiring
- * it as primary is an explicit OWNER OVERRIDE of the standing rule that a
- * train-permitting provider may not be a tier at any position (the rule that
- * keeps OpenCode Zen banned). The owner accepted this on 2026-09-03 after the
- * tradeoff was put to him directly. See MODELS.md.
- *
- * AUTO-DEGRADE: an unset/expired TOKENBOM_API_KEY falls through to
- * GLM_PRIMARY_MODEL on HackClub, so a dead key can never break every turn.
- * Vision works on `claude-opus-5` here (verified 2026-09-03 with a real image),
- * so it is NOT in TEXT_ONLY_MODELS.
+ * The primary model for main queries: GLM 5.3 Flash via the Hack Club
+ * OpenRouter-compatible gateway. Owner's call, 2026-08-26 (PR #8); reinstated
+ * 2026-09-04 after a one-day detour through TokenBom (a P2P quota marketplace,
+ * fully removed — see MODELS.md) — the owner does not trust that provider and
+ * asked for GLM back.
  */
-export const PRIMARY_MODEL = 'claude-opus-5';
-
-/**
- * GLM 5.3 Flash on the HackClub gateway — kyto's primary from 2026-08-26 (PR #8)
- * until TokenBom replaced it on 2026-09-03. Now the degrade target when
- * TOKENBOM_API_KEY is unset. Vision-capable, so it is NOT in TEXT_ONLY_MODELS.
- */
-const GLM_PRIMARY_MODEL = 'z-ai/glm-5.3-flash';
+export const PRIMARY_MODEL = 'z-ai/glm-5.3-flash';
 
 /** The previous primary remains the first proven, low-cost fallback rung. */
 const FORMER_PRIMARY_MODEL = 'deepseek/deepseek-v4-flash-0731';
@@ -169,11 +131,7 @@ const mebboAttempts: ModelAttempt[] = env.MEBBO_API_KEY
 
 // Models that cannot accept image input. DeepSeek V4 Flash is served by
 // Cloudflare, which is text-only: an image turn otherwise 404s before fallback.
-// The TokenBom primary (`claude-opus-5`) and the GLM 5.3 Flash degrade target
-// are both vision-capable — verified 2026-09-03 with a real image on opus-5, so
-// neither is in this set. (Note `claude-fable-5` on TokenBom advertised vision
-// but silently dropped the image — re-check any TokenBom slug with a real image
-// before trusting its catalog flag.)
+// GLM 5.3 Flash is vision-capable, so it is intentionally not in this set.
 const TEXT_ONLY_MODELS = new Set<string>([FORMER_PRIMARY_MODEL]);
 
 /** True unless the model's endpoint is known to reject image input. */
@@ -195,30 +153,18 @@ export const visionAttempt: ModelAttempt | undefined = env.GEMINI_API_KEY
     }
   : undefined;
 
-/**
- * The attempt the main query starts on: `PRIMARY_MODEL` (`claude-opus-5`) on
- * TokenBom when TOKENBOM_API_KEY is set; otherwise GLM 5.3 Flash on HackClub,
- * exactly as before 2026-09-03. HackClub is always configured, so this never
- * degrades to nothing, and unsetting TOKENBOM_API_KEY is the one-line revert.
- */
-export const PRIMARY_ATTEMPT: ModelAttempt = env.TOKENBOM_API_KEY
-  ? {
-      apiKey: env.TOKENBOM_API_KEY,
-      baseURL: TOKENBOM_BASE_URL,
-      model: PRIMARY_MODEL,
-      provider: TOKENBOM_PROVIDER,
-    }
-  : catalogAttempt(GLM_PRIMARY_MODEL);
+/** The main query always starts on the configured Hack Club gateway primary. */
+export const PRIMARY_ATTEMPT: ModelAttempt = catalogAttempt(PRIMARY_MODEL);
 
 /**
  * Where `upgradeModel` sends a turn: the rungs kyto escalates to when the model
  * itself says the task is beyond it (owner's call, 2026-08-05 — "model self
  * escalate whenever needed … anyone can escalate it").
  *
- * These are DEAR. kimi-k3 is $3/M in and $15/M out, and the whole HackClub tier
- * shares one $3/day cap, so a single long escalated turn can eat most of a
- * day's budget. (The TokenBom primary spends the owner's separate marketplace
- * credits, not this cap.) That is why escalation is capped per turn AND per day
+ * These are DEAR. kimi-k3 is $3/M in and $15/M out against the low-cost GLM
+ * Flash primary (and ~20x/50x the HackClub rungs behind it) — and the whole
+ * HackClub tier shares one $3/day cap, so a single long escalated turn can eat
+ * most of a day's budget. That is why escalation is capped per turn AND per day
  * (see the upgradeModel tool), and why the ladder is ordered
  * cheapest-capable-first rather than "best": claude-sonnet-5 ($2/$10) is the
  * second rung, not the first, and nothing here is a `-pro` variant.
@@ -232,8 +178,8 @@ export const UPGRADE_ATTEMPTS: ModelAttempt[] = [
 
 // The models a subagent runs on: **the same model the main turn runs on**
 // (owner's call, 2026-08-21 — "subagent use same deepseek v4 flash"), i.e.
-// PRIMARY_ATTEMPT itself, so subagents use the same primary (Claude Opus 5 on
-// TokenBom) as the parent and follow future primary changes automatically. A
+// PRIMARY_ATTEMPT itself, so subagents use the same GLM Flash model as the
+// parent and follow future primary changes automatically. A
 // subagent walks this list on failure OR on an empty report — a single pinned
 // model made a "herd" of subagents mostly report nothing back.
 //
