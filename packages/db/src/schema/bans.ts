@@ -22,3 +22,12 @@ export const bannedUsers = pgTable('banned_users', {
 });
 
 export type BannedUser = typeof bannedUsers.$inferSelect;
+
+// The anti-coding gate's warning ledger: when kyto last caught this person
+// asking it to act as a coding agent on the shared models. One row per person —
+// only the most recent warning matters, because a second catch inside the
+// window is what turns a warning into a ban.
+export const codingWarnings = pgTable('coding_warnings', {
+  userId: text('user_id').primaryKey(),
+  warnedAt: timestamp('warned_at', { withTimezone: true }).notNull(),
+});

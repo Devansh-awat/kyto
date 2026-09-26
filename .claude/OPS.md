@@ -50,6 +50,19 @@ the DDL and swallow "already exists".
 - Two jobs: **promote a memory to global** (read the body first — it becomes prompt text on everyone's turns) and **grant/revoke GitHub trust**, incl. queued `github_requests`.
 - **Approving a GitHub request grants trust and stops there** — it does NOT replay the command (composed by a model in a thread that has since moved on; re-running it blind turns a click into an action nobody reviewed). The person asks kyto again.
 
+## The `coding_warnings` table (2026-09-26)
+
+```sql
+CREATE TABLE IF NOT EXISTS coding_warnings (
+  user_id text PRIMARY KEY,
+  warned_at timestamptz NOT NULL
+);
+```
+
+The anti-coding gate's ledger: the LAST time each person was warned. A second
+catch within 24h of it is a 2-hour ban (`recordCodingWarning` returns the
+previous time and stamps the new one in one statement).
+
 ## The `banned_users` table (2026-08-14)
 
 ```sql

@@ -59,6 +59,7 @@ import {
 } from '@/lib/ai/tools/upgrade-model';
 import { buildTools } from '@/lib/ai/toolset';
 import { runQueuedTurn } from '@/lib/ai/turn-queue';
+import { gateCodingRequest } from '@/lib/anti-coding';
 import { recordByokOutcome, resolveUserRouting } from '@/lib/byok';
 import { bot, slack } from '@/lib/chat';
 import { recordChatgptOutcome } from '@/lib/chatgpt';
@@ -238,6 +239,34 @@ async function executeTurn(
     },
     '[agent] turn started'
   );
+  // Resolved here, once, rather than inside renderTurn: the anti-coding gate
+  // needs to know whether this turn runs on the person's own key before any of
+  // the turn exists. BYOK: a user who brought their own model keys runs on them
+  // instead of the service models, and the shared chain is only reachable
+  // afterwards if they opted in — a broken personal key must not silently spend
+  // the shared budget.
+  let routing = await resolveUserRouting(message.author.userId);
+  // Before setTurn, so a stopped turn leaves nothing behind: a message arriving
+  // meanwhile waits in the per-thread queue and is scored in its own turn.
+  const codingGate = await gateCodingRequest({
+    isOwner,
+    message,
+    secret,
+    thread,
+    usesOwnModels: routing.own.length > 0,
+  });
+  if (codingGate.stop) {
+    return;
+  }
+  if (codingGate.ownModelsOnly) {
+    // Silently, and for this turn only: a coding turn from someone on their own
+    // key must not fall back onto Hack Club AI, in either routing order.
+    routing = { own: routing.own, ownFirst: true, serviceFallback: false };
+  }
+  // Every rung past the user's own is kyto's shared chain, which is what the
+  // no-coding prompt and the missing deploySite are about.
+  const ownModelsOnly =
+    routing.own.length > 0 && routing.ownFirst && !routing.serviceFallback;
   const activeTurn: ActiveTurn = {
     controller,
     pendingMessages: [],
@@ -429,6 +458,7 @@ async function executeTurn(
   }): AsyncGenerator<string | StreamChunk> {
     const messageText = await buildPrompt(turnMessage, {
       customizationPrompt: hints.customization?.prompt,
+      ownModelsOnly,
       thread: turnThread,
     });
     // Seed attached files into the sandbox up front (materializes it only when
@@ -486,11 +516,6 @@ async function executeTurn(
     // instead of re-running the same tools.
     const gatheredResults: GatheredResult[] = [];
     const gatheredKeys = new Set<string>();
-    // BYOK: if the ACTING USER brought their own model keys, this turn runs on
-    // them (in the order they added them) instead of the service models. The
-    // shared service chain is only reachable afterwards if they opted in — a
-    // broken personal key must not silently spend the shared budget.
-    const routing = await resolveUserRouting(turnMessage.author.userId);
     // The user's own paid attempts (a linked ChatGPT account and/or BYOK keys),
     // consumed in order. routing.ownFirst decides whether these run before or
     // after kyto's shared service chain.
@@ -554,6 +579,7 @@ async function executeTurn(
       extendAttemptDeadline: (extraMs) => extendDeadline?.(extraMs),
       getSandboxContext: () => sandboxContext,
       message: turnMessage,
+      ownModelsOnly,
       thread: turnThread,
     });
     closeTools = built.close;

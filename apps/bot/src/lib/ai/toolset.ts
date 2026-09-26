@@ -133,6 +133,7 @@ export async function buildTools({
   extendAttemptDeadline,
   getSandboxContext,
   message,
+  ownModelsOnly = false,
   thread,
   unattended = false,
 }: {
@@ -152,6 +153,13 @@ export async function buildTools({
   extendAttemptDeadline?: (extraMs: number) => void;
   getSandboxContext: () => SandboxContext;
   message: Message;
+  /**
+   * The turn can only run on the person's own model key. Anything else may land
+   * on Hack Club AI's shared key, where building and hosting a site is the
+   * coding-agent work kyto is not allowed to do — so `deploySite` is not even
+   * registered. Defaults to false: a caller that forgets gets the safe toolset.
+   */
+  ownModelsOnly?: boolean;
   thread: ThreadHandle;
   /**
    * Nobody is watching this run (a reminder firing, a subagent inside another
@@ -234,11 +242,15 @@ export async function buildTools({
     canvasList: canvasListTool({ thread }),
     getPermalink: getPermalinkTool({ thread }),
     fetchUrl: fetchUrlTool(),
-    deploySite: deploySiteTool({
-      getSandboxContext,
-      isOwner,
-      userId: authorUserId,
-    }),
+    ...(ownModelsOnly
+      ? {
+          deploySite: deploySiteTool({
+            getSandboxContext,
+            isOwner,
+            userId: authorUserId,
+          }),
+        }
+      : {}),
     listSites: listSitesTool(),
     removeSite: removeSiteTool({ isOwner, userId: authorUserId }),
     // Keyed off the constant: the stop condition that makes a skip terminal

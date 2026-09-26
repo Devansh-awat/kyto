@@ -80,9 +80,12 @@ export async function buildPrompt(
   message: Message,
   {
     customizationPrompt,
+    ownModelsOnly = false,
     thread,
   }: {
     customizationPrompt?: string;
+    /** Runs only on the asker's own model key, where the no-coding rule lifts. */
+    ownModelsOnly?: boolean;
     thread?: Thread;
   } = {}
 ): Promise<string> {
@@ -183,6 +186,13 @@ export async function buildPrompt(
   const nowLine = [
     `The current date and time is ${new Date().toISOString()}.`,
     `The message you're responding to has id ${message.id}.`,
+    // Per person, so it lives down here with the clock: in the system prompt it
+    // would split the cached prefix between key-holders and everyone else.
+    ...(ownModelsOnly
+      ? [
+          "This turn runs on the person's OWN model key, not Hack Club AI's shared one, so the coding-agent rule does not apply to it.",
+        ]
+      : []),
   ].join('\n');
 
   // ORDER IS LOAD-BEARING, for prompt caching (see addCacheControl in

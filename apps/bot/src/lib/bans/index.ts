@@ -128,12 +128,31 @@ async function applyBan({
   if (!reason) {
     return `that ban needs a reason. \`ban <@${target}> ${first} <why>\`.`;
   }
-  const expiresAt =
-    duration.ms === null ? null : new Date(Date.now() + duration.ms);
-  cache = undefined;
-  await createBan({ bannedBy: userId, expiresAt, reason, userId: target });
-  logger.info({ expiresAt, reason, target, userId }, '[bans] user banned');
+  await banUser({ bannedBy: userId, ms: duration.ms, reason, userId: target });
   return `<@${target}> is banned ${duration.ms === null ? 'indefinitely' : `for ${formatBanDuration(duration.ms)}`} — ${reason}. kyto will ignore them until then; \`unban <@${target}>\` lifts it.`;
+}
+
+/**
+ * Put a ban in place and make it bite now. Every ban goes through here so the
+ * read cache is dropped with it — otherwise the person gets up to CACHE_TTL_MS of
+ * answers after being banned. Not owner-checked: the callers are the owner's own
+ * command and the anti-coding gate, never the model.
+ */
+export async function banUser({
+  bannedBy,
+  ms,
+  reason,
+  userId,
+}: {
+  bannedBy: string;
+  ms: number | null;
+  reason: string;
+  userId: string;
+}): Promise<void> {
+  const expiresAt = ms === null ? null : new Date(Date.now() + ms);
+  cache = undefined;
+  await createBan({ bannedBy, expiresAt, reason, userId });
+  logger.info({ bannedBy, expiresAt, reason, userId }, '[bans] user banned');
 }
 
 async function describeBans(): Promise<string> {
