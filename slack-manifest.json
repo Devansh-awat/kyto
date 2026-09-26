@@ -19,7 +19,7 @@
         "command": "/kyto",
         "description": "Interact with Kyto (try /kyto help)",
         "usage_hint": "help | topic-summaries",
-        "should_escape": false
+        "should_escape": true
       }
     ],
     "agent_view": {
