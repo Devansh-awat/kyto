@@ -5,9 +5,11 @@
 // owner or lets a custom-key user's coding turn fall back onto Hack Club AI.
 
 // Jev's probability that a message asks kyto to be a coding agent. Measured
-// against real asks (2026-09-26, jev-1.13.0): every build/fix/refactor/deploy/PR
-// request scored ≥0.96, while "run this one-liner" scored 0.80, "write a regex"
-// 0.46 and "find the bug in this" 0.13 — all of which kyto is allowed to do.
+// against real asks (2026-09-26, jev-1.13.0): every agentic ask — bot cap.js, an
+// hourly auto-claim script, scrape a store, fork yourself, fix a repo's tests,
+// open a PR, host a site, run a bot 24/7 — scored 0.92-0.98; every chatbot ask —
+// fix this pasted code, refactor this, write a prime check, a regex — 0.02.
+// "Make me a website" (0.43) and "run this one-liner" (0.59) stay allowed.
 export const CODING_THRESHOLD = 0.9;
 
 // A second catch inside this window after a warning is a ban, not another warning.

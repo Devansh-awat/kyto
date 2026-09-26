@@ -1,5 +1,6 @@
-// Anti-coding: kyto may explain code, show a short snippet and point out where a
-// bug is, but it is not a coding agent on Hack Club AI's shared budget.
+// Anti-coding: kyto answers code questions like any AI chatbot — explain, write
+// a snippet, fix code someone pasted — but it is not an autonomous coding agent
+// on Hack Club AI's shared budget.
 //
 // Hack Club AI's abuse tooling flagged kyto's key for coding-agent traffic
 // (2026-09, someone had it bot cap.js and fork itself), and HCAI's answer was
@@ -33,17 +34,19 @@ const JEV_TIMEOUT_MS = 4000;
 // tell whether it came with "fix this for me".
 const MAX_STATE_CHARS = 4000;
 
-// Worded around what kyto MAY do as much as what it may not: an early draft that
-// asked only "is this about code?" flagged "why does my loop print undefined",
-// which is exactly the bug-finding kyto is allowed to do.
+// Worded around what kyto MAY do as much as what it may not. The line is the
+// owner's: fixing code someone pasted, in the reply, is what any AI chatbot does
+// and is fine; what got kyto's key flagged was AGENTIC work — ~20 minutes of it
+// botting cap.js, and forking itself. An early draft that asked only "is this
+// about code?" flagged "why does my loop print undefined".
 const CODING_QUESTION = {
   criteria: {
     false:
-      'Chat, a question, explaining code, a small illustrative snippet, finding or explaining a bug, or not about code',
-    true: 'Asks the assistant to do software development work (build, fix, refactor, deploy, push code)',
+      'A normal chatbot coding question: explain, snippet, or fix pasted code in the reply; or not about code',
+    true: 'Wants the assistant to autonomously build, run, automate, bot a site, work in a repo, or deploy',
   },
   instructions:
-    "A Slack assistant may explain code, show a short example snippet, review code, and point out where a bug is. It must NOT act as a coding agent. Is this message asking the assistant to act as a coding agent: build, write or scaffold a program, script, bot, app, website or project; fix, patch or refactor the user's code; run or test code to develop software; clone, fork, commit, push or open a pull request; or deploy something?",
+    'A Slack chatbot may answer coding questions like any AI chatbot: explain code, write a snippet or a short function, and fix code the user pasted by replying with the corrected version. It must NOT act as an autonomous coding agent. Is this message asking it to act as a coding agent: automate, bot, scrape or farm a website or service; bypass or solve captchas or anti-bot protection; build and RUN a program, bot or project in its own sandbox; work through a codebase or repository; clone, fork, commit, push or open a pull request; copy or fork itself; or deploy/host something?',
   type: 'noul',
 } as const;
 
@@ -182,7 +185,7 @@ export async function gateCodingRequest({
   await tell({
     ephemeral: secret,
     message,
-    text: `<@${userId}> i'm not a coding agent — i can explain code, show a short example, or point out where a bug is, but i won't build, fix, refactor or deploy code for you. this is your warning: asking again within 24 hours gets you a ${formatBanDuration(CODING_BAN_MS)} ban.${ownKeyHint}`,
+    text: `<@${userId}> i'm not a coding agent — i'll explain code, write a snippet or fix code you paste, but i won't build and run projects, automate or bot sites, work in repos or deploy things for you. this is your warning: asking again within 24 hours gets you a ${formatBanDuration(CODING_BAN_MS)} ban.${ownKeyHint}`,
     thread,
   });
   return { ownModelsOnly: false, stop: true };
