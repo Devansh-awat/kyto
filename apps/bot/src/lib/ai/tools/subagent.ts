@@ -89,6 +89,7 @@ interface SubagentJob {
 export function runSubagentTool({
   bot,
   getSandboxContext,
+  guardCodeTool,
   message,
   thread,
 }: {
@@ -96,6 +97,11 @@ export function runSubagentTool({
   // The PARENT turn's sandbox context — the subagent runs in the SAME sandbox,
   // so it shares the parent's files/workspace rather than booting its own.
   getSandboxContext: () => SandboxContext;
+  /** The parent turn's anti-coding check, so delegating does not dodge it. */
+  guardCodeTool?: (call: {
+    input: unknown;
+    toolName: string;
+  }) => Promise<string | null>;
   message: Message;
   thread: ThreadHandle;
 }) {
@@ -183,6 +189,7 @@ export function runSubagentTool({
             const built = await buildTools({
               bot,
               getSandboxContext: () => sandboxContext,
+              guardCodeTool,
               message,
               thread,
               // A subagent runs inside the parent's turn and has no watchdog of

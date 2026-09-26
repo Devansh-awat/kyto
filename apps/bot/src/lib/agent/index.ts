@@ -44,6 +44,7 @@ import {
   abortReasonOf,
   interruptTurn,
   queuedInput,
+  TurnAbort,
 } from '@/lib/agent/steering';
 import { rememberThinking } from '@/lib/agent/thinking';
 import { clearTurn, getTurn, setTurn } from '@/lib/agent/turns';
@@ -59,7 +60,7 @@ import {
 } from '@/lib/ai/tools/upgrade-model';
 import { buildTools } from '@/lib/ai/toolset';
 import { runQueuedTurn } from '@/lib/ai/turn-queue';
-import { gateCodingRequest } from '@/lib/anti-coding';
+import { createCodingMonitor } from '@/lib/anti-coding';
 import { recordByokOutcome, resolveUserRouting } from '@/lib/byok';
 import { bot, slack } from '@/lib/chat';
 import { recordChatgptOutcome } from '@/lib/chatgpt';
@@ -239,34 +240,27 @@ async function executeTurn(
     },
     '[agent] turn started'
   );
-  // Resolved here, once, rather than inside renderTurn: the anti-coding gate
-  // needs to know whether this turn runs on the person's own key before any of
-  // the turn exists. BYOK: a user who brought their own model keys runs on them
-  // instead of the service models, and the shared chain is only reachable
-  // afterwards if they opted in — a broken personal key must not silently spend
-  // the shared budget.
-  let routing = await resolveUserRouting(message.author.userId);
-  // Before setTurn, so a stopped turn leaves nothing behind: a message arriving
-  // meanwhile waits in the per-thread queue and is scored in its own turn.
-  const codingGate = await gateCodingRequest({
-    isOwner,
-    message,
-    secret,
-    thread,
-    usesOwnModels: routing.own.length > 0,
-  });
-  if (codingGate.stop) {
-    return;
-  }
-  if (codingGate.ownModelsOnly) {
-    // Silently, and for this turn only: a coding turn from someone on their own
-    // key must not fall back onto Hack Club AI, in either routing order.
-    routing = { own: routing.own, ownFirst: true, serviceFallback: false };
-  }
+  // BYOK: a user who brought their own model keys runs on them instead of the
+  // service models, and the shared chain is only reachable afterwards if they
+  // opted in — a broken personal key must not silently spend the shared budget.
+  const routing = await resolveUserRouting(message.author.userId);
   // Every rung past the user's own is kyto's shared chain, which is what the
   // no-coding prompt and the missing deploySite are about.
   const ownModelsOnly =
     routing.own.length > 0 && routing.ownFirst && !routing.serviceFallback;
+  // Judges the WORK, not just the message: the thread once the prompt is built,
+  // then every code-capable tool call (lib/anti-coding). It tells the person
+  // itself; all the turn does on a stop is end.
+  const codingMonitor = createCodingMonitor({
+    isOnSharedModel: () =>
+      !(activeAttempt && routing.own.includes(activeAttempt)),
+    isOwner,
+    message,
+    onStop: () => controller.abort(new TurnAbort('coding')),
+    secret,
+    thread,
+    usesOwnModels: routing.own.length > 0,
+  });
   const activeTurn: ActiveTurn = {
     controller,
     pendingMessages: [],
@@ -461,6 +455,13 @@ async function executeTurn(
       ownModelsOnly,
       thread: turnThread,
     });
+    // Judged against the prompt the model is about to get — the thread, earlier
+    // thinking and the new message — because a follow-up like "now do the cf
+    // version" is only a coding request in light of what came before it.
+    codingMonitor.setConversation(messageText);
+    if (await codingMonitor.checkTurn()) {
+      throw new TurnAbort('coding');
+    }
     // Seed attached files into the sandbox up front (materializes it only when
     // the message actually carries files — chat-only turns stay sandbox-free).
     const attachments =
@@ -578,6 +579,7 @@ async function executeTurn(
       escalation,
       extendAttemptDeadline: (extraMs) => extendDeadline?.(extraMs),
       getSandboxContext: () => sandboxContext,
+      guardCodeTool: codingMonitor.guardTool,
       message: turnMessage,
       ownModelsOnly,
       thread: turnThread,
@@ -611,6 +613,12 @@ async function executeTurn(
       });
     };
     const routeNextAttempt = () => {
+      // A custom-key user's turn caught doing coding-agent work: their own
+      // attempts only, in either order, so it never lands on Hack Club AI.
+      if (codingMonitor.ownModelsOnly) {
+        attempt = nextOwnAttempt();
+        return;
+      }
       if (routing.ownFirst) {
         // Own attempts first; the shared chain only after them, and only if the
         // user opted into it (otherwise the turn stops — see ByokExhaustedError).
@@ -878,6 +886,7 @@ async function executeTurn(
           },
           onToolResult: (info) => {
             armWatchdog(ATTEMPT_TIMEOUT_MS);
+            codingMonitor.recordResult(info);
             const key = `${info.toolName}:${stableInput(info.input)}`;
             if (gatheredKeys.has(key)) {
               return;

@@ -127,11 +127,31 @@ export interface BuiltTools {
  * schemas don't ride along in every prompt. `activeTools` feeds streamText's
  * prepareStep, which is what actually gates visibility per step.
  */
+// Every tool that can build, run or ship code — the ones the anti-coding check
+// judges before they run. Everything else (search, browse, email, Slack) is
+// general agent work and never waits on it. The five shells are all here:
+// `slackScript` is free-form bash despite its name. Scheduling is here because a
+// `bash`/`agent` reminder is code that runs on a timer.
+const CODE_TOOLS = new Set([
+  'bash',
+  'codeMode',
+  'deploySite',
+  'editFile',
+  'editReminder',
+  'gh',
+  'runBackgroundProcess',
+  'runSubagent',
+  'scheduleRecurringReminder',
+  'slackScript',
+  'writeFile',
+]);
+
 export async function buildTools({
   bot,
   escalation,
   extendAttemptDeadline,
   getSandboxContext,
+  guardCodeTool,
   message,
   ownModelsOnly = false,
   thread,
@@ -152,6 +172,15 @@ export async function buildTools({
   escalation?: Escalation;
   extendAttemptDeadline?: (extraMs: number) => void;
   getSandboxContext: () => SandboxContext;
+  /**
+   * The anti-coding check (lib/anti-coding), run BEFORE each code-capable tool
+   * call. A string is a refusal handed to the model instead of running the tool.
+   * Absent (reminders) = no check.
+   */
+  guardCodeTool?: (call: {
+    input: unknown;
+    toolName: string;
+  }) => Promise<string | null>;
   message: Message;
   /**
    * The turn can only run on the person's own model key. Anything else may land
@@ -438,6 +467,7 @@ export async function buildTools({
       ? (() => {
           const subagent = runSubagentTool({
             getSandboxContext,
+            guardCodeTool,
             bot,
             message,
             thread,
@@ -642,10 +672,15 @@ export async function buildTools({
     if (typeof original !== 'function') {
       return entry;
     }
+    const guard = CODE_TOOLS.has(name) ? guardCodeTool : undefined;
     return {
       ...entry,
-      execute: (input: never, options: never) => {
+      execute: async (input: never, options: never) => {
         usage.set(name, (usage.get(name) ?? 0) + 1);
+        const refusal = await guard?.({ input, toolName: name });
+        if (refusal) {
+          return { error: refusal, success: false };
+        }
         return original(input, options);
       },
     } as T;
