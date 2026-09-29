@@ -83,6 +83,7 @@ import {
   StreamInterruptedError,
 } from '@/lib/errors';
 import { buildReplyFooter } from '@/lib/feedback/footer';
+import { scheduleKevinton } from '@/lib/kevinton';
 import logger from '@/lib/logger';
 import { openSandboxProxies } from '@/lib/sandbox/proxies';
 import { acquireThreadSandbox, threadSandboxStore } from '@/lib/sandbox/store';
@@ -480,6 +481,10 @@ async function executeTurn(
     // cleanup() (which pauses the sandbox) has already run on both paths above.
     releaseSandbox();
     await endTracking();
+    // Not for a `!secret` turn, which must leave nothing behind to review.
+    if (!secret) {
+      scheduleKevinton(threadId).catch(() => undefined);
+    }
     clearTurn({ threadId, turn: activeTurn });
     // Only an interrupt replays queued messages; a rapid burst is merged into a
     // single follow-up so steering does not drop intermediate corrections.

@@ -10,6 +10,7 @@ import {
 import { startThinkingReaper } from '@/lib/agent/thinking';
 import { buildAllowlist } from '@/lib/allowed-users';
 import { slack } from '@/lib/chat';
+import { startKevinton } from '@/lib/kevinton';
 import logger from '@/lib/logger';
 import { redactSecrets, setRedactionAlert } from '@/lib/redact';
 import { startReminderScheduler } from '@/lib/reminders/scheduler';
@@ -70,6 +71,7 @@ try {
   startSandboxReaper();
   // Reap thread reasoning older than the retention window.
   startThinkingReaper();
+  startKevinton();
   // Same window, same reason, for compacted thread history.
   startSummaryReaper();
   // Warm the channel name→id index so the FIRST reply after a restart can

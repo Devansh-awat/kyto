@@ -9,6 +9,7 @@ export * from './github-repos';
 export * from './github-trust';
 export * from './identity';
 export * from './inflight-turns';
+export * from './kevinton';
 export * from './mcp';
 export * from './memories';
 export * from './model-credentials';

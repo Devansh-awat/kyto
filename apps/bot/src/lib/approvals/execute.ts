@@ -3,8 +3,14 @@ import { grantGithubTrust } from '@repo/db/queries';
 import { executePostMessage } from '@/lib/ai/tools/post-message';
 import { bot } from '@/lib/chat';
 import logger from '@/lib/logger';
+import { writeSkill } from '@/lib/skills';
+import { parseSkill } from '@/lib/skills/parse';
 import { errorMessage } from '@/lib/utils/error';
-import type { GithubApprovalPayload, PostApprovalPayload } from './types';
+import type {
+  GithubApprovalPayload,
+  PostApprovalPayload,
+  SkillApprovalPayload,
+} from './types';
 import { isApprovalKind } from './types';
 
 /**
@@ -31,6 +37,9 @@ export async function executeApproval(
   try {
     if (row.kind === 'post' || row.kind === 'broadcast') {
       return await executePostApproval(row);
+    }
+    if (row.kind === 'skill') {
+      return await executeSkillApproval(row);
     }
     return await executeGithubApproval(row);
   } catch (error) {
@@ -85,4 +94,21 @@ async function executeGithubApproval(
     detail: `<@${row.requestedBy}> can now have me write to \`${payload.repo}\`. I did NOT re-run the command — ask me again and it will work.`,
     ok: true,
   };
+}
+
+/** Save the proposed skill — parsed again, since the row is model-written. */
+async function executeSkillApproval(
+  row: ApprovalRequest
+): Promise<{ ok: boolean; detail: string }> {
+  const payload = row.payload as unknown as SkillApprovalPayload;
+  const parsed = parseSkill(payload?.markdown ?? '');
+  if (!parsed.ok) {
+    return { detail: `That skill does not parse: ${parsed.error}`, ok: false };
+  }
+  await writeSkill({
+    skill: parsed.skill,
+    source: 'kevinton',
+    userId: row.decidedBy ?? 'approval',
+  });
+  return { detail: `Saved the ${parsed.skill.name} skill.`, ok: true };
 }

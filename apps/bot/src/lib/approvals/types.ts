@@ -11,12 +11,13 @@
  * could speak as a person is a different and much worse thing than one that can
  * post as a bot.
  */
-export type ApprovalKind = 'post' | 'broadcast' | 'github';
+export type ApprovalKind = 'post' | 'broadcast' | 'github' | 'skill';
 
 export const APPROVAL_KINDS: readonly ApprovalKind[] = [
   'post',
   'broadcast',
   'github',
+  'skill',
 ];
 
 export function isApprovalKind(value: string): value is ApprovalKind {
@@ -37,4 +38,13 @@ export interface PostApprovalPayload {
 export interface GithubApprovalPayload {
   command: string;
   repo: string;
+}
+
+/**
+ * A skill kevinton proposes (lib/kevinton). Approving saves exactly this text:
+ * a skill is prompt text every user's turn may load, so it goes live only on
+ * the owner's click, never on kevinton's say-so.
+ */
+export interface SkillApprovalPayload {
+  markdown: string;
 }

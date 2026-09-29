@@ -147,6 +147,13 @@ Tools live in `apps/bot/src/lib/ai/tools/`, registered in `lib/ai/toolset.ts`. R
 
 `loadSkill` (core) / `manageSkills` (OWNER-only registration) — `lib/skills/`, `skills` table (owner's ask 2026-09-29, from coolton). Built-ins are the `.md` files in `apps/bot/src/skills/` (read at boot; a bad one fails the boot), the owner's rows add or override by name. **The index is `loadSkill`'s DESCRIPTION**, sorted by name — tool schemas are in the cached prefix, so a stable order matters and only a catalog change moves it (60s cache). **Writing a skill is owner-only for the same reason a memory needs promotion**: it is prompt text every user's turn loads. Install is by GitHub link only (`githubSkillSource`, tested — https github.com/raw.githubusercontent.com, no `..`), anonymous, SKILL.md + `references/*.md`. Third-party skills with NO licence (the AgentMail pack) live only in the DB, never in this public repo; coolton/gorkie ports keep their AGPL attribution line.
 
+### Kevinton — the silent reviewer
+
+`lib/kevinton/`, `kevinton_reviews` (owner's ask 2026-09-29, from coolton; `KEVINTON_ENABLED` kill switch). Every finished non-`!secret` turn in a **PUBLIC channel** pushes the thread's review 30 min out; a 60s poller CLAIMS due threads atomically (tested against the DB: concurrent claims → one) and runs a full, headless kyto turn on `subagentAttempts` (GLM 5.3 on Hack Club first — the shared chain, owner's call). Load-bearing:
+- **It never speaks in the thread**: its toolset is an allowlist of LOOKING tools (`LOOKING_TOOLS`) plus its own two; it runs as a synthetic non-owner (`kevinton`), `secret: true`, `unattended: true`, in a throwaway sandbox.
+- **Issues go straight onto the PUBLIC `Devansh-awat/kyto`** (owner's call) as `kyto-agent`, titled `[kevinton] …` (no triage access for labels), search-before-file, ≤2 per review and ≤8 per day (counted on GitHub, so it survives restarts). Text passes `scrubForPublic` (tested — Slack mentions/ids/links/timestamps/emails) and `redactSecrets`. That cannot catch a paraphrase, which is WHY only public channels are reviewed; do not widen it to DMs or private channels without the owner's say.
+- **Skills it proposes go to the owner's approval queue** (`kind: 'skill'`, posted in the owner's DM, re-parsed at execute) — never live on its own say-so. It never opens PRs or changes code (coolton's does; kyto's files issues instead).
+
 ### Per-tool detail lives in [`.claude/TOOLS.md`](./TOOLS.md)
 
 Read it before touching a tool. **Not loaded automatically** (same convention as MODELS.md), so the security invariants below stay here.

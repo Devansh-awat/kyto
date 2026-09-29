@@ -50,6 +50,12 @@ export const env = createEnv({
       .default('true')
       .transform((value) => value === 'true'),
     SITES_PORT: z.coerce.number().default(8080),
+    // kevinton, the silent after-the-fact reviewer (lib/kevinton). On by
+    // default; 'false' stops it scheduling and reviewing anything.
+    KEVINTON_ENABLED: z
+      .enum(['true', 'false'])
+      .default('true')
+      .transform((value) => value === 'true'),
     // Serve HTTPS with a self-signed cert. Leave false when running behind a
     // TLS-terminating reverse proxy (e.g. Nest), which forwards plain HTTP to
     // the container — serving HTTPS there causes 502 Bad Gateway.
