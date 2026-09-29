@@ -120,6 +120,11 @@ export interface BuiltTools {
    * them on its next step.
    */
   drainImages: () => ImageInput[];
+  /**
+   * Load deferred tools before the first step, as if `loadTools` had been
+   * called (lib/ai/tool-preload). Unknown or already-active names are ignored.
+   */
+  preload: (names: string[]) => void;
   tools: ToolSet;
 }
 
@@ -675,6 +680,7 @@ export async function buildTools({
   // deferred.
   const usage = new Map<string, number>();
   const loadedNames = new Set<string>();
+  const preloadedNames = new Set<string>();
   let loadToolsCalls = 0;
   const trackUse = <T extends Tool>(name: string, entry: T): T => {
     const original = entry.execute;
@@ -773,6 +779,12 @@ export async function buildTools({
           // catalog description is misleading the model.
           loadedUnused: [...loadedNames].filter((name) => !usage.has(name)),
           loadedUsed: [...loadedNames].filter((name) => usage.has(name)),
+          // Put there by Jev before the turn began. `preloadedUnused` is the
+          // number that says whether its threshold is too generous.
+          preloaded: [...preloadedNames],
+          preloadedUnused: [...preloadedNames].filter(
+            (name) => !usage.has(name)
+          ),
           // Carried in from an earlier turn of this thread rather than loaded
           // here — keeps the deferral measurement honest now that the set
           // survives the turn.
@@ -784,6 +796,16 @@ export async function buildTools({
       await mcp.close();
     },
     drainImages: () => pendingImages.splice(0),
+    // Deliberately NOT remembered for the thread (unlike a model's own
+    // loadTools): Jev's guess is about this message, and the next one asks again.
+    preload: (names) => {
+      for (const name of names) {
+        if (deferred[name] && !active.has(name)) {
+          active.add(name);
+          preloadedNames.add(name);
+        }
+      }
+    },
     tools,
   };
 }

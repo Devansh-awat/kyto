@@ -62,6 +62,7 @@ import { promptWithAttachments, seedAttachments } from '@/lib/ai/attachments';
 import { requestHints } from '@/lib/ai/hints';
 import { renderStream, type StreamError } from '@/lib/ai/stream';
 import { createCardBudget } from '@/lib/ai/stream/cards';
+import { pickPreloadTools } from '@/lib/ai/tool-preload';
 import {
   claimStickyUpgrade,
   type Escalation,
@@ -516,7 +517,14 @@ async function executeTurn(
       messageText = `${messageText}\n\n<resumed_after_restart>kyto restarted while answering this message and is picking it back up. Anything you already posted is in the thread above — continue from there instead of starting over, and check before repeating anything with a side effect (a post, a DM, a reminder, a file), since it may already have happened.</resumed_after_restart>`;
     }
     codingMonitor.setConversation(messageText);
-    if (await codingMonitor.checkTurn()) {
+    // Two Jev calls at once: is this coding work (which can stop the turn), and
+    // which deferred tools will it need (lib/ai/tool-preload). In parallel, so the
+    // preload costs no wait of its own.
+    const [codingStopped, preloadNames] = await Promise.all([
+      codingMonitor.checkTurn(),
+      secret ? Promise.resolve([]) : pickPreloadTools(messageText),
+    ]);
+    if (codingStopped) {
       throw new TurnAbort('coding');
     }
     // Seed attached files into the sandbox up front (materializes it only when
@@ -657,6 +665,7 @@ async function executeTurn(
       thread: turnThread,
     });
     closeTools = built.close;
+    built.preload(preloadNames);
     const knownTools = new Set(Object.keys(built.tools));
 
     // The next of the user's OWN attempts (ChatGPT account / BYOK keys), or
