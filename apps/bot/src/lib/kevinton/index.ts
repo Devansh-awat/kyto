@@ -7,17 +7,20 @@ import {
 import {
   claimDueKevintonReviews,
   finishKevintonReview,
+  getMcpServer,
   noteKevintonActivity,
 } from '@repo/db/queries';
 import { LazySandbox } from '@repo/sandbox';
-import type { ToolSet } from 'ai';
+import { type ToolSet, tool } from 'ai';
 import { z } from 'zod';
 import { env } from '@/env';
 import type { Message } from '@/harness';
 import { buildPrompt } from '@/lib/agent/prompt';
 import { requestHints } from '@/lib/ai/hints';
+import { buildMcpTools } from '@/lib/ai/mcp';
 import { bot, slack } from '@/lib/chat';
 import logger from '@/lib/logger';
+import { redactSecretsDeep } from '@/lib/redact';
 import { openSandboxProxies } from '@/lib/sandbox/proxies';
 import { toLogError } from '@/lib/utils/error';
 import { kevintonTools } from './tools';
@@ -30,9 +33,14 @@ import { kevintonTools } from './tools';
 // coolton's version opens PRs; kyto's files issues instead (owner's call).
 //
 // It runs as nobody: a synthetic non-owner author, so no owner-only tool is
-// even registered and the GitHub write guard refuses it like any stranger. And
-// only PUBLIC channels are reviewed — what it writes lands on a public repo,
-// and the scrubber cannot catch a paraphrase of a private conversation.
+// even registered and the GitHub write guard refuses it like any stranger.
+// Public and private channels are reviewed (owner's call, 2026-09-29); DMs are
+// not. What it writes lands on a public repo, so the prompt keeps people out
+// of it and scrub.ts cuts every identifier on the way out.
+//
+// It can read kyto's own container logs through the owner's Coolify MCP server
+// (the App Home entry named KEVINTON_LOGS_MCP), forced READ-ONLY here whatever
+// that entry's own rules say: the token behind it can deploy and restart.
 
 const QUIET_MS = 30 * 60 * 1000;
 const POLL_MS = 60 * 1000;
@@ -66,12 +74,25 @@ const KEVINTON_NOTE = `
 <kevinton>
 You are kevinton, kyto's silent reviewer. You are NOT answering anyone: nobody will see your text, and you cannot post in this thread. The conversation above already happened; kyto (you, in another role) took part in it.
 
-Look at what kyto did — its replies, the thinking it left, errors and failed tool calls, what people said back — and decide whether either of these is warranted. The expected, common outcome is NEITHER; doing nothing is a good review.
+Look at what kyto did — its replies, the thinking it left, errors and failed tool calls, gaps where a reply should be, what people said back — and decide whether either of these is warranted. The expected, common outcome is NEITHER; doing nothing is a good review.
 
-1. An ISSUE on kyto's repo, only for a real defect in kyto itself: a tool that errored or misbehaved, a wrong or broken behaviour people pushed back on, a loop, a refusal it should not have made, a missing capability people clearly needed. Not for a person's mistake, a third-party outage, or a one-off model slip. \`search\` first and \`comment\` on an existing issue instead of filing a duplicate. You may read kyto's source to point at the right place: \`git clone --depth 1 https://github.com/Devansh-awat/kyto\` in bash. Do not write or run programs beyond reading.
+1. An ISSUE on kyto's repo, only for a real defect in kyto itself: it stopped mid-turn or went silent, a tool errored or misbehaved, a wrong or broken behaviour people pushed back on, a loop, a refusal it should not have made, a missing capability people clearly needed. Not for a person's mistake, a third-party outage, or a one-off model slip.
 2. A SKILL proposal, only for a genuinely reusable, non-obvious method this conversation worked out that would save real work next time — and only if \`loadSkill\`'s list has nothing covering it.
 
-The issue tracker is PUBLIC. Describe kyto's behaviour in your own words: never quote a message, never name or describe a person, channel or workspace, never include what anyone asked about beyond what is needed to reproduce kyto's fault.
+INVESTIGATE BEFORE YOU FILE. An issue that says "kyto stopped mid-turn" is useless; one that says WHY is worth having.
+- kyto's logs: when the coolify tools are there, \`mcp_coolify_search_resources\` for "kyto" (the APPLICATION, not the project), then \`mcp_coolify_get_logs\` (up to 500 lines, with timestamps) and find this thread's lines — they carry its thread id, given below. Look for the turn's lifecycle: which model answered or failed and why, fallbacks, watchdog trips, tool errors, stack traces, a restart (\`is online\`) or a deploy (\`mcp_coolify_list_deployments\`) in the middle of it. The logs only reach back so far and a redeploy starts them over — say so if the turn is not in them.
+- kyto's source: \`curl -sL https://codeload.github.com/Devansh-awat/kyto/tar.gz/refs/heads/main | tar xz\` in bash (not git clone), then grep and read the code the logs point at. Read-only: do not write or run programs.
+- \`kytoIssues\` \`search\` first; if it is already reported, \`comment\` with the new evidence instead of filing a duplicate.
+
+A filed issue is DETAILED. Use these sections:
+- **What happened** — the symptom as a person saw it, step by step, with approximate times.
+- **What kyto was doing** — the model(s), tools and steps involved, from the thread and the logs.
+- **Evidence** — the relevant log lines and error messages, quoted exactly (identifiers are stripped automatically).
+- **Likely cause** — your diagnosis, with file paths and functions from the source. Say how sure you are.
+- **Suggested fix** — concrete.
+- **How to reproduce** — if you can tell.
+
+The tracker is PUBLIC. Log lines and errors may be quoted; people's messages may not. Never name or describe a person, channel or workspace, and never include what anyone asked about beyond what is needed to understand kyto's fault — describe the request generically ("a multi-part research question").
 
 When you are done, write one line saying what you did (or "nothing to do").
 </kevinton>`;
@@ -87,10 +108,11 @@ const infoSchema = z.looseObject({
   ok: z.boolean(),
 });
 
-const publicChannels = new Map<string, boolean>();
+const reviewable = new Map<string, boolean>();
 
-async function isPublicChannel(channel: string): Promise<boolean> {
-  const known = publicChannels.get(channel);
+/** A channel, public or private — never a DM or a group DM. */
+async function isReviewable(channel: string): Promise<boolean> {
+  const known = reviewable.get(channel);
   if (known !== undefined) {
     return known;
   }
@@ -99,16 +121,65 @@ async function isPublicChannel(channel: string): Promise<boolean> {
       .apiCall('conversations.info', { channel })
       .catch(() => null)
   );
-  const isPublic =
+  const ok =
     info.success &&
     info.data.ok &&
-    !(
-      info.data.channel?.is_private ||
-      info.data.channel?.is_im ||
-      info.data.channel?.is_mpim
-    );
-  publicChannels.set(channel, isPublic);
-  return isPublic;
+    !(info.data.channel?.is_im || info.data.channel?.is_mpim);
+  reviewable.set(channel, ok);
+  return ok;
+}
+
+// The Coolify tools kevinton may call, whatever the App Home entry allows:
+// reads, and the container logs. Never deploy/control/cancel, never env names.
+const LOGS_RULES = {
+  read: 'allow',
+  sensitive: 'never',
+  tools: {
+    get_deployment: 'allow',
+    get_logs: 'allow',
+    list_deployments: 'allow',
+  },
+  unknown: 'never',
+  write: 'never',
+} as const;
+
+/** The owner's Coolify MCP, read-only, or nothing if it is not set up. */
+async function logTools(): Promise<{
+  close: () => Promise<void>;
+  tools: ToolSet;
+}> {
+  const none = { close: () => Promise.resolve(), tools: {} };
+  if (!(env.OWNER_USER_ID && env.KEVINTON_LOGS_MCP)) {
+    return none;
+  }
+  const server = await getMcpServer({
+    name: env.KEVINTON_LOGS_MCP,
+    userId: env.OWNER_USER_ID,
+  }).catch(() => undefined);
+  if (!server) {
+    return none;
+  }
+  const built = await buildMcpTools({
+    logger,
+    servers: [
+      { namespace: 'coolify', server: { ...server, rules: LOGS_RULES } },
+    ],
+  });
+  // Logs can hold anything a process printed; the backstop runs on them like
+  // on every other tool result.
+  const tools: ToolSet = {};
+  for (const [name, entry] of Object.entries(built.tools)) {
+    tools[name] = tool({
+      description: entry.description ?? name,
+      execute: async (args: unknown, options) =>
+        redactSecretsDeep(
+          await entry.execute?.(args, options),
+          `kevinton ${name}`
+        ),
+      inputSchema: entry.inputSchema,
+    });
+  }
+  return { close: built.close, tools };
 }
 
 /** A turn just ended here; review the thread once it has been quiet 30 min. */
@@ -117,7 +188,7 @@ export async function scheduleKevinton(threadId: string): Promise<void> {
     return;
   }
   const { channel } = slack.decodeThreadId(threadId);
-  if (!(await isPublicChannel(channel))) {
+  if (!(await isReviewable(channel))) {
     return;
   }
   await noteKevintonActivity({
@@ -145,9 +216,7 @@ function kevintonMessage({
     isMention: false,
     metadata: { dateSent: new Date() },
     raw: {},
-    text: reviewedAt
-      ? `[kevinton review] Review this thread. You last reviewed it at ${reviewedAt.toISOString()}; only what happened after that is new.`
-      : '[kevinton review] Review this thread.',
+    text: `[kevinton review] Review this thread (thread id ${threadId}, as it appears in the logs).${reviewedAt ? ` You last reviewed it at ${reviewedAt.toISOString()}; only what happened after that is new.` : ''}`,
     threadId,
   };
 }
@@ -192,14 +261,29 @@ async function review({
       thread,
       unattended: true,
     });
-    close = built.close;
-    const own = kevintonTools({ threadId });
+    const logs = await logTools().catch((error: unknown) => {
+      logger.warn(toLogError(error), '[kevinton] coolify logs unavailable');
+      return { close: () => Promise.resolve(), tools: {} };
+    });
+    close = async () => {
+      await Promise.all([built.close(), logs.close()]);
+    };
+    const history = await slack
+      .fetchMessages(threadId, { limit: 1000 })
+      .catch(() => ({ messages: [] }));
+    const own = kevintonTools({
+      humanMessages: history.messages
+        .filter((entry) => entry.author.isMe !== true)
+        .map((entry) => entry.text),
+      threadId,
+    });
     const tools: ToolSet = {
       ...Object.fromEntries(
         LOOKING_TOOLS.flatMap((name) =>
           built.tools[name] ? [[name, built.tools[name]]] : []
         )
       ),
+      ...logs.tools,
       kytoIssues: own.kytoIssues,
       proposeSkill: own.proposeSkill,
     };

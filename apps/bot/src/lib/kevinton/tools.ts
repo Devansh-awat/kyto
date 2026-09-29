@@ -8,7 +8,7 @@ import { redactSecrets } from '@/lib/redact';
 import { getSkill } from '@/lib/skills';
 import { parseSkill } from '@/lib/skills/parse';
 import { errorMessage } from '@/lib/utils/error';
-import { scrubForPublic } from './scrub';
+import { findQuote, scrubForPublic } from './scrub';
 
 // kevinton's only two ways to leave a mark. Everything else it can do is
 // looking: it never posts in the thread it reviews, and never changes code.
@@ -63,7 +63,14 @@ function publicText(text: string): string {
   return redactSecrets(scrubForPublic(text), 'kevinton issue');
 }
 
-export function kevintonTools({ threadId }: { threadId: string }) {
+export function kevintonTools({
+  humanMessages,
+  threadId,
+}: {
+  /** What people wrote in the thread, so a quote of it can be refused. */
+  humanMessages: string[];
+  threadId: string;
+}) {
   let issuesThisReview = 0;
   let skillsThisReview = 0;
   const filed: string[] = [];
@@ -115,6 +122,16 @@ export function kevintonTools({ threadId }: { threadId: string }) {
         }
         if (!body) {
           return { error: `${action} needs a body.`, success: false };
+        }
+        const quoted = findQuote({
+          messages: humanMessages,
+          text: `${title ?? ''}\n${body}`,
+        });
+        if (quoted) {
+          return {
+            error: `Not filed: it quotes a person's message ("${quoted}…"). This goes on a PUBLIC tracker — rewrite that part generically in your own words (e.g. "a multi-part question about a hobby project") and try again.`,
+            success: false,
+          };
         }
         const footer =
           "\n\n---\n_Filed by kevinton, kyto's after-the-fact reviewer, from a conversation it reviewed. Conversation details are deliberately left out._";

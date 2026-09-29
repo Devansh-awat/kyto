@@ -23,3 +23,42 @@ export function scrubForPublic(text: string): string {
   }
   return out;
 }
+
+// Words that run together in a person's message and in what kevinton wrote.
+// Five is long enough that ordinary phrasing ("kyto did not reply to the")
+// rarely collides with a real message, and short enough to catch a quote.
+const QUOTE_WORDS = 5;
+
+function words(text: string): string[] {
+  return text.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? [];
+}
+
+/**
+ * The first run of QUOTE_WORDS consecutive words `text` shares with any of
+ * `messages`, or undefined. The prompt forbids quoting people; this is what
+ * makes it true, since a model told not to quote will still do it (it did, on
+ * the first live review).
+ */
+export function findQuote({
+  messages,
+  text,
+}: {
+  messages: string[];
+  text: string;
+}): string | undefined {
+  const seen = new Set<string>();
+  for (const message of messages) {
+    const list = words(message);
+    for (let index = 0; index + QUOTE_WORDS <= list.length; index += 1) {
+      seen.add(list.slice(index, index + QUOTE_WORDS).join(' '));
+    }
+  }
+  const own = words(text);
+  for (let index = 0; index + QUOTE_WORDS <= own.length; index += 1) {
+    const run = own.slice(index, index + QUOTE_WORDS).join(' ');
+    if (seen.has(run)) {
+      return run;
+    }
+  }
+  return;
+}

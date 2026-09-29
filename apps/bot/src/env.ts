@@ -56,6 +56,9 @@ export const env = createEnv({
       .enum(['true', 'false'])
       .default('true')
       .transform((value) => value === 'true'),
+    // The owner's App Home MCP entry kevinton reads kyto's logs through (forced
+    // read-only in lib/kevinton). Empty to give it no logs.
+    KEVINTON_LOGS_MCP: z.string().default('coolify'),
     // Serve HTTPS with a self-signed cert. Leave false when running behind a
     // TLS-terminating reverse proxy (e.g. Nest), which forwards plain HTTP to
     // the container — serving HTTPS there causes 502 Bad Gateway.
