@@ -52,23 +52,29 @@ const CRITERIA = {
 // but misses follow-ups whose meaning is in the thread ("give me the final
 // program": 0.59 vs 0.93 on `work`).
 //
-// Measured 2026-09-26 on jev-1.13.0 against lily's real cap.js / BotID /
-// Turnstile thread and a spread of general agent work (25 labelled cases, all
-// on the right side of 0.9): every coding case 0.93-0.98; research, email,
-// browsing, reminders, read-only gh, bash for kyto's own maths or a CSV 0.02-0.37.
-// Closest pass: running an existing plotting script, 0.88 — which is why
-// "analyse data or draw a chart" is spelled out as allowed.
+// Both are framed around what kyto DELIVERS. Software as the result is coding;
+// code used as a TOOL (ffmpeg, yt-dlp, whisper, a pip install, a Python one-off)
+// to hand back an answer, a file or media is general agent work. Without that
+// line the first live week (2026-09-26..29) had 7 strangers stopped at a `bash`
+// call, and most were tool use: a zip turned into a video with python + ffmpeg
+// (0.91 — a 2-hour BAN, since the same person had been warned for an npm install),
+// a video transcribed with whisper (0.94), a YouTube page fetched with a curl clone.
+// Reworded, those score 0.12-0.27, while lily's cap.js / BotID / Turnstile
+// thread, fetch-a-gist-then-write-a-bot, clone-and-edit, fork yourself and
+// hosting a site still score 0.93-0.98 (31 labelled cases on jev-1.13.0).
+// Deliberately allowed now: cloning a tool to COMPUTE something (lily's onion
+// vanity address, 0.84) and installing a package on request (is-even, 0.80).
 const QUESTIONS = {
   request: {
     criteria: CRITERIA,
     instructions:
-      'A Slack assistant may answer coding questions like any AI chatbot (explain code, write a snippet or short function, fix code the user pasted, in its reply) and may do general agent work (research, browsing, email, Slack, and running code itself to calculate, analyse data or draw a chart for its answer). It must NOT act as an autonomous coding agent. Read the latest message in light of the conversation before it. Is it asking the assistant to act as a coding agent: build, run or debug a program, script, bot or solver; automate or bot a website, service or captcha; work through a repository; clone, fork, commit, push or open a pull request; copy or fork itself; or deploy/host something?',
+      "A Slack assistant may answer coding questions like any AI chatbot (explain code, write a snippet or short function, fix code the user pasted, in its reply) and may do general agent work (research, browsing, email, Slack) — including using code and tools itself as a means to an end, e.g. converting or transcribing media, downloading something, calculating, analysing data or drawing a chart, where what it delivers is an answer, a file or media rather than a program. It must NOT act as an autonomous coding agent. Read the latest message in light of the conversation before it. Is it asking the assistant to act as a coding agent, where the RESULT is software: build, run or debug a program, script, bot or solver for someone; automate or bot a website, service or captcha; work on a repository's code; clone, fork, commit, push or open a pull request; copy or fork itself; or deploy/host something?",
     type: 'noul',
   },
   work: {
     criteria: CRITERIA,
     instructions:
-      'Judge the WHOLE context below: the conversation so far, the latest message, and what the assistant has done and is about to do this turn. Is the assistant being asked to act, or already acting, as an autonomous CODING agent — doing software development itself, now or as the requested next step: writing, running, testing or debugging programs, scripts or bots (including solvers, bots or automation for websites or captchas), working in repositories, making GitHub writes, or deploying/hosting code? NOT a coding agent: ordinary chatbot coding help given in its reply (explaining, a snippet, fixing code the user pasted), and general agent work that is not software development (research, web browsing, email, Slack actions, calculations, reading or summarising files and pages).',
+      "Judge the WHOLE context below: the conversation so far, the latest message, and what the assistant has done and is about to do this turn. Is the assistant being asked to act, or already acting, as an autonomous CODING agent — where the RESULT is software: writing or building a program, script, bot, solver, website or app for someone to keep or run; automating, botting or farming a website, service or captcha; working on a repository's code; GitHub writes; or deploying/hosting code? NOT a coding agent: chatbot coding help in its reply (explaining, a snippet, fixing code the user pasted), and general agent work — which INCLUDES using code and command-line tools as a means to an end: installing a package, or running ffmpeg, yt-dlp, whisper, curl or a short Python script to download, convert, transcribe, inspect, compute or analyse something, when what it delivers is an answer, a file or media rather than a program.",
     type: 'noul',
   },
 } as const;
