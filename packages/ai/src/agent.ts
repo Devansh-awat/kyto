@@ -481,6 +481,8 @@ function codexFetch({
   };
 }
 
+const PROMPT_CACHE_KEY = 'kyto';
+
 function tunedFetch({
   attempt,
   holder,
@@ -637,6 +639,19 @@ function tuneBody(
       payload.reasoning === undefined
     ) {
       payload.reasoning = { effort: 'medium' };
+      changed = true;
+    }
+    // One routing hint shared by EVERY thread (coolton's design, 2026-09-29):
+    // the system prompt and tools are byte-identical across threads on purpose,
+    // so any warm cache anywhere is a usable one. Measured through the proxy on
+    // glm-5.3-flash: 11/12 repeats read the ~4.6k-token prefix from cache with
+    // it, 10/12 without — a nudge, not a fix; the cache_control marks below do
+    // the real work. Hack Club only: another provider may 400 on the field.
+    if (
+      attempt.provider === HACKCLUB_PROVIDER &&
+      payload.prompt_cache_key === undefined
+    ) {
+      payload.prompt_cache_key = PROMPT_CACHE_KEY;
       changed = true;
     }
     // Prompt caching: mark the large, stable prefix (system prompt + tool

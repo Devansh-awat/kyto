@@ -74,6 +74,16 @@ Moved out of CLAUDE.md to hold its 40k budget; the summary there points here.
 - **Ordering choice (per user)**: `chatgpt_first` (default true) runs the account BEFORE kyto's shared models; `service_fallback` (default false) governs whether the shared chain may run at all when own-first. `recordChatgptOutcome` marks the login invalid ONLY on a hard 401/402/403 — a 429 is a quota, handled by the parking rule above.
 - **Model MUST be a real Codex catalog slug** (`listChatgptModels` fetches `GET /models?client_version=<v>`, filtered to public/api-supported): `gpt-5.5`/`gpt-5.6-*` work, plain `gpt-5` 400s.
 
+## Prompt cache key (2026-09-29)
+
+Hack Club requests carry `prompt_cache_key: 'kyto'` — ONE key for every thread,
+coolton's design, which works because kyto's system prompt and tool schemas are
+byte-identical across threads by construction (nothing volatile in the system
+prompt). Measured on `z-ai/glm-5.3-flash` through the proxy: repeats read the
+~4.6k-token prefix from cache 11/12 times with the key vs 10/12 without — a
+routing nudge only; the `cache_control` 1h breakpoints (`cache-control.ts`) are
+what actually cache. Not sent to other providers, which may reject the field.
+
 ## Fallback cache (2026-09-29)
 
 `lib/agent/fallback-cache.ts` (tested) remembers, in memory for 30 minutes, the
