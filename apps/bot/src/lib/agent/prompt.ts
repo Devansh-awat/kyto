@@ -4,7 +4,10 @@ import {
   type ThreadHandle as Thread,
 } from '@/harness';
 import { compactOverflow, loadThreadSummary } from '@/lib/agent/compaction';
-import { renderUnreadableBlock } from '@/lib/agent/compaction-plan';
+import {
+  renderUnreadableBlock,
+  replayWindowStart,
+} from '@/lib/agent/compaction-plan';
 import { isFocusAllowed } from '@/lib/agent/focus';
 import { annotateMentions } from '@/lib/agent/mentions';
 import { recallThinking, renderThinking } from '@/lib/agent/thinking';
@@ -15,6 +18,12 @@ import { isHiddenFromBot, rawSlackText } from '@/lib/utils/message';
 // We never persist a session, so the whole Slack thread is the agent's only
 // memory. Cap how many prior messages we replay VERBATIM to bound prompt size.
 const MAX_THREAD_MESSAGES = 100;
+// …and at most this much text (~60k tokens), so a thread of pasted logs does not
+// replay hundreds of thousands of characters on every turn. What falls out goes
+// to the digest. Moved in steps so the window's start — where the replayed,
+// cached history begins — shifts rarely (see replayWindowStart).
+const MAX_REPLAY_CHARS = 240_000;
+const REPLAY_STEP = 25;
 // How far back we look beyond that cap. Everything between this and the verbatim
 // window is compacted into a summary (see lib/agent/compaction) instead of being
 // dropped on the floor, which is what used to happen: the model was handed the
@@ -141,11 +150,14 @@ export async function buildPrompt(
     );
     // Split AFTER filtering, so a focused thread's window is 100 messages kyto
     // may actually see rather than 100 slots partly spent on hidden ones.
-    const replayed = prior.slice(-MAX_THREAD_MESSAGES);
-    const overflow = prior.slice(
-      0,
-      Math.max(prior.length - replayed.length, 0)
-    );
+    const start = replayWindowStart({
+      maxChars: MAX_REPLAY_CHARS,
+      maxMessages: MAX_THREAD_MESSAGES,
+      sizes: prior.map((entry) => (rawSlackText(entry) || entry.text).length),
+      step: REPLAY_STEP,
+    });
+    const replayed = prior.slice(start);
+    const overflow = prior.slice(0, start);
     if (!contiguous) {
       compacted = renderUnreadableBlock({
         summary: stored?.summary,

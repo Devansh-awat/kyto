@@ -165,3 +165,43 @@ export function renderCompactedBlock({
       : '';
   return `${header}\n\n${summary}${gap}\n\nThis is a compacted digest, not a transcript. If you need something it does not cover, read the thread with the Slack history tools.\n</earlier_in_this_thread>`;
 }
+
+/**
+ * Where the verbatim replay window starts, given each earlier message's size.
+ *
+ * Two limits (owner's ask, 2026-09-29, after comparing coolton's compaction,
+ * which is sized by tokens): at most `maxMessages`, AND at most `maxChars` of
+ * text. The count alone let a thread of pasted logs replay hundreds of thousands
+ * of characters verbatim on every turn; everything that falls out of the window
+ * goes to the digest like any other overflow.
+ *
+ * When the SIZE limit is what binds, the start moves in steps of `step`
+ * messages rather than one at a time: the window's first message is where the
+ * replayed history begins in the prompt, so a start that shifted every turn
+ * would throw away the cached prefix from that point on every turn. The newest
+ * message is always kept, however long.
+ */
+export function replayWindowStart({
+  maxChars,
+  maxMessages,
+  sizes,
+  step,
+}: {
+  maxChars: number;
+  maxMessages: number;
+  sizes: number[];
+  step: number;
+}): number {
+  const byCount = Math.max(0, sizes.length - maxMessages);
+  let start = byCount;
+  let total = sizes.slice(start).reduce((sum, size) => sum + size, 0);
+  while (total > maxChars && start < sizes.length - 1) {
+    total -= sizes[start] ?? 0;
+    start += 1;
+  }
+  if (start === byCount) {
+    return start;
+  }
+  const stepped = byCount + Math.ceil((start - byCount) / step) * step;
+  return Math.min(stepped, sizes.length - 1);
+}

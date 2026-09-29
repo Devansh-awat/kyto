@@ -6,6 +6,7 @@ import {
   planCompaction,
   renderCompactedBlock,
   renderUnreadableBlock,
+  replayWindowStart,
 } from './compaction-plan';
 
 function messages(count: number, offset = 0): CompactableMessage[] {
@@ -184,5 +185,62 @@ describe('renderCompactedBlock', () => {
     expect(renderCompactedBlock({ count: 1 })).toContain(
       'do not treat the replayed history as its beginning'
     );
+  });
+});
+
+describe('replayWindowStart', () => {
+  test('only the count binds for ordinary messages', () => {
+    const sizes = new Array(150).fill(100);
+    expect(
+      replayWindowStart({
+        maxChars: 120_000,
+        maxMessages: 100,
+        sizes,
+        step: 25,
+      })
+    ).toBe(50);
+  });
+
+  test('a size overflow drops the oldest, in steps', () => {
+    // 40 messages of 10k chars: the budget fits 12, so 28 must go — rounded
+    // up to the next step of 10 is 30.
+    const sizes = new Array(40).fill(10_000);
+    expect(
+      replayWindowStart({
+        maxChars: 120_000,
+        maxMessages: 100,
+        sizes,
+        step: 10,
+      })
+    ).toBe(30);
+  });
+
+  test('the start does not move until a whole step has overflowed', () => {
+    const base = new Array(20).fill(10_000);
+    const a = replayWindowStart({
+      maxChars: 120_000,
+      maxMessages: 100,
+      sizes: [...base],
+      step: 10,
+    });
+    const b = replayWindowStart({
+      maxChars: 120_000,
+      maxMessages: 100,
+      sizes: [...base, 10_000],
+      step: 10,
+    });
+    expect(a).toBe(10);
+    expect(b).toBe(10);
+  });
+
+  test('the newest message is kept however long it is', () => {
+    expect(
+      replayWindowStart({
+        maxChars: 1000,
+        maxMessages: 100,
+        sizes: [10, 50_000],
+        step: 25,
+      })
+    ).toBe(1);
   });
 });
