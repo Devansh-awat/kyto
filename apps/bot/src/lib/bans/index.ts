@@ -16,7 +16,9 @@ import {
   removeBan,
 } from '@repo/db/queries';
 import { env } from '@/env';
+import { bot } from '@/lib/chat';
 import logger from '@/lib/logger';
+import { toLogError } from '@/lib/utils/error';
 import { formatBanDuration, parseBanDuration } from './duration';
 
 // Slack ids, either as a real `<@U…>` mention or pasted bare — same shape the
@@ -96,6 +98,9 @@ export async function runBanCommand({
     cache = undefined;
     const lifted = await removeBan(target);
     logger.info({ target, userId }, '[bans] lifted');
+    if (lifted) {
+      await announce(`<@${target}> is unbanned from kyto.`);
+    }
     return lifted ? `<@${target}> is unbanned.` : `<@${target}> wasn't banned.`;
   }
   return await applyBan({ args, match: match?.[0] ?? '', target, userId });
@@ -153,6 +158,29 @@ export async function banUser({
   cache = undefined;
   await createBan({ bannedBy, expiresAt, reason, userId });
   logger.info({ bannedBy, expiresAt, reason, userId }, '[bans] user banned');
+  const length = ms === null ? 'indefinitely' : `for ${formatBanDuration(ms)}`;
+  const by = bannedBy === 'anti-coding' ? ' (automatic)' : '';
+  await announce(
+    `<@${userId}> is banned from kyto ${length}${by} — reason: ${reason}`
+  );
+}
+
+/**
+ * Say it in the opt-in channel (owner's call, 2026-09-29): that is where
+ * everyone who uses kyto agreed to its terms, so it is where a ban is public.
+ * The banned person themselves still gets only the one ephemeral when they next
+ * speak. Best-effort — a ban that could not be announced is still a ban.
+ */
+async function announce(text: string): Promise<void> {
+  if (!env.OPT_IN_CHANNEL) {
+    return;
+  }
+  await bot
+    .channel(env.OPT_IN_CHANNEL)
+    .post({ markdown: text })
+    .catch((error: unknown) => {
+      logger.warn(toLogError(error), '[bans] could not announce');
+    });
 }
 
 async function describeBans(): Promise<string> {
