@@ -3,6 +3,7 @@
   "import": ["@repo/cspell-config"],
   "words": [
     "benchlm",
+    "unredacted",
     "defence",
     "ffprobe",
     "itzmetanjim",
