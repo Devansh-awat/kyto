@@ -21,6 +21,7 @@ import { slack } from '@/lib/chat';
 import { emojiUploadConfigured } from '@/lib/emoji-upload';
 import logger from '@/lib/logger';
 import { requestMcpPermission } from '@/lib/mcp-permissions/request';
+import { redactSecretsDeep } from '@/lib/redact';
 import { recallLoadedTools, rememberLoadedTools } from './loaded-tools';
 import { askQuestionTool } from './tools/ask-question';
 import { backgroundProcessTools } from './tools/background';
@@ -681,7 +682,13 @@ export async function buildTools({
         if (refusal) {
           return { error: refusal, success: false };
         }
-        return original(input, options);
+        // What the tool hands back is what the model reads next and what the
+        // plan card shows: a secret that surfaces in one is stripped here, once,
+        // for every tool including MCP ones (lib/redact).
+        return redactSecretsDeep(
+          await original(input, options),
+          `tool ${name}`
+        );
       },
     } as T;
   };

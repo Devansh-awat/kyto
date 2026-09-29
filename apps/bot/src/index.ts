@@ -1,10 +1,13 @@
 import { bot } from '@/bot';
+import { env } from '@/env';
+import { setOutboundFilter } from '@/harness';
 import { stopAllTurns } from '@/lib/agent';
 import { startSummaryReaper } from '@/lib/agent/compaction';
 import { startThinkingReaper } from '@/lib/agent/thinking';
 import { buildAllowlist } from '@/lib/allowed-users';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
+import { redactSecrets, setRedactionAlert } from '@/lib/redact';
 import { startReminderScheduler } from '@/lib/reminders/scheduler';
 import { startSandboxReaper } from '@/lib/sandbox/store';
 import { startSitesServer } from '@/lib/sites/server';
@@ -30,6 +33,25 @@ async function shutdown(signal: string): Promise<void> {
   });
   process.exit(0);
 }
+
+// Every text kyto sends to Slack passes the secret-value scrub, and a catch is
+// reported to the owner by NAME only (lib/redact).
+setOutboundFilter((text) => redactSecrets(text, 'a Slack post'));
+setRedactionAlert(({ context, labels }) => {
+  if (!env.OWNER_USER_ID) {
+    return;
+  }
+  bot
+    .openDM(env.OWNER_USER_ID)
+    .then((dm) =>
+      dm.post({
+        markdown: `:rotating_light: kyto stripped the value of ${labels.join(', ')} out of ${context}. worth checking how it got there, and rotating it if it went anywhere.`,
+      })
+    )
+    .catch((error: unknown) => {
+      logger.warn({ err: error }, '[redact] could not alert the owner');
+    });
+});
 
 try {
   await bot.initialize();

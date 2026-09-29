@@ -1,6 +1,7 @@
 import type { Logger } from '@repo/logging/logger';
 import { WebClient } from '@slack/web-api';
 import { mrkdwnToMarkdown } from './markdown';
+import { filterOutbound, filterOutboundDeep } from './outbound';
 import type { Author, Message, MessageAttachment, StreamChunk } from './types';
 
 // Raw Slack message event fields the harness reads.
@@ -524,7 +525,9 @@ export class SlackHarness {
         return;
       }
       try {
-        await streamer.append({ chunks: [chunk] as never });
+        await streamer.append({
+          chunks: [filterOutboundDeep(chunk)] as never,
+        });
         currentHasContent = true;
       } catch (error) {
         structuredSupported = false;
@@ -566,7 +569,7 @@ export class SlackHarness {
         if (typeof chunk === 'string' || chunk.type === 'markdown_text') {
           const text = typeof chunk === 'string' ? chunk : chunk.text;
           if (text) {
-            await streamer.append({ markdown_text: text });
+            await streamer.append({ markdown_text: filterOutbound(text) });
             currentHasContent = true;
           }
           continue;

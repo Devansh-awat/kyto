@@ -11,6 +11,7 @@ import {
   neutralizeBroadcast,
   neutralizeBroadcastDeep,
 } from './markdown';
+import { filterOutbound, filterOutboundDeep } from './outbound';
 import type {
   Author,
   ChannelMetadata,
@@ -55,6 +56,22 @@ function stripBroadcasts(post: PostContent): PostContent {
       ? { fallbackText: neutralizeBroadcast(post.fallbackText) }
       : {}),
     ...(post.markdown ? { markdown: neutralizeBroadcast(post.markdown) } : {}),
+  };
+}
+
+/**
+ * The app's outbound filter (lib/redact: known secret values) over every text
+ * field of a post. Field-by-field for the same reason as stripBroadcasts —
+ * `files[].data` is binary.
+ */
+function scrub(post: PostContent): PostContent {
+  return {
+    ...post,
+    ...(post.blocks ? { blocks: filterOutboundDeep(post.blocks) } : {}),
+    ...(post.fallbackText
+      ? { fallbackText: filterOutbound(post.fallbackText) }
+      : {}),
+    ...(post.markdown ? { markdown: filterOutbound(post.markdown) } : {}),
   };
 }
 
@@ -114,7 +131,7 @@ export class ThreadHandle {
     // uploadFile. `post` renders a control mention as a section+mrkdwn block
     // specifically so it resolves into a real ping, so those paths notified
     // the whole channel with nothing in front of them.
-    const post = raw.allowBroadcast ? raw : stripBroadcasts(raw);
+    const post = scrub(raw.allowBroadcast ? raw : stripBroadcasts(raw));
 
     if (post.files?.length) {
       return await this.postFiles({ channel, post, threadTs });
@@ -201,7 +218,10 @@ export class ThreadHandle {
   ): Promise<{ channel?: string; delivery: 'ephemeral' | 'dm'; ts?: string }> {
     const userId = typeof user === 'string' ? user : user.userId;
     const { channel, threadTs } = this.location;
-    const blocks = options.blocks;
+    const blocks = options.blocks
+      ? filterOutboundDeep(options.blocks)
+      : undefined;
+    text = filterOutbound(text);
     try {
       await this.adapter.webClient.chat.postEphemeral({
         channel,
@@ -309,7 +329,7 @@ export class ThreadHandle {
     // `post`'s own history is that the paths which forgot the strip were the
     // ones nobody thinks of as "the model talking", and a scheduled message is
     // exactly that shape.
-    const post = raw.allowBroadcast ? raw : stripBroadcasts(raw);
+    const post = scrub(raw.allowBroadcast ? raw : stripBroadcasts(raw));
     const markdown = post.markdown?.slice(0, MARKDOWN_BLOCK_MAX);
     await this.adapter.webClient.chat.scheduleMessage({
       ...(markdown

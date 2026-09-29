@@ -23,6 +23,7 @@ import {
   encryptSecret,
 } from '@/lib/byok/crypto';
 import logger from '@/lib/logger';
+import { registerSecret } from '@/lib/redact';
 import { deepErrorText, errorStatus } from '@/lib/utils/error';
 
 // The token blob stored (encrypted) for a linked account. Only this module ever
@@ -308,6 +309,8 @@ async function loadFreshTokens(
     }).catch(() => undefined);
     return;
   }
+  registerSecret({ label: 'a ChatGPT token', value: stored.accessToken });
+  registerSecret({ label: 'a ChatGPT token', value: stored.refreshToken });
   if (stored.expiresAt - Date.now() > REFRESH_SKEW_MS) {
     return stored;
   }

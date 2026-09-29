@@ -4,6 +4,7 @@ import { env } from '@/env';
 import { byokConfigured, encryptSecret } from '@/lib/byok';
 import { decryptSecret } from '@/lib/byok/crypto';
 import logger from '@/lib/logger';
+import { registerSecret } from '@/lib/redact';
 
 /**
  * "Connect your Slack account" — a per-user OAuth grant.
@@ -257,7 +258,9 @@ export async function userSlackToken(userId: string): Promise<string | null> {
     return null;
   }
   try {
-    return decryptSecret(grant.encryptedToken);
+    const token = decryptSecret(grant.encryptedToken);
+    registerSecret({ label: 'a Slack user token', value: token });
+    return token;
   } catch (error) {
     logger.warn(
       { err: error, userId },

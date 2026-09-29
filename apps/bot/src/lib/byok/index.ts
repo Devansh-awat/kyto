@@ -11,6 +11,7 @@ import {
 import { byokConfigured, decryptSecret } from '@/lib/byok/crypto';
 import { resolveChatgptRouting } from '@/lib/chatgpt';
 import logger from '@/lib/logger';
+import { registerSecret } from '@/lib/redact';
 import { deepErrorText, errorStatus } from '@/lib/utils/error';
 
 export {
@@ -107,6 +108,10 @@ export async function resolveUserRouting(userId: string): Promise<UserRouting> {
       }).catch(() => undefined);
       continue;
     }
+    registerSecret({
+      label: `a ${credential.provider} model key`,
+      value: apiKey,
+    });
     const attempt = byokAttempt({
       apiKey,
       baseUrl: credential.baseUrl,

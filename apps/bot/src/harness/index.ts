@@ -9,6 +9,7 @@ export {
   openFenceLanguage,
   restoreAnnotatedMentions,
 } from './markdown';
+export { setOutboundFilter } from './outbound';
 export { ThreadHandle } from './thread';
 export type {
   ActionEvent,
