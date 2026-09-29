@@ -37,6 +37,7 @@ import {
   markRungDead,
   markTierDead,
 } from '@/lib/agent/fallback-cache';
+import { trackTurn } from '@/lib/agent/inflight';
 import { buildPrompt } from '@/lib/agent/prompt';
 import { createReply } from '@/lib/agent/reply';
 import {
@@ -215,6 +216,8 @@ export { stopAllTurns, stopTurn } from '@/lib/agent/turns';
 
 export function runTurn(input: {
   message: Message;
+  /** Re-running a turn a restart cut short (lib/agent/inflight). */
+  resumed?: boolean;
   /**
    * `!secret`: answer this one ephemerally, to the asker only, and leave no
    * trace kyto can later read back. See the SecretTurn notes in executeTurn.
@@ -240,9 +243,15 @@ export function runTurn(input: {
 async function executeTurn(
   {
     message,
+    resumed = false,
     secret = false,
     thread,
-  }: { message: Message; secret?: boolean; thread: ThreadHandle },
+  }: {
+    message: Message;
+    resumed?: boolean;
+    secret?: boolean;
+    thread: ThreadHandle;
+  },
   controller: AbortController
 ): Promise<void> {
   const threadId = thread.id;
@@ -385,6 +394,12 @@ async function executeTurn(
   // Hold this thread's sandbox for the whole turn, so a bash reminder firing on
   // the scheduler can't pause the sandbox out from under a running command.
   const releaseSandbox = await acquireThreadSandbox(threadId);
+  // Recorded so a restart can pick this turn back up — here, right before the
+  // try, so the finally below is guaranteed to end it. Not a `!secret` turn: its
+  // question is already deleted, and resuming it would mean remembering it.
+  const endTracking = secret
+    ? () => Promise.resolve()
+    : trackTurn({ message, resumed, threadId });
 
   try {
     // Slack's native streaming API renders the thinking/task-card UI. Every
@@ -461,6 +476,7 @@ async function executeTurn(
   } finally {
     // cleanup() (which pauses the sandbox) has already run on both paths above.
     releaseSandbox();
+    await endTracking();
     clearTurn({ threadId, turn: activeTurn });
     // Only an interrupt replays queued messages; a rapid burst is merged into a
     // single follow-up so steering does not drop intermediate corrections.
@@ -485,7 +501,7 @@ async function executeTurn(
     message: Message;
     thread: ThreadHandle;
   }): AsyncGenerator<string | StreamChunk> {
-    const messageText = await buildPrompt(turnMessage, {
+    let messageText = await buildPrompt(turnMessage, {
       customizationPrompt: hints.customization?.prompt,
       ownModelsOnly,
       thread: turnThread,
@@ -493,6 +509,12 @@ async function executeTurn(
     // Judged against the prompt the model is about to get — the thread, earlier
     // thinking and the new message — because a follow-up like "now do the cf
     // version" is only a coding request in light of what came before it.
+    // The same message, again, after a restart cut the first try short. What
+    // was already posted is in the thread above; what was already DONE (a post,
+    // a file, a reminder) may not be obvious from it.
+    if (resumed) {
+      messageText = `${messageText}\n\n<resumed_after_restart>kyto restarted while answering this message and is picking it back up. Anything you already posted is in the thread above — continue from there instead of starting over, and check before repeating anything with a side effect (a post, a DM, a reminder, a file), since it may already have happened.</resumed_after_restart>`;
+    }
     codingMonitor.setConversation(messageText);
     if (await codingMonitor.checkTurn()) {
       throw new TurnAbort('coding');

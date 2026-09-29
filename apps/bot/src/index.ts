@@ -1,8 +1,12 @@
 import { bot } from '@/bot';
 import { env } from '@/env';
 import { setOutboundFilter } from '@/harness';
-import { stopAllTurns } from '@/lib/agent';
+import { runTurn, stopAllTurns } from '@/lib/agent';
 import { startSummaryReaper } from '@/lib/agent/compaction';
+import {
+  markShuttingDown,
+  startResumingOrphanedTurns,
+} from '@/lib/agent/inflight';
 import { startThinkingReaper } from '@/lib/agent/thinking';
 import { buildAllowlist } from '@/lib/allowed-users';
 import { slack } from '@/lib/chat';
@@ -21,6 +25,9 @@ async function shutdown(signal: string): Promise<void> {
     return;
   }
   shuttingDown = true;
+  // BEFORE the turns are stopped: stopping them would otherwise read as a
+  // normal ending and forget them. The next instance resumes them.
+  await markShuttingDown();
   stopAllTurns();
   logger.info({ signal }, '[bot] shutting down');
   // Kyto restarts after every change; without this the last few seconds of
@@ -73,6 +80,8 @@ try {
         .info({ user: slack.botUserId })
         .catch(() => null)
     : null;
+  // Turns a previous instance was in the middle of (lib/agent/inflight).
+  startResumingOrphanedTurns({ bot, runTurn });
   logger.info(
     `[bot] ${botProfile?.user?.profile?.display_name || botProfile?.user?.profile?.real_name || botProfile?.user?.name || 'kyto'} (${slack.botUserId ?? 'unknown id'}) is online`
   );
