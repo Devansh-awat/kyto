@@ -29,6 +29,14 @@ import {
   createRepetitionGuard,
   stripRepeatedLines,
 } from '@/lib/agent/degenerate';
+import {
+  cachedDeadness,
+  clearFallbackCache,
+  isHardFailure,
+  markAlive,
+  markRungDead,
+  markTierDead,
+} from '@/lib/agent/fallback-cache';
 import { buildPrompt } from '@/lib/agent/prompt';
 import { createReply } from '@/lib/agent/reply';
 import {
@@ -549,6 +557,21 @@ async function executeTurn(
     // rung — but a provider that truncates every time has to be routed away from
     // eventually, hence the cap.
     let truncationRetries = 0;
+    // Start past whatever earlier turns found dead (lib/agent/fallback-cache): a
+    // spent Hack Club cap or a vanished model fails every turn the same way, and
+    // re-discovering it cost each new message a doomed request and a fallback
+    // card.
+    const cached = cachedDeadness();
+    for (const key of cached.rungs) {
+      failedKeys.add(key);
+    }
+    if (cached.providers.includes(HACKCLUB_PROVIDER)) {
+      hackclubBudgetExhausted = true;
+    }
+    const skipShared = (candidate: ModelAttempt): boolean =>
+      failedKeys.has(attemptKey(candidate)) ||
+      ((hackclubBudgetExhausted || hackclubUnavailable) &&
+        candidate.provider === HACKCLUB_PROVIDER);
     let attempt: ModelAttempt | undefined;
     // Set per attempt (the watchdog is armed inside the loop below), but the
     // toolset is built ONCE up front — so the tools get a stable indirection
@@ -603,9 +626,12 @@ async function executeTurn(
         triedPrimary = true;
         // A thread that escalated leads with the strong rung; if it fails, the
         // walk carries on from the primary exactly as it always did.
-        return stickyUpgrade ?? PRIMARY_ATTEMPT;
+        const first = stickyUpgrade ?? PRIMARY_ATTEMPT;
+        if (!skipShared(first)) {
+          return first;
+        }
       }
-      if (stickyUpgrade && !failedKeys.has(attemptKey(PRIMARY_ATTEMPT))) {
+      if (stickyUpgrade && !skipShared(PRIMARY_ATTEMPT)) {
         return PRIMARY_ATTEMPT;
       }
       fallbackQueue ??= buildQueue(LEADERBOARD_FALLBACK);
@@ -643,8 +669,25 @@ async function executeTurn(
       attempt = shared ?? nextOwnAttempt();
     };
     routeNextAttempt();
+    // The cache must never be what leaves a turn with nothing to try: if every
+    // rung is remembered dead, forget it all and walk from the top as before.
+    if (!attempt && (cached.rungs.length > 0 || cached.providers.length > 0)) {
+      clearFallbackCache();
+      failedKeys.clear();
+      hackclubBudgetExhausted = false;
+      triedPrimary = false;
+      routeNextAttempt();
+    }
     logger.info(
-      { model: attempt?.model, provider: attempt?.provider, threadId },
+      {
+        cachedDead:
+          cached.rungs.length > 0 || cached.providers.length > 0
+            ? cached
+            : undefined,
+        model: attempt?.model,
+        provider: attempt?.provider,
+        threadId,
+      },
       '[agent] routed turn'
     );
     // The prompt for the NEXT attempt: the user's message, plus (on a fallback)
@@ -1233,6 +1276,12 @@ async function executeTurn(
             threadId,
           });
         }
+        if (!routing.own.includes(currentAttempt)) {
+          markAlive({
+            key: attemptKey(currentAttempt),
+            provider: currentAttempt.provider,
+          });
+        }
         // A user's own key/account that just answered a whole turn is
         // demonstrably valid (each recorder no-ops unless the attempt is theirs).
         await recordByokOutcome({
@@ -1322,6 +1371,27 @@ async function executeTurn(
             if (hackclubFailures >= HACKCLUB_OUTAGE_THRESHOLD) {
               hackclubUnavailable = true;
             }
+          }
+        }
+        // Remember a failure that will repeat on the next turn too. Only kyto's
+        // own rungs: a person's key is theirs to fix, and recordByokOutcome
+        // already tracks it.
+        if (!routing.own.includes(currentAttempt)) {
+          if (
+            hackclubBudgetExhausted &&
+            currentAttempt.provider === HACKCLUB_PROVIDER
+          ) {
+            markTierDead({
+              provider: HACKCLUB_PROVIDER,
+              reason: (spendLimitMessage ?? 'spend limit').slice(0, 200),
+            });
+          } else if (
+            isHardFailure({ spendLimit: false, status: errorStatus(error) })
+          ) {
+            markRungDead({
+              key: attemptKey(currentAttempt),
+              reason: errorMessage(error).slice(0, 200),
+            });
           }
         }
         routeNextAttempt();

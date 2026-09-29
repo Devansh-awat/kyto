@@ -74,6 +74,24 @@ Moved out of CLAUDE.md to hold its 40k budget; the summary there points here.
 - **Ordering choice (per user)**: `chatgpt_first` (default true) runs the account BEFORE kyto's shared models; `service_fallback` (default false) governs whether the shared chain may run at all when own-first. `recordChatgptOutcome` marks the login invalid ONLY on a hard 401/402/403 — a 429 is a quota, handled by the parking rule above.
 - **Model MUST be a real Codex catalog slug** (`listChatgptModels` fetches `GET /models?client_version=<v>`, filtered to public/api-supported): `gpt-5.5`/`gpt-5.6-*` work, plain `gpt-5` 400s.
 
+## Fallback cache (2026-09-29)
+
+`lib/agent/fallback-cache.ts` (tested) remembers, in memory for 30 minutes, the
+failures that will repeat next turn: a rung that returned 401/402/403/404, and
+the Hack Club TIER once its spend limit is hit. `renderTurn` seeds `failedKeys`
+and `hackclubBudgetExhausted` from it before routing, so a spent cap no longer
+costs every new message a doomed primary request and a `· fallback` card. The
+turn log's `[agent] routed turn` carries `cachedDead` when anything was skipped.
+
+- Transient failures (429, 5xx, gateway, timeouts, empty/degenerate replies) are
+  never cached — they say nothing about the next request.
+- A person's own attempts are never cached (their key, their problem;
+  `recordByokOutcome` already marks it).
+- An answer from a rung clears it AND its tier.
+- No probe (owner's call): expiry is the only way back. A restart clears it.
+- Not ported from coolton: "move the last working provider to the front".
+- If every rung is cached dead the cache is cleared and the walk runs as before.
+
 ## BYOK — a user's own model key (the routing half)
 
 Moved out of CLAUDE.md to hold its 40k budget; the secrets-handling half stays there.
