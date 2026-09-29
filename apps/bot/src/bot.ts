@@ -6,7 +6,12 @@ import { activeBan, banNotice, runBanCommand } from '@/lib/bans';
 import { bot, slack } from '@/lib/chat';
 import { handleCommand } from '@/lib/commands';
 import logger from '@/lib/logger';
-import { acceptOptIn, offerOptIn } from '@/lib/onboarding';
+import {
+  acceptOptIn,
+  OPT_IN_ACCEPT_ACTION,
+  OPT_IN_NO_JOIN_ACTION,
+  offerOptIn,
+} from '@/lib/onboarding';
 import { handleSecret } from '@/lib/secret';
 import { toLogError } from '@/lib/utils/error';
 import { isAddressedOnly, isHiddenFromBot } from '@/lib/utils/message';
@@ -91,7 +96,7 @@ bot.onSlashCommand(async ({ text, userId }) => {
   return;
 });
 
-bot.onAction('opt_in_accept', acceptOptIn);
+bot.onAction([OPT_IN_ACCEPT_ACTION, OPT_IN_NO_JOIN_ACTION], acceptOptIn);
 
 bot.onAction('stop_turn', async (event) => {
   const threadId = event.value ?? event.threadId;

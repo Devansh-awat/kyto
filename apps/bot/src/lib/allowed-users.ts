@@ -1,12 +1,15 @@
+import { listOptInUserIds } from '@repo/db/queries';
 import { env } from '@/env';
 import { bot, slack } from '@/lib/chat';
 import logger from '@/lib/logger';
 import { toRawSlackChannelId } from '@/lib/slack/ids';
 import { toLogError } from '@/lib/utils/error';
 
-// Opt-in allowlist: when OPT_IN_CHANNEL is set, only members of that channel may
-// use Kyto. The channel gates terms-of-service acceptance, users read the terms
-// posted there and opt in by joining, which is what grants access.
+// Opt-in allowlist: when OPT_IN_CHANNEL is set, only people who accepted the
+// terms posted there may use Kyto. Two ways to have accepted: being a member of
+// the channel (joining is the acceptance), or clicking "opt in without joining",
+// which is recorded in `opt_ins` because there is no membership to rebuild it
+// from at boot.
 
 function allowlistKey(channel: string): string {
   return `slack:allowed-users:${channel}`;
@@ -54,6 +57,20 @@ export async function addAllowedUser(userId: string): Promise<void> {
   }
 }
 
+/** Drop someone from the in-memory allowlist (an `!optout`). */
+export async function removeAllowedUser(userId: string): Promise<void> {
+  const channel = env.OPT_IN_CHANNEL;
+  if (!channel) {
+    return;
+  }
+  const state = bot.getState();
+  const allowedUsers = new Set(
+    (await state.get<string[]>(allowlistKey(channel))) ?? []
+  );
+  allowedUsers.delete(userId);
+  await state.set(allowlistKey(channel), [...allowedUsers]);
+}
+
 export async function buildAllowlist(): Promise<void> {
   const channel = env.OPT_IN_CHANNEL;
   if (!channel) {
@@ -82,6 +99,9 @@ export async function buildAllowlist(): Promise<void> {
       }
       cursor = response.response_metadata?.next_cursor || undefined;
     } while (cursor);
+    for (const userId of await listOptInUserIds()) {
+      allowedUsers.add(userId);
+    }
     await state.set(allowlistKey(channel), [...allowedUsers]);
     logger.info({ count: allowedUsers.size }, '[allowlist] opt-in cache built');
   } catch (error) {

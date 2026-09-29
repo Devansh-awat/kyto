@@ -1,5 +1,8 @@
+import { removeOptIn } from '@repo/db/queries';
+import { env } from '@/env';
 import type { Message, ThreadHandle as Thread } from '@/harness';
 import { stopTurn } from '@/lib/agent';
+import { removeAllowedUser } from '@/lib/allowed-users';
 import { runBanCommand } from '@/lib/bans';
 import logger from '@/lib/logger';
 import { toLogError } from '@/lib/utils/error';
@@ -26,7 +29,7 @@ import { rawText, withoutLeadingMentions } from '@/lib/utils/message';
 interface BotCommand {
   /** Everything after the command word, unparsed. */
   args: string;
-  type: 'ban' | 'bans' | 'focusmode' | 'stop' | 'unban';
+  type: 'ban' | 'bans' | 'focusmode' | 'optout' | 'stop' | 'unban';
 }
 
 // Slack user ids look like U0123ABCD / W0123ABCD, either as a real `<@U…>`
@@ -52,6 +55,10 @@ export async function handleCommand({
     await runStop({ message, thread });
     return true;
   }
+  if (command.type === 'optout') {
+    await runOptOut({ message, thread });
+    return true;
+  }
   if (
     command.type === 'ban' ||
     command.type === 'unban' ||
@@ -68,6 +75,45 @@ export async function handleCommand({
   }
   await runFocusMode({ args: command.args, message, thread });
   return true;
+}
+
+/**
+ * `!optout` — withdraw acceptance of the terms. The way out for someone who
+ * opted in WITHOUT joining the channel, who otherwise has no leave button; a
+ * channel member is told that leaving is part of it, since membership is itself
+ * the acceptance and is re-read at every restart.
+ */
+async function runOptOut({
+  message,
+  thread,
+}: {
+  message: Message;
+  thread: Thread;
+}): Promise<void> {
+  if (!env.OPT_IN_CHANNEL) {
+    await tell({
+      message,
+      text: "there's no opt-in here, so there's nothing to opt out of.",
+      thread,
+      what: 'opt-out feedback',
+    });
+    return;
+  }
+  const userId = message.author.userId;
+  await removeOptIn(userId).catch((error: unknown) => {
+    logger.warn(
+      { ...toLogError(error), userId },
+      '[commands] could not remove an opt-in'
+    );
+  });
+  await removeAllowedUser(userId);
+  logger.info({ userId }, '[commands] user opted out');
+  await tell({
+    message,
+    text: `you're opted out — i won't answer you until you opt in again. if you're a member of <#${env.OPT_IN_CHANNEL}>, leave it too: being in that channel counts as opting in.`,
+    thread,
+    what: 'opt-out feedback',
+  });
 }
 
 async function runStop({
@@ -192,6 +238,8 @@ function cmd(message: Message): BotCommand | null {
       return { args, type: 'unban' };
     case 'bans':
       return { args, type: 'bans' };
+    case 'optout':
+      return { args, type: 'optout' };
     // Anything else is not a command and must still reach the model — `!` opens
     // plenty of ordinary sentences too.
     default:

@@ -97,6 +97,8 @@ export interface ThreadState {
 }
 
 export interface ActionEvent {
+  /** Which action fired — one handler may be registered for several. */
+  actionId: string;
   /** Message ts of the message hosting the action, if any. */
   messageId?: string;
   raw: unknown;

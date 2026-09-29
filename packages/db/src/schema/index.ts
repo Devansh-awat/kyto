@@ -10,6 +10,7 @@ export * from './identity';
 export * from './mcp';
 export * from './memories';
 export * from './model-credentials';
+export * from './opt-ins';
 export * from './reminders';
 export * from './sandbox';
 export * from './sites';

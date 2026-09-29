@@ -393,6 +393,7 @@ export class KytoBot {
           })
         : '';
       await handler({
+        actionId: action.action_id ?? '',
         messageId: container.message_ts,
         raw: body,
         thread: threadId ? this.thread(threadId) : undefined,
