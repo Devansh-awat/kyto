@@ -143,6 +143,10 @@ channels, then i can link same mem and mcp with all 5-7 channels").
 
 Tools live in `apps/bot/src/lib/ai/tools/`, registered in `lib/ai/toolset.ts`. Raw Slack API: `slack.webClient.apiCall(method, args)`; error helpers from `@/lib/utils/error`. **`TOOLS.md` is the index of the roster**; don't duplicate it here.
 
+### Skills
+
+`loadSkill` (core) / `manageSkills` (OWNER-only registration) — `lib/skills/`, `skills` table (owner's ask 2026-09-29, from coolton). Built-ins are the `.md` files in `apps/bot/src/skills/` (read at boot; a bad one fails the boot), the owner's rows add or override by name. **The index is `loadSkill`'s DESCRIPTION**, sorted by name — tool schemas are in the cached prefix, so a stable order matters and only a catalog change moves it (60s cache). **Writing a skill is owner-only for the same reason a memory needs promotion**: it is prompt text every user's turn loads. Install is by GitHub link only (`githubSkillSource`, tested — https github.com/raw.githubusercontent.com, no `..`), anonymous, SKILL.md + `references/*.md`. Third-party skills with NO licence (the AgentMail pack) live only in the DB, never in this public repo; coolton/gorkie ports keep their AGPL attribution line.
+
 ### Per-tool detail lives in [`.claude/TOOLS.md`](./TOOLS.md)
 
 Read it before touching a tool. **Not loaded automatically** (same convention as MODELS.md), so the security invariants below stay here.

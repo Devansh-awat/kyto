@@ -23,7 +23,7 @@ import { toLogError } from '@/lib/utils/error';
 // (a crash) — and it is claimed atomically, so it runs exactly once.
 
 /** This process. A new one per boot, so "whose row is it" is unambiguous. */
-export const INSTANCE_ID = randomUUID();
+const INSTANCE_ID = randomUUID();
 
 const HEARTBEAT_MS = 30_000;
 // Four missed heartbeats: that instance is gone, not just busy.

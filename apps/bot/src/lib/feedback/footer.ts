@@ -29,7 +29,7 @@ export function formatDuration(ms: number): string {
  * getting dumber. Not shown for a person's own key or a deliberate upgrade —
  * neither of those is a step down.
  */
-export function fallbackNote({
+function fallbackNote({
   model,
   primaryLabel,
 }: {

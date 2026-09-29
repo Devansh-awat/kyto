@@ -16,6 +16,7 @@ export * from './opt-ins';
 export * from './reminders';
 export * from './sandbox';
 export * from './sites';
+export * from './skills';
 export * from './slack-grants';
 export * from './thread-sandboxes';
 export * from './thread-summaries';

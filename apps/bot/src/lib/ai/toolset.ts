@@ -23,6 +23,7 @@ import { emojiUploadConfigured } from '@/lib/emoji-upload';
 import logger from '@/lib/logger';
 import { requestMcpPermission } from '@/lib/mcp-permissions/request';
 import { redactSecretsDeep } from '@/lib/redact';
+import { listSkills } from '@/lib/skills';
 import { recallLoadedTools, rememberLoadedTools } from './loaded-tools';
 import { askQuestionTool } from './tools/ask-question';
 import { backgroundProcessTools } from './tools/background';
@@ -98,6 +99,7 @@ import { scheduleReminderTool } from './tools/schedule-reminder';
 import { searchSlackTool } from './tools/search-slack';
 import { searchWebTool } from './tools/search-web';
 import { editAsUserTool, sendAsUserTool } from './tools/send-as-user';
+import { loadSkillTool, manageSkillsTool } from './tools/skills';
 import { skipTool } from './tools/skip';
 import { slackDocsTool } from './tools/slack-docs';
 import { slackScriptTool } from './tools/slack-script';
@@ -331,6 +333,7 @@ export async function buildTools({
     searchSlack: searchSlackTool({ message }),
     searchWeb: searchWebTool({ apiKey: env.EXA_API_KEY }),
     summarizeThread: summarizeThreadTool({ bot, threadId: thread.id }),
+    loadSkill: loadSkillTool({ skills: await listSkills() }),
     generateImage: generateImageTool({
       getSandboxContext,
       upload: async ({ bytes, mediaType, index, total }) => {
@@ -575,6 +578,14 @@ export async function buildTools({
     // account (Slack has no app-level API), and Slack only lets the adding
     // account remove one — so an open version would let anyone delete anything
     // kyto has ever added for anyone.
+    ...(isOwner
+      ? {
+          manageSkills: {
+            summary: 'install, write, edit or remove skills (owner only)',
+            tool: manageSkillsTool({ userId: authorUserId }),
+          },
+        }
+      : {}),
     ...(isOwner && emojiUploadConfigured()
       ? {
           removeEmoji: {
