@@ -2,8 +2,13 @@ import type { UserMcpServer } from '@repo/db/queries';
 import type { Logger } from '@repo/logging/logger';
 import { jsonSchema, type Tool, tool } from 'ai';
 import { z } from 'zod';
+import { AGENTMAIL_BUILTIN_ID } from '@/lib/ai/mcp-builtin';
 import type { McpServerForTurn } from '@/lib/ai/mcp-scope';
 import { assertPublicMcpHost } from '@/lib/ai/mcp-url';
+import {
+  redactSecrets as redactEmailSecrets,
+  redactionNote,
+} from '@/lib/email/redact';
 import {
   classifyMcpTool,
   type McpCategory,
@@ -426,7 +431,13 @@ export async function buildMcpTools({
                   return decision.detail;
                 }
               }
-              return await connection.callTool(info.name, args);
+              const text = await connection.callTool(info.name, args);
+              if (server.id !== AGENTMAIL_BUILTIN_ID) {
+                return text;
+              }
+              const clean = redactEmailSecrets(text);
+              const note = redactionNote(clean.redactions);
+              return note ? `${clean.text}\n\n${note}` : clean.text;
             },
           });
         }
