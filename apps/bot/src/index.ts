@@ -17,6 +17,7 @@ import { startReminderScheduler } from '@/lib/reminders/scheduler';
 import { startSandboxReaper } from '@/lib/sandbox/store';
 import { startSitesServer } from '@/lib/sites/server';
 import { ensureChannelIndex } from '@/lib/slack/channel-links';
+import { flushThreadLogs, startThreadLogs } from '@/lib/thread-logs';
 import { flushWhiteboards } from '@/lib/whiteboard/room';
 
 let shuttingDown = false;
@@ -36,6 +37,8 @@ async function shutdown(signal: string): Promise<void> {
   await flushWhiteboards().catch((error: unknown) => {
     logger.error({ err: error }, '[bot] failed to save whiteboards');
   });
+  // The stopped turns' last lines — often exactly what shows why they died.
+  await flushThreadLogs();
   await bot.shutdown().catch((error: unknown) => {
     logger.error({ err: error }, '[bot] error during shutdown');
   });
@@ -72,6 +75,7 @@ try {
   // Reap thread reasoning older than the retention window.
   startThinkingReaper();
   startKevinton();
+  startThreadLogs();
   // Same window, same reason, for compacted thread history.
   startSummaryReaper();
   // Warm the channel name→id index so the FIRST reply after a restart can

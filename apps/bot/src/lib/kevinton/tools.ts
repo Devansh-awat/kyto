@@ -7,8 +7,8 @@ import logger from '@/lib/logger';
 import { redactSecrets } from '@/lib/redact';
 import { getSkill } from '@/lib/skills';
 import { parseSkill } from '@/lib/skills/parse';
+import { threadLogText } from '@/lib/thread-logs';
 import { errorMessage } from '@/lib/utils/error';
-import { findQuote, scrubForPublic } from './scrub';
 
 // kevinton's only two ways to leave a mark. Everything else it can do is
 // looking: it never posts in the thread it reviews, and never changes code.
@@ -59,16 +59,20 @@ async function github(
   return json;
 }
 
+// Conversation content may go into an issue (owner's call); secret values may not.
 function publicText(text: string): string {
-  return redactSecrets(scrubForPublic(text), 'kevinton issue');
+  return redactSecrets(text, 'kevinton issue');
 }
 
+// Plenty for a long turn's worth of kyto's verbose logs; past it the OLDEST
+// lines go, since the end of a turn is where it broke.
+const MAX_LOG_CHARS = 150_000;
+
 export function kevintonTools({
-  humanMessages,
+  reviewedAt,
   threadId,
 }: {
-  /** What people wrote in the thread, so a quote of it can be refused. */
-  humanMessages: string[];
+  reviewedAt: Date | null;
   threadId: string;
 }) {
   let issuesThisReview = 0;
@@ -77,7 +81,7 @@ export function kevintonTools({
   const proposed: string[] = [];
 
   const kytoIssues = tool({
-    description: `Kyto's public GitHub issues (${REPO}). \`search\` first, always — a problem that already has an issue gets a \`comment\` with the new evidence, never a duplicate. \`file\` opens a new one. PUBLIC: never quote a message, never name or describe a person, channel or workspace, never include anything from the conversation beyond what kyto did and what went wrong, in your own words. At most ${MAX_ISSUES_PER_REVIEW} new issues or comments per review.`,
+    description: `Kyto's public GitHub issues (${REPO}). \`search\` first, always — a problem that already has an issue gets a \`comment\` with the new evidence, never a duplicate. \`file\` opens a new one. Never include a secret, password or token. At most ${MAX_ISSUES_PER_REVIEW} new issues or comments per review.`,
     inputSchema: z.object({
       action: z.enum(['search', 'file', 'comment']),
       body: z
@@ -122,16 +126,6 @@ export function kevintonTools({
         }
         if (!body) {
           return { error: `${action} needs a body.`, success: false };
-        }
-        const quoted = findQuote({
-          messages: humanMessages,
-          text: `${title ?? ''}\n${body}`,
-        });
-        if (quoted) {
-          return {
-            error: `Not filed: it quotes a person's message ("${quoted}…"). This goes on a PUBLIC tracker — rewrite that part generically in your own words (e.g. "a multi-part question about a hobby project") and try again.`,
-            success: false,
-          };
         }
         const footer =
           "\n\n---\n_Filed by kevinton, kyto's after-the-fact reviewer, from a conversation it reviewed. Conversation details are deliberately left out._";
@@ -237,5 +231,26 @@ export function kevintonTools({
     },
   });
 
-  return { filed, kytoIssues, proposeSkill, proposed };
+  const threadLogs = tool({
+    description:
+      'Every log line kyto emitted while working on THIS thread — agent lifecycle, model attempts and failures, tool calls and errors, sandbox — kept across restarts for a week. Start any investigation here. `all: true` includes lines from before your last review.',
+    inputSchema: z.object({
+      all: z.boolean().optional(),
+    }),
+    execute: async ({ all }) => {
+      const { text, truncated } = await threadLogText({
+        maxChars: MAX_LOG_CHARS,
+        threadId,
+        ...(reviewedAt && !all ? { since: reviewedAt } : {}),
+      });
+      return {
+        logs:
+          text ||
+          'No lines captured for this thread (it predates the capture, or they were pruned after a week).',
+        ...(truncated ? { note: 'The oldest lines were cut to fit.' } : {}),
+      };
+    },
+  });
+
+  return { filed, kytoIssues, proposeSkill, proposed, threadLogs };
 }

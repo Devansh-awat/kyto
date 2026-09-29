@@ -19,6 +19,7 @@ export * from './sandbox';
 export * from './sites';
 export * from './skills';
 export * from './slack-grants';
+export * from './thread-logs';
 export * from './thread-sandboxes';
 export * from './thread-summaries';
 export * from './thread-thinking';

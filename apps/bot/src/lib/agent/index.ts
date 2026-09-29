@@ -84,7 +84,7 @@ import {
 } from '@/lib/errors';
 import { buildReplyFooter } from '@/lib/feedback/footer';
 import { scheduleKevinton } from '@/lib/kevinton';
-import logger from '@/lib/logger';
+import logger, { threadLogContext } from '@/lib/logger';
 import { openSandboxProxies } from '@/lib/sandbox/proxies';
 import { acquireThreadSandbox, threadSandboxStore } from '@/lib/sandbox/store';
 import { ensureChannelIndex } from '@/lib/slack/channel-links';
@@ -232,7 +232,14 @@ export function runTurn(input: {
   if (!turn) {
     return runQueuedTurn({
       threadId: input.thread.id,
-      run: (controller) => executeTurn(input, controller),
+      // Everything logged while the turn runs is captured for its thread
+      // (lib/thread-logs) — except a `!secret` turn, which leaves no trace.
+      run: (controller) =>
+        input.secret
+          ? executeTurn(input, controller)
+          : threadLogContext.run({ threadId: input.thread.id }, () =>
+              executeTurn(input, controller)
+            ),
     });
   }
 

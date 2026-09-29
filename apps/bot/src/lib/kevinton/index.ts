@@ -12,13 +12,12 @@ import {
 } from '@repo/db/queries';
 import { LazySandbox } from '@repo/sandbox';
 import { type ToolSet, tool } from 'ai';
-import { z } from 'zod';
 import { env } from '@/env';
 import type { Message } from '@/harness';
 import { buildPrompt } from '@/lib/agent/prompt';
 import { requestHints } from '@/lib/ai/hints';
 import { buildMcpTools } from '@/lib/ai/mcp';
-import { bot, slack } from '@/lib/chat';
+import { bot } from '@/lib/chat';
 import logger from '@/lib/logger';
 import { redactSecretsDeep } from '@/lib/redact';
 import { openSandboxProxies } from '@/lib/sandbox/proxies';
@@ -34,9 +33,9 @@ import { kevintonTools } from './tools';
 //
 // It runs as nobody: a synthetic non-owner author, so no owner-only tool is
 // even registered and the GitHub write guard refuses it like any stranger.
-// Public and private channels are reviewed (owner's call, 2026-09-29); DMs are
-// not. What it writes lands on a public repo, so the prompt keeps people out
-// of it and scrub.ts cuts every identifier on the way out.
+// EVERY thread is reviewed — channels, private channels, DMs and group DMs —
+// and conversation content may go into the (public) issue: both the owner's
+// call, 2026-09-29. Only secret VALUES are redacted on the way out.
 //
 // It can read kyto's own container logs through the owner's Coolify MCP server
 // (the App Home entry named KEVINTON_LOGS_MCP), forced READ-ONLY here whatever
@@ -80,54 +79,23 @@ Look at what kyto did — its replies, the thinking it left, errors and failed t
 2. A SKILL proposal, only for a genuinely reusable, non-obvious method this conversation worked out that would save real work next time — and only if \`loadSkill\`'s list has nothing covering it.
 
 INVESTIGATE BEFORE YOU FILE. An issue that says "kyto stopped mid-turn" is useless; one that says WHY is worth having.
-- kyto's logs: when the coolify tools are there, \`mcp_coolify_search_resources\` for "kyto" (the APPLICATION, not the project), then \`mcp_coolify_get_logs\` (up to 500 lines, with timestamps) and find this thread's lines — they carry its thread id, given below. Look for the turn's lifecycle: which model answered or failed and why, fallbacks, watchdog trips, tool errors, stack traces, a restart (\`is online\`) or a deploy (\`mcp_coolify_list_deployments\`) in the middle of it. The logs only reach back so far and a redeploy starts them over — say so if the turn is not in them.
-- kyto's source: \`curl -sL https://codeload.github.com/Devansh-awat/kyto/tar.gz/refs/heads/main | tar xz\` in bash (not git clone), then grep and read the code the logs point at. Read-only: do not write or run programs.
+- kyto's logs for THIS thread: \`threadLogs\` — every line kyto logged while working on it (agent, models, tools, sandbox), kept across restarts. Start here. Look for the turn's lifecycle: which model answered or failed and why, fallbacks, watchdog trips, tool errors, stack traces, and where the lines simply STOP (a restart or crash mid-turn).
+- Around it, when the coolify tools are there: \`mcp_coolify_list_deployments\` for a deploy at that moment, and \`mcp_coolify_get_logs\` on the kyto APPLICATION (\`mcp_coolify_search_resources\` "kyto") for what the whole process was doing — the current container only, 500 lines.
+- kyto's source: \`git clone --depth 1 https://github.com/Devansh-awat/kyto\` in bash (if that fails, \`curl -sL https://codeload.github.com/Devansh-awat/kyto/tar.gz/refs/heads/main | tar xz\`), then grep and read the code the logs point at. Read-only: do not write or run programs.
 - \`kytoIssues\` \`search\` first; if it is already reported, \`comment\` with the new evidence instead of filing a duplicate.
 
 A filed issue is DETAILED. Use these sections:
 - **What happened** — the symptom as a person saw it, step by step, with approximate times.
 - **What kyto was doing** — the model(s), tools and steps involved, from the thread and the logs.
-- **Evidence** — the relevant log lines and error messages, quoted exactly (identifiers are stripped automatically).
+- **Evidence** — the relevant log lines and error messages, quoted exactly, and what people said when it matters.
 - **Likely cause** — your diagnosis, with file paths and functions from the source. Say how sure you are.
 - **Suggested fix** — concrete.
 - **How to reproduce** — if you can tell.
 
-The tracker is PUBLIC. Log lines and errors may be quoted; people's messages may not. Never name or describe a person, channel or workspace, and never include what anyone asked about beyond what is needed to understand kyto's fault — describe the request generically ("a multi-part research question").
+Include whatever from the conversation makes the issue clear — what was asked, what was said back. Never include a secret, a password or a token.
 
 When you are done, write one line saying what you did (or "nothing to do").
 </kevinton>`;
-
-const infoSchema = z.looseObject({
-  channel: z
-    .looseObject({
-      is_im: z.boolean().optional(),
-      is_mpim: z.boolean().optional(),
-      is_private: z.boolean().optional(),
-    })
-    .optional(),
-  ok: z.boolean(),
-});
-
-const reviewable = new Map<string, boolean>();
-
-/** A channel, public or private — never a DM or a group DM. */
-async function isReviewable(channel: string): Promise<boolean> {
-  const known = reviewable.get(channel);
-  if (known !== undefined) {
-    return known;
-  }
-  const info = infoSchema.safeParse(
-    await slack.webClient
-      .apiCall('conversations.info', { channel })
-      .catch(() => null)
-  );
-  const ok =
-    info.success &&
-    info.data.ok &&
-    !(info.data.channel?.is_im || info.data.channel?.is_mpim);
-  reviewable.set(channel, ok);
-  return ok;
-}
 
 // The Coolify tools kevinton may call, whatever the App Home entry allows:
 // reads, and the container logs. Never deploy/control/cancel, never env names.
@@ -185,10 +153,6 @@ async function logTools(): Promise<{
 /** A turn just ended here; review the thread once it has been quiet 30 min. */
 export async function scheduleKevinton(threadId: string): Promise<void> {
   if (!env.KEVINTON_ENABLED) {
-    return;
-  }
-  const { channel } = slack.decodeThreadId(threadId);
-  if (!(await isReviewable(channel))) {
     return;
   }
   await noteKevintonActivity({
@@ -268,15 +232,7 @@ async function review({
     close = async () => {
       await Promise.all([built.close(), logs.close()]);
     };
-    const history = await slack
-      .fetchMessages(threadId, { limit: 1000 })
-      .catch(() => ({ messages: [] }));
-    const own = kevintonTools({
-      humanMessages: history.messages
-        .filter((entry) => entry.author.isMe !== true)
-        .map((entry) => entry.text),
-      threadId,
-    });
+    const own = kevintonTools({ reviewedAt, threadId });
     const tools: ToolSet = {
       ...Object.fromEntries(
         LOOKING_TOOLS.flatMap((name) =>
@@ -286,6 +242,7 @@ async function review({
       ...logs.tools,
       kytoIssues: own.kytoIssues,
       proposeSkill: own.proposeSkill,
+      threadLogs: own.threadLogs,
     };
     const names = Object.keys(tools);
 
