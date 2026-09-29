@@ -24,6 +24,7 @@ import type { Message, ThreadHandle } from '@/harness';
 import { banUser } from '@/lib/bans';
 import { formatBanDuration } from '@/lib/bans/duration';
 import { byokConfigured } from '@/lib/byok/crypto';
+import { bot, slack } from '@/lib/chat';
 import logger from '@/lib/logger';
 import { toLogError } from '@/lib/utils/error';
 import {
@@ -333,12 +334,49 @@ async function strike({
     return;
   }
   const left = WARNINGS_BEFORE_BAN - count;
+  await tellOwner({ count, message, thread });
   await tell({
     ephemeral: secret,
     message,
     text: `<@${userId}> i stopped there — that's coding-agent work, and i'm not a coding agent. i'll happily explain code, write a snippet, fix code you paste, or do general agent stuff (research, browsing, email, slack), but i won't build, run or debug programs and bots, brute-force or mine things, work in repos or deploy things. ${left === 0 ? `this is your last warning (${count} of ${WARNINGS_BEFORE_BAN}): once more within 24 hours and you're banned for ${banFor}.` : `this is warning ${count} of ${WARNINGS_BEFORE_BAN}; after the last one, the next within 24 hours gets you banned for ${banFor}.`}${ownKeyHint}`,
     thread,
   });
+}
+
+/**
+ * DM the owner about a warning (owner's ask, 2026-09-29: "ping me when a user is
+ * warned"). A ban already announces itself in the opt-in channel; a warning
+ * is otherwise visible only in the thread it happened in. Best-effort.
+ */
+async function tellOwner({
+  count,
+  message,
+  thread,
+}: {
+  count: number;
+  message: Message;
+  thread: ThreadHandle;
+}): Promise<void> {
+  if (!env.OWNER_USER_ID) {
+    return;
+  }
+  const { channel, threadTs } = slack.decodeThreadId(thread.id);
+  const link = await slack.webClient.chat
+    .getPermalink({ channel, message_ts: message.id || threadTs })
+    .then((result) => result.permalink)
+    .catch(() => undefined);
+  const where = link ? `<${link}|here>` : `in <#${channel}>`;
+  try {
+    const dm = await bot.openDM(env.OWNER_USER_ID);
+    await dm.post({
+      markdown: `:warning: <@${message.author.userId}> got coding warning ${count} of ${WARNINGS_BEFORE_BAN} ${where}.`,
+    });
+  } catch (error) {
+    logger.warn(
+      { ...toLogError(error), userId: message.author.userId },
+      '[anti-coding] could not tell the owner about a warning'
+    );
+  }
 }
 
 async function tell({
