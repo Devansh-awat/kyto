@@ -1,12 +1,19 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../client';
-import { type UserCustomization, userCustomizations } from '../schema';
+import {
+  type ModelMode,
+  type UserCustomization,
+  userCustomizations,
+} from '../schema';
+
+export type { ModelMode } from '../schema';
 
 export async function getUserCustomization(
   userId: string
 ): Promise<UserCustomization | null> {
   const rows = await db
     .select({
+      modelMode: userCustomizations.modelMode,
       prompt: userCustomizations.prompt,
       showUsageFooter: userCustomizations.showUsageFooter,
     })
@@ -15,6 +22,20 @@ export async function getUserCustomization(
     .limit(1);
 
   return rows[0] ?? null;
+}
+
+/** Choose which models a person with their own key runs on (upserts). */
+export async function setModelMode(
+  userId: string,
+  modelMode: ModelMode
+): Promise<void> {
+  await db
+    .insert(userCustomizations)
+    .values({ modelMode, prompt: '', userId })
+    .onConflictDoUpdate({
+      set: { modelMode, updatedAt: new Date() },
+      target: userCustomizations.userId,
+    });
 }
 
 /** Toggle the per-turn usage footer for a user (upserts a row if needed). */

@@ -5,7 +5,9 @@ import {
   type ModelAttempt,
 } from '@repo/ai';
 import {
+  getUserCustomization,
   listUserModelCredentialSecrets,
+  type ModelMode,
   setCredentialValidation,
 } from '@repo/db/queries';
 import { byokConfigured, decryptSecret } from '@/lib/byok/crypto';
@@ -43,12 +45,20 @@ export interface UserRouting {
    * false (the shared chain already runs first in that mode).
    */
   serviceFallback: boolean;
+  /**
+   * 'coding' = kyto's shared models, switching to the person's own attempts
+   * only when the turn is caught doing coding-agent work (owner's ask,
+   * 2026-09-29). The own list is populated for it, but routing leads with the
+   * shared chain and the anti-coding monitor is what moves the turn over.
+   */
+  switchOnCoding: boolean;
 }
 
 const SERVICE_ONLY: UserRouting = {
   own: [],
   ownFirst: true,
   serviceFallback: true,
+  switchOnCoding: false,
 };
 
 /**
@@ -129,6 +139,24 @@ export async function resolveUserRouting(userId: string): Promise<UserRouting> {
   if (own.length === 0) {
     return SERVICE_ONLY;
   }
+  const mode: ModelMode =
+    (await getUserCustomization(userId).catch(() => null))?.modelMode ?? 'own';
+  // Kyto's models only: their keys exist but are not to be spent.
+  if (mode === 'shared') {
+    return SERVICE_ONLY;
+  }
+  if (mode === 'coding') {
+    logger.info(
+      { providers: own.map((attempt) => attempt.provider), userId },
+      '[byok] shared models, switching to the user’s own if the turn is coding'
+    );
+    return {
+      own,
+      ownFirst: false,
+      serviceFallback: true,
+      switchOnCoding: true,
+    };
+  }
   // The ChatGPT account owns the ordering choice; a BYOK-only user is own-first.
   const ownFirst = chatgpt ? chatgpt.chatgptFirst : true;
   logger.info(
@@ -140,7 +168,7 @@ export async function resolveUserRouting(userId: string): Promise<UserRouting> {
     },
     '[byok] routing turn on the user’s own attempts'
   );
-  return { own, ownFirst, serviceFallback };
+  return { own, ownFirst, serviceFallback, switchOnCoding: false };
 }
 
 // Statuses a provider returns when the KEY itself is the problem, as opposed to

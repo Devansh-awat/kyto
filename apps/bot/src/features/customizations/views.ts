@@ -2,6 +2,7 @@ import { BYOK_PROVIDER_IDS, BYOK_PROVIDERS, personas } from '@repo/ai';
 import type {
   ChatgptAccount,
   IdentityProfile,
+  ModelMode,
   Reminder,
   SlackGrant,
   UserMcpServer,
@@ -69,6 +70,58 @@ const VALIDATION_BADGES: Record<string, string> = {
 };
 
 const VALIDATION_MESSAGE_MAX = 140;
+
+export const MODEL_MODE_ACTION = 'home_set_model_mode';
+
+const MODEL_MODES: { description: string; label: string; value: ModelMode }[] =
+  [
+    {
+      description:
+        "your key (or ChatGPT account) runs first; kyto's shared models only as each key allows",
+      label: 'Mine first',
+      value: 'own',
+    },
+    {
+      description:
+        "kyto's models normally; your key takes over when a turn is coding work, which kyto's shared models can't do",
+      label: "Kyto's, mine for coding",
+      value: 'coding',
+    },
+    {
+      description: 'never use your keys; kyto’s shared models only',
+      label: "Kyto's only",
+      value: 'shared',
+    },
+  ];
+
+const DEFAULT_MODE = MODEL_MODES[0] as (typeof MODEL_MODES)[number];
+
+// Shown once someone HAS something of their own to choose between (owner's
+// ask, 2026-09-29): run on theirs, run on kyto's, or kyto's until the turn is
+// coding work — the one thing kyto's shared models are not allowed to do.
+function modelModeBlocks(mode: ModelMode): SlackBlock[] {
+  const current =
+    MODEL_MODES.find((entry) => entry.value === mode) ?? DEFAULT_MODE;
+  const option = (entry: (typeof MODEL_MODES)[number]) => ({
+    description: plainText(entry.description.slice(0, 75)),
+    text: plainText(entry.label),
+    value: entry.value,
+  });
+  return [
+    {
+      accessory: {
+        action_id: MODEL_MODE_ACTION,
+        initial_option: option(current),
+        options: MODEL_MODES.map(option),
+        type: 'static_select',
+      },
+      text: mrkdwn(
+        `*Which models answer you*\n${escapeSlackText(current.description)}.`
+      ),
+      type: 'section',
+    },
+  ];
+}
 
 // The Model keys (BYOK) section: the acting user's own provider keys, which
 // their turns run on instead of kyto's shared models. Only ever rendered for the
@@ -444,6 +497,7 @@ export function buildHomeView({
   privacy,
   prompt,
   reminders = [],
+  modelMode = 'own',
   showUsageFooter = true,
   slackGrant = null,
   slackOauthEnabled = false,
@@ -465,6 +519,8 @@ export function buildHomeView({
   /** Server id → human-readable list of where the user has shared it. */
   mcpShares?: Record<string, string[]>;
   modelCredentials?: UserModelCredential[];
+  /** Which models their turns run on, once they have a key of their own. */
+  modelMode?: ModelMode;
   prompt: string | null;
   reminders?: Reminder[];
   showUsageFooter?: boolean;
@@ -541,10 +597,13 @@ export function buildHomeView({
 
   if (byokEnabled) {
     blocks.push(...chatgptBlocks(chatgptAccount));
+    blocks.push(...modelKeyBlocks(modelCredentials));
+    if (modelCredentials.length > 0 || chatgptAccount) {
+      blocks.push(...modelModeBlocks(modelMode));
+    }
   }
   if (slackOauthEnabled) {
     blocks.push(...slackGrantBlocks(slackGrant));
-    blocks.push(...modelKeyBlocks(modelCredentials));
   }
 
   blocks.push(

@@ -66,6 +66,12 @@ warnings, the 4th and later a 1-hour ban. `recordCodingWarning` increments and
 returns the count in one statement. A `Date` inside a raw `sql` fragment is NOT
 serialized by the driver — pass `toISOString()` with a `::timestamptz` cast.
 
+## `user_customizations.model_mode` (2026-09-29)
+
+```sql
+ALTER TABLE user_customizations ADD COLUMN IF NOT EXISTS model_mode text;
+```
+
 ## The `opt_ins` table (2026-09-29)
 
 ```sql

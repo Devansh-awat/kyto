@@ -392,6 +392,7 @@ export class KytoBot {
   ): Promise<void> {
     const actions = (body.actions ?? []) as {
       action_id?: string;
+      selected_option?: { value?: string } | null;
       value?: string;
     }[];
     const container = (body.container ?? {}) as {
@@ -425,7 +426,8 @@ export class KytoBot {
           userId: user.id ?? '',
           userName: user.username ?? user.id ?? '',
         },
-        value: action.value,
+        // A button carries `value`; a select reports `selected_option.value`.
+        value: action.value ?? action.selected_option?.value ?? undefined,
       });
     }
   }

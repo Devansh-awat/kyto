@@ -95,6 +95,7 @@ export async function publishHome({
         shareEntries.filter(([, names]) => names.length > 0)
       ),
       modelCredentials,
+      modelMode: customization?.modelMode ?? 'own',
       privacy,
       prompt: customization?.prompt ?? null,
       reminders,

@@ -3,7 +3,6 @@ import {
   addMcpServer,
   cancelReminder,
   clearMemoryScopeForGroup,
-  clearUserCustomization,
   createChannelGroup,
   deleteChannelGroup,
   deleteChatgptAccount,
@@ -29,6 +28,7 @@ import {
   setCredentialValidation,
   setIdentityProfile,
   setMcpServerShares,
+  setModelMode,
   setUsageFooter,
   setUserCustomization,
   updateChatgptModel,
@@ -84,6 +84,7 @@ import {
   buildPresetModal,
   buildPromptModal,
   buildShareMcpModal,
+  MODEL_MODE_ACTION,
 } from './views';
 
 // Slack rejects an input-block error string longer than this.
@@ -222,8 +223,11 @@ bot.onAction('modal_load_preset', async (event) => {
     });
 });
 
+// Clearing instructions blanks the prompt rather than deleting the row: the
+// row also holds the reply-footer and model-mode choices, which "clear my
+// instructions" must not quietly reset.
 bot.onAction('home_clear_prompt', async (event) => {
-  await clearUserCustomization(event.user.userId)
+  await setUserCustomization(event.user.userId, { prompt: '' })
     .then(() => publishHome({ userId: event.user.userId }))
     .catch((error: unknown) => {
       logger.warn(
@@ -302,7 +306,7 @@ bot.onModalSubmit(
       if (prompt) {
         await setUserCustomization(event.user.userId, { prompt });
       } else {
-        await clearUserCustomization(event.user.userId);
+        await setUserCustomization(event.user.userId, { prompt: '' });
       }
     } catch (error) {
       logger.warn(
@@ -849,6 +853,25 @@ bot.onModalSubmit(
 );
 
 // ── Model keys / BYOK (per-user, App Home) ──────────────────────────────────
+
+const modelModeSchema = z.enum(['own', 'shared', 'coding']);
+
+// Which models answer this person (App Home "Which models answer you"). The
+// value comes back from a Slack select, so it is parsed, not trusted.
+bot.onAction(MODEL_MODE_ACTION, async (event) => {
+  const parsed = modelModeSchema.safeParse(event.value);
+  if (!parsed.success) {
+    return;
+  }
+  await setModelMode(event.user.userId, parsed.data)
+    .then(() => publishHome({ userId: event.user.userId }))
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), userId: event.user.userId },
+        'Failed to set model mode'
+      );
+    });
+});
 
 // A user's own key never leaves this flow in the clear: it is encrypted before
 // it reaches the DB, never written to a log, never placed in the modal's

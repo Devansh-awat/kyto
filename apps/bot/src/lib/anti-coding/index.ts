@@ -174,6 +174,7 @@ export function createCodingMonitor({
   isOnSharedModel,
   isOwner,
   message,
+  onOwnModelsOnly,
   onStop,
   secret,
   thread,
@@ -183,6 +184,12 @@ export function createCodingMonitor({
   isOnSharedModel: () => boolean;
   isOwner: boolean;
   message: Message;
+  /**
+   * The turn was just caught doing coding work and may continue only on the
+   * person's own models. Called once, the first time — the caller moves a turn
+   * that is currently on the shared chain over, if it can.
+   */
+  onOwnModelsOnly?: () => void;
   /** Abort the turn. Called after the person has been told. */
   onStop: () => void;
   /** A `!secret` turn: anything said about it must stay ephemeral. */
@@ -230,7 +237,10 @@ export function createCodingMonitor({
       '[anti-coding] coding-agent work caught'
     );
     if (decision === 'own-models-only') {
-      ownModelsOnly = true;
+      if (!ownModelsOnly) {
+        ownModelsOnly = true;
+        onOwnModelsOnly?.();
+      }
       return 'own-models-only';
     }
     if (decision === 'owner-warning') {

@@ -189,6 +189,19 @@ function appendStreamedText(existing: string, text: string): string {
     : combined;
 }
 
+/**
+ * The running attempt is on kyto's shared chain and the turn was just caught
+ * doing coding work, for someone whose mode is "kyto's models, mine for
+ * coding". Ending the attempt hands the turn to their own key, which picks up
+ * from the gathered results like any continuation.
+ */
+class SwitchToOwnModelError extends Error {
+  constructor() {
+    super('Coding work: moving the turn onto the person’s own model.');
+    this.name = 'SwitchToOwnModelError';
+  }
+}
+
 class AttemptTimeoutError extends Error {
   constructor(ms: number) {
     super(
@@ -257,6 +270,8 @@ async function executeTurn(
   // no-coding prompt and the missing deploySite are about.
   const ownModelsOnly =
     routing.own.length > 0 && routing.ownFirst && !routing.serviceFallback;
+  // Ends whichever attempt is running (set per attempt below).
+  let abortCurrentAttempt: ((reason: Error) => void) | undefined;
   // Judges the WORK, not just the message: the thread once the prompt is built,
   // then every code-capable tool call (lib/anti-coding). It tells the person
   // itself; all the turn does on a stop is end.
@@ -265,6 +280,15 @@ async function executeTurn(
       !(activeAttempt && routing.own.includes(activeAttempt)),
     isOwner,
     message,
+    onOwnModelsOnly: () => {
+      if (
+        routing.switchOnCoding &&
+        activeAttempt &&
+        !routing.own.includes(activeAttempt)
+      ) {
+        abortCurrentAttempt?.(new SwitchToOwnModelError());
+      }
+    },
     onStop: () => controller.abort(new TurnAbort('coding')),
     secret,
     thread,
@@ -766,6 +790,7 @@ async function executeTurn(
         }, ms);
       };
       armWatchdog(ATTEMPT_TIMEOUT_MS);
+      abortCurrentAttempt = (reason) => attemptAbort.abort(reason);
       // Grant the full idle budget on TOP of the pause, so the model still has
       // its normal working window once the wait is over.
       extendDeadline = (extraMs) => armWatchdog(ATTEMPT_TIMEOUT_MS + extraMs);
@@ -1414,7 +1439,9 @@ async function executeTurn(
         const canContinue =
           error instanceof StreamInterruptedError ||
           error instanceof DegenerateOutputError ||
-          error instanceof AttemptTimeoutError;
+          error instanceof AttemptTimeoutError ||
+          error instanceof SwitchToOwnModelError ||
+          attemptAbort.signal.reason instanceof SwitchToOwnModelError;
         if (controller.signal.aborted || (producedText && !canContinue)) {
           throw error;
         }

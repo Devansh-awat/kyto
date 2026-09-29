@@ -21,6 +21,8 @@ interface SlackTextInputElement {
 }
 
 interface SlackSelectOption {
+  /** Shown under the option in the menu. */
+  description?: ReturnType<typeof plainText>;
   text: ReturnType<typeof plainText>;
   value: string;
 }
@@ -63,7 +65,7 @@ export type SlackBlock =
       elements: SlackButtonElement[];
     }
   | {
-      accessory?: SlackButtonElement;
+      accessory?: SlackButtonElement | SlackSelectElement;
       text: ReturnType<typeof mrkdwn>;
       type: 'section';
     }
