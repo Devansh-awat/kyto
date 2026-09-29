@@ -84,6 +84,10 @@ afterAll(async () => {
   );
 });
 
+// A real `tsc` run: seconds of cold start on a loaded host, past bun's 5s
+// default — which made this fail intermittently for no reason in the code.
+const TSC_TEST_TIMEOUT_MS = 30_000;
+
 describe('fileDiagnostics', () => {
   test('reports a python syntax error', async () => {
     const result = await check('broken.py', 'def f(:\n');
@@ -170,31 +174,35 @@ describe('fileDiagnostics', () => {
 });
 
 describe('fileDiagnostics typecheck', () => {
-  test('reports a real type error through tsc', async () => {
-    const root = await mkdtemp(nodePath.join(tmpdir(), 'kyto-diag-tsc-'));
-    roots.push(root);
-    await writeFile(
-      nodePath.join(root, 'tsconfig.json'),
-      JSON.stringify({
-        compilerOptions: { noEmit: true, strict: true },
-        include: ['*.ts'],
-      })
-    );
-    // tsc is resolved by walking up from the tsconfig for node_modules/.bin/tsc,
-    // so point the walk at this repo's own install.
-    const binDir = nodePath.join(root, 'node_modules', '.bin');
-    await import('node:fs/promises').then((fs) =>
-      fs.mkdir(binDir, { recursive: true })
-    );
-    await import('node:fs/promises').then((fs) =>
-      fs.symlink(repoTsc(), nodePath.join(binDir, 'tsc'))
-    );
-    const path = nodePath.join(root, 'typed.ts');
-    // Parses fine; only a TYPE check can see the problem.
-    await writeFile(path, 'export const n: number = "not a number";\n');
-    const result = await fileDiagnostics({ context: contextFor(path), path });
-    expect(result?.checker).toBe('tsc --noEmit');
-    expect(result?.output).toContain('typed.ts');
-    expect(result?.output).toContain('not assignable');
-  });
+  test(
+    'reports a real type error through tsc',
+    async () => {
+      const root = await mkdtemp(nodePath.join(tmpdir(), 'kyto-diag-tsc-'));
+      roots.push(root);
+      await writeFile(
+        nodePath.join(root, 'tsconfig.json'),
+        JSON.stringify({
+          compilerOptions: { noEmit: true, strict: true },
+          include: ['*.ts'],
+        })
+      );
+      // tsc is resolved by walking up from the tsconfig for node_modules/.bin/tsc,
+      // so point the walk at this repo's own install.
+      const binDir = nodePath.join(root, 'node_modules', '.bin');
+      await import('node:fs/promises').then((fs) =>
+        fs.mkdir(binDir, { recursive: true })
+      );
+      await import('node:fs/promises').then((fs) =>
+        fs.symlink(repoTsc(), nodePath.join(binDir, 'tsc'))
+      );
+      const path = nodePath.join(root, 'typed.ts');
+      // Parses fine; only a TYPE check can see the problem.
+      await writeFile(path, 'export const n: number = "not a number";\n');
+      const result = await fileDiagnostics({ context: contextFor(path), path });
+      expect(result?.checker).toBe('tsc --noEmit');
+      expect(result?.output).toContain('typed.ts');
+      expect(result?.output).toContain('not assignable');
+    },
+    TSC_TEST_TIMEOUT_MS
+  );
 });
