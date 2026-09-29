@@ -75,6 +75,9 @@ export const env = createEnv({
     // GitHub CLI token for the `gh` tool (injected per-call into the sandbox,
     // never persisted as a shell env var). Tool is registered only when set.
     GH_TOKEN: z.string().min(1).optional(),
+    // Context7's built-in docs MCP works anonymously; a key only lifts its
+    // per-IP rate limit (lib/ai/mcp-builtin).
+    CONTEXT7_API_KEY: z.string().min(1).optional(),
     // The GitHub account that token belongs to — kyto's own identity there. Used
     // to tell the model that PRs/issues authored by it are kyto's own work, and
     // to decide which repos the ownership gate auto-claims.

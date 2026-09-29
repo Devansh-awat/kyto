@@ -16,6 +16,7 @@ import { z } from 'zod';
 import { env } from '@/env';
 import type { KytoBot, Message, ThreadHandle } from '@/harness';
 import { buildMcpTools } from '@/lib/ai/mcp';
+import { withBuiltinMcpServers } from '@/lib/ai/mcp-builtin';
 import { resolveTurnMcpServers } from '@/lib/ai/mcp-scope';
 import { slack } from '@/lib/chat';
 import { emojiUploadConfigured } from '@/lib/emoji-upload';
@@ -593,10 +594,12 @@ export async function buildTools({
       }
     ),
   ]);
-  const servers = resolveTurnMcpServers({
-    own: ownServers,
-    shared: sharedServers,
-  });
+  const servers = withBuiltinMcpServers(
+    resolveTurnMcpServers({
+      own: ownServers,
+      shared: sharedServers,
+    })
+  );
   const mcp = await buildMcpTools({
     logger,
     // The person SPEAKING decides an `ask`, even on a server someone else shared
