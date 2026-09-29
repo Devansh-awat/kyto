@@ -25,11 +25,14 @@ const TABLE_SEPARATOR = /^\|?[\s:|-]*-{2,}[\s:|-]*$/;
 
 export function createReply({
   allowBroadcast = false,
+  fromUserAccount = false,
   threadId,
 }: {
   // Only the owner may make kyto ping @channel/@here/@everyone; for everyone
   // else broadcast tokens are downgraded to inert plaintext before posting.
   allowBroadcast?: boolean;
+  /** Posted by kyto's Slack user account, which has no custom icon. */
+  fromUserAccount?: boolean;
   threadId: string;
 }) {
   let buffer = '';
@@ -54,13 +57,15 @@ export function createReply({
       // The normal identity profile can restyle kyto's avatar on ordinary
       // replies — icon only, the name stays plain "kyto". Cached 30s, and it
       // never throws (resolveIdentity swallows load errors).
-      const { iconEmoji, iconUrl } = await resolveIdentity('normal');
+      const identity = fromUserAccount
+        ? { fromUserAccount }
+        : await resolveIdentity('normal');
       await thread
         // `post` denies broadcasts by default; the owner's streamed reply is
         // one of the two paths allowed to opt in (this thread IS the channel
         // kyto was invoked in). `take` has already neutralized the chunk when
         // allowBroadcast is false, so this is belt and braces either way.
-        .post({ allowBroadcast, iconEmoji, iconUrl, markdown: chunk })
+        .post({ allowBroadcast, ...identity, markdown: chunk })
         .then(() => {
           lastPostAt = Date.now();
         })

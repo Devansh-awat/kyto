@@ -9,7 +9,7 @@ import {
 } from '@/lib/agent/inflight';
 import { startThinkingReaper } from '@/lib/agent/thinking';
 import { buildAllowlist } from '@/lib/allowed-users';
-import { slack } from '@/lib/chat';
+import { slack, userBot } from '@/lib/chat';
 import { startKevinton } from '@/lib/kevinton';
 import logger from '@/lib/logger';
 import { redactSecrets, setRedactionAlert } from '@/lib/redact';
@@ -42,6 +42,9 @@ async function shutdown(signal: string): Promise<void> {
   await bot.shutdown().catch((error: unknown) => {
     logger.error({ err: error }, '[bot] error during shutdown');
   });
+  await userBot?.shutdown().catch((error: unknown) => {
+    logger.error({ err: error }, '[bot] user-account connection shutdown');
+  });
   process.exit(0);
 }
 
@@ -67,6 +70,11 @@ setRedactionAlert(({ context, fresh, labels }) => {
 
 try {
   await bot.initialize();
+  // After the app's: it resolves the account id this connection's pings use.
+  // A failure here must not take the app down with it.
+  await userBot?.initialize().catch((error: unknown) => {
+    logger.error({ err: error }, '[bot] user-account connection failed');
+  });
   await buildAllowlist();
   await startSitesServer();
   startReminderScheduler(bot);

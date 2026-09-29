@@ -41,6 +41,12 @@ export const env = createEnv({
     // into EMOJI_REQUEST_CHANNEL and postMessage has no user-account option.
     KYTO_USER_TOKEN: z.string().optional(),
     KYTO_USER_COOKIE: z.string().optional(),
+    // The Socket Mode app-level token (`xapp-`) of an EVENTS-ONLY Slack app
+    // installed BY kyto's user account, so a ping or DM of that account
+    // reaches kyto. It only listens: the answer goes out through the session
+    // above, as the account itself. Unset (or no session) = the account is
+    // never answered.
+    KYTO_USER_APP_TOKEN: z.string().startsWith('xapp-').optional(),
 
     // Static site hosting (see lib/sites). The host only ever serves prebuilt
     // static files from SITES_ROOT — it never executes site code. Building and

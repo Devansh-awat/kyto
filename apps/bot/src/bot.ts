@@ -1,10 +1,11 @@
-import type { Message, ThreadHandle as Thread } from '@/harness';
+import { env } from '@/env';
+import type { KytoBot, Message, ThreadHandle as Thread } from '@/harness';
 import { runTurn, stopTurn } from '@/lib/agent';
 import { isFocusAllowed } from '@/lib/agent/focus';
 import { isUserAllowed } from '@/lib/allowed-users';
 import { activeBan, banNotice, runBanCommand } from '@/lib/bans';
 import { allowBotTurn, noteHumanMessage } from '@/lib/bot-pings';
-import { bot, slack } from '@/lib/chat';
+import { bot, slack, userBot } from '@/lib/chat';
 import { isCodeChannel } from '@/lib/code-channels';
 import { handleCommand } from '@/lib/commands';
 import logger from '@/lib/logger';
@@ -16,7 +17,11 @@ import {
 } from '@/lib/onboarding';
 import { handleSecret } from '@/lib/secret';
 import { toLogError } from '@/lib/utils/error';
-import { isAddressedOnly, isHiddenFromBot } from '@/lib/utils/message';
+import {
+  isAddressedOnly,
+  isHiddenFromBot,
+  rawSlackText,
+} from '@/lib/utils/message';
 import '@/features/approvals';
 import '@/features/ask-question';
 import '@/features/assistant';
@@ -28,11 +33,53 @@ import '@/features/poll';
 
 export { bot } from '@/lib/chat';
 
-bot.onNewMention(answerMention);
+listen(bot);
+if (userBot) {
+  listen(userBot);
+}
+
+/**
+ * The same gates on both connections: the app, and kyto's Slack USER account
+ * (lib/chat `userBot`). Only who answers differs — the account answers as a
+ * person would, through its own session (runTurn `asUserAccount`).
+ */
+function listen(target: KytoBot): void {
+  const asUserAccount = target.answersAs === 'user';
+  target.onNewMention((thread, message) =>
+    answerMention({ asUserAccount, message, thread })
+  );
+  target.onDirectMessage(async (thread, message) => {
+    // Bots are answered on a mention in a shared room, not in a DM with nobody
+    // human watching the two of them talk.
+    if (shouldIgnore(message) || message.author.isBot === true) {
+      return;
+    }
+    if (await refuseBanned(thread, message)) {
+      return;
+    }
+    if (!(await isUserAllowed(message.author.userId))) {
+      await offerOptInAs({ asUserAccount, message, thread });
+      return;
+    }
+    await thread.subscribe();
+    await runCommandOrTurn({ asUserAccount, message, thread });
+  });
+  target.onSubscribedMessage((thread, message) =>
+    answerThreadMessage({ asUserAccount, message, thread })
+  );
+}
 
 // A mention, or a top-level message in a code channel (which is answered as if
 // it were one): the same gates either way — bans, opt-in, focus, the bot loop.
-async function answerMention(thread: Thread, message: Message): Promise<void> {
+async function answerMention({
+  asUserAccount,
+  message,
+  thread,
+}: {
+  asUserAccount: boolean;
+  message: Message;
+  thread: Thread;
+}): Promise<void> {
   if (shouldIgnore(message)) {
     return;
   }
@@ -58,56 +105,58 @@ async function answerMention(thread: Thread, message: Message): Promise<void> {
   // A bot cannot click "i accept", so the opt-in gate is a person's; a bot is
   // still subject to bans, and to the loop guard above.
   if (!(fromBot || (await isUserAllowed(message.author.userId)))) {
-    await offerOptIn(thread, message.author);
+    await offerOptInAs({ asUserAccount, message, thread });
     return;
   }
-  // Mentioned at the top of a thread: stay for the replies. Not for a bot —
+  // Mentioned anywhere in a thread — its top or halfway down — stay for the
+  // replies, as whichever kyto was pinged: the last one pinged takes the
+  // thread over, so it never gets an answer from both. Not for a bot —
   // joining would have kyto answering a thread nobody human asked it into.
-  if (
-    !fromBot &&
-    slack.decodeThreadId(message.threadId).threadTs === message.id
-  ) {
-    await thread.setState({ respondOnThreadMessages: true });
-    await thread.subscribe();
+  if (!fromBot) {
+    await thread.setState({
+      respondAs: asUserAccount ? 'user' : 'app',
+      respondOnThreadMessages: true,
+    });
   }
-  await runCommandOrTurn(thread, message);
+  await runCommandOrTurn({ asUserAccount, message, thread });
 }
 
-bot.onDirectMessage(async (thread, message) => {
-  // Bots are answered on a mention in a shared room, not in a DM with nobody
-  // human watching the two of them talk.
-  if (shouldIgnore(message) || message.author.isBot === true) {
-    return;
-  }
-  if (await refuseBanned(thread, message)) {
-    return;
-  }
-  if (!(await isUserAllowed(message.author.userId))) {
-    await offerOptIn(thread, message.author);
-    return;
-  }
-  await thread.subscribe();
-  await runCommandOrTurn(thread, message);
-});
-
-bot.onSubscribedMessage(async (thread, message) => {
-  // A code channel: every top-level message from a person is for kyto. Bots
-  // still need an explicit mention there (lib/bot-pings).
+async function answerThreadMessage({
+  asUserAccount,
+  message,
+  thread,
+}: {
+  asUserAccount: boolean;
+  message: Message;
+  thread: Thread;
+}): Promise<void> {
+  // A code channel: every top-level message from a person is for kyto (the
+  // app — the user account is not a code channel's bot). Bots still need an
+  // explicit mention there (lib/bot-pings).
   const { channel, threadTs } = slack.decodeThreadId(message.threadId);
   if (
+    !asUserAccount &&
     message.author.isBot !== true &&
     threadTs === message.id &&
     (await isCodeChannel(channel))
   ) {
-    await answerMention(thread, message);
+    await answerMention({ asUserAccount, message, thread });
+    return;
+  }
+  // Pinging the OTHER kyto is talking to it, not to this one — both
+  // connections see the message, and the pinged one answers it.
+  const otherId = asUserAccount ? slack.botUserId : slack.userAccountId;
+  if (
+    !message.isMention &&
+    otherId &&
+    (rawSlackText(message) ?? '').includes(`<@${otherId}>`)
+  ) {
     return;
   }
   const state = await thread.state;
   const shouldRespondToThread =
-    state &&
-    typeof state === 'object' &&
-    'respondOnThreadMessages' in state &&
-    state.respondOnThreadMessages === true;
+    state?.respondOnThreadMessages === true &&
+    (state.respondAs ?? 'app') === (asUserAccount ? 'user' : 'app');
 
   if (shouldIgnore(message)) {
     return;
@@ -133,8 +182,41 @@ bot.onSubscribedMessage(async (thread, message) => {
     );
     return;
   }
-  await runCommandOrTurn(thread, message);
-});
+  await runCommandOrTurn({ asUserAccount, message, thread });
+}
+
+/**
+ * The opt-in prompt carries buttons, which only the app can post. The user
+ * account (often in a DM the app is not part of) says it in words instead.
+ */
+async function offerOptInAs({
+  asUserAccount,
+  message,
+  thread,
+}: {
+  asUserAccount: boolean;
+  message: Message;
+  thread: Thread;
+}): Promise<void> {
+  if (!asUserAccount) {
+    await offerOptIn(thread, message.author);
+    return;
+  }
+  if (!env.OPT_IN_CHANNEL) {
+    return;
+  }
+  await thread
+    .post({
+      fromUserAccount: true,
+      markdown: `hey! you'll need to accept the terms in <#${env.OPT_IN_CHANNEL}> first, then ping me again`,
+    })
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), threadId: thread.id },
+        '[user-account] could not point someone at the opt-in'
+      );
+    });
+}
 
 // `/kyto ban @someone 1d reason`, `/kyto unban @someone`, `/kyto bans`. The
 // same three run as `@kyto!ban …` (lib/commands); this is the form the owner
@@ -172,10 +254,15 @@ bot.onAction('stop_turn', async (event) => {
   }
 });
 
-async function runCommandOrTurn(
-  thread: Thread,
-  message: Message
-): Promise<void> {
+async function runCommandOrTurn({
+  asUserAccount,
+  message,
+  thread,
+}: {
+  asUserAccount: boolean;
+  message: Message;
+  thread: Thread;
+}): Promise<void> {
   if (await handleCommand({ message, thread })) {
     return;
   }
@@ -185,7 +272,7 @@ async function runCommandOrTurn(
   if (await handleSecret({ message, thread })) {
     return;
   }
-  await runTurn({ message, thread });
+  await runTurn({ asUserAccount, message, thread });
 }
 
 /**

@@ -13,6 +13,12 @@ export const threadSubscriptions = pgTable('thread_subscriptions', {
   // messages from these Slack user ids in this thread — everyone else is
   // ignored, so other people can't distract it in a public thread. Null = off.
   focusUserIds: jsonb('focus_user_ids').$type<string[]>(),
+  // WHICH kyto follows the thread: the app, or kyto's own Slack user account.
+  // One per thread, the last one pinged, so a thread never gets two answers.
+  respondAs: text('respond_as')
+    .$type<'app' | 'user'>()
+    .notNull()
+    .default('app'),
   createdAt: timestamp('created_at', { withTimezone: true })
     .notNull()
     .defaultNow(),

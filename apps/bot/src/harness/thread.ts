@@ -299,6 +299,7 @@ export class ThreadHandle {
     const state = row
       ? {
           focusUserIds: row.focusUserIds ?? null,
+          respondAs: row.respondAs,
           respondOnThreadMessages: row.respondOnThreadMessages,
         }
       : null;
@@ -313,11 +314,14 @@ export class ThreadHandle {
   }
 
   async setState(state: ThreadState): Promise<void> {
-    await setThreadSubscription(
-      this.id,
-      state.respondOnThreadMessages === true
-    );
-    cacheSubscription(this.id, state);
+    await setThreadSubscription({
+      respondOnThreadMessages: state.respondOnThreadMessages === true,
+      threadId: this.id,
+      ...(state.respondAs ? { respondAs: state.respondAs } : {}),
+    });
+    // Not cached: an omitted respondAs keeps the stored one, which this
+    // caller doesn't know. The next read goes to the row.
+    subscriptionCache.delete(this.id);
   }
 
   async subscribe(): Promise<void> {

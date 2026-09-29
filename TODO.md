@@ -299,23 +299,10 @@ that only accepts a browser session — an `xoxc-` token plus the matching `d`
 cookie. So kyto now does exactly what that bot does, and the emoji is live
 immediately instead of being posted into #emojibot and hoped for.
 
-**It needs two values from you, once.** In a browser, open the workspace →
-devtools (F12) → Network tab → add any emoji by hand → find the `emoji.add`
-request. From it copy (a) the `token` form field, which starts `xoxc-`, and
-(b) the `cookie` request header (or just the `d=xoxd-…` part of it). Put them in
-`apps/bot/.env` as `KYTO_USER_TOKEN` and `KYTO_USER_COOKIE` (renamed 2026-09-29, when the pair became kyto's OWN user account instead of yours), then restart.
-Until they are set, `submitEmoji` behaves exactly as before.
-
-Worth knowing what that pair is: **not a scoped token — your whole Slack
-account.** It can read every DM you can and post anywhere as you, with no scopes
-to narrow it and nothing distinguishing kyto from you in the audit trail. So it
-stays in the env (never the database, never a sandbox, never a log), only
-`addEmoji`/`removeEmoji` can touch it, and there is deliberately no general
-"call Slack as the owner" helper built on it. Per your call, ANY user can add an
-emoji with it — they all land under your name, so there is a 10/day/person cap
-and every upload logs who asked. Removal is yours alone (Slack only lets the
-adding account remove one). It dies when you log out of that browser session;
-`invalid_auth` in the journal means re-copy it.
+**The session is set (2026-09-29):** `KYTO_USER_TOKEN`/`KYTO_USER_COOKIE` in
+Coolify now hold kyto's OWN user account (`U0BSJ6ZGNDQ`), not yours. It dies
+when that browser session logs out — `kyto user-account session rejected` at
+boot or `invalid_auth` means re-copy both from devtools (see OPS.md).
 
 **Kyto is no longer told whose account an emoji goes in under (2026-08-11).**
 Both places that said so are gone — the tool description told it to say so if

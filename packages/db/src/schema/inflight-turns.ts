@@ -22,6 +22,8 @@ export const inflightTurns = pgTable('inflight_turns', {
   // A turn is resumed at most once, so a turn that crashes the process cannot
   // crash every instance after it too.
   resumed: boolean('resumed').notNull().default(false),
+  // Answered as kyto's Slack user account, not the app: resumed the same way.
+  asUserAccount: boolean('as_user_account').notNull().default(false),
   startedAt: timestamp('started_at', { withTimezone: true })
     .notNull()
     .defaultNow(),

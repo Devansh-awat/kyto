@@ -218,6 +218,12 @@ class AttemptTimeoutError extends Error {
 export { stopAllTurns, stopTurn } from '@/lib/agent/turns';
 
 export function runTurn(input: {
+  /**
+   * Answer as kyto's Slack USER account (lib/chat `userBot`): like a person —
+   * no plan, no thinking, no footer, only the reply and the odd status line,
+   * posted through that account's session. A skip posts nothing at all.
+   */
+  asUserAccount?: boolean;
   message: Message;
   /** Re-running a turn a restart cut short (lib/agent/inflight). */
   resumed?: boolean;
@@ -244,6 +250,10 @@ export function runTurn(input: {
   }
 
   interruptTurn({ activeTurn: turn, input });
+  // The ✅ is the app's; a person doesn't react to say they read you.
+  if (input.asUserAccount) {
+    return Promise.resolve();
+  }
   return slack
     .addReaction(input.thread.id, input.message.id, 'white_check_mark')
     .then(() => undefined)
@@ -252,11 +262,13 @@ export function runTurn(input: {
 
 async function executeTurn(
   {
+    asUserAccount = false,
     message,
     resumed = false,
     secret = false,
     thread,
   }: {
+    asUserAccount?: boolean;
     message: Message;
     resumed?: boolean;
     secret?: boolean;
@@ -318,7 +330,11 @@ async function executeTurn(
     pendingMessages: [],
   };
   setTurn({ threadId, turn: activeTurn });
-  await startThinking({ thread });
+  // "kyto is thinking" is the app's assistant status — the user account shows
+  // nothing until it speaks.
+  if (!asUserAccount) {
+    await startThinking({ thread });
+  }
   // Keep the channel name→id index fresh (30-min TTL, shared in-flight
   // refresh) so `#some-channel` in the reply becomes a real link. A no-op on
   // all but one turn in thirty minutes, and it swallows its own failures — a
@@ -410,7 +426,7 @@ async function executeTurn(
   // question is already deleted, and resuming it would mean remembering it.
   const endTracking = secret
     ? () => Promise.resolve()
-    : trackTurn({ message, resumed, threadId });
+    : trackTurn({ asUserAccount, message, resumed, threadId });
 
   try {
     // Slack's native streaming API renders the thinking/task-card UI. Every
@@ -423,18 +439,25 @@ async function executeTurn(
       // half: no plan message, no streamed reply, no footer. Everything the
       // model writes is collected and handed to one ephemeral message.
       await collectSecret({ message, thread });
+    } else if (asUserAccount) {
+      await speakAsUserAccount({ message, thread });
+      await reply?.flush({ thread });
     } else {
       await streamSegmented({ message, thread });
       await reply?.flush({ thread });
     }
-    if (!secret && hints.customization?.prompt && !slack.isDM(thread.id)) {
+    if (
+      !(secret || asUserAccount) &&
+      hints.customization?.prompt &&
+      !slack.isDM(thread.id)
+    ) {
       await thread
         .post({
           markdown: "_kyto's responses are shaped by this user's instructions_",
         })
         .catch(() => undefined);
     }
-    if (!secret && answeredBy) {
+    if (!(secret || asUserAccount) && answeredBy) {
       await postReplyFooter({
         answeredBy,
         durationMs: Date.now() - turnStart,
@@ -482,7 +505,21 @@ async function executeTurn(
       );
       await reply?.flush({ thread });
       await cleanup();
-      await thread.post(agentErrorMessage({ error, stage: errorStage }));
+      await thread
+        .post(
+          asUserAccount
+            ? {
+                fromUserAccount: true,
+                markdown: 'ugh, something broke on my end. try again in a bit?',
+              }
+            : agentErrorMessage({ error, stage: errorStage })
+        )
+        .catch((postError: unknown) => {
+          logger.warn(
+            { err: postError, threadId },
+            '[agent] could not post the turn failure'
+          );
+        });
     }
   } finally {
     // cleanup() (which pauses the sandbox) has already run on both paths above.
@@ -520,6 +557,7 @@ async function executeTurn(
       codeChannel: await isCodeChannel(
         slack.channelIdFromThreadId(turnThread.id)
       ),
+      asUserAccount,
       customizationPrompt: hints.customization?.prompt,
       ownModelsOnly,
       thread: turnThread,
@@ -866,7 +904,11 @@ async function executeTurn(
       const isFallback = attempts.length > 0;
       try {
         activeAttempt = currentAttempt;
-        reply ??= createReply({ allowBroadcast: isOwner, threadId });
+        reply ??= createReply({
+          allowBroadcast: isOwner,
+          fromUserAccount: asUserAccount,
+          threadId,
+        });
         logger.info(
           {
             attempt: attemptLog(currentAttempt),
@@ -1591,6 +1633,40 @@ async function executeTurn(
             '[agent] secret reply could not be delivered'
           );
         });
+    }
+  }
+
+  /**
+   * Drive the turn as kyto's user account: reply text goes out as that
+   * account's own messages, and every plan/task chunk is dropped. Text the
+   * model writes BEFORE more tool calls is flushed right then, so a long task
+   * reads as a status line or two and then the answer — the way a person
+   * working on something would say it.
+   */
+  async function speakAsUserAccount({
+    message: turnMessage,
+    thread: turnThread,
+  }: {
+    message: Message;
+    thread: ThreadHandle;
+  }): Promise<void> {
+    // Held back from the mid-turn flush while it could still be a bare
+    // `skip`, which the attempt drops from the buffer once it ends — posted,
+    // it would be the one thing a skip must never show.
+    let sinceFlush = '';
+    for await (const part of renderTurn({
+      message: turnMessage,
+      thread: turnThread,
+    })) {
+      if (typeof part === 'string') {
+        await reply?.append({ text: part, thread: turnThread });
+        sinceFlush += part;
+        continue;
+      }
+      if (sinceFlush.trim() && !isBareSkipText(sinceFlush)) {
+        await reply?.flush({ thread: turnThread });
+        sinceFlush = '';
+      }
     }
   }
 

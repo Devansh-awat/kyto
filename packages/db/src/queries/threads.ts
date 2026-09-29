@@ -16,15 +16,25 @@ export async function getThreadSubscription(
   return rows[0] ?? null;
 }
 
-export async function setThreadSubscription(
-  threadId: string,
-  respondOnThreadMessages: boolean
-): Promise<void> {
+export async function setThreadSubscription({
+  respondAs,
+  respondOnThreadMessages,
+  threadId,
+}: {
+  /** Left as stored when omitted (joinThread doesn't know which kyto it is). */
+  respondAs?: 'app' | 'user';
+  respondOnThreadMessages: boolean;
+  threadId: string;
+}): Promise<void> {
   await db
     .insert(threadSubscriptions)
-    .values({ respondOnThreadMessages, threadId })
+    .values({
+      respondOnThreadMessages,
+      threadId,
+      ...(respondAs ? { respondAs } : {}),
+    })
     .onConflictDoUpdate({
-      set: { respondOnThreadMessages },
+      set: { respondOnThreadMessages, ...(respondAs ? { respondAs } : {}) },
       target: threadSubscriptions.threadId,
     });
 }

@@ -46,6 +46,12 @@ interface SocketEnvelope {
  * bot.ts and features port with minimal churn.
  */
 export class KytoBot {
+  /**
+   * `user`: this connection carries events for kyto's Slack USER account (an
+   * events-only app installed by that account), and a mention means a ping
+   * of that account, not of the app.
+   */
+  readonly answersAs: 'app' | 'user';
   private readonly appToken: string;
   private readonly slackLogger: Logger;
   private readonly harness: SlackHarness;
@@ -72,14 +78,17 @@ export class KytoBot {
   ) => Promise<void>)[] = [];
 
   constructor({
+    answersAs = 'app',
     appToken,
     harness,
     logger,
   }: {
+    answersAs?: 'app' | 'user';
     appToken: string;
     harness: SlackHarness;
     logger: Logger;
   }) {
+    this.answersAs = answersAs;
     this.appToken = appToken;
     this.harness = harness;
     this.slackLogger = logger;
@@ -200,7 +209,11 @@ export class KytoBot {
   // ── Lifecycle ───────────────────────────────────────────────────────────
 
   async initialize(): Promise<void> {
-    await this.harness.connectIdentity();
+    // The user-account connection shares the app's harness, whose identity
+    // the app connection has already resolved.
+    if (this.answersAs === 'app') {
+      await this.harness.connectIdentity();
+    }
     const socket = new SocketModeClient({
       appToken: this.appToken,
       logLevel: LogLevel.WARN,
@@ -339,7 +352,17 @@ export class KytoBot {
     if (event.bot_id && event.bot_id === this.harness.botId) {
       author = { ...author, isBot: true, isMe: true };
     }
-    const message = this.harness.buildMessage(event, author);
+    const built = this.harness.buildMessage(event, author);
+    const accountId = this.harness.userAccountId;
+    const message =
+      this.answersAs === 'user'
+        ? {
+            ...built,
+            isMention: Boolean(
+              accountId && (event.text ?? '').includes(`<@${accountId}>`)
+            ),
+          }
+        : built;
     const thread = this.thread(message.threadId);
 
     if (event.channel_type === 'im') {

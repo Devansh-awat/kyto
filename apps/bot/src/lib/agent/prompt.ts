@@ -50,12 +50,18 @@ const RECENT_WINDOW_SECONDS = 7 * 24 * 60 * 60;
 // same special-case in annotateMentions).
 const BOT_NAME = 'kyto';
 
-function readThread(
-  threadId: string,
-  oldest?: string
-): Promise<{ messages: Message[]; nextCursor?: string } | undefined> {
+function readThread({
+  asUserAccount,
+  oldest,
+  threadId,
+}: {
+  asUserAccount: boolean;
+  oldest?: string;
+  threadId: string;
+}): Promise<{ messages: Message[]; nextCursor?: string } | undefined> {
   return slack
     .fetchMessages(threadId, {
+      asUserAccount,
       limit: MAX_HISTORY_MESSAGES,
       maxPages: MAX_HISTORY_PAGES,
       ...(oldest ? { oldest } : {}),
@@ -74,6 +80,9 @@ function authorLabel(message: Message): string {
   if (slack.botUserId && message.author.userId === slack.botUserId) {
     return BOT_NAME;
   }
+  if (slack.userAccountId && message.author.userId === slack.userAccountId) {
+    return `${BOT_NAME} [your user account]`;
+  }
   // Said outright so the model knows it is answering a program, not a person.
   return message.author.isBot === true
     ? `${message.author.userName} [bot]`
@@ -91,11 +100,14 @@ async function renderMessage(message: Message): Promise<string> {
 export async function buildPrompt(
   message: Message,
   {
+    asUserAccount = false,
     codeChannel = false,
     customizationPrompt,
     ownModelsOnly = false,
     thread,
   }: {
+    /** Answering as kyto's Slack user account; per turn, so volatile tail. */
+    asUserAccount?: boolean;
     /** In a code channel (lib/code-channels). Per channel, so volatile tail. */
     codeChannel?: boolean;
     customizationPrompt?: string;
@@ -124,7 +136,11 @@ export async function buildPrompt(
     // Everything before it is in the summary, so re-reading it would be Slack
     // API work whose only output we already have written down.
     const stored = await loadThreadSummary(thread.id);
-    let fetched = await readThread(thread.id, stored?.throughMessageId);
+    let fetched = await readThread({
+      asUserAccount,
+      oldest: stored?.throughMessageId,
+      threadId: thread.id,
+    });
     // A cursor left over means the walk ran out of budget BEFORE the end of the
     // thread — so what we hold is a middle slice, and replaying its last 100
     // messages would hand the model a conversation from months ago as if it
@@ -133,7 +149,11 @@ export async function buildPrompt(
     // rather than fold a slice that does not join onto the stored digest.
     let contiguous = true;
     if (fetched?.nextCursor) {
-      const recent = await readThread(thread.id, recentAnchor(message.id));
+      const recent = await readThread({
+        asUserAccount,
+        oldest: recentAnchor(message.id),
+        threadId: thread.id,
+      });
       logger.warn(
         { threadId: thread.id },
         '[prompt] thread is longer than the history ceiling; reading only recent messages'
@@ -209,6 +229,11 @@ export async function buildPrompt(
     ...(ownModelsOnly
       ? [
           "This turn runs on the person's OWN model key, not Hack Club AI's shared one, so the coding-agent rule does not apply to it.",
+        ]
+      : []),
+    ...(asUserAccount
+      ? [
+          'You are answering as kyto\'s own Slack USER account — a regular member account named kyto, not the kyto app — so talk like a person in Slack does: short and casual, usually a line or two, no headings, no bullet lists unless the answer really is a list, no sign-offs or offers of more help. Nobody sees your plan, tool calls or reasoning, only what you write. On a longer task, one or two very short status lines before the answer are fine ("on it, give me a sec"); otherwise write only the answer. If the message isn\'t for you or needs no reply, call skip — nothing at all is shown. Your tools are the same as always.',
         ]
       : []),
     ...(codeChannel

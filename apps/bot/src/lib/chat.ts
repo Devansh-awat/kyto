@@ -23,3 +23,15 @@ export const bot = new KytoBot({
   harness: slack,
   logger,
 });
+
+// kyto's Slack USER account, answering its own pings and DMs. Same harness
+// (so both kytos know each other's posts as their own), its own connection.
+export const userBot =
+  env.KYTO_USER_APP_TOKEN && env.KYTO_USER_TOKEN && env.KYTO_USER_COOKIE
+    ? new KytoBot({
+        answersAs: 'user',
+        appToken: env.KYTO_USER_APP_TOKEN,
+        harness: slack,
+        logger,
+      })
+    : undefined;

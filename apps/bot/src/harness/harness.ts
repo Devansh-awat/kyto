@@ -32,6 +32,7 @@ const USER_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 // for more is not an error, it just silently returns fewer — so paging a long
 // thread with a bigger number costs the same calls and looks like it worked.
 const SLACK_MAX_PAGE = 1000;
+const SLACK_FILE_HOST = 'files.slack.com';
 
 // Slack keeps a single native stream (chat.startStream → appendStream) open only
 // ~5 minutes; past that the stream expires and further appends are dropped. A
@@ -135,9 +136,13 @@ export class SlackHarness {
   userAccountId: string | undefined;
   /** kyto's user-account session. Reached only through
    * `requireUserAccountClient`, whose only callers are `ThreadHandle.post`
-   * with `fromUserAccount` and `KytoBot.openUserAccountDM` — keep it that way,
+   * with `fromUserAccount`, `KytoBot.openUserAccountDM`, and reading back the
+   * thread that account was pinged in (`fetchMessages` with `asUserAccount`,
+   * the in-flight resume's refetch) — keep it that way,
    * so nothing grows into a general "call Slack as that account" path. */
   private readonly userAccountClient: WebClient | undefined;
+  /** The same session as request headers, for `url_private` file downloads. */
+  private readonly userAccountHeaders: Record<string, string> | undefined;
   private readonly logger: Logger;
   private readonly userCache = new Map<
     string,
@@ -155,14 +160,14 @@ export class SlackHarness {
     userAccount?: { cookie: string; token: string };
   }) {
     this.webClient = new WebClient(botToken);
+    const cookie = userAccount?.cookie.includes('=')
+      ? userAccount.cookie
+      : `d=${userAccount?.cookie}`;
     this.userAccountClient = userAccount
-      ? new WebClient(userAccount.token, {
-          headers: {
-            Cookie: userAccount.cookie.includes('=')
-              ? userAccount.cookie
-              : `d=${userAccount.cookie}`,
-          },
-        })
+      ? new WebClient(userAccount.token, { headers: { Cookie: cookie } })
+      : undefined;
+    this.userAccountHeaders = userAccount
+      ? { Authorization: `Bearer ${userAccount.token}`, Cookie: cookie }
       : undefined;
     this.logger = logger;
   }
@@ -271,11 +276,36 @@ export class SlackHarness {
   }
 
   private async downloadFile(url: string): Promise<Uint8Array | null> {
+    const asBot = await this.fetchFile({
+      headers: { Authorization: `Bearer ${this.webClient.token ?? ''}` },
+      url,
+    });
+    if (asBot || !this.userAccountHeaders) {
+      return asBot;
+    }
+    // A file posted where only kyto's user account is (its DMs): the bot token
+    // gets Slack's sign-in page. Only ever to Slack's file host — the session
+    // is a whole account.
+    if (new URL(url).hostname !== SLACK_FILE_HOST) {
+      return null;
+    }
+    return await this.fetchFile({ headers: this.userAccountHeaders, url });
+  }
+
+  private async fetchFile({
+    headers,
+    url,
+  }: {
+    headers: Record<string, string>;
+    url: string;
+  }): Promise<Uint8Array | null> {
     try {
-      const response = await fetch(url, {
-        headers: { Authorization: `Bearer ${this.webClient.token ?? ''}` },
-      });
-      if (!response.ok) {
+      const response = await fetch(url, { headers });
+      // A token that can't see the file is answered 200 with an HTML page.
+      if (
+        !response.ok ||
+        response.headers.get('content-type')?.startsWith('text/html')
+      ) {
         return null;
       }
       return new Uint8Array(await response.arrayBuffer());
@@ -329,12 +359,19 @@ export class SlackHarness {
   async fetchMessages(
     threadId: string,
     {
+      asUserAccount = false,
       cursor,
       direction = 'backward',
       limit = 100,
       maxPages,
       oldest,
     }: {
+      /**
+       * Read with kyto's user-account session: a turn answering AS that
+       * account, in a thread (its DMs above all) the app may not be in. Only
+       * ever for the thread that account was pinged in — never a tool's read.
+       */
+      asUserAccount?: boolean;
       cursor?: string;
       direction?: 'backward' | 'forward';
       limit?: number;
@@ -350,8 +387,11 @@ export class SlackHarness {
     const pageSize = Math.min(Math.max(limit, 1), SLACK_MAX_PAGE);
     let raw: RawSlackMessage[] = [];
     let nextCursor = cursor;
+    const client = asUserAccount
+      ? this.requireUserAccountClient()
+      : this.webClient;
     for (let page = 0; page < pages; page += 1) {
-      const result = await this.webClient.conversations.replies({
+      const result = await client.conversations.replies({
         channel,
         ...(nextCursor ? { cursor: nextCursor } : {}),
         ...(oldest ? { oldest } : {}),

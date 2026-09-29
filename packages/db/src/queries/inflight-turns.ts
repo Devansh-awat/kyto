@@ -6,12 +6,14 @@ export type { InflightTurn } from '../schema';
 
 /** A turn started (or a resumed one restarted) on this instance. */
 export async function startInflightTurn({
+  asUserAccount,
   instanceId,
   messageId,
   resumed,
   threadId,
   userId,
 }: {
+  asUserAccount: boolean;
   instanceId: string;
   messageId: string;
   resumed: boolean;
@@ -22,6 +24,7 @@ export async function startInflightTurn({
   await db
     .insert(inflightTurns)
     .values({
+      asUserAccount,
       heartbeatAt: now,
       instanceId,
       messageId,
@@ -33,6 +36,7 @@ export async function startInflightTurn({
     })
     .onConflictDoUpdate({
       set: {
+        asUserAccount,
         heartbeatAt: now,
         instanceId,
         messageId,

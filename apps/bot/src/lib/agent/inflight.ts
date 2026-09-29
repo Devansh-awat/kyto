@@ -45,10 +45,12 @@ let shuttingDown = false;
  * turn must never be why it fails.
  */
 export function trackTurn({
+  asUserAccount,
   message,
   resumed,
   threadId,
 }: {
+  asUserAccount: boolean;
   message: Message;
   resumed: boolean;
   threadId: string;
@@ -56,6 +58,7 @@ export function trackTurn({
   const ids = { instanceId: INSTANCE_ID, threadId };
   startInflightTurn({
     ...ids,
+    asUserAccount,
     messageId: message.id,
     resumed,
     userId: message.author.userId,
@@ -88,14 +91,20 @@ export async function markShuttingDown(): Promise<void> {
  * resume.
  */
 async function refetchMessage({
+  asUserAccount,
   messageId,
   threadId,
 }: {
+  asUserAccount: boolean;
   messageId: string;
   threadId: string;
 }): Promise<Message | null> {
   const { channel, threadTs } = slack.decodeThreadId(threadId);
-  const result = await slack.webClient.conversations
+  // The user account's turns are often in its DMs, which the app can't read.
+  const client = asUserAccount
+    ? slack.requireUserAccountClient()
+    : slack.webClient;
+  const result = await client.conversations
     .replies({
       channel,
       inclusive: true,
@@ -119,6 +128,7 @@ async function resumeOnce({
 }: {
   bot: KytoBot;
   runTurn: (input: {
+    asUserAccount: boolean;
     message: Message;
     resumed: boolean;
     thread: ReturnType<KytoBot['thread']>;
@@ -151,10 +161,21 @@ async function resumeOnce({
       { messageId: row.messageId, threadId: row.threadId },
       '[inflight] resuming a turn interrupted by a restart'
     );
-    await thread
-      .post({ markdown: '_kyto restarted mid-reply — picking this back up._' })
-      .catch(() => undefined);
-    runTurn({ message, resumed: true, thread }).catch((error: unknown) => {
+    // The user account talks like a person, and a person doesn't announce
+    // that they restarted.
+    if (!row.asUserAccount) {
+      await thread
+        .post({
+          markdown: '_kyto restarted mid-reply — picking this back up._',
+        })
+        .catch(() => undefined);
+    }
+    runTurn({
+      asUserAccount: row.asUserAccount,
+      message,
+      resumed: true,
+      thread,
+    }).catch((error: unknown) => {
       logger.error(
         { ...toLogError(error), threadId: row.threadId },
         '[inflight] resumed turn failed'

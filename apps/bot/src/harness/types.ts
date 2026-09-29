@@ -96,6 +96,8 @@ export interface ThreadState {
    * these Slack user ids in this thread. Null/undefined = focus off.
    */
   focusUserIds?: string[] | null;
+  /** Which kyto follows the thread: the app, or kyto's Slack user account. */
+  respondAs?: 'app' | 'user';
   respondOnThreadMessages?: boolean;
 }
 

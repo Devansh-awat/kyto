@@ -4,6 +4,10 @@
 > budget. **Keep this current the same way** — if you change how kyto is
 > deployed, synced, debugged, or migrated, update it in the same change.
 
+## The user-account events app
+
+kyto's Slack USER account (`U0BSJ6ZGNDQ`) learns it was pinged or DMed from a separate, events-only Slack app created from `apps/bot/slack-user-events-manifest.json` and **installed while logged in as that account** (user-token events arrive for the installing user). Its app-level token (`xapp-`, scope `connections:write`) goes in Coolify as `KYTO_USER_APP_TOKEN`; nothing else of that app is used — replies go out through `KYTO_USER_TOKEN`/`KYTO_USER_COOKIE`. That session dies when the account logs out: re-copy both from devtools and update them in Coolify (`coolify app env update <kyto uuid> KYTO_USER_TOKEN --value … --is-literal`); a dead one logs `kyto user-account session rejected` at boot.
+
 ## Manifest sync
 
 `bun run sync:manifest` (apps/bot) pushes `slack-manifest.json` via `apps.manifest.update`. Needs a Slack **app configuration token**, not the bot/user token: `SLACK_APP_ID`, `SLACK_CONFIG_ACCESS_TOKEN`, optional `SLACK_CONFIG_REFRESH_TOKEN`. Scopes live in `slack-manifest.json` — update it when a tool needs a new one; scope changes require reinstalling the app.
