@@ -263,3 +263,93 @@ Things kyto creates on someone's behalf and can later change carry an access lis
   - **A thread's sandbox is one mutable machine**; a live turn and a `bash`/`agent` reminder both reach for it. `acquireThreadSandbox`/`withThreadSandbox` serialize them (a turn holds the lock its whole duration).
   - **A paused sandbox costs storage**, so `startSandboxReaper()` (hourly) kills anything untouched for **30 days** (`SANDBOX_TTL_DAYS`). It is ACTIVITY-based (`touchThreadSandbox`), so a sandbox kept warm never ages out — that is how long a compromised one survives. `runOnce()` spins a throwaway sandbox for callers with no thread.
   - **ONE shared virtual display** (`packages/sandbox/src/display.ts`, `kyto-display` on PATH): the headful browser needs X, and callers starting their own killed each other and left `/tmp/.X99-lock` behind, after which every start failed. It is idempotent and clears a stale lock; nothing else may start an X server.
+
+
+---
+
+# Architecture and sandbox as they stood in CLAUDE.md (moved 2026-09-29)
+
+Verbatim, so nothing was lost when CLAUDE.md was trimmed.
+
+## Architecture — fully custom harness
+
+The Vercel Chat SDK, the Pi framework, and `@ai-sdk/harness*` were removed in a ground-up rewrite. Kyto runs on:
+
+- **Custom Slack harness** (`apps/bot/src/harness/`) — `@slack/socket-mode` + `@slack/web-api` directly. `SLACK_APP_TOKEN` required (Socket Mode is the only mode).
+  - `SlackHarness` (`harness.ts`): Web API facade — thread-id codec `slack:CHANNEL[:TS]`, message building, fetch/history/listThreads, reactions, assistant status, native streaming via `webClient.chatStream` (task cards = `task_update` chunks, `task_display_mode: 'plan'`). `fetchMessages` takes `oldest`/`maxPages`; a returned `nextCursor` means the tail was not reached.
+  - `KytoBot` (`bot.ts`): owns the Socket Mode connection and event routing. `app_mention` events are deliberately **ignored** — everything routes off `message` events (mention = text contains the bot id), killing the old dedupe problem.
+  - `ThreadHandle` (`thread.ts`): `post` (Block Kit `markdown` blocks; files via `filesUploadV2`; per-message profile overrides, needs `chat:write.customize`), `postEphemeral`, `schedule`, `subscribe`/`setState`, `fetchMetadata`.
+  - **Every message threads** — a top-level DM/channel message roots its own thread (`threadTs = event.thread_ts || event.ts`). `buildPrompt` scopes context to that thread only, so kyto has no memory of the rest of a DM by default; it uses `searchSlack` (`in:@user`) to pull earlier history on purpose.
+  - Markdown conversion is ours (`harness/markdown.ts`): mrkdwn→markdown inbound, `healMarkdown` closes dangling fences in chunked replies. `bot.getState()` is an in-memory TTL KV (`harness/kv.ts`).
+
+- **Custom agent loop** on `ai`'s `streamText` (`packages/ai/src/agent.ts` `streamAttempt` + `apps/bot/src/lib/agent/index.ts`): multi-step tool loop (`MAX_STEPS`, default **1000** — effectively no limit; the real bound is the watchdog, the degenerate guard, and a `skip`, since a hard cap stranded long jobs mid-solve). Per-attempt `@ai-sdk/openai-compatible` provider; a per-provider `fetch` tunes each request (see Models). `renderStream` (`lib/ai/stream/`) consumes `fullStream` and renders the plan.
+
+- **Sandbox tools** (`lib/ai/tools/sandbox.ts`): `bash`, `readFile`, `writeFile`, `editFile` against `LazySandbox` (see "Sandbox / E2B" below).
+
+- **Deferred tools**: uncommon tools (browser, email, canvases, slackDocs, channel admin, pins, poll, askQuestion, mermaid, sendAsUser/editAsUser, gh, TTS, subagent, every MCP tool) are registered but hidden until the model calls the **`loadTools`** meta-tool, enforced per step via `prepareStep`/`activeTools`. **Whether deferral is worth it is MEASURED, not assumed**: every turn logs `[tools] turn summary` (`loaded`/`loadedUsed`/`loadedUnused`/`coreUsed`). Always-loaded-and-used belongs in `core`; a core tool never in `coreUsed` belongs behind `loadTools`; `loadedUnused` is a round trip paid for nothing. **Jev preloads** (`lib/ai/tool-preload.ts`; owner's ask 2026-09-29, from coolton): at turn start, in PARALLEL with the anti-coding check, one Jev call asks a yes/no per tool GROUP (browser, email, library docs, diagrams, …; ≥0.5 loads it, 3s timeout, a failure preloads nothing) and `built.preload` activates them before step one — never remembered for the thread, and never removes anything `loadTools` could reach. `preloaded`/`preloadedUnused` in the turn summary say whether the threshold is right.
+
+- **Per-user MCP servers** (`lib/ai/mcp.ts`, `user_mcp_servers`): remote Streamable-HTTP servers added from **App Home**. **Plus built-ins for everyone** (`lib/ai/mcp-builtin.ts`): Context7 docs (owner's ask 2026-09-29), appended AFTER the person's own/shared servers so it steps aside for a user's own `context7`, its two read tools pinned `allow` and everything else `never`. Anonymous; `CONTEXT7_API_KEY` lifts the rate limit. **AgentMail's MCP on kyto's inbox** too (`AGENTMAIL_BUILTIN_ID`): reads and send/reply/draft/label open to all like the email tools, every result through `lib/email/redact` (the email invariant covers EVERY read path), `forward_message` and `get_attachment` hidden (forward sends the original server-side, around the redaction), inbox/delete/account tools hidden. A hand-rolled JSON-RPC client connects lazily per turn; listings cached 10 min; tools namespaced `mcp_<server>_<tool>`, deferred behind `loadTools`. A dead server degrades only that turn.
+  - **The URL must be PUBLIC, checked twice** (`lib/ai/mcp-url.ts`, tested): once on save, once at CONNECT time with a DNS resolve, because a name that resolved publicly yesterday can resolve to `127.0.0.1` today. Without it, anyone could point a server at `169.254.169.254` or a neighbouring container and read the reply back out of their own Slack thread — the fetch runs from inside kyto's network and the response is printed. Do NOT relax this to a save-time-only check.
+  - **A server can be SHARED with a channel or a channel group** (`mcp_server_shares`, `lib/ai/mcp-scope.ts`, owner's ask 2026-08-21). Anyone may share a server they own; the credential is NOT copied, the share points at the row. On a shared server the person SPEAKING approves an `ask`, not the sharer (owner's call — "person b can also approve it") — but a STANDING rule stays with the credential's owner, enforced in `features/mcp-permissions` (`gate.ownerUserId`) and the extra buttons are not even rendered for anyone else.
+  - **Namespaces are resolved deterministically** (`resolveTurnMcpServers`, tested): the asker's OWN servers keep their names, a shared server colliding on a name is suffixed `_2`, and a server is listed once. Two people both calling a server `github` must never let one's call land on the other's credential — and the order must be STABLE, or the tool array reshuffles between turns and the thread's prompt cache is thrown away.
+  - **A bare token is normalized to `Bearer <token>` at save time** (`normalizeMcpAuthorization`, tested), and a **failed listing is RECORDED, not just logged** (`getMcpFailure`, shown on the entry in App Home). One bug, two halves: the field wants a header VALUE but an API token is what gets pasted, so every bearer-auth server 401'd, and the old catch swallowed it — a bad entry looked exactly like a server with no tools. The record doubles as a 60s negative cache, since `buildMcpTools` is awaited while the toolset is built and a broken entry else added two 8s timeouts to every turn of that user's. The listing cache is keyed by URL **and** credential — on URL alone it served one user's listing to another.
+  - **Every tool a server advertises is gated by that server's own rules** (`lib/ai/mcp-permissions.ts`, tested; owner's ask 2026-08-16). Each is classified `read`/`sensitive`/`write`/`unknown` (annotations → the ability its description STATES → name verbs; anything left stays `unknown` rather than being guessed into `read`), and each category carries `allow`/`ask`/`never`, with per-tool overrides on top. Defaults: `read: allow`, everything else `ask`. `parseMcpRules` falls back field-by-field to the SAFE shape, so a corrupt jsonb blob cannot open a gate. **Mechanics — classification layers, the shared add/edit modal, token replace/clear, pin syntax — are in [`.claude/TOOLS.md`](./TOOLS.md).**
+    - **`never` means NOT REGISTERED**, not refused at call time (owner's call: "hide them entirely") — a hidden tool is unreachable by an injection and its schema never enters the prompt. The model is told only the COUNT per category, so it can say the category is off instead of confabulating a reason a tool it half-remembers is missing.
+    - **`ask` blocks the call on a threaded ephemeral** (`lib/mcp-permissions/request.ts`, `features/mcp-permissions/`): Allow once / Always / Deny / Never, asking on **every single call** (no per-thread memory, owner's call). Only the row's `approverUserId` may click, checked BEFORE the row is claimed. There is deliberately **no DM fallback** — a prompt that cannot post refuses the call. `extendAttemptDeadline` holds the watchdog open for the wait, and an **unattended** run (a reminder, a subagent — no watchdog to extend) passes `unattended: true` to `buildTools` and gets a clear REFUSAL instead of a button nobody is watching.
+
+### Channel groups
+
+`channel_groups` + `channel_group_channels` — a NAMED SET OF CHANNELS so one
+configuration covers several rooms (owner's ask 2026-08-21: "if many linked
+channels, then i can link same mem and mcp with all 5-7 channels").
+
+- **Anyone may create one** (owner's call); its creator is its custodian and only
+  they (and the bot owner) may rename it, delete it, or change its channel list.
+  That is checked at modal OPEN *and* at SUBMIT — the group id travels through
+  the client, so opening someone else's group is one edited payload away.
+- **A share follows the group.** Adding a channel to a group extends every MCP
+  server and every promoted memory attached to it, so sharing with a group is
+  trust in its custodian. The App Home copy says exactly that at the point of
+  sharing; do not quietly make it read like a snapshot.
+- **Deleting a group takes its dependents with it** — MCP shares dropped,
+  scoped memories demoted to private. An orphan fails closed (it resolves for no
+  channel) but is also invisible and impossible to revoke, which is the worse property.
+- Resolved ONCE per turn in `buildTools` (`listGroupIdsForChannel`) and reused by
+  both the memory scope and the MCP toolset.
+
+## AI tools
+
+Tools live in `apps/bot/src/lib/ai/tools/`, registered in `lib/ai/toolset.ts`. Raw Slack API: `slack.webClient.apiCall(method, args)`; error helpers from `@/lib/utils/error`. **`TOOLS.md` is the index of the roster**; don't duplicate it here.
+
+### Skills
+
+`loadSkill` (core) / `manageSkills` (OWNER-only registration) — `lib/skills/`, `skills` table (owner's ask 2026-09-29, from coolton). Built-ins are the `.md` files in `apps/bot/src/skills/` (read at boot; a bad one fails the boot), the owner's rows add or override by name. **The index is `loadSkill`'s DESCRIPTION**, sorted by name — tool schemas are in the cached prefix, so a stable order matters and only a catalog change moves it (60s cache). **Writing a skill is owner-only for the same reason a memory needs promotion**: it is prompt text every user's turn loads. Install is by GitHub link only (`githubSkillSource`, tested — https github.com/raw.githubusercontent.com, no `..`), anonymous, SKILL.md + `references/*.md`. Third-party skills with NO licence (the AgentMail pack) live only in the DB, never in this public repo; coolton/gorkie ports keep their AGPL attribution line.
+
+### Kevinton — the silent reviewer
+
+`lib/kevinton/`, `kevinton_reviews` (owner's ask 2026-09-29, from coolton; `KEVINTON_ENABLED` kill switch). Every finished non-`!secret` turn in a **channel, public or private** (owner's call; never a DM or group DM) pushes the thread's review 30 min out; a 60s poller CLAIMS due threads atomically (tested against the DB: concurrent claims → one) and runs a full, headless kyto turn on `subagentAttempts` (GLM 5.3 on Hack Club first — the shared chain, owner's call). Load-bearing:
+- **It never speaks in the thread**: its toolset is an allowlist of LOOKING tools (`LOOKING_TOOLS`) plus its own two; it runs as a synthetic non-owner (`kevinton`), `secret: true`, `unattended: true`, in a throwaway sandbox.
+- **Issues go straight onto the PUBLIC `Devansh-awat/kyto`** (owner's call) as `kyto-agent`, titled `[kevinton] …` (no triage access for labels), DETAILED (what happened / what kyto was doing / evidence / likely cause with code paths / fix / repro), search-before-file, ≤2 per review and ≤8 per day (counted on GitHub, so it survives restarts). **A filing that repeats 5+ consecutive words of a person's message in the thread is REFUSED** (`findQuote`, tested) — the prompt alone did not stop the first live review quoting users. Then `scrubForPublic` (Slack mentions/ids/links/timestamps/emails) and `redactSecrets`.
+- **It reads kyto's logs through the owner's App Home Coolify MCP** (`KEVINTON_LOGS_MCP`, default `coolify`), with `LOGS_RULES` FORCED over that entry's own: reads + `get_logs`, never deploy/control/cancel/env names — the token behind it can restart kyto. Container logs start over at every redeploy, so an older turn is often out of reach. Source comes from the codeload tarball (git through the sandbox's GitHub proxy fails for its identity).
+- **Skills it proposes go to the owner's approval queue** (`kind: 'skill'`, posted in the owner's DM, re-parsed at execute) — never live on its own say-so. It never opens PRs or changes code (coolton's does; kyto's files issues instead).
+
+### Per-tool detail lives in [`.claude/TOOLS.md`](./TOOLS.md)
+
+Read it before touching a tool. **Not loaded automatically** (same convention as MODELS.md), so the security invariants below stay here.
+
+
+## Sandbox / E2B — lazy, and persistent per thread
+
+Config in `packages/sandbox/src/config.ts`. E2B backs the `bash`/file tools and the host tools that opt in (`browser`, `deploySite`, `getFile`, `uploadFile`).
+- **Lazy** (`LazySandbox`): `Sandbox.create` is deferred until a tool touches it, so chat-only turns cost zero E2B.
+- **Persistent per thread**: `destroy()` **pauses** rather than kills, the thread's `sandbox_id` is remembered in `thread_sandboxes`, and the next turn calls `Sandbox.connect(id)` (auto-resumes, ~450ms) for the same filesystem. This makes a **`bash` recurring reminder** useful (write/test a script, then schedule it) and is what `wait`'s `pauseSandbox` leans on.
+  - **The persistence details — the `SandboxStore` injection, a thread vs a "conversation", stale create-time `envs`, the per-thread lock, the 30-day activity reaper, and the ONE shared virtual display — are in [`.claude/TOOLS.md`](./TOOLS.md).**
+
+- **Memory = the Slack thread.** `buildPrompt` feeds the whole thread (`slack.fetchMessages`, capped); no verbatim TRANSCRIPT is persisted. kyto DOES persist three kinds of DERIVED text — `thread_thinking`, `thread_summaries` (~30-day retention) and `memories` (until deleted) — all of which can paraphrase message content. Deliberate: the owner signed off and cleared it with Hack Club. Full position in `docs/reference/security.md`.
+- **…plus the last few turns' THINKING** (`lib/agent/thinking.ts`). Slack records only what kyto *said*, so without this every turn re-derived the previous turn's conclusions. `renderStream`'s `onReasoning` collects it; `rememberThinking` keeps the last 3 turns per thread, injected as `<your_previous_thinking>`. **Persisted** (`thread_thinking`, ~30-day retention, daily `startThinkingReaper`) so it survives a restart. Only the attempt that ANSWERED leaves its thinking, so a spiral can't seed the next turn.
+- **…plus a COMPACTED digest of whatever no longer fits** (`lib/agent/compaction.ts` + `compaction-plan.ts`, `thread_summaries`). `buildPrompt` replays the newest `MAX_THREAD_MESSAGES` (100) verbatim — and at most `MAX_REPLAY_CHARS` (240k, ~60k tokens; owner's ask 2026-09-29, the one thing coolton's token-sized compaction did better), the start moving in steps of 25 so the cached history prefix rarely shifts (`replayWindowStart`, tested) — and folds everything older into a running summary injected as `<earlier_in_this_thread>` — past the cap, messages used to just vanish and the model contradicted decisions it could no longer see. **The block ALWAYS states the count**, summary or not. Runs on `subagentAttempt` (the Gemini key), NOT the HackClub cap. Reaped by `startSummaryReaper`; erased like `thread_thinking`.
+  - **The READ is incremental, which is what makes "the whole thread" affordable** (2026-08-08). The fetch starts at the digest's `throughMessageId` (`fetchMessages`'s `oldest`), so history is read ONCE and later turns cost the replay window. Ceiling `MAX_HISTORY_MESSAGES`/`MAX_HISTORY_PAGES` (20k): Slack only pages a thread FORWARD, so a never-compacted thread costs one call per 1,000, and a returned `nextCursor` means the tail was NOT reached.
+  - **A truncated walk RE-ANCHORS near now and skips compaction that turn.** A leftover cursor means the walk stopped mid-thread, so replaying its last 100 would hand the model a conversation from months ago as if it were live (measured: `slack:C06QV2T1P4G:1710818631.730789` is 25,000+ messages). It re-reads from a week before the current message and renders `renderUnreadableBlock` (no count: kyto doesn't know what it didn't see).
+  - **The boundary is found by TIMESTAMP, not by index** — an incremental read never contains the older ids, and `conversations.replies` prepends the thread root to every page, so an index lookup calls the digest "unlocatable" and rebuilds it from scratch.
+  - **A backlog is CHUNKED into passes that each extend the previous digest and each PERSIST** (`MAX_MESSAGES_PER_PASS` 200); it used to clamp to the newest 200 and move the marker past the rest, losing them permanently. >1 pass runs in the BACKGROUND (one per thread, `catchingUp`) so a months-old thread never stalls a reply.
+

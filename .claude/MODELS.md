@@ -140,3 +140,64 @@ Two standing rules survive from the 2026-08-11 removal:
   provider nobody chose is dropped, not tried last. That is tested.
 - Before adding ANY tier or rung, read its terms for a training clause and for
   what it retains — price is not the only constraint.
+
+
+---
+
+# Essentials as they stood in CLAUDE.md (moved 2026-09-29)
+
+Verbatim, so nothing was lost when CLAUDE.md was trimmed. Where it and the sections above disagree, the code decides — then fix both.
+
+## Models / fallback (former CLAUDE.md section)
+
+**Full detail in [`.claude/MODELS.md`](./MODELS.md) — read it before touching routing, and update it when you change routing.** Essentials:
+
+- **Primary is `z-ai/glm-5.3-flash` on the Hack Club gateway** (`PRIMARY_MODEL`/`PRIMARY_ATTEMPT`, `packages/ai/src/providers/attempts.ts`) — owner's call, 2026-08-26 (PR #8), reinstated 2026-09-04 after a one-day TokenBom detour (tried as primary 2026-09-03→04, then **fully removed from the code** — owner's call, "i dont trust tokebom" — after `claude-fable-5` lost all marketplace supply within hours and its replacement `claude-opus-5` then 402'd on every call because the TokenBom account's credit balance was below what one call cost). Do not re-add TokenBom without the owner's explicit ask. Full detail: MODELS.md.
+- **The HackClub 504s are a 5s header timeout in HackClub's own proxy, not a gateway or provider fault.** Failures land at ~5.4s, bill no tokens, and a plain replay fixes ~96%. **Time-to-first-byte is therefore load-bearing for any rung.** Mechanism in MODELS.md.
+- **The DigitalOcean tier is GONE (2026-07-27)** — the account behind it stopped being provided. Do NOT re-add a tier without a live account behind it (a user's own OpenRouter key is separate, and still supported).
+- **`LEADERBOARD_FALLBACK` is CHEAP ON PURPOSE, not the arena top 19** (owner's call, 2026-07-27): the tier shares one $3/day cap, so falling back to an expensive model over a transient 504 could spend the day's budget on one turn. Every rung must still be good enough to hand a live thread to; cheap is a constraint, not the bar. **Price any new rung before adding it.**
+- **An ATTEMPT is "handled" iff IT produced reply text or a deliberate `skip`** (per-attempt, not per-turn). A model that ran tools but wrote nothing gets ONE `synthesizeFinalAnswer` nudge (same model, tools still ON so it can finish, told not to repeat a side effect that already happened) before falling back. `continueTruncatedReply` also keeps the real toolset now (2026-08-22): the prompt tells it prose-only instead, because an empty toolset is what made models narrate the contradiction.
+- **A subagent runs on the SAME model as the turn** (`subagentAttempts` = `PRIMARY_ATTEMPT`, so now GLM 5.3 Flash on HackClub, Gemini behind it — owner's call 2026-08-21). **Compaction did NOT follow it**: `compactionAttempts` stays Gemini-first (then `deepseek-v4-flash-0731` on HackClub, not the current primary), because one pass digests up to 200 messages, a long-idle thread catches up over many passes, and it all runs in the background where nobody sees the bill.
+- **Fallback walks by TIER, best-first within each** (`buildFallbackQueue`): HackClub rungs in rank order, then the free **mebbo** tier (a friend's self-hosted OpenWebUI — **wired but EMPTY since 2026-08-22**: one slug 404s, the other's Groq upstream caps the key at 8k tokens/min against kyto's 13-20k prompts, so both were doomed attempts on every walk), then the Gemini key. Must NOT pivot on the primary's rank — an old "walk up from the pivot" reversed the leaderboard and fell back worst-first onto a degenerate model.
+- **A stream cut off with NO finish reason is a transport drop, not a model failure** (`truncatedStream`): the openai-compatible mapper reports `other` for it, which no healthy completion produces. If text had streamed it is CONTINUED on the same model (the `length` path); if nothing had streamed and no tool ran, the SAME attempt is re-run in place (≤2×). This is what made kyto "stop mid-turn and fall back to gemini" while Ox Alpha was free and unlimited. Detail in MODELS.md.
+- **A gateway 504 no longer condemns the HackClub tier** (`condemnsHackclub`): the proxy 504s per REQUEST, not per model. `HACKCLUB_OUTAGE_THRESHOLD = 1` still writes the tier off on any OTHER proxy-reported failure (auth, rate limit, budget, a real 5xx), since every rung shares one proxy and budget.
+- **A model that starts LOOPING is not "handled"** (`lib/agent/degenerate.ts`): 8 identical consecutive lines outside a fence, or a runaway single line, drops the loop before Slack sees it and falls back.
+- **A turn that already streamed text may still fall back, for exactly three reasons** (`canContinue`): a degenerate loop, a watchdog trip, and `StreamInterruptedError` — a provider dying MID-STREAM doesn't throw (the SDK makes it an `error` part and ends the stream), so a turn went quiet while looking handled. The next model gets `renderContinuation` + `renderCarryover`.
+- **A spent ChatGPT plan quota is PARKED, not retried** (`quota_resets_at`): the 429 carries a reset time, so the account is skipped until then rather than prepending a doomed attempt to every walk. Separate from `validationStatus` — a 429 is not an invalid login.
+- **A provider whose terms allow training on what is sent may NOT be a tier, at any position** (owner's call 2026-08-11). OpenCode Zen's free slugs were removed for exactly this: Hack Club's scraping policy permits training on Slack messages only with every author's explicit consent, and a turn carries other people's messages. Two owner-granted per-slug exceptions have existed and both are now REMOVED entirely: Ox Alpha Free on Zen (primary 2026-08-21→2026-08-26) and TokenBom (`claude-fable-5` then `claude-opus-5`, primary 2026-09-03→04, pulled because the owner does not trust the provider — see MODELS.md). Do not add a train-permitting provider as a tier without a fresh, explicit owner ask. `buildFallbackQueue` is an ALLOWLIST of tiers so an unchosen provider is dropped rather than tried last (tested). Read a candidate's terms before adding it.
+- **Hard failures are remembered ACROSS turns for 30 min** (`lib/agent/fallback-cache.ts`, tested; owner's ask 2026-09-29, from coolton — with NO background probe, owner's call). 401/402/403/404 on a rung, or Hack Club's spend limit (the whole tier), seed the next turn's `failedKeys` so it starts past them; a rung that answers clears itself and its tier. Never a 429/5xx/timeout/model fault, never a person's own key, and never "promote the last working rung" (the primary is a choice). If the cache would leave a turn with nothing to try it is cleared and the walk starts over.
+- **A GATEWAY failure is replayed before it can cost a fallback** (`gateway-retry.ts`): a gateway-status response (408/502/503/504/520/522/524) is re-sent up to 2× inside the per-attempt fetch — safe because the model never ran. Every other failure routes away on the first try (`maxRetries` stays 1).
+- **The model can escalate itself to a stronger rung** (`upgradeModel`, core tool): the call ends the attempt like `skip`, and the turn continues on kimi-k3 → claude-sonnet-5 with the work so far replayed as carryover. Capped at ONCE per turn and 8 per UTC day workspace-wide — those rungs are ~20-50x the primary on the same $3/day cap. **An upgrade STICKS to its thread** (`claimStickyUpgrade`, 30-min idle window): escalation used to last one turn, so the next message went back to the model that had just said it couldn't do it. A sticky turn claims the SAME daily budget, so it cannot outrun the cap. Detail in MODELS.md.
+- **A tool call truncated mid-JSON is repaired** (`repairTruncatedToolCall`) — a huge arg can hit `MAX_OUTPUT_TOKENS` mid-string.
+- **Prompt caching** (1h TTL) + **`maxOutputTokens: 8000`** on the metered proxies defuse HackClub's pessimistic spend projection. **Nothing volatile may enter the system prompt** — it is one string, so one changed byte throws away the whole system+tools prefix; the per-turn clock and message id live in the user message's volatile tail. **Tool schemas serialize BEFORE the messages**, so `stabilizeToolOrder` (tested) keeps a tool loaded mid-turn APPENDED rather than spliced in — otherwise every `loadTools` call cost the rest of the turn its cache (`divergedAt: "tools(48)", cacheable: "0%"`). `cache-probe.ts` logs any step whose prompt is not a pure append.
+- **Gemini requires `thought_signature` replay** or every multi-step tool turn 400s.
+- **Per-attempt STALL watchdog** (`ATTEMPT_TIMEOUT_MS`, default **5m**, env `AGENT_ATTEMPT_TIMEOUT_MS`): an IDLE budget re-armed on every text delta, tool call, and tool result — a long-but-working turn is NOT killed, only a genuine stall (frozen SSE, hung tool). Aborts ONLY the attempt signal (not the turn controller), so it's not mistaken for a user interrupt. The `wait` tool extends it.
+
+### BYOK and Sign in with ChatGPT — a user's own model access
+
+Both let a user's turns run on **their** credential instead of kyto's shared
+models: BYOK is a provider API key (**App Home "Model keys"**), the ChatGPT link
+is an OAuth'd Plus/Pro/Team subscription (`packages/ai/src/providers/chatgpt.ts`,
+`apps/bot/src/lib/chatgpt/`, `user_chatgpt_accounts`). What lives here rather
+than in MODELS.md is the SECRET handling:
+
+- Both are **gated on `BYOK_ENCRYPTION_KEY`** (min 32 chars, scrypt →
+  AES-256-GCM, `lib/byok/crypto.ts`). Unset = no App Home section and no
+  per-user routing at all; `chatgptConfigured()` === `byokConfigured()`.
+  Changing the key makes every stored secret unreadable.
+- **`packages/db` never returns a plaintext key** except through
+  `listUserModelCredentialSecrets` / `getChatgptAccountSecret`. A key is never
+  logged, never put in a prompt or a sandbox env, never in a modal's
+  `private_metadata`; the UI shows only a `…tail`.
+- Linking ChatGPT is a **manual code paste**: OpenAI's Codex client only
+  registers a `localhost:1455` redirect a server bot can't listen on.
+
+**Everything else — service-fallback defaults, validity marking, the
+`generateImage` exception, the Responses API branch, `store:false`, Codex
+headers, the `MAX_OUTPUT_TOKENS` exemption, per-user ordering, quota parking,
+the model-slug rule — is in [`.claude/MODELS.md`](./MODELS.md).**
+
+- **A turn a restart cut short is resumed** (`lib/agent/inflight.ts`, `inflight_turns`; owner's ask 2026-09-29, from coolton). Each running turn has a row with its instance id and a 30s heartbeat; SIGTERM marks this instance's rows `interrupted` BEFORE `stopAllTurns` (else stopping reads as a normal end and deletes them). A new instance polls for 10 min and CLAIMS rows atomically — `interrupted`, or `running` with a heartbeat >2 min stale (a crash) — which is what keeps the old and new containers of a rolling deploy from both running one turn. Resumed at most once, only within 30 min, never a `!secret` turn; it posts "_kyto restarted mid-reply_" and re-runs with a `<resumed_after_restart>` note telling the model not to repeat side effects already in the thread.
+
+**Every routing failure above is readable from the container's logs** (`docker logs <container>` on the oracle server, or the Coolify dashboard — NOT `journalctl`, the systemd unit is masked) — the turn's lifecycle lines and what each one tells you are in MODELS.md ("Turn logging").
+
