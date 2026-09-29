@@ -29,7 +29,7 @@ describe('redactSecrets', () => {
 
   test('reports the label, never the value', () => {
     const hits: string[][] = [];
-    setRedactionAlert(({ labels }) => hits.push(labels));
+    setRedactionAlert(({ fresh }) => hits.push(fresh));
     redactSecrets('sk-test-0123456789abcdef', 'alert test');
     expect(hits.flat().join()).not.toContain('sk-test');
   });

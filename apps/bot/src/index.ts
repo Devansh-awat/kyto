@@ -37,15 +37,16 @@ async function shutdown(signal: string): Promise<void> {
 // Every text kyto sends to Slack passes the secret-value scrub, and a catch is
 // reported to the owner by NAME only (lib/redact).
 setOutboundFilter((text) => redactSecrets(text, 'a Slack post'));
-setRedactionAlert(({ context, labels }) => {
-  if (!env.OWNER_USER_ID) {
+setRedactionAlert(({ context, fresh, labels }) => {
+  logger.warn({ context, labels }, '[redact] a secret value was stripped');
+  if (!env.OWNER_USER_ID || fresh.length === 0) {
     return;
   }
   bot
     .openDM(env.OWNER_USER_ID)
     .then((dm) =>
       dm.post({
-        markdown: `:rotating_light: kyto stripped the value of ${labels.join(', ')} out of ${context}. worth checking how it got there, and rotating it if it went anywhere.`,
+        markdown: `:rotating_light: kyto stripped the value of ${fresh.join(', ')} out of ${context}. worth checking how it got there, and rotating it if it went anywhere.`,
       })
     )
     .catch((error: unknown) => {

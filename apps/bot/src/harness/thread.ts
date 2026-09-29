@@ -221,11 +221,11 @@ export class ThreadHandle {
     const blocks = options.blocks
       ? filterOutboundDeep(options.blocks)
       : undefined;
-    text = filterOutbound(text);
+    const safeText = filterOutbound(text);
     try {
       await this.adapter.webClient.chat.postEphemeral({
         channel,
-        text,
+        text: safeText,
         ...(blocks ? { blocks } : {}),
         ...(threadTs ? { thread_ts: threadTs } : {}),
         user: userId,
@@ -245,7 +245,7 @@ export class ThreadHandle {
       const sent = await this.adapter.webClient.chat.postMessage({
         channel: dmChannel,
         ...(blocks ? { blocks } : {}),
-        text,
+        text: safeText,
       });
       return { channel: dmChannel, delivery: 'dm', ts: sent.ts };
     }

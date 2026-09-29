@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mayCarryPat } from './index';
+import { mayCarryPat } from './host';
 
 describe('mayCarryPat', () => {
   test('the three GitHub hosts over https', () => {

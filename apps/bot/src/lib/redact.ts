@@ -11,8 +11,6 @@
 //
 // When it fires, the owner is told WHICH secret and WHERE — never the value.
 
-import logger from '@/lib/logger';
-
 // An env var whose NAME says it is a secret. DATABASE_URL carries the password.
 const SECRET_NAME =
   /KEY|TOKEN|SECRET|PASSWORD|PASS|CREDENTIAL|SIGNING|COOKIE|DATABASE_URL/i;
@@ -53,7 +51,14 @@ export function registerSecret({
   }
 }
 
-type AlertFn = (hit: { context: string; labels: string[] }) => void;
+// Called on EVERY catch with `fresh` = the labels not already reported within
+// the hour, so the installer can log each one and DM only the fresh ones. This
+// module deliberately imports nothing (tests load it without an environment).
+type AlertFn = (hit: {
+  context: string;
+  fresh: string[];
+  labels: string[];
+}) => void;
 
 let alert: AlertFn | undefined;
 const lastAlertAt = new Map<string, number>();
@@ -122,16 +127,12 @@ function report({
   context: string;
   labels: string[];
 }): void {
-  logger.warn({ context, labels }, '[redact] a secret value was stripped');
   const now = Date.now();
   const fresh = labels.filter(
     (label) => now - (lastAlertAt.get(label) ?? 0) > ALERT_EVERY_MS
   );
-  if (fresh.length === 0) {
-    return;
-  }
   for (const label of fresh) {
     lastAlertAt.set(label, now);
   }
-  alert?.({ context, labels: fresh });
+  alert?.({ context, fresh, labels });
 }
