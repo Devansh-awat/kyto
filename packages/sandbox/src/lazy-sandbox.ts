@@ -285,6 +285,12 @@ export class LazySandbox {
     }
   }
 
+  /** The public hostname E2B routes to `port` inside this sandbox. */
+  async getHost(port: number): Promise<string> {
+    const sandbox = await this.ensure();
+    return sandbox.getHost(port);
+  }
+
   async readBinaryFile({ path }: { path: string }): Promise<Uint8Array | null> {
     const sandbox = await this.ensure();
     return await sandbox.files

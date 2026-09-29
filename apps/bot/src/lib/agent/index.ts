@@ -662,6 +662,7 @@ async function executeTurn(
       guardCodeTool: codingMonitor.guardTool,
       message: turnMessage,
       ownModelsOnly,
+      secret,
       thread: turnThread,
     });
     closeTools = built.close;

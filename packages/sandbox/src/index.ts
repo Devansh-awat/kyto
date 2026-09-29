@@ -11,5 +11,10 @@ export {
   LazySandbox,
   type SandboxStore,
 } from './lazy-sandbox';
+export {
+  LIVE_VIEW_COMMAND,
+  LIVE_VIEW_PORT,
+  liveViewUrl,
+} from './live-view';
 export { OPENCODE_SETUP_COMMAND } from './opencode';
 export { killSandbox, type RunOnceResult, runOnce } from './run-once';

@@ -1,8 +1,11 @@
 import type { SandboxContext } from '@repo/ai';
+import { LIVE_VIEW_COMMAND, LIVE_VIEW_PORT, liveViewUrl } from '@repo/sandbox';
 import { tool } from 'ai';
 import { z } from 'zod';
+import type { ThreadHandle } from '@/harness';
 import { ensureCloakBrowser } from '@/lib/browser/cloak';
-import { errorMessage } from '@/lib/utils/error';
+import logger from '@/lib/logger';
+import { errorMessage, toLogError } from '@/lib/utils/error';
 
 // Browser automation runs the preinstalled `agent-browser` CLI inside the
 // sandbox (Chromium + untrusted page automation stay isolated off the host),
@@ -18,11 +21,58 @@ function truncate(text: string): string {
     : text;
 }
 
+/**
+ * Post a watch-only link to the browser's display into the thread, once per
+ * turn (owner's ask, 2026-09-29). Best effort: a view that will not start is
+ * logged, never a reason for the browser command to fail.
+ */
+async function postLiveView({
+  abortSignal,
+  context,
+  thread,
+}: {
+  abortSignal?: AbortSignal;
+  context: SandboxContext;
+  thread: ThreadHandle;
+}): Promise<string | undefined> {
+  try {
+    const started = await context.session.run({
+      abortSignal,
+      command: LIVE_VIEW_COMMAND,
+    });
+    const password = started.stdout.trim().split('\n').at(-1) ?? '';
+    if (started.exitCode !== 0 || !password) {
+      logger.warn(
+        { exitCode: started.exitCode, stderr: started.stderr.slice(-500) },
+        '[browser] live view did not start'
+      );
+      return;
+    }
+    const url = liveViewUrl({
+      host: await context.session.getHost(LIVE_VIEW_PORT),
+      password,
+    });
+    await thread.post({
+      markdown: `_watching the browser live: [open the view](${url}) (watch-only, ends when this reply does)_`,
+    });
+    return url;
+  } catch (error) {
+    logger.warn(toLogError(error), '[browser] live view failed');
+    return;
+  }
+}
+
 export function browserTool({
   getSandboxContext,
+  thread,
 }: {
   getSandboxContext: () => SandboxContext | undefined;
+  /** Where the live-view link goes. Unset (a `!secret` turn) posts none. */
+  thread?: ThreadHandle;
 }) {
+  // One link per turn: the tool is built per turn, and every call after the
+  // first is watching the same display.
+  let liveView: Promise<string | undefined> | undefined;
   return tool({
     description:
       'Drive a real web browser in your sandbox: navigate pages, fill forms, click, screenshot, scrape, or test web apps. It runs the agent-browser CLI against a stealth Chromium (CloakBrowser), so most anti-bot walls never challenge you. Pass the agent-browser sub-command and args in `command` (it is run as `agent-browser <command>`). Run `command: "skills get core"` first to load the current workflows and command reference, then issue open/snapshot/click/etc. Sequential calls share one browser session. If a captcha or "verify you are human" checkbox does appear, just interact with it like a person would — snapshot the page, click the checkbox or challenge frame, and carry on. Never tell the user you cannot get past a captcha before you have actually tried clicking it.',
@@ -47,6 +97,9 @@ export function browserTool({
         if (!ready.ok) {
           return { error: ready.error, success: false, summary: ready.error };
         }
+        if (thread) {
+          liveView ??= postLiveView({ abortSignal, context, thread });
+        }
         // Forward the turn's abort signal so a browser command that never
         // returns (a page that hangs loading) is killed when the turn is
         // interrupted or the per-attempt watchdog fires — otherwise the agent
@@ -56,8 +109,15 @@ export function browserTool({
           command: `agent-browser ${command}`,
           workingDirectory: context.sessionWorkDir,
         });
+        const view = await liveView;
         return {
           exitCode: result.exitCode,
+          ...(view
+            ? {
+                liveView:
+                  'A watch-only live view link is already posted in the thread; no need to share it again.',
+              }
+            : {}),
           stderr: truncate(result.stderr),
           stdout: truncate(result.stdout),
           success: result.exitCode === 0,

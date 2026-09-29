@@ -1,5 +1,7 @@
 export interface SandboxContext {
   session: {
+    /** The public hostname that reaches `port` inside the sandbox. */
+    getHost(port: number): PromiseLike<string>;
     readBinaryFile(input: { path: string }): PromiseLike<Uint8Array | null>;
     writeBinaryFile(input: {
       content: Uint8Array;

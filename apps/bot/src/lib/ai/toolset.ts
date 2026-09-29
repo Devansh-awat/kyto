@@ -163,6 +163,7 @@ export async function buildTools({
   message,
   ownModelsOnly = false,
   thread,
+  secret = false,
   unattended = false,
 }: {
   bot: KytoBot;
@@ -204,6 +205,8 @@ export async function buildTools({
    * button: there is no watchdog here to hold open for ten minutes while a person
    * who may be asleep decides, and a silent stall is worse than a clear refusal.
    */
+  /** A `!secret` turn: nothing may be posted publicly on its behalf. */
+  secret?: boolean;
   unattended?: boolean;
 }): Promise<BuiltTools> {
   const authorUserId = message.author.userId;
@@ -376,7 +379,10 @@ export async function buildTools({
   const deferred: Record<string, { summary: string; tool: Tool }> = {
     browser: {
       summary: 'drive a real Chromium browser (screenshots, clicks, scraping)',
-      tool: browserTool({ getSandboxContext }),
+      tool: browserTool({
+        getSandboxContext,
+        ...(secret ? {} : { thread }),
+      }),
     },
     runBackgroundProcess: {
       summary: 'start a long-running shell command in the background',

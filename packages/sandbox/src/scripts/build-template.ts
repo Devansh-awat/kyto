@@ -81,6 +81,11 @@ async function main(): Promise<void> {
           'xvfb',
           'xauth',
           'procps',
+          // The watch-only live view of that display (src/live-view.ts), which
+          // otherwise installs these at first use.
+          'x11vnc',
+          'novnc',
+          'websockify',
         ],
         { noInstallRecommends: true }
       )

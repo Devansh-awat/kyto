@@ -16,6 +16,7 @@ import { fileDiagnostics } from './diagnostics';
 function localSession(): SandboxContext['session'] {
   return {
     destroy: () => Promise.resolve(),
+    getHost: () => Promise.resolve('localhost'),
     readBinaryFile: () => Promise.resolve(null),
     run: ({ command }) =>
       new Promise((resolve) => {
