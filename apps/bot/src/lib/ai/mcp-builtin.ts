@@ -1,5 +1,6 @@
 import type { UserMcpServer } from '@repo/db/queries';
 import { env } from '@/env';
+import { AGENTMAIL_BUILTIN_ID } from '@/lib/ai/mcp';
 import type { McpServerForTurn } from '@/lib/ai/mcp-scope';
 
 // MCP servers kyto brings for EVERYONE, without anyone adding them in App Home.
@@ -15,9 +16,6 @@ import type { McpServerForTurn } from '@/lib/ai/mcp-scope';
 
 const CONTEXT7_NAMESPACE = 'context7';
 const AGENTMAIL_NAMESPACE = 'agentmail';
-
-/** Its results go through the email redaction (see lib/ai/mcp.ts). */
-export const AGENTMAIL_BUILTIN_ID = 'builtin:agentmail';
 
 function context7(): UserMcpServer {
   return {

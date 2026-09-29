@@ -2,7 +2,6 @@ import type { UserMcpServer } from '@repo/db/queries';
 import type { Logger } from '@repo/logging/logger';
 import { jsonSchema, type Tool, tool } from 'ai';
 import { z } from 'zod';
-import { AGENTMAIL_BUILTIN_ID } from '@/lib/ai/mcp-builtin';
 import type { McpServerForTurn } from '@/lib/ai/mcp-scope';
 import { assertPublicMcpHost } from '@/lib/ai/mcp-url';
 import {
@@ -16,6 +15,11 @@ import {
   parseMcpRules,
   resolveMcpRule,
 } from './mcp-permissions';
+
+// The built-in AgentMail server (lib/ai/mcp-builtin): its results go through
+// the email redaction below. Here, not there, so tests of this module need no
+// environment.
+export const AGENTMAIL_BUILTIN_ID = 'builtin:agentmail';
 
 // Minimal MCP client over the Streamable HTTP transport (JSON-RPC 2.0 via
 // POST). Hand-rolled on purpose: it is ~150 lines, has zero dependencies, and
