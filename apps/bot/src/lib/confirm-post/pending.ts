@@ -25,6 +25,8 @@ export type PendingPost =
       target: { type: 'thread' | 'channel' | 'user'; id: string };
       body: string;
       blocks?: unknown[];
+      /** Sent from kyto's own Slack user account rather than the app. */
+      fromUserAccount?: boolean;
       // Per-post identity override (custom name/icon, or a mirrored person/bot).
       // Carried through the confirm gate so the sent post wears the same face the
       // approver saw described in the confirmation.

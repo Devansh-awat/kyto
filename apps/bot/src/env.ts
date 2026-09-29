@@ -30,17 +30,17 @@ export const env = createEnv({
     // The workspace channel where new custom emoji are requested (an admin
     // reads it and adds them). Unset = the submitEmoji tool isn't registered.
     EMOJI_REQUEST_CHANNEL: z.string().optional(),
-    // Slack has no PUBLIC API for adding a custom emoji — `emoji.add` is an
-    // internal endpoint that only accepts a browser session: an `xoxc-` token
-    // plus the matching `d` cookie, both copied out of devtools (this is what
-    // #emojibot does). That pair is NOT a scoped app credential; it is a whole
-    // Slack account, so it stays here rather than in the database, is the
-    // OWNER's by his decision (2026-08-09), never enters a sandbox, is never
-    // logged, and is only ever used to add or remove an emoji — never as a
-    // general "call Slack as the owner" path. Unset = submitEmoji falls back to
-    // posting into EMOJI_REQUEST_CHANNEL.
-    SLACK_EMOJI_TOKEN: z.string().optional(),
-    SLACK_EMOJI_COOKIE: z.string().optional(),
+    // A browser session (`xoxc-` token + matching `d` cookie, copied out of
+    // devtools) for KYTO'S OWN Slack user account — a real member account, not
+    // the app and not the owner's (switched 2026-09-29). It is a whole account
+    // with no scopes to narrow it, so it stays here, never in the database or
+    // a sandbox, and is never logged. Two things use it and nothing else:
+    // `emoji.add`/`emoji.remove` (internal endpoints with no public API) and
+    // postMessage's `fromUserAccount`, which goes through every gate an
+    // ordinary postMessage does. Unset = submitEmoji falls back to posting
+    // into EMOJI_REQUEST_CHANNEL and postMessage has no user-account option.
+    KYTO_USER_TOKEN: z.string().optional(),
+    KYTO_USER_COOKIE: z.string().optional(),
 
     // Static site hosting (see lib/sites). The host only ever serves prebuilt
     // static files from SITES_ROOT — it never executes site code. Building and

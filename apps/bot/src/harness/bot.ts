@@ -177,6 +177,18 @@ export class KytoBot {
     return this.channel(channel);
   }
 
+  /** The DM between kyto's USER account and someone — not the app's DM. */
+  async openUserAccountDM(userId: string): Promise<ThreadHandle> {
+    const result = await this.harness
+      .requireUserAccountClient()
+      .conversations.open({ users: userId });
+    const channel = result.channel?.id;
+    if (!channel) {
+      throw new Error(`Failed to open a user-account DM with ${userId}.`);
+    }
+    return this.channel(channel);
+  }
+
   getUser(userId: string): Promise<Author> {
     return this.harness.getUser(userId);
   }

@@ -64,6 +64,7 @@ async function executePostApproval(
     allowBroadcast: row.kind === 'broadcast',
     blocks: payload.blocks,
     body: payload.body,
+    fromUserAccount: payload.fromUserAccount === true,
     target: { id: payload.targetId, type: payload.targetType },
   });
   return { detail: `Sent — ${row.summary}.`, ok: true };

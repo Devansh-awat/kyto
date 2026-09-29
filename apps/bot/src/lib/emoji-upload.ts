@@ -6,21 +6,14 @@
 // exactly what #emojibot (github.com/taciturnaxolotl/emojibot) does, and there
 // is no other way — an app-scoped token is refused outright.
 //
-// What that pair is worth is the thing to keep in mind: it is not a scoped
-// credential, it is a whole Slack account. It can read every DM that account
-// can read and post anywhere as them, with no scopes to narrow it and nothing
-// in the audit trail separating kyto from the person. So:
+// The pair belongs to kyto's OWN Slack user account (since 2026-09-29; before
+// that it was the owner's), so every emoji lands under "kyto". It is still a
+// whole account with no scopes, so it lives in the environment only — see
+// KYTO_USER_TOKEN in env.ts for everything else allowed to use it.
 //
-//   - it is the OWNER's, by his decision (2026-08-09), and anyone may trigger
-//     an upload with it — the emoji all land under his name;
-//   - it lives in the environment, never in the database and never in a
-//     sandbox, and is never logged, not even truncated;
-//   - it is reachable ONLY through the two calls below. There is deliberately
-//     no "call Slack as the owner" helper built on it, because a general one
-//     would hand every prompt injection the owner's account.
-//
-// A per-day cap per requester sits on top: the account is the owner's, so a
-// user who asks for two hundred emoji is spending his reputation, not kyto's.
+// A per-day cap per requester sits on top: every upload goes out under one
+// shared account, so a user who asks for two hundred emoji spends its
+// reputation, not their own.
 
 import { env } from '@/env';
 import logger from '@/lib/logger';
@@ -37,7 +30,7 @@ const DAILY_LIMIT_PER_USER = 10;
 const uploads = new Map<string, number>();
 
 export function emojiUploadConfigured(): boolean {
-  return Boolean(env.SLACK_EMOJI_TOKEN && env.SLACK_EMOJI_COOKIE);
+  return Boolean(env.KYTO_USER_TOKEN && env.KYTO_USER_COOKIE);
 }
 
 /**
@@ -60,8 +53,8 @@ interface EmojiResult {
 }
 
 async function callEmojiApi(url: string, body: FormData): Promise<EmojiResult> {
-  const token = env.SLACK_EMOJI_TOKEN;
-  const cookie = env.SLACK_EMOJI_COOKIE;
+  const token = env.KYTO_USER_TOKEN;
+  const cookie = env.KYTO_USER_COOKIE;
   if (!(token && cookie)) {
     return { error: 'not_configured', ok: false };
   }
@@ -85,7 +78,7 @@ async function callEmojiApi(url: string, body: FormData): Promise<EmojiResult> {
 /**
  * Add one custom emoji. Returns Slack's own error code on failure — the useful
  * ones are `error_name_taken`, `error_bad_name_i18n`, `invalid_auth` (the
- * session has expired and the owner must re-copy the pair) and `ratelimited`.
+ * session has expired and the pair must be re-copied) and `ratelimited`.
  */
 export async function addEmoji({
   bytes,
@@ -111,8 +104,8 @@ export async function addEmoji({
   if (result.ok) {
     uploads.set(key, used + 1);
   }
-  // Who asked matters more than usual here: the emoji is added under the
-  // owner's account, so this log is the only record of who it was really for.
+  // Who asked matters more than usual here: the emoji is added under kyto's
+  // shared user account, so this log is the only record of who it was really for.
   logger.info(
     { error: result.error, name, ok: result.ok, requestedBy },
     '[emoji] direct upload'

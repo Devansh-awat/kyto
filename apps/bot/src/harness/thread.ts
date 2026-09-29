@@ -133,6 +133,20 @@ export class ThreadHandle {
     // the whole channel with nothing in front of them.
     const post = scrub(raw.allowBroadcast ? raw : stripBroadcasts(raw));
 
+    // From kyto's own USER account instead of the app: same scrubbing and
+    // broadcast strip above, only the sender differs. A user post cannot wear
+    // a custom name/icon, and has no file path — both are refused, not
+    // silently dropped, so a caller never believes something went out that
+    // didn't.
+    if (post.fromUserAccount && (post.files?.length || post.username)) {
+      throw new Error(
+        "A post from kyto's user account cannot carry files or a custom identity."
+      );
+    }
+    const client = post.fromUserAccount
+      ? this.adapter.requireUserAccountClient()
+      : this.adapter.webClient;
+
     if (post.files?.length) {
       return await this.postFiles({ channel, post, threadTs });
     }
@@ -159,8 +173,8 @@ export class ThreadHandle {
     };
     // Cast: ChatPostMessageArguments is a strict discriminated union that
     // rejects this options-spread shape even when the payload is valid.
-    const result = await this.adapter.webClient.chat.postMessage(args as never);
-    return this.sent(result.ts ?? '', result);
+    const result = await client.chat.postMessage(args as never);
+    return this.sent({ client, raw: result, ts: result.ts ?? '' });
   }
 
   private async postFiles({
@@ -182,17 +196,30 @@ export class ThreadHandle {
       ...(post.markdown ? { initial_comment: post.markdown } : {}),
       ...(threadTs ? { thread_ts: threadTs } : {}),
     });
-    return this.sent('', result);
+    return this.sent({
+      client: this.adapter.webClient,
+      raw: result,
+      ts: '',
+    });
   }
 
-  private sent(ts: string, raw: unknown): SentMessage {
+  private sent({
+    client,
+    raw,
+    ts,
+  }: {
+    /** Whoever posted it — only that sender can delete it again. */
+    client: SlackHarness['webClient'];
+    raw: unknown;
+    ts: string;
+  }): SentMessage {
     const { channel } = this.location;
     return {
       delete: async () => {
         if (!ts) {
           return;
         }
-        await this.adapter.webClient.chat.delete({ channel, ts });
+        await client.chat.delete({ channel, ts });
       },
       id: ts,
       raw,

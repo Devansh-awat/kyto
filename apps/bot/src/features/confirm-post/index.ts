@@ -75,6 +75,7 @@ bot.onAction(CONFIRM_SEND_ACTION, async (event) => {
       await executePostMessage(bot, {
         blocks: post.blocks,
         body: post.body,
+        fromUserAccount: post.fromUserAccount,
         identity: post.identity,
         target: post.target,
       });

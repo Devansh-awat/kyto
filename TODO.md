@@ -303,7 +303,7 @@ immediately instead of being posted into #emojibot and hoped for.
 devtools (F12) → Network tab → add any emoji by hand → find the `emoji.add`
 request. From it copy (a) the `token` form field, which starts `xoxc-`, and
 (b) the `cookie` request header (or just the `d=xoxd-…` part of it). Put them in
-`apps/bot/.env` as `SLACK_EMOJI_TOKEN` and `SLACK_EMOJI_COOKIE`, then restart.
+`apps/bot/.env` as `KYTO_USER_TOKEN` and `KYTO_USER_COOKIE` (renamed 2026-09-29, when the pair became kyto's OWN user account instead of yours), then restart.
 Until they are set, `submitEmoji` behaves exactly as before.
 
 Worth knowing what that pair is: **not a scoped token — your whole Slack

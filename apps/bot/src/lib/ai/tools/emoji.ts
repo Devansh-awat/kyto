@@ -329,7 +329,7 @@ export function submitEmojiTool({
           };
         }
         const extension = nodePath.extname(resolved) || '.png';
-        // The direct path, when the owner's emoji session is configured: add it
+        // The direct path, when kyto's user-account session is configured: add it
         // ourselves rather than posting into a channel and hoping a bot picks
         // it up. Everything below is the fallback for when it is not.
         if (emojiUploadConfigured()) {
@@ -446,8 +446,8 @@ export function submitEmojiTool({
  * Remove a custom emoji. OWNER ONLY, and registered only for him.
  *
  * Two reasons it is not open like adding is. Slack only lets the account that
- * added an emoji remove it, and every emoji kyto adds goes in under the owner's
- * account — so "remove it" would mean anyone in the workspace could delete
+ * added an emoji remove it, and every emoji kyto adds goes in under the same
+ * shared account — so "remove it" would mean anyone in the workspace could delete
  * anything kyto has ever added, for anyone. And removal is the destructive half:
  * an emoji someone is using in a saved message just disappears.
  */

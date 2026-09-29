@@ -30,6 +30,8 @@ export interface PostApprovalPayload {
   allowBroadcast?: boolean;
   blocks?: unknown[];
   body: string;
+  /** Sent from kyto's own Slack user account rather than the app. */
+  fromUserAccount?: boolean;
   targetId: string;
   targetType: 'thread' | 'channel' | 'user';
 }

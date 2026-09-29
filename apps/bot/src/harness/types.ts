@@ -71,6 +71,9 @@ export interface PostContent {
   blocks?: unknown[];
   fallbackText?: string;
   files?: PostFile[];
+  /** Send from kyto's own Slack USER account rather than the app. The caller
+   * has already run the same gates as for an app post; this picks the sender. */
+  fromUserAccount?: boolean;
   /** Per-message profile override (needs the chat:write.customize scope). */
   iconEmoji?: string;
   iconUrl?: string;

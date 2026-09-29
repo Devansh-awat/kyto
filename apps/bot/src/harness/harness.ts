@@ -129,14 +129,41 @@ export class SlackHarness {
    * as a `bot_message` carrying only this, not the user id. */
   botId: string | undefined;
   teamId: string | undefined;
+  /** The `U…` id of kyto's own Slack USER account, when its session is set.
+   * Its posts are kyto's too — a human-looking message from it must never be
+   * answered, or kyto replies to itself (every message in a code channel is). */
+  userAccountId: string | undefined;
+  /** kyto's user-account session. Reached only through
+   * `requireUserAccountClient`, whose only callers are `ThreadHandle.post`
+   * with `fromUserAccount` and `KytoBot.openUserAccountDM` — keep it that way,
+   * so nothing grows into a general "call Slack as that account" path. */
+  private readonly userAccountClient: WebClient | undefined;
   private readonly logger: Logger;
   private readonly userCache = new Map<
     string,
     { at: number; author: Author }
   >();
 
-  constructor({ botToken, logger }: { botToken: string; logger: Logger }) {
+  constructor({
+    botToken,
+    logger,
+    userAccount,
+  }: {
+    botToken: string;
+    logger: Logger;
+    /** An `xoxc-` token and its `d` cookie (bare value or `d=…` header). */
+    userAccount?: { cookie: string; token: string };
+  }) {
     this.webClient = new WebClient(botToken);
+    this.userAccountClient = userAccount
+      ? new WebClient(userAccount.token, {
+          headers: {
+            Cookie: userAccount.cookie.includes('=')
+              ? userAccount.cookie
+              : `d=${userAccount.cookie}`,
+          },
+        })
+      : undefined;
     this.logger = logger;
   }
 
@@ -145,6 +172,28 @@ export class SlackHarness {
     this.botUserId = auth.user_id ?? undefined;
     this.botId = auth.bot_id ?? undefined;
     this.teamId = auth.team_id ?? undefined;
+    if (!this.userAccountClient) {
+      return;
+    }
+    // A logged-out session must not stop kyto booting: posting from the user
+    // account then fails with Slack's own error, and everything else works.
+    try {
+      const self = await this.userAccountClient.auth.test();
+      this.userAccountId = self.user_id ?? undefined;
+    } catch (error) {
+      this.logger.warn(
+        { err: error },
+        '[harness] kyto user-account session rejected; re-copy it'
+      );
+    }
+  }
+
+  /** The user-account client, or a clear error when no session is set. */
+  requireUserAccountClient(): WebClient {
+    if (!this.userAccountClient) {
+      throw new Error("kyto's user-account session is not configured.");
+    }
+    return this.userAccountClient;
   }
 
   // ── Thread ids ──────────────────────────────────────────────────────────
@@ -241,13 +290,17 @@ export class SlackHarness {
     if (cached && Date.now() - cached.at < USER_CACHE_TTL_MS) {
       return cached.author;
     }
-    let author: Author = { userId, userName: userId };
+    let author: Author = {
+      isMe: userId === this.botUserId || userId === this.userAccountId,
+      userId,
+      userName: userId,
+    };
     try {
       const { user } = await this.webClient.users.info({ user: userId });
       author = {
         fullName: user?.profile?.real_name || user?.real_name || undefined,
         isBot: user?.is_bot,
-        isMe: userId === this.botUserId,
+        isMe: userId === this.botUserId || userId === this.userAccountId,
         userId,
         userName:
           user?.profile?.display_name ||

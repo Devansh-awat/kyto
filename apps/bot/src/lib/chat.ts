@@ -8,6 +8,14 @@ import logger from '@/lib/logger';
 export const slack = new SlackHarness({
   botToken: env.SLACK_BOT_TOKEN,
   logger,
+  ...(env.KYTO_USER_TOKEN && env.KYTO_USER_COOKIE
+    ? {
+        userAccount: {
+          cookie: env.KYTO_USER_COOKIE,
+          token: env.KYTO_USER_TOKEN,
+        },
+      }
+    : {}),
 });
 
 export const bot = new KytoBot({

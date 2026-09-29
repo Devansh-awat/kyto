@@ -37,6 +37,7 @@ export async function executePostMessage(
     target,
     body,
     blocks,
+    fromUserAccount = false,
     identity: override,
   }: {
     /**
@@ -49,15 +50,35 @@ export async function executePostMessage(
     target: PostTarget;
     body: string;
     blocks?: unknown[];
+    /** Send from kyto's own Slack user account; the gates are the caller's. */
+    fromUserAccount?: boolean;
     identity?: ResolvedIdentity;
   }
 ): Promise<{ messageId: string; threadId: string }> {
+  const base: PostContent = {
+    ...(blocks ? { blocks, fallbackText: body } : { markdown: body }),
+    allowBroadcast,
+  };
+  if (fromUserAccount) {
+    // A user post shows the account's own name and picture; there is no
+    // identity to apply.
+    const content: PostContent = { ...base, fromUserAccount: true };
+    if (target.type === 'user') {
+      const dm = await bot.openUserAccountDM(target.id);
+      const sent = await dm.post(content);
+      return { messageId: sent.id, threadId: sent.threadId };
+    }
+    const sent = await (target.type === 'thread'
+      ? bot.thread(target.id)
+      : bot.channel(target.id)
+    ).post(content);
+    return { messageId: sent.id, threadId: sent.threadId };
+  }
   // A per-post override (custom name/icon, or a person/bot to mirror) replaces
   // kyto's configured identity; without one, the normal profile applies.
   const identity = override ?? (await resolveIdentity('normal'));
   const content: PostContent = {
-    ...(blocks ? { blocks, fallbackText: body } : { markdown: body }),
-    allowBroadcast,
+    ...base,
     iconEmoji: identity.iconEmoji,
     iconUrl: identity.iconUrl,
     username: identity.username,
@@ -124,6 +145,9 @@ export function postMessageTool({
   isOwner: boolean;
 }) {
   const currentChannel = rawChannelOf(currentThreadId);
+  const userAccountConfigured = Boolean(
+    env.KYTO_USER_TOKEN && env.KYTO_USER_COOKIE
+  );
   const permission = isOwner
     ? 'Post to another target. Type must be thread, channel, or user.'
     : 'You may post into the current thread freely — and `type: "channel"` on the channel you were mentioned in is delivered as a reply in that thread, because starting a top-level post is the owner\'s alone. A DM to a user (type user) is held until the owner clicks Confirm, which can take a while or never come. Posting into a DIFFERENT channel is queued for the owner\'s approval — it is posted in this thread with Approve/Deny buttons, never expires, and nothing is sent unless they approve. Say it is waiting; do not claim it was sent, and do not look for another way to send it.';
@@ -132,6 +156,10 @@ export function postMessageTool({
       isOwner
         ? ' You can post under a custom identity: `asName` + `asIcon` for a fully custom display name and avatar, or `asUser` (a user/bot id or @mention) to post looking like that person/bot (their name + avatar). Slack still marks it as an app.'
         : ''
+    }${
+      userAccountConfigured
+        ? " Pass `fromUserAccount: true` to send it from kyto's own Slack USER account (a normal member account named kyto) instead of the app — the same rules, confirmations and approvals apply. It only reaches channels that account has joined, and it cannot be combined with a custom identity."
+        : ''
     }`,
     inputSchema: z.object({
       blocks: z
@@ -139,6 +167,12 @@ export function postMessageTool({
         .optional()
         .describe(
           `Optional Block Kit payload: a JSON array of up to ${MAX_BLOCKS} blocks (e.g. [{"type":"section","text":{"type":"mrkdwn","text":"hi"}}]). Replaces the markdown body; \`message\` is still sent as the notification fallback. Do NOT append a "Posted by kyto"/"sent by kyto in #channel" or any author/attribution context block — Slack already shows who sent the message and the channel, so such a footer is noise; only include blocks that carry real content.`
+        ),
+      fromUserAccount: z
+        .boolean()
+        .optional()
+        .describe(
+          "Send from kyto's own Slack user account instead of the app. Same gates as any post."
         ),
       id: z.string().min(1),
       message: z
@@ -170,9 +204,33 @@ export function postMessageTool({
         ),
     }),
     execute: async (
-      { blocks: rawBlocks, id, message, type, asName, asIcon, asUser },
+      {
+        blocks: rawBlocks,
+        fromUserAccount: requestedUserAccount,
+        id,
+        message,
+        type,
+        asName,
+        asIcon,
+        asUser,
+      },
       { abortSignal }
     ) => {
+      const fromUserAccount = requestedUserAccount === true;
+      if (fromUserAccount && !userAccountConfigured) {
+        return {
+          error:
+            "kyto's user account is not configured, so it can only post as the app.",
+        };
+      }
+      // A user post always shows that account's own name and face, so a
+      // custom identity cannot apply. Refused rather than silently dropped.
+      if (fromUserAccount && (asName || asIcon || asUser)) {
+        return {
+          error:
+            'fromUserAccount posts as the kyto user account and cannot take asName/asIcon/asUser. Drop one or the other.',
+        };
+      }
       const target = type === 'user' ? undefined : rawChannelOf(id);
       // Reject a wrong-shaped id BEFORE it can be queued and confirmed. The model
       // sometimes passes a message timestamp (`1785…`) as a "channel", or a DM
@@ -266,11 +324,12 @@ export function postMessageTool({
           payload: {
             ...(blocks ? { blocks } : {}),
             body,
+            ...(fromUserAccount ? { fromUserAccount } : {}),
             targetId: id,
             targetType: type,
           },
           requestedBy: authorUserId,
-          summary: `post into <#${target}>`,
+          summary: `post into <#${target}>${fromUserAccount ? " from kyto's user account" : ''}`,
           threadId: currentThreadId,
         });
         return { pending: true, summary: queued };
@@ -292,11 +351,12 @@ export function postMessageTool({
           payload: {
             ...(rawParsedBlocks ? { blocks: rawParsedBlocks } : {}),
             body: restored,
+            ...(fromUserAccount ? { fromUserAccount } : {}),
             targetId: id,
             targetType: type,
           },
           requestedBy: authorUserId,
-          summary: 'post here and ping the whole channel',
+          summary: `post here and ping the whole channel${fromUserAccount ? " from kyto's user account" : ''}`,
           threadId: currentThreadId,
         });
         return { pending: true, summary: queued };
@@ -352,10 +412,11 @@ export function postMessageTool({
             ...(mirrored ? { approverUserId: mirrored } : {}),
             blocks,
             body,
+            ...(fromUserAccount ? { fromUserAccount } : {}),
             identity,
             kind: 'postMessage',
             requestedBy: authorUserId,
-            summary: `post to ${where}${blocks ? ' (Block Kit)' : ''}${asWhom}${requestedFor}${askedBecause}`,
+            summary: `post to ${where}${blocks ? ' (Block Kit)' : ''}${fromUserAccount ? " from kyto's user account" : ''}${asWhom}${requestedFor}${askedBecause}`,
             target: { id, type },
           },
           thread: bot.thread(currentThreadId),
@@ -369,6 +430,7 @@ export function postMessageTool({
         allowBroadcast,
         blocks,
         body,
+        fromUserAccount,
         identity,
         target: redirectedToThread
           ? { id: currentThreadId, type: 'thread' }
