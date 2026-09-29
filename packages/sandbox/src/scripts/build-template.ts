@@ -5,6 +5,7 @@ import { createLogger } from '@repo/logging';
 import dotenv from 'dotenv';
 import { defaultBuildLogger, Template } from 'e2b';
 import { sandboxConfig } from '../config';
+import { NOVNC_URL } from '../live-view';
 
 dotenv.config({
   path: resolve(
@@ -82,9 +83,9 @@ async function main(): Promise<void> {
           'xauth',
           'procps',
           // The watch-only live view of that display (src/live-view.ts), which
-          // otherwise installs these at first use.
+          // otherwise installs these at first use. NOT Debian's `novnc`: it
+          // depends on the distro nodejs purged below, and went with it.
           'x11vnc',
-          'novnc',
           'websockify',
         ],
         { noInstallRecommends: true }
@@ -112,6 +113,9 @@ async function main(): Promise<void> {
         // (src/opencode.ts) still installs it into an older sandbox, and writes
         // the Slack-free wrapper and config either way.
         'npm install -g --prefix /home/user/.kyto/opencode opencode-ai',
+        // The live view's web client (src/live-view.ts fetches it too, for a
+        // sandbox from an older template).
+        `mkdir -p /opt/novnc && curl -sfL ${NOVNC_URL} | tar xz -C /opt/novnc --strip-components=1`,
         'chown -R user:user /home/user',
       ])
       .setUser('user')

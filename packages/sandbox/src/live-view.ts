@@ -16,13 +16,24 @@
 export const LIVE_VIEW_PORT = 6080;
 const VNC_PORT = 5900;
 const PASSWORD_FILE = '/home/user/.kyto/live-view-password';
+// The noVNC web client, from its release rather than Debian's `novnc` package:
+// that one depends on the distro nodejs, which the template purges (taking
+// noVNC with it) and which a runtime `apt-get install novnc` would drag back in
+// over the real Node.
+const NOVNC_DIR = '/opt/novnc';
+export const NOVNC_URL =
+  'https://github.com/novnc/noVNC/archive/refs/tags/v1.5.0.tar.gz';
 
 /** Starts the stream if needed and prints its password on the last line. */
 export const LIVE_VIEW_COMMAND = `set -e
 DISP="$(kyto-display)"
-if ! command -v x11vnc >/dev/null 2>&1 || ! command -v websockify >/dev/null 2>&1 || [ ! -d /usr/share/novnc ]; then
-  sudo apt-get install -y --no-install-recommends x11vnc novnc websockify >/tmp/live-view-install.log 2>&1 \\
-    || { sudo apt-get update >/dev/null 2>&1 && sudo apt-get install -y --no-install-recommends x11vnc novnc websockify >/tmp/live-view-install.log 2>&1; }
+if ! command -v x11vnc >/dev/null 2>&1 || ! command -v websockify >/dev/null 2>&1; then
+  sudo apt-get install -y --no-install-recommends x11vnc websockify >/tmp/live-view-install.log 2>&1 \\
+    || { sudo apt-get update >/dev/null 2>&1 && sudo apt-get install -y --no-install-recommends x11vnc websockify >/tmp/live-view-install.log 2>&1; }
+fi
+if [ ! -f ${NOVNC_DIR}/vnc.html ]; then
+  sudo mkdir -p ${NOVNC_DIR}
+  curl -sfL ${NOVNC_URL} | sudo tar xz -C ${NOVNC_DIR} --strip-components=1
 fi
 mkdir -p /home/user/.kyto /home/user/.vnc
 # Never \`pgrep -f\` here: this script's own text names both programs, so it
@@ -44,7 +55,7 @@ if ! viewonly_up || ! port_up ${VNC_PORT} || [ ! -s ${PASSWORD_FILE} ]; then
   x11vnc -bg -display "$DISP" -forever -shared -viewonly -rfbport ${VNC_PORT} -localhost -rfbauth /home/user/.vnc/passwd -o /tmp/x11vnc.log >/dev/null 2>&1
 fi
 if ! port_up ${LIVE_VIEW_PORT}; then
-  setsid nohup websockify --web /usr/share/novnc ${LIVE_VIEW_PORT} localhost:${VNC_PORT} </dev/null >/tmp/live-view.log 2>&1 &
+  setsid nohup websockify --web ${NOVNC_DIR} ${LIVE_VIEW_PORT} localhost:${VNC_PORT} </dev/null >/tmp/live-view.log 2>&1 &
   i=0
   until port_up ${LIVE_VIEW_PORT}; do
     i=$((i + 1)); [ $i -gt 50 ] && { echo "live view did not start" >&2; tail -n 5 /tmp/live-view.log >&2; exit 1; }
