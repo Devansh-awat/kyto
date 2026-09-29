@@ -66,6 +66,18 @@ warnings, the 4th and later a 1-hour ban. `recordCodingWarning` increments and
 returns the count in one statement. A `Date` inside a raw `sql` fragment is NOT
 serialized by the driver — pass `toISOString()` with a `::timestamptz` cast.
 
+## The `inflight_turns` table (2026-09-29)
+
+```sql
+CREATE TABLE IF NOT EXISTS inflight_turns (
+  thread_id text PRIMARY KEY, message_id text NOT NULL, user_id text NOT NULL,
+  status text NOT NULL DEFAULT 'running', instance_id text NOT NULL,
+  resumed boolean NOT NULL DEFAULT false,
+  started_at timestamptz NOT NULL DEFAULT now(),
+  heartbeat_at timestamptz NOT NULL DEFAULT now()
+);
+```
+
 ## `user_customizations.model_mode` (2026-09-29)
 
 ```sql
