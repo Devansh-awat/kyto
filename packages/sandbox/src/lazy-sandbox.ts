@@ -73,6 +73,13 @@ export interface SandboxStore {
  * resumed sandbox. Per-command env is re-sent on every `run()`, so short-lived
  * secrets (the per-turn Slack and GitHub proxy tokens) are always current.
  */
+// How many live LazySandbox objects in this process hold each persistent
+// session's sandbox. Two turns can share one: a reminder firing into a thread
+// mid-turn, or two threads of a code channel (one sandbox per channel). The
+// first to finish used to pause it under the other, whose next command then
+// failed. Only the LAST holder pauses.
+const holders = new Map<string, number>();
+
 export class LazySandbox {
   readonly workDir = config.workdir;
 
@@ -232,6 +239,9 @@ export class LazySandbox {
       const sandbox = resumed ?? (await this.create());
       await this.bootstrap(sandbox);
       this.sandbox = sandbox;
+      if (this.persistent && this.sessionId) {
+        holders.set(this.sessionId, (holders.get(this.sessionId) ?? 0) + 1);
+      }
       this.logger.info(
         {
           ms: Date.now() - started,
@@ -348,6 +358,14 @@ export class LazySandbox {
     this.sandbox = null;
     if (!sandbox) {
       return;
+    }
+    if (this.persistent && this.sessionId) {
+      const left = (holders.get(this.sessionId) ?? 1) - 1;
+      if (left > 0) {
+        holders.set(this.sessionId, left);
+        return;
+      }
+      holders.delete(this.sessionId);
     }
     if (this.persistent) {
       // `pause()` resolves false when it was ALREADY paused — still persisted,

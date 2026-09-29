@@ -34,6 +34,7 @@ import {
   canvasWriteTool,
 } from './tools/canvas';
 import { createChannelTool, setChannelTopicTool } from './tools/channels';
+import { codeChannelTool } from './tools/code-channel';
 import { codeModeTool } from './tools/code-mode';
 import {
   deploySiteTool,
@@ -199,14 +200,14 @@ export async function buildTools({
    */
   ownModelsOnly?: boolean;
   thread: ThreadHandle;
+  /** A `!secret` turn: nothing may be posted publicly on its behalf. */
+  secret?: boolean;
   /**
    * Nobody is watching this run (a reminder firing, a subagent inside another
    * turn). An MCP tool whose rule is `ask` then REFUSES instead of posting a
    * button: there is no watchdog here to hold open for ten minutes while a person
    * who may be asleep decides, and a silent stall is worse than a clear refusal.
    */
-  /** A `!secret` turn: nothing may be posted publicly on its behalf. */
-  secret?: boolean;
   unattended?: boolean;
 }): Promise<BuiltTools> {
   const authorUserId = message.author.userId;
@@ -421,6 +422,15 @@ export async function buildTools({
     createChannel: {
       summary: 'create a Slack channel',
       tool: createChannelTool(),
+    },
+    codeChannel: {
+      summary:
+        'code channels: create/enable/disable/list channels where you answer every message and threads share one sandbox',
+      tool: codeChannelTool({
+        authorUserId,
+        currentChannel: channelId,
+        isOwner,
+      }),
     },
     setChannelTopic: {
       summary: 'set a channel topic',

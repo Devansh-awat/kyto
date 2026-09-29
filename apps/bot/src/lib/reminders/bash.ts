@@ -6,6 +6,7 @@ import {
   sanitizeGitRepos,
 } from '@repo/sandbox';
 import { env } from '@/env';
+import { sandboxKey } from '@/lib/code-channels';
 import logger from '@/lib/logger';
 import { openSandboxProxies } from '@/lib/sandbox/proxies';
 import { threadSandboxStore, withThreadSandbox } from '@/lib/sandbox/store';
@@ -73,7 +74,7 @@ export async function runReminderBash(reminder: Reminder): Promise<string> {
       bootstrapCommand: proxies.bootstrapCommand,
       env: proxies.env,
       logger,
-      sessionId: threadId,
+      sessionId: await sandboxKey(threadId),
       store: threadSandboxStore,
     });
     try {

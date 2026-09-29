@@ -43,6 +43,11 @@ const GROUPS = {
       'unpinMessage',
     ],
   },
+  codeChannels: {
+    question:
+      'Does this ask to create, turn on, turn off or list a code channel?',
+    tools: ['codeChannel'],
+  },
   diagrams: {
     question:
       'Will the assistant need to draw a diagram, flowchart or chart as an image?',

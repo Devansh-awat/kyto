@@ -91,10 +91,13 @@ async function renderMessage(message: Message): Promise<string> {
 export async function buildPrompt(
   message: Message,
   {
+    codeChannel = false,
     customizationPrompt,
     ownModelsOnly = false,
     thread,
   }: {
+    /** In a code channel (lib/code-channels). Per channel, so volatile tail. */
+    codeChannel?: boolean;
     customizationPrompt?: string;
     /** Runs only on the asker's own model key, where the no-coding rule lifts. */
     ownModelsOnly?: boolean;
@@ -206,6 +209,11 @@ export async function buildPrompt(
     ...(ownModelsOnly
       ? [
           "This turn runs on the person's OWN model key, not Hack Club AI's shared one, so the coding-agent rule does not apply to it.",
+        ]
+      : []),
+    ...(codeChannel
+      ? [
+          'This is a CODE CHANNEL: every top-level message here is for you without a mention, and every thread in the channel shares ONE sandbox workspace — files from earlier threads are already there, so check before starting over. Earlier threads are readable with the Slack history tools.',
         ]
       : []),
   ].join('\n');

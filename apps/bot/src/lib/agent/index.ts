@@ -74,6 +74,7 @@ import { createCodingMonitor } from '@/lib/anti-coding';
 import { recordByokOutcome, resolveUserRouting } from '@/lib/byok';
 import { bot, slack } from '@/lib/chat';
 import { recordChatgptOutcome } from '@/lib/chatgpt';
+import { isCodeChannel, sandboxKey } from '@/lib/code-channels';
 import {
   agentErrorMessage,
   BudgetExhaustedError,
@@ -340,7 +341,8 @@ async function executeTurn(
     bootstrapCommand: proxies.bootstrapCommand,
     env: proxies.env,
     logger,
-    sessionId: threadId,
+    // The channel, in a code channel: its threads share one workspace.
+    sessionId: await sandboxKey(threadId),
     store: threadSandboxStore,
   });
   const sandboxContext: SandboxContext = {
@@ -503,6 +505,9 @@ async function executeTurn(
     thread: ThreadHandle;
   }): AsyncGenerator<string | StreamChunk> {
     let messageText = await buildPrompt(turnMessage, {
+      codeChannel: await isCodeChannel(
+        slack.channelIdFromThreadId(turnThread.id)
+      ),
       customizationPrompt: hints.customization?.prompt,
       ownModelsOnly,
       thread: turnThread,

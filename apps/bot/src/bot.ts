@@ -5,6 +5,7 @@ import { isUserAllowed } from '@/lib/allowed-users';
 import { activeBan, banNotice, runBanCommand } from '@/lib/bans';
 import { allowBotTurn, noteHumanMessage } from '@/lib/bot-pings';
 import { bot, slack } from '@/lib/chat';
+import { isCodeChannel } from '@/lib/code-channels';
 import { handleCommand } from '@/lib/commands';
 import logger from '@/lib/logger';
 import {
@@ -27,7 +28,11 @@ import '@/features/poll';
 
 export { bot } from '@/lib/chat';
 
-bot.onNewMention(async (thread, message) => {
+bot.onNewMention(answerMention);
+
+// A mention, or a top-level message in a code channel (which is answered as if
+// it were one): the same gates either way — bans, opt-in, focus, the bot loop.
+async function answerMention(thread: Thread, message: Message): Promise<void> {
   if (shouldIgnore(message)) {
     return;
   }
@@ -66,7 +71,7 @@ bot.onNewMention(async (thread, message) => {
     await thread.subscribe();
   }
   await runCommandOrTurn(thread, message);
-});
+}
 
 bot.onDirectMessage(async (thread, message) => {
   // Bots are answered on a mention in a shared room, not in a DM with nobody
@@ -86,6 +91,17 @@ bot.onDirectMessage(async (thread, message) => {
 });
 
 bot.onSubscribedMessage(async (thread, message) => {
+  // A code channel: every top-level message from a person is for kyto. Bots
+  // still need an explicit mention there (lib/bot-pings).
+  const { channel, threadTs } = slack.decodeThreadId(message.threadId);
+  if (
+    message.author.isBot !== true &&
+    threadTs === message.id &&
+    (await isCodeChannel(channel))
+  ) {
+    await answerMention(thread, message);
+    return;
+  }
   const state = await thread.state;
   const shouldRespondToThread =
     state &&

@@ -12,6 +12,7 @@ import type { Message, ThreadHandle } from '@/harness';
 import { requestHints } from '@/lib/ai/hints';
 import { stripToolComplaints } from '@/lib/ai/stream/tool-complaints';
 import { bot } from '@/lib/chat';
+import { sandboxKey } from '@/lib/code-channels';
 import logger from '@/lib/logger';
 import { openSandboxProxies } from '@/lib/sandbox/proxies';
 import { threadSandboxStore, withThreadSandbox } from '@/lib/sandbox/store';
@@ -145,7 +146,10 @@ async function runAgent(
     // Sharing the thread's sandbox is the whole point: the job can use what the
     // model built earlier. Jobs without a thread get an unremembered sandbox.
     ...(reminder.threadId
-      ? { sessionId: reminder.threadId, store: threadSandboxStore }
+      ? {
+          sessionId: await sandboxKey(reminder.threadId),
+          store: threadSandboxStore,
+        }
       : {}),
   });
   const sandboxContext: SandboxContext = {
