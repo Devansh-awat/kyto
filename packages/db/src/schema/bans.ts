@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import { integer, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
 
 // People the bot owner has told kyto to stop answering.
 //
@@ -24,10 +24,12 @@ export const bannedUsers = pgTable('banned_users', {
 export type BannedUser = typeof bannedUsers.$inferSelect;
 
 // The anti-coding gate's warning ledger: when kyto last caught this person
-// asking it to act as a coding agent on the shared models. One row per person —
-// only the most recent warning matters, because a second catch inside the
-// window is what turns a warning into a ban.
+// doing coding-agent work on the shared models, and how many catches in a row.
+// One row per person — a strike count, not a history.
 export const codingWarnings = pgTable('coding_warnings', {
   userId: text('user_id').primaryKey(),
   warnedAt: timestamp('warned_at', { withTimezone: true }).notNull(),
+  // Catches in the current run: each one within the window of the previous
+  // extends it, a gap longer than the window starts over at 1.
+  count: integer('count').notNull().default(1),
 });

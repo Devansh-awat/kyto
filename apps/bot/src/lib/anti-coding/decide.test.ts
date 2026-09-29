@@ -2,8 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import {
   CODING_THRESHOLD,
   decideCodingAction,
-  isRepeatOffence,
-  WARNING_WINDOW_MS,
+  isBanStrike,
+  WARNINGS_BEFORE_BAN,
 } from './decide';
 
 const CODING = 0.97;
@@ -75,20 +75,15 @@ describe('decideCodingAction', () => {
   });
 });
 
-describe('isRepeatOffence', () => {
-  const now = new Date('2026-09-26T12:00:00Z');
-
-  test('a first offence is a warning', () => {
-    expect(isRepeatOffence({ now, previousWarning: null })).toBe(false);
+describe('isBanStrike', () => {
+  test('the first three catches are warnings', () => {
+    for (let count = 1; count <= WARNINGS_BEFORE_BAN; count += 1) {
+      expect(isBanStrike(count)).toBe(false);
+    }
   });
 
-  test('a second catch inside the window is a ban', () => {
-    const previousWarning = new Date(now.getTime() - 60 * 60 * 1000);
-    expect(isRepeatOffence({ now, previousWarning })).toBe(true);
-  });
-
-  test('an old warning has lapsed', () => {
-    const previousWarning = new Date(now.getTime() - WARNING_WINDOW_MS);
-    expect(isRepeatOffence({ now, previousWarning })).toBe(false);
+  test('the fourth catch bans, and so does every one after it in the run', () => {
+    expect(isBanStrike(WARNINGS_BEFORE_BAN + 1)).toBe(true);
+    expect(isBanStrike(WARNINGS_BEFORE_BAN + 5)).toBe(true);
   });
 });

@@ -11,8 +11,9 @@
 // "write a bot". The prompt half lives in packages/ai/src/prompts/core.ts, and
 // the toolset drops `deploySite` on shared-model turns.
 //
-// The rules (owner's call, 2026-09-26): a stranger is stopped and warned, and
-// caught again within a day is banned for two hours; the owner gets an ephemeral
+// The rules (owner's calls, 2026-09-26/29): a stranger is stopped and warned,
+// three times, and the fourth catch in a run (each within a day of the last) is
+// a one-hour ban; the owner gets an ephemeral
 // note and the turn runs anyway; someone on their own model key is never warned,
 // but that one turn is kept off kyto's shared models entirely.
 
@@ -25,7 +26,13 @@ import { formatBanDuration } from '@/lib/bans/duration';
 import { byokConfigured } from '@/lib/byok/crypto';
 import logger from '@/lib/logger';
 import { toLogError } from '@/lib/utils/error';
-import { CODING_BAN_MS, decideCodingAction, isRepeatOffence } from './decide';
+import {
+  CODING_BAN_MS,
+  decideCodingAction,
+  isBanStrike,
+  WARNING_WINDOW_MS,
+  WARNINGS_BEFORE_BAN,
+} from './decide';
 import { type CodingAction, renderCodingState } from './state';
 
 const JEV_URL = 'https://ai.hackclub.com/proxy/v1/jev/systemone';
@@ -62,19 +69,22 @@ const CRITERIA = {
 // Reworded, those score 0.12-0.27, while lily's cap.js / BotID / Turnstile
 // thread, fetch-a-gist-then-write-a-bot, clone-and-edit, fork yourself and
 // hosting a site still score 0.93-0.98 (31 labelled cases on jev-1.13.0).
-// Deliberately allowed now: cloning a tool to COMPUTE something (lily's onion
-// vanity address, 0.84) and installing a package on request (is-even, 0.80).
+// Two lines drawn on purpose (owner's calls, 2026-09-29): installing a package
+// on request is allowed (is-even, 0.81), but building from source or running a
+// brute-force / mining job counts as coding even when the output is "just" an
+// answer — lily's mkp224o onion vanity address went 0.84 -> 0.95 once named.
+// 37 labelled cases, all on the right side of 0.9.
 const QUESTIONS = {
   request: {
     criteria: CRITERIA,
     instructions:
-      "A Slack assistant may answer coding questions like any AI chatbot (explain code, write a snippet or short function, fix code the user pasted, in its reply) and may do general agent work (research, browsing, email, Slack) — including using code and tools itself as a means to an end, e.g. converting or transcribing media, downloading something, calculating, analysing data or drawing a chart, where what it delivers is an answer, a file or media rather than a program. It must NOT act as an autonomous coding agent. Read the latest message in light of the conversation before it. Is it asking the assistant to act as a coding agent, where the RESULT is software: build, run or debug a program, script, bot or solver for someone; automate or bot a website, service or captcha; work on a repository's code; clone, fork, commit, push or open a pull request; copy or fork itself; or deploy/host something?",
+      "A Slack assistant may answer coding questions like any AI chatbot (explain code, write a snippet or short function, fix code the user pasted, in its reply) and may do general agent work (research, browsing, email, Slack) — including using code and tools itself as a means to an end, e.g. converting or transcribing media, downloading something, calculating, analysing data or drawing a chart, where what it delivers is an answer, a file or media rather than a program. It must NOT act as an autonomous coding agent. Read the latest message in light of the conversation before it. Is it asking the assistant to act as a coding agent, where the RESULT is software: build, run or debug a program, script, bot or solver for someone; automate or bot a website, service or captcha; work on a repository's code; clone, compile or build software from source; run a brute-force, mining or other long compute job (e.g. generating a vanity address or keys); clone, fork, commit, push or open a pull request; copy or fork itself; or deploy/host something?",
     type: 'noul',
   },
   work: {
     criteria: CRITERIA,
     instructions:
-      "Judge the WHOLE context below: the conversation so far, the latest message, and what the assistant has done and is about to do this turn. Is the assistant being asked to act, or already acting, as an autonomous CODING agent — where the RESULT is software: writing or building a program, script, bot, solver, website or app for someone to keep or run; automating, botting or farming a website, service or captcha; working on a repository's code; GitHub writes; or deploying/hosting code? NOT a coding agent: chatbot coding help in its reply (explaining, a snippet, fixing code the user pasted), and general agent work — which INCLUDES using code and command-line tools as a means to an end: installing a package, or running ffmpeg, yt-dlp, whisper, curl or a short Python script to download, convert, transcribe, inspect, compute or analyse something, when what it delivers is an answer, a file or media rather than a program.",
+      "Judge the WHOLE context below: the conversation so far, the latest message, and what the assistant has done and is about to do this turn. Is the assistant being asked to act, or already acting, as an autonomous CODING agent — where the RESULT is software: writing or building a program, script, bot, solver, website or app for someone to keep or run; automating, botting or farming a website, service or captcha; working on a repository's code; cloning, compiling or building software from source; running brute-force, mining or other long compute jobs (e.g. generating vanity addresses or keys); GitHub writes; or deploying/hosting code? NOT a coding agent: chatbot coding help in its reply (explaining, a snippet, fixing code the user pasted), and general agent work — which INCLUDES using code and command-line tools as a means to an end: installing a package, or running ffmpeg, yt-dlp, whisper, curl or a short Python script to download, convert, transcribe, inspect, compute or analyse something, when what it delivers is an answer, a file or media rather than a program.",
     type: 'noul',
   },
 } as const;
@@ -280,7 +290,7 @@ export function createCodingMonitor({
   };
 }
 
-/** Warn a first offence, ban a repeat inside the window. */
+/** Warn the first three catches in a run, ban the one after. */
 async function strike({
   message,
   secret,
@@ -292,38 +302,41 @@ async function strike({
 }): Promise<void> {
   const userId = message.author.userId;
   // A DB failure must not ban anyone: treat it as a first offence.
-  const previousWarning = await recordCodingWarning(userId).catch(
-    (error: unknown) => {
-      logger.warn(
-        { ...toLogError(error), userId },
-        '[anti-coding] could not record the warning'
-      );
-      return null;
-    }
-  );
+  // A DB failure must not ban anyone: treat it as a first warning.
+  const count = await recordCodingWarning({
+    userId,
+    windowMs: WARNING_WINDOW_MS,
+  }).catch((error: unknown) => {
+    logger.warn(
+      { ...toLogError(error), userId },
+      '[anti-coding] could not record the warning'
+    );
+    return 1;
+  });
   const ownKeyHint = byokConfigured()
     ? ' if you want a coding agent, add your own model key in my App Home (Model keys) and this limit no longer applies to you.'
     : '';
-  if (isRepeatOffence({ now: new Date(), previousWarning })) {
+  const banFor = formatBanDuration(CODING_BAN_MS);
+  if (isBanStrike(count)) {
     await banUser({
       bannedBy: 'anti-coding',
       ms: CODING_BAN_MS,
-      reason:
-        'asked kyto to act as a coding agent again within a day of being warned (automatic)',
+      reason: `coding-agent work after ${WARNINGS_BEFORE_BAN} warnings within a day of each other (automatic)`,
       userId,
     });
     await tell({
       ephemeral: secret,
       message,
-      text: `<@${userId}> that's coding-agent work again within a day of your warning, so you're banned from kyto for ${formatBanDuration(CODING_BAN_MS)}.${ownKeyHint}`,
+      text: `<@${userId}> that's coding-agent work again after ${WARNINGS_BEFORE_BAN} warnings, so you're banned from kyto for ${banFor}.${ownKeyHint}`,
       thread,
     });
     return;
   }
+  const left = WARNINGS_BEFORE_BAN - count;
   await tell({
     ephemeral: secret,
     message,
-    text: `<@${userId}> i stopped there — that's coding-agent work, and i'm not a coding agent. i'll happily explain code, write a snippet, fix code you paste, or do general agent stuff (research, browsing, email, slack), but i won't build, run or debug programs and bots, work in repos or deploy things. this is your warning: coding-agent work again within 24 hours gets you banned for ${formatBanDuration(CODING_BAN_MS)}.${ownKeyHint}`,
+    text: `<@${userId}> i stopped there — that's coding-agent work, and i'm not a coding agent. i'll happily explain code, write a snippet, fix code you paste, or do general agent stuff (research, browsing, email, slack), but i won't build, run or debug programs and bots, brute-force or mine things, work in repos or deploy things. ${left === 0 ? `this is your last warning (${count} of ${WARNINGS_BEFORE_BAN}): once more within 24 hours and you're banned for ${banFor}.` : `this is warning ${count} of ${WARNINGS_BEFORE_BAN}; after the last one, the next within 24 hours gets you banned for ${banFor}.`}${ownKeyHint}`,
     thread,
   });
 }

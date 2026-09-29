@@ -57,11 +57,14 @@ CREATE TABLE IF NOT EXISTS coding_warnings (
   user_id text PRIMARY KEY,
   warned_at timestamptz NOT NULL
 );
+ALTER TABLE coding_warnings ADD COLUMN IF NOT EXISTS count integer NOT NULL DEFAULT 1; -- 2026-09-29
 ```
 
-The anti-coding gate's ledger: the LAST time each person was warned. A second
-catch within 24h of it is a 2-hour ban (`recordCodingWarning` returns the
-previous time and stamps the new one in one statement).
+The anti-coding gate's ledger: the last catch and how many in a row (each
+within 24h of the previous; a longer gap resets to 1). Catches 1-3 are
+warnings, the 4th and later a 1-hour ban. `recordCodingWarning` increments and
+returns the count in one statement. A `Date` inside a raw `sql` fragment is NOT
+serialized by the driver — pass `toISOString()` with a `::timestamptz` cast.
 
 ## The `banned_users` table (2026-08-14)
 

@@ -67,33 +67,30 @@ export async function listBans(): Promise<BannedUser[]> {
 }
 
 /**
- * Record an anti-coding catch and return when this person was last caught
- * BEFORE it (null for a first offence). One statement, so two messages caught
- * at once can't both read "no earlier warning" and both get let off.
+ * Record an anti-coding catch and return how many catches in a row this is.
+ * A catch within `windowMs` of the previous one extends the run; a longer gap
+ * starts over at 1. One statement, so two catches at once can't both read the
+ * same count and both be let off with a warning.
  */
-export async function recordCodingWarning(
-  userId: string
-): Promise<Date | null> {
+export async function recordCodingWarning({
+  userId,
+  windowMs,
+}: {
+  userId: string;
+  windowMs: number;
+}): Promise<number> {
   const now = new Date();
-  const previous = db
-    .$with('previous')
-    .as(
-      db
-        .select({ warnedAt: codingWarnings.warnedAt })
-        .from(codingWarnings)
-        .where(eq(codingWarnings.userId, userId))
-    );
+  const cutoff = new Date(now.getTime() - windowMs);
   const [row] = await db
-    .with(previous)
     .insert(codingWarnings)
-    .values({ userId, warnedAt: now })
+    .values({ count: 1, userId, warnedAt: now })
     .onConflictDoUpdate({
-      set: { warnedAt: now },
+      set: {
+        count: sql`case when ${codingWarnings.warnedAt} > ${cutoff.toISOString()}::timestamptz then ${codingWarnings.count} + 1 else 1 end`,
+        warnedAt: now,
+      },
       target: codingWarnings.userId,
     })
-    .returning({
-      previous: sql<Date | null>`(select warned_at from previous)`,
-    });
-  const value = row?.previous;
-  return value ? new Date(value) : null;
+    .returning({ count: codingWarnings.count });
+  return row?.count ?? 1;
 }
