@@ -159,10 +159,20 @@ rotation lands naturally on chunk arrival.
 - **Hallucinated tool calls are hidden.** Weak models sometimes call an
   unregistered tool; `renderStream`'s `knownTools` drops any such call (and its
   result/error) instead of surfacing "Tool X not found".
-- **Usage footer** (`postUsageFooter`): a muted context block,
-  `<output tokens> · <N> tok/s`. Per-user opt-out via
-  `user_customizations.show_usage_footer` (App Home). The resolved model shows in
-  `Thinking`, not here.
+- **Reply footer** (`postReplyFooter`, `lib/feedback/footer.ts`, tested): one
+  message under the reply — `_done in 12.3s_` (the whole turn, not the model's
+  tokens/sec: owner's call 2026-09-29, tok/s measured the provider and read as
+  noise) plus 👍/👎 buttons. Per-user opt-out via
+  `user_customizations.show_usage_footer` (App Home "Reply footer").
+  - **The weaker-model note ignores that opt-out**: an answer from anything but
+    the primary on kyto's own chain says which model wrote it and that it is
+    weaker. Not for a person's own key, and not for an upgrade (a step UP).
+  - **Feedback** (`features/feedback`, `reply_feedback`): the rating is saved on
+    the CLICK, so dismissing the comment modal loses nothing; a comment updates
+    the same row (one per person per reply). The owner is DM'd on the rating
+    and again on a comment. The reply's text is NOT copied into the table — the
+    row points at the Slack message, so feedback never becomes a second
+    transcript.
 - **Channel names are linked on the way out** (`lib/slack/channel-links.ts`): the
   model writes `#some-channel` because that is how a channel reads everywhere
   else, and Slack renders that as plain text. Resolved off a cached name→id

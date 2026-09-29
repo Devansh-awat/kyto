@@ -66,6 +66,18 @@ warnings, the 4th and later a 1-hour ban. `recordCodingWarning` increments and
 returns the count in one statement. A `Date` inside a raw `sql` fragment is NOT
 serialized by the driver — pass `toISOString()` with a `::timestamptz` cast.
 
+## The `reply_feedback` table (2026-09-29)
+
+```sql
+CREATE TABLE IF NOT EXISTS reply_feedback (
+  channel_id text NOT NULL, message_ts text NOT NULL, user_id text NOT NULL,
+  thread_id text NOT NULL, rating text NOT NULL, comment text, model text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (channel_id, message_ts, user_id)
+);
+```
+
 ## The `banned_users` table (2026-08-14)
 
 ```sql

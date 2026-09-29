@@ -71,6 +71,7 @@ import {
   DegenerateOutputError,
   StreamInterruptedError,
 } from '@/lib/errors';
+import { buildReplyFooter } from '@/lib/feedback/footer';
 import logger from '@/lib/logger';
 import { openSandboxProxies } from '@/lib/sandbox/proxies';
 import { acquireThreadSandbox, threadSandboxStore } from '@/lib/sandbox/store';
@@ -314,11 +315,10 @@ async function executeTurn(
   const attempts: AttemptFailure[] = [];
   let reply: ReturnType<typeof createReply> | undefined;
   let errorStage: AgentErrorStage = 'before_output';
-  // Filled by the successful attempt so the finalizer can render the usage
-  // footer (output tokens · tokens/sec) if the user hasn't disabled it.
-  let usageFooter:
-    | { outputTokens: number; tokensPerSecond: number }
-    | undefined;
+  // The attempt that wrote the reply, for the footer under it: how long the turn
+  // took, feedback buttons, and a note when a weaker model had to answer.
+  // Unset on a skip or a turn that failed, which get no footer.
+  let answeredBy: ModelAttempt | undefined;
   // The answering attempt's prompt-token split, logged on `turn complete`. Kept
   // separate from usageFooter: the footer is a user-facing opt-out, this is
   // operational (is the 1h cache actually being hit?) and always recorded.
@@ -327,6 +327,7 @@ async function executeTurn(
         cacheReadTokens?: number;
         cacheWriteTokens?: number;
         inputTokens?: number;
+        outputTokens?: number;
       }
     | undefined;
 
@@ -375,12 +376,14 @@ async function executeTurn(
         })
         .catch(() => undefined);
     }
-    if (
-      !secret &&
-      usageFooter &&
-      hints.customization?.showUsageFooter !== false
-    ) {
-      await postUsageFooter({ footer: usageFooter, thread });
+    if (!secret && answeredBy) {
+      await postReplyFooter({
+        answeredBy,
+        durationMs: Date.now() - turnStart,
+        isOwnAttempt: routing.own.includes(answeredBy),
+        showFooter: hints.customization?.showUsageFooter !== false,
+        thread,
+      });
     }
     await cleanup();
     logger.info(
@@ -394,7 +397,7 @@ async function executeTurn(
         cache: cacheLog(turnUsage),
         durationMs: Date.now() - turnStart,
         failedAttempts: failedAttemptsLog(attempts),
-        outputTokens: usageFooter?.outputTokens,
+        outputTokens: turnUsage?.outputTokens,
         steps: handledSteps,
         threadId,
       },
@@ -1252,15 +1255,11 @@ async function executeTurn(
             cacheReadTokens: usage?.inputTokenDetails?.cacheReadTokens,
             cacheWriteTokens: usage?.inputTokenDetails?.cacheWriteTokens,
             inputTokens: usage?.inputTokens,
+            outputTokens: usage?.outputTokens ?? usage?.totalTokens,
           };
-          const outputTokens = usage?.outputTokens ?? usage?.totalTokens;
-          const elapsedSeconds = (Date.now() - attemptStart) / 1000;
-          if (attemptText && outputTokens && elapsedSeconds > 0) {
-            usageFooter = {
-              outputTokens,
-              tokensPerSecond: outputTokens / elapsedSeconds,
-            };
-          }
+        }
+        if (attemptText) {
+          answeredBy = currentAttempt;
         }
         return;
       } catch (error) {
@@ -1587,28 +1586,48 @@ function failedAttemptsLog(attempts: AttemptFailure[]) {
   }));
 }
 
-const TOK_PER_SEC_DECIMAL_BELOW = 10;
+// What the fallback note calls the usual model. Named in words rather than by
+// slug because the note is for people, not for the journal.
+const PRIMARY_LABEL = 'glm 5.3 flash on hack club ai';
 
-// Post the per-turn usage footer as a muted Slack context block under the
-// reply. Best-effort — a failure here never affects the answer.
-async function postUsageFooter({
-  footer,
+/**
+ * The footer under a reply (lib/feedback/footer). Best-effort — a failure here
+ * never affects the answer.
+ *
+ * The weaker-model note is for an answer that came from anywhere other than the
+ * primary on kyto's own chain: not for a person's own key (their choice, their
+ * model) and not for an upgrade (a step UP, which the Thinking card already says).
+ */
+async function postReplyFooter({
+  answeredBy,
+  durationMs,
+  isOwnAttempt,
+  showFooter,
   thread,
 }: {
-  footer: { outputTokens: number; tokensPerSecond: number };
+  answeredBy: ModelAttempt;
+  durationMs: number;
+  isOwnAttempt: boolean;
+  showFooter: boolean;
   thread: ThreadHandle;
 }): Promise<void> {
-  const rate =
-    footer.tokensPerSecond < TOK_PER_SEC_DECIMAL_BELOW
-      ? footer.tokensPerSecond.toFixed(1)
-      : Math.round(footer.tokensPerSecond).toString();
-  const text = `${footer.outputTokens.toLocaleString('en-US')} tokens · ${rate} tok/s`;
-  await thread
-    .post({
-      blocks: [{ elements: [{ text, type: 'mrkdwn' }], type: 'context' }],
-      fallbackText: text,
-    })
-    .catch(() => undefined);
+  const key = attemptKey(answeredBy);
+  const steppedDown =
+    !isOwnAttempt &&
+    key !== attemptKey(PRIMARY_ATTEMPT) &&
+    !UPGRADE_ATTEMPTS.some((candidate) => attemptKey(candidate) === key);
+  const footer = buildReplyFooter({
+    durationMs,
+    fallback: steppedDown
+      ? { model: answeredBy.model, primaryLabel: PRIMARY_LABEL }
+      : undefined,
+    model: answeredBy.model,
+    showFooter,
+  });
+  if (!footer) {
+    return;
+  }
+  await thread.post(footer).catch(() => undefined);
 }
 
 /**

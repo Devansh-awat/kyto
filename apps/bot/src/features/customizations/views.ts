@@ -533,7 +533,7 @@ export function buildHomeView({
         value: showUsageFooter ? 'off' : 'on',
       },
       text: mrkdwn(
-        `*Usage footer*\nShow a small token count · tokens/sec line under Kyto's replies. Currently *${showUsageFooter ? 'on' : 'off'}*.`
+        `*Reply footer*\nShow how long each reply took, with 👍/👎 buttons to rate it, under Kyto's replies. Currently *${showUsageFooter ? 'on' : 'off'}*. (A note that a weaker model had to answer is shown either way.)`
       ),
       type: 'section',
     }

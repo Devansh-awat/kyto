@@ -3,6 +3,7 @@ export * from './bans';
 export * from './channel-groups';
 export * from './chatgpt-accounts';
 export * from './customizations';
+export * from './feedback';
 export * from './github-repos';
 export * from './github-trust';
 export * from './identity';
