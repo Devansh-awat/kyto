@@ -65,7 +65,10 @@ function authorLabel(message: Message): string {
   if (slack.botUserId && message.author.userId === slack.botUserId) {
     return BOT_NAME;
   }
-  return message.author.userName;
+  // Said outright so the model knows it is answering a program, not a person.
+  return message.author.isBot === true
+    ? `${message.author.userName} [bot]`
+    : message.author.userName;
 }
 
 async function renderMessage(message: Message): Promise<string> {

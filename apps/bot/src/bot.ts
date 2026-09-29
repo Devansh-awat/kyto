@@ -3,6 +3,7 @@ import { runTurn, stopTurn } from '@/lib/agent';
 import { isFocusAllowed } from '@/lib/agent/focus';
 import { isUserAllowed } from '@/lib/allowed-users';
 import { activeBan, banNotice, runBanCommand } from '@/lib/bans';
+import { allowBotTurn, noteHumanMessage } from '@/lib/bot-pings';
 import { bot, slack } from '@/lib/chat';
 import { handleCommand } from '@/lib/commands';
 import logger from '@/lib/logger';
@@ -30,6 +31,17 @@ bot.onNewMention(async (thread, message) => {
   if (shouldIgnore(message)) {
     return;
   }
+  const fromBot = message.author.isBot === true;
+  if (fromBot && !allowBotTurn(thread.id)) {
+    logger.info(
+      { botId: message.author.userId, threadId: thread.id },
+      '[bots] ignored a bot mention: too many bot turns in a row here'
+    );
+    return;
+  }
+  if (!fromBot) {
+    noteHumanMessage(thread.id);
+  }
   // Focus mode: in a focused thread, ignore mentions from non-focused users so
   // they can't hijack kyto away from the people it was told to attend to.
   if (!isFocusAllowed(await thread.state, message.author.userId)) {
@@ -38,11 +50,18 @@ bot.onNewMention(async (thread, message) => {
   if (await refuseBanned(thread, message)) {
     return;
   }
-  if (!(await isUserAllowed(message.author.userId))) {
+  // A bot cannot click "i accept", so the opt-in gate is a person's; a bot is
+  // still subject to bans, and to the loop guard above.
+  if (!(fromBot || (await isUserAllowed(message.author.userId)))) {
     await offerOptIn(thread, message.author);
     return;
   }
-  if (slack.decodeThreadId(message.threadId).threadTs === message.id) {
+  // Mentioned at the top of a thread: stay for the replies. Not for a bot —
+  // joining would have kyto answering a thread nobody human asked it into.
+  if (
+    !fromBot &&
+    slack.decodeThreadId(message.threadId).threadTs === message.id
+  ) {
     await thread.setState({ respondOnThreadMessages: true });
     await thread.subscribe();
   }
@@ -50,7 +69,9 @@ bot.onNewMention(async (thread, message) => {
 });
 
 bot.onDirectMessage(async (thread, message) => {
-  if (shouldIgnore(message)) {
+  // Bots are answered on a mention in a shared room, not in a DM with nobody
+  // human watching the two of them talk.
+  if (shouldIgnore(message) || message.author.isBot === true) {
     return;
   }
   if (await refuseBanned(thread, message)) {
@@ -72,13 +93,28 @@ bot.onSubscribedMessage(async (thread, message) => {
     'respondOnThreadMessages' in state &&
     state.respondOnThreadMessages === true;
 
+  if (shouldIgnore(message)) {
+    return;
+  }
+  const fromBot = message.author.isBot === true;
+  if (!fromBot) {
+    noteHumanMessage(thread.id);
+  }
   if (
-    shouldIgnore(message) ||
-    !(shouldRespondToThread || message.isMention) ||
-    !isFocusAllowed(state, message.author.userId) ||
+    !(
+      (shouldRespondToThread || message.isMention) &&
+      isFocusAllowed(state, message.author.userId)
+    ) ||
     (await activeBan(message.author.userId)) !== null ||
-    !(await isUserAllowed(message.author.userId))
+    !(fromBot || (await isUserAllowed(message.author.userId)))
   ) {
+    return;
+  }
+  if (fromBot && !allowBotTurn(thread.id)) {
+    logger.info(
+      { botId: message.author.userId, threadId: thread.id },
+      '[bots] ignored a bot mention: too many bot turns in a row here'
+    );
     return;
   }
   await runCommandOrTurn(thread, message);
@@ -165,11 +201,12 @@ async function refuseBanned(
 }
 
 function shouldIgnore(message: Message): boolean {
-  if (
-    message.author.isBot === true ||
-    message.author.userId === 'USLACKBOT' ||
-    message.author.isMe === true
-  ) {
+  if (message.author.userId === 'USLACKBOT' || message.author.isMe === true) {
+    return true;
+  }
+  // Another bot is answered only when it @mentions kyto (lib/bot-pings) —
+  // never just for talking in a thread kyto joined, and never in a DM.
+  if (message.author.isBot === true && !message.isMention) {
     return true;
   }
   // `<>` at the front means "only the agents named here should answer". Applied

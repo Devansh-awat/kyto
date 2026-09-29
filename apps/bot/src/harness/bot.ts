@@ -298,13 +298,35 @@ export class KytoBot {
   }
 
   private async dispatchMessage(event: RawSlackMessage): Promise<void> {
-    if (event.subtype && !ALLOWED_SUBTYPES.has(event.subtype)) {
+    // Another app's post. Most modern apps post as their bot USER (no subtype,
+    // `user` set), but webhooks and legacy integrations arrive as `bot_message`
+    // with only a `bot_id`. Either may now reach kyto — the app decides which
+    // to answer (lib/bot-pings) — but kyto's OWN custom-identity posts come
+    // through this way too, and must never be mistaken for someone else's.
+    const isBotPost = event.subtype === 'bot_message';
+    if (event.subtype && !(ALLOWED_SUBTYPES.has(event.subtype) || isBotPost)) {
       return;
     }
-    if (!(event.user && event.channel && event.ts)) {
+    if (!(event.channel && event.ts)) {
       return;
     }
-    const author = await this.harness.getUser(event.user);
+    let author: Author;
+    if (event.user) {
+      author = await this.harness.getUser(event.user);
+    } else if (isBotPost && event.bot_id) {
+      author = {
+        isBot: true,
+        isMe: event.bot_id === this.harness.botId,
+        userId: event.bot_id,
+        userName:
+          typeof event.username === 'string' ? event.username : event.bot_id,
+      };
+    } else {
+      return;
+    }
+    if (event.bot_id && event.bot_id === this.harness.botId) {
+      author = { ...author, isBot: true, isMe: true };
+    }
     const message = this.harness.buildMessage(event, author);
     const thread = this.thread(message.threadId);
 

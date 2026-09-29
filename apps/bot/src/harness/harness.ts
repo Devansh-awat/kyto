@@ -124,6 +124,9 @@ function extractTables(event: RawSlackMessage): string | undefined {
 export class SlackHarness {
   readonly webClient: WebClient;
   botUserId: string | undefined;
+  /** kyto's own `B…` bot id — a post made with a custom name/icon can arrive
+   * as a `bot_message` carrying only this, not the user id. */
+  botId: string | undefined;
   teamId: string | undefined;
   private readonly logger: Logger;
   private readonly userCache = new Map<
@@ -139,6 +142,7 @@ export class SlackHarness {
   async connectIdentity(): Promise<void> {
     const auth = await this.webClient.auth.test();
     this.botUserId = auth.user_id ?? undefined;
+    this.botId = auth.bot_id ?? undefined;
     this.teamId = auth.team_id ?? undefined;
   }
 
@@ -389,12 +393,23 @@ export class SlackHarness {
       rawMessages
         .filter((raw) => raw.ts)
         .map(async (raw) => {
+          // kyto's own custom-identity posts carry only its bot id; read back,
+          // they are still kyto speaking, not some other bot.
+          const own =
+            !raw.user && raw.bot_id !== undefined && raw.bot_id === this.botId;
           const author = raw.user
             ? await this.getUser(raw.user)
             : {
                 isBot: true,
-                userId: raw.bot_id ?? 'bot',
-                userName: raw.bot_id ?? 'bot',
+                isMe: own,
+                userId:
+                  own && this.botUserId
+                    ? this.botUserId
+                    : (raw.bot_id ?? 'bot'),
+                userName:
+                  typeof raw.username === 'string'
+                    ? raw.username
+                    : (raw.bot_id ?? 'bot'),
               };
           return this.buildMessage({ ...raw, channel }, author);
         })
