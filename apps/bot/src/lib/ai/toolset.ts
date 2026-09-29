@@ -69,6 +69,7 @@ import {
   saveMemoryTool,
 } from './tools/memory';
 import { mermaidTool } from './tools/mermaid';
+import { opencodeTool } from './tools/opencode';
 import {
   bookmarkLinkTool,
   pinMessageTool,
@@ -244,6 +245,10 @@ export async function buildTools({
       getSandboxContext,
       github: { isOwner, threadId: thread.id, userId: authorUserId },
     }),
+    // Where code work goes instead of kyto's own shells. NOT in CODE_TOOLS: the
+    // anti-coding check watches kyto doing the coding, and this is exactly the
+    // alternative to that (see tools/opencode.ts).
+    opencode: opencodeTool({ extendAttemptDeadline, getSandboxContext }),
     readFile: readFileTool({ getSandboxContext }),
     writeFile: writeFileTool({ getSandboxContext }),
     editFile: editFileTool({ getSandboxContext }),

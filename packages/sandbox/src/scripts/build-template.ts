@@ -102,6 +102,11 @@ async function main(): Promise<void> {
         // HOME at build time so the first browse of a thread isn't a download.
         'npm install -g cloakbrowser',
         'bash -lc "HOME=/home/user cloakbrowser install"',
+        // OpenCode, the coding agent kyto delegates to. Pre-installed so a fresh
+        // thread's first delegation isn't a minute of npm; the tool's setup
+        // (src/opencode.ts) still installs it into an older sandbox, and writes
+        // the Slack-free wrapper and config either way.
+        'npm install -g --prefix /home/user/.kyto/opencode opencode-ai',
         'chown -R user:user /home/user',
       ])
       .setUser('user')

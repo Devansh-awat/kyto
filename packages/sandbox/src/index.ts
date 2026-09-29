@@ -11,4 +11,5 @@ export {
   LazySandbox,
   type SandboxStore,
 } from './lazy-sandbox';
+export { OPENCODE_SETUP_COMMAND } from './opencode';
 export { killSandbox, type RunOnceResult, runOnce } from './run-once';
