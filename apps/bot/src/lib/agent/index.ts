@@ -56,7 +56,12 @@ import {
   TurnAbort,
 } from '@/lib/agent/steering';
 import { rememberThinking } from '@/lib/agent/thinking';
-import { clearTurn, getTurn, setTurn } from '@/lib/agent/turns';
+import {
+  clearTurn,
+  getTurn,
+  setTurn,
+  USER_ACCOUNT_TURN_SUFFIX,
+} from '@/lib/agent/turns';
 import { startThinking } from '@/lib/agent/utils';
 import { promptWithAttachments, seedAttachments } from '@/lib/ai/attachments';
 import { requestHints } from '@/lib/ai/hints';
@@ -217,6 +222,16 @@ class AttemptTimeoutError extends Error {
 
 export { stopAllTurns, stopTurn } from '@/lib/agent/turns';
 
+function turnSlot({
+  asUserAccount,
+  threadId,
+}: {
+  asUserAccount: boolean;
+  threadId: string;
+}): string {
+  return asUserAccount ? `${threadId}${USER_ACCOUNT_TURN_SUFFIX}` : threadId;
+}
+
 export function runTurn(input: {
   /**
    * Answer as kyto's Slack USER account (lib/chat `userBot`): like a person —
@@ -234,10 +249,17 @@ export function runTurn(input: {
   secret?: boolean;
   thread: ThreadHandle;
 }): Promise<void> {
-  const turn = getTurn({ threadId: input.thread.id });
+  // One slot per kyto: a thread pinging both the app and the user account
+  // runs both turns, instead of the second interrupting the first and taking
+  // over its answer.
+  const slot = turnSlot({
+    asUserAccount: input.asUserAccount === true,
+    threadId: input.thread.id,
+  });
+  const turn = getTurn({ threadId: slot });
   if (!turn) {
     return runQueuedTurn({
-      threadId: input.thread.id,
+      threadId: slot,
       // Everything logged while the turn runs is captured for its thread
       // (lib/thread-logs) — except a `!secret` turn, which leaves no trace.
       run: (controller) =>
@@ -329,7 +351,8 @@ async function executeTurn(
     controller,
     pendingMessages: [],
   };
-  setTurn({ threadId, turn: activeTurn });
+  const slot = turnSlot({ asUserAccount, threadId });
+  setTurn({ threadId: slot, turn: activeTurn });
   // "kyto is thinking" is the app's assistant status — the user account shows
   // nothing until it speaks.
   if (!asUserAccount) {
@@ -529,7 +552,7 @@ async function executeTurn(
     if (!secret) {
       scheduleKevinton(threadId).catch(() => undefined);
     }
-    clearTurn({ threadId, turn: activeTurn });
+    clearTurn({ threadId: slot, turn: activeTurn });
     // Only an interrupt replays queued messages; a rapid burst is merged into a
     // single follow-up so steering does not drop intermediate corrections.
     const resume =
@@ -710,6 +733,7 @@ async function executeTurn(
       ? 'upgraded'
       : undefined;
     const built = await buildTools({
+      asUserAccount,
       bot,
       escalation,
       extendAttemptDeadline: (extraMs) => extendDeadline?.(extraMs),

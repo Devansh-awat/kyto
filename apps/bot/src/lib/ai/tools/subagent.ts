@@ -87,6 +87,7 @@ interface SubagentJob {
 }
 
 export function runSubagentTool({
+  asUserAccount = false,
   bot,
   getSandboxContext,
   guardCodeTool,
@@ -104,6 +105,8 @@ export function runSubagentTool({
   }) => Promise<string | null>;
   message: Message;
   thread: ThreadHandle;
+  /** The parent answers as kyto's user account; so does the report's wake. */
+  asUserAccount?: boolean;
 }) {
   // Background subagents started this turn, keyed by id (sub-1, sub-2, …). Shared
   // between runSubagent (which registers) and checkSubagent (which collects).
@@ -365,7 +368,7 @@ export function runSubagentTool({
             record.status = result.success ? 'done' : 'failed';
             record.result = result;
             if (mayWake) {
-              wakeThread({ job: record, message, thread }).catch(
+              wakeThread({ asUserAccount, job: record, message, thread }).catch(
                 () => undefined
               );
             }
@@ -378,7 +381,7 @@ export function runSubagentTool({
               '[subagent] background run failed'
             );
             if (mayWake) {
-              wakeThread({ job: record, message, thread }).catch(
+              wakeThread({ asUserAccount, job: record, message, thread }).catch(
                 () => undefined
               );
             }
@@ -471,18 +474,25 @@ export function runSubagentTool({
  * the only trace, which is the right trade against derailing a live thread.
  */
 async function wakeThread({
+  asUserAccount,
   job,
   message,
   thread,
 }: {
+  asUserAccount: boolean;
   job: SubagentJob;
   message: Message;
   thread: ThreadHandle;
 }): Promise<void> {
   try {
-    const { getTurn } = await import('@/lib/agent/turns');
+    const { getTurn, USER_ACCOUNT_TURN_SUFFIX } = await import(
+      '@/lib/agent/turns'
+    );
     const deadline = Date.now() + WAKE_MAX_WAIT_MS;
-    while (getTurn({ threadId: thread.id })) {
+    const slot = asUserAccount
+      ? `${thread.id}${USER_ACCOUNT_TURN_SUFFIX}`
+      : thread.id;
+    while (getTurn({ threadId: slot })) {
       if (Date.now() > deadline) {
         logger.warn(
           { id: job.id, threadId: thread.id },
@@ -508,7 +518,11 @@ async function wakeThread({
       { id: job.id, status: job.status, threadId: thread.id },
       '[subagent] waking the thread with a background report'
     );
-    await runTurn({ message: reportMessage({ job, message, thread }), thread });
+    await runTurn({
+      asUserAccount,
+      message: reportMessage({ job, message, thread }),
+      thread,
+    });
   } catch (error) {
     logger.warn(
       { err: errorMessage(error), id: job.id, threadId: thread.id },

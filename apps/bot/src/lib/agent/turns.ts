@@ -33,13 +33,20 @@ export function clearTurn({
   }
 }
 
+// The user account's turn in a thread has its own slot beside the app's.
+export const USER_ACCOUNT_TURN_SUFFIX = '#user';
+
+/** Stop whatever is running in the thread — the app's turn and the account's. */
 export function stopTurn({ threadId }: { threadId: string }): boolean {
-  const turn = turns.get(threadId);
-  if (!turn) {
-    return false;
+  let stopped = false;
+  for (const slot of [threadId, `${threadId}${USER_ACCOUNT_TURN_SUFFIX}`]) {
+    const turn = turns.get(slot);
+    if (turn) {
+      turn.controller.abort(new TurnAbort('stop'));
+      stopped = true;
+    }
   }
-  turn.controller.abort(new TurnAbort('stop'));
-  return true;
+  return stopped;
 }
 
 export function stopAllTurns(): void {

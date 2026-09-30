@@ -158,6 +158,7 @@ const CODE_TOOLS = new Set([
 ]);
 
 export async function buildTools({
+  asUserAccount = false,
   bot,
   escalation,
   extendAttemptDeadline,
@@ -204,6 +205,8 @@ export async function buildTools({
   thread: ThreadHandle;
   /** A `!secret` turn: nothing may be posted publicly on its behalf. */
   secret?: boolean;
+  /** Answering as kyto's user account: a subagent's report wakes it, too. */
+  asUserAccount?: boolean;
   /**
    * Nobody is watching this run (a reminder firing, a subagent inside another
    * turn). An MCP tool whose rule is `ask` then REFUSES instead of posting a
@@ -497,6 +500,7 @@ export async function buildTools({
     ...(subagentAttempt
       ? (() => {
           const subagent = runSubagentTool({
+            asUserAccount,
             getSandboxContext,
             guardCodeTool,
             bot,

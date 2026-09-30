@@ -38,6 +38,73 @@ if (userBot) {
   listen(userBot);
 }
 
+// Messages the ACCOUNT has already taken, from either connection: a channel
+// message can reach it through both, and must be answered once.
+const accountSeen = new Set<string>();
+const ACCOUNT_SEEN_LIMIT = 1000;
+
+function firstTimeForAccount(message: Message): boolean {
+  const key = `${message.threadId}:${message.id}`;
+  if (accountSeen.has(key)) {
+    return false;
+  }
+  accountSeen.add(key);
+  if (accountSeen.size > ACCOUNT_SEEN_LIMIT) {
+    const oldest = accountSeen.values().next().value;
+    if (oldest) {
+      accountSeen.delete(oldest);
+    }
+  }
+  return true;
+}
+
+function pingsAccount(message: Message): boolean {
+  return Boolean(
+    slack.userAccountId &&
+      (rawSlackText(message) ?? '').includes(`<@${slack.userAccountId}>`)
+  );
+}
+
+/**
+ * A channel message, handed to the ACCOUNT. Slack only delivers the account's
+ * DMs to its events app (channel messages never arrive there), so the APP's
+ * connection — which sees every message in the channels it is in — passes on
+ * the ones the account should hear: a ping of it, or a reply in a thread it
+ * follows (answerThreadMessage checks that). Needs only the account's session.
+ */
+async function answerAsAccount({
+  message,
+  thread,
+}: {
+  message: Message;
+  thread: Thread;
+}): Promise<void> {
+  if (!slack.userAccountId) {
+    return;
+  }
+  const pinged = pingsAccount(message);
+  const asAccount = { ...message, isMention: pinged };
+  if (pinged) {
+    if (firstTimeForAccount(message)) {
+      await answerMention({ asUserAccount: true, message: asAccount, thread });
+    }
+    return;
+  }
+  // Only a thread the account follows is worth claiming the message for.
+  const state = await thread.state;
+  if (
+    state?.respondOnThreadMessages === true &&
+    state.respondAs === 'user' &&
+    firstTimeForAccount(message)
+  ) {
+    await answerThreadMessage({
+      asUserAccount: true,
+      message: asAccount,
+      thread,
+    });
+  }
+}
+
 /**
  * The same gates on both connections: the app, and kyto's Slack USER account
  * (lib/chat `userBot`). Only who answers differs — the account answers as a
@@ -45,10 +112,24 @@ if (userBot) {
  */
 function listen(target: KytoBot): void {
   const asUserAccount = target.answersAs === 'user';
-  target.onNewMention((thread, message) =>
-    answerMention({ asUserAccount, message, thread })
-  );
+  target.onNewMention(async (thread, message) => {
+    if (asUserAccount) {
+      if (firstTimeForAccount(message)) {
+        await answerMention({ asUserAccount, message, thread });
+      }
+      return;
+    }
+    // Not awaited one after the other: each resolves only when its whole
+    // turn is done, and a message pinging both kytos is for both.
+    await Promise.all([
+      answerMention({ asUserAccount, message, thread }),
+      answerAsAccount({ message, thread }),
+    ]);
+  });
   target.onDirectMessage(async (thread, message) => {
+    if (asUserAccount && !firstTimeForAccount(message)) {
+      return;
+    }
     // Bots are answered on a mention in a shared room, not in a DM with nobody
     // human watching the two of them talk.
     if (shouldIgnore(message) || message.author.isBot === true) {
@@ -64,9 +145,22 @@ function listen(target: KytoBot): void {
     await thread.subscribe();
     await runCommandOrTurn({ asUserAccount, message, thread });
   });
-  target.onSubscribedMessage((thread, message) =>
-    answerThreadMessage({ asUserAccount, message, thread })
-  );
+  target.onSubscribedMessage(async (thread, message) => {
+    if (asUserAccount) {
+      if (message.isMention) {
+        if (firstTimeForAccount(message)) {
+          await answerMention({ asUserAccount, message, thread });
+        }
+        return;
+      }
+      await answerAsAccount({ message, thread });
+      return;
+    }
+    await Promise.all([
+      answerThreadMessage({ asUserAccount, message, thread }),
+      answerAsAccount({ message, thread }),
+    ]);
+  });
 }
 
 // A mention, or a top-level message in a code channel (which is answered as if
