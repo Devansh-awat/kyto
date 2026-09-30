@@ -162,7 +162,11 @@ rotation lands naturally on chunk arrival.
 - **Reply footer** (`postReplyFooter`, `lib/feedback/footer.ts`, tested): one
   message under the reply — `_done in 12.3s_` (the whole turn, not the model's
   tokens/sec: owner's call 2026-09-29, tok/s measured the provider and read as
-  noise) plus 👍/👎 buttons. Per-user opt-out via
+  noise) plus Slack's native `feedback_buttons` in a `context_actions` block —
+  two small thumb icons, like Coolton's; the old full-size `actions` buttons
+  dwarfed short replies (owner's call 2026-09-30). One action id
+  (`reply_feedback`), value `up:<model>`/`down:<model>`; the old per-thumb ids
+  stay registered for footers already posted. Per-user opt-out via
   `user_customizations.show_usage_footer` (App Home "Reply footer").
   - **The weaker-model note ignores that opt-out**: an answer from anything but
     the primary on kyto's own chain says which model wrote it and that it is

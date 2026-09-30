@@ -300,7 +300,7 @@ cookie. So kyto now does exactly what that bot does, and the emoji is live
 immediately instead of being posted into #emojibot and hoped for.
 
 **The session is set (2026-09-29):** `KYTO_USER_TOKEN`/`KYTO_USER_COOKIE` in
-Coolify now hold kyto's OWN user account (`U0BSJ6ZGNDQ`), not yours. It dies
+Coolify now hold kyto's OWN user account, not yours. It dies
 when that browser session logs out — `kyto user-account session rejected` at
 boot or `invalid_auth` means re-copy both from devtools (see OPS.md).
 

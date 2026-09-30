@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import {
   buildReplyFooter,
-  FEEDBACK_DOWN_ACTION,
-  FEEDBACK_UP_ACTION,
+  FEEDBACK_ACTION,
   formatDuration,
+  parseFeedbackValue,
 } from './footer';
 
 describe('formatDuration', () => {
@@ -31,11 +31,29 @@ describe('buildReplyFooter', () => {
       showFooter: true,
     });
     expect(footer?.fallbackText).toBe('_done in 3.2s_');
-    const actions = footer?.blocks.find((block) => block.type === 'actions');
-    expect(
-      actions?.type === 'actions' &&
-        actions.elements.map((element) => element.action_id)
-    ).toEqual([FEEDBACK_UP_ACTION, FEEDBACK_DOWN_ACTION]);
+    const actions = footer?.blocks.find(
+      (block) => block.type === 'context_actions'
+    );
+    const thumbs =
+      actions?.type === 'context_actions' ? actions.elements[0] : undefined;
+    expect(thumbs?.action_id).toBe(FEEDBACK_ACTION);
+    expect(parseFeedbackValue(thumbs?.positive_button.value)).toEqual({
+      model: 'z-ai/glm-5.3-flash',
+      rating: 'up',
+    });
+    expect(parseFeedbackValue(thumbs?.negative_button.value)).toEqual({
+      model: 'z-ai/glm-5.3-flash',
+      rating: 'down',
+    });
+  });
+
+  test('a thumb value without a model, and garbage', () => {
+    expect(parseFeedbackValue('down:')).toEqual({
+      model: undefined,
+      rating: 'down',
+    });
+    expect(parseFeedbackValue('sideways:x')).toBe(null);
+    expect(parseFeedbackValue(undefined)).toBe(null);
   });
 
   test('the fallback note shows even with the footer turned off', () => {

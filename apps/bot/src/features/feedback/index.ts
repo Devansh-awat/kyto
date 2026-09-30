@@ -5,8 +5,10 @@ import type { ActionEvent } from '@/harness';
 import { mrkdwn, plainText } from '@/harness/views';
 import { bot, slack } from '@/lib/chat';
 import {
+  FEEDBACK_ACTION,
   FEEDBACK_DOWN_ACTION,
   FEEDBACK_UP_ACTION,
+  parseFeedbackValue,
 } from '@/lib/feedback/footer';
 import logger from '@/lib/logger';
 import { toLogError } from '@/lib/utils/error';
@@ -78,10 +80,15 @@ async function tellOwner({
   }
 }
 
-async function onRating(
-  event: ActionEvent,
-  rating: 'up' | 'down'
-): Promise<void> {
+async function onRating({
+  event,
+  model,
+  rating,
+}: {
+  event: ActionEvent;
+  model?: string;
+  rating: 'up' | 'down';
+}): Promise<void> {
   const messageTs = event.messageId;
   if (!messageTs) {
     return;
@@ -90,7 +97,7 @@ async function onRating(
   const metadata: FeedbackMetadata = {
     channelId,
     messageTs,
-    model: event.value || undefined,
+    model,
     rating,
     threadId: event.threadId,
   };
@@ -154,8 +161,19 @@ async function onRating(
     });
 }
 
-bot.onAction(FEEDBACK_UP_ACTION, (event) => onRating(event, 'up'));
-bot.onAction(FEEDBACK_DOWN_ACTION, (event) => onRating(event, 'down'));
+bot.onAction(FEEDBACK_ACTION, async (event) => {
+  const parsed = parseFeedbackValue(event.value);
+  if (parsed) {
+    await onRating({ event, ...parsed });
+  }
+});
+// Footers posted before the native thumbs carry the model as the whole value.
+bot.onAction(FEEDBACK_UP_ACTION, (event) =>
+  onRating({ event, model: event.value || undefined, rating: 'up' })
+);
+bot.onAction(FEEDBACK_DOWN_ACTION, (event) =>
+  onRating({ event, model: event.value || undefined, rating: 'down' })
+);
 
 bot.onModalSubmit(SUBMIT_CALLBACK, async (event) => {
   const parsed = metadataSchema.safeParse(

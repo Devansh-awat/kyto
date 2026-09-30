@@ -5,8 +5,28 @@
 // the answer, and read as noise to everyone but the owner; "how long did I
 // wait" is the number a person actually feels (owner's call, 2026-09-29).
 
+// Slack's native feedback control (`context_actions` + `feedback_buttons`):
+// two small thumb icons on one line, where the old `actions` row was a pair of
+// full-size buttons that dwarfed a short reply. One action id for both; the
+// value says which thumb, then the model that answered.
+export const FEEDBACK_ACTION = 'reply_feedback';
+// The full-size buttons' ids, still on every footer posted before the switch.
 export const FEEDBACK_UP_ACTION = 'reply_feedback_up';
 export const FEEDBACK_DOWN_ACTION = 'reply_feedback_down';
+
+/** A feedback thumb's value: `up:<model>` / `down:<model>`. */
+export function parseFeedbackValue(
+  value: string | undefined
+): { model?: string; rating: 'down' | 'up' } | null {
+  const match = /^(up|down):(.*)$/s.exec(value ?? '');
+  if (!match) {
+    return null;
+  }
+  return {
+    model: match[2] || undefined,
+    rating: match[1] === 'up' ? 'up' : 'down',
+  };
+}
 
 const SECONDS_PER_MINUTE = 60;
 const MS_PER_SECOND = 1000;
@@ -47,12 +67,18 @@ type FooterBlock =
   | {
       elements: {
         action_id: string;
-        text: { emoji: true; text: string; type: 'plain_text' };
-        type: 'button';
-        value: string;
+        negative_button: FeedbackButton;
+        positive_button: FeedbackButton;
+        type: 'feedback_buttons';
       }[];
-      type: 'actions';
+      type: 'context_actions';
     };
+
+interface FeedbackButton {
+  accessibility_label: string;
+  text: { emoji: true; text: string; type: 'plain_text' };
+  value: string;
+}
 
 /**
  * The footer message, or null when there is nothing to show. `showFooter` is the
@@ -90,23 +116,25 @@ export function buildReplyFooter({
     });
   }
   if (showFooter) {
-    const value = model ?? '';
+    const answeredBy = model ?? '';
     blocks.push({
       elements: [
         {
-          action_id: FEEDBACK_UP_ACTION,
-          text: { emoji: true, text: '👍', type: 'plain_text' },
-          type: 'button',
-          value,
-        },
-        {
-          action_id: FEEDBACK_DOWN_ACTION,
-          text: { emoji: true, text: '👎', type: 'plain_text' },
-          type: 'button',
-          value,
+          action_id: FEEDBACK_ACTION,
+          negative_button: {
+            accessibility_label: 'Say this reply was bad',
+            text: { emoji: true, text: 'Bad response', type: 'plain_text' },
+            value: `down:${answeredBy}`,
+          },
+          positive_button: {
+            accessibility_label: 'Say this reply was good',
+            text: { emoji: true, text: 'Good response', type: 'plain_text' },
+            value: `up:${answeredBy}`,
+          },
+          type: 'feedback_buttons',
         },
       ],
-      type: 'actions',
+      type: 'context_actions',
     });
   }
   return { blocks, fallbackText: lines.join('\n') || 'feedback' };

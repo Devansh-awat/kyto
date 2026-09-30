@@ -175,7 +175,7 @@ In `apps/bot/src/lib/ai/tools/`, registered in `lib/ai/toolset.ts`; `TOOLS.md` i
 - **The pure halves of the agent loop live in tested modules** (`routing.ts`, `segmentation.ts`, `carryover.ts`, `compaction-plan.ts`, `thinking-render.ts`, `reasoning-tracker.ts`, `fallback-cache.ts`) — do NOT inline one back.
 - **NOTHING in the plan is hidden** — any budget is per MESSAGE, owned by the caller (`endMessage()` at each boundary).
 - **Tool-call markup** (`<｜DSML｜…`) and **"no tools loaded" sentences** are never a reply (`tool-markup.ts`, `tool-complaints.ts`). Recovery calls keep their REAL toolset; the sentence filter applies only where a call is declared prose-only. Do not replace it with another prompt tweak.
-- **Reply footer**: time taken, 👍/👎 feedback (`reply_feedback`, owner DM'd), and a note naming the weaker model when GLM 5.3 wasn't used. Rendering detail in `STREAMING.md`.
+- **Reply footer**: time taken, Slack's native small 👍/👎 (`context_actions` + `feedback_buttons`, value `up:`/`down:<model>`; a click saves the rating, then an optional comment modal; `reply_feedback`, owner DM'd), and a note naming the weaker model when GLM 5.3 wasn't used. Rendering detail in `STREAMING.md`.
 
 ## Models / fallback — full detail in [`MODELS.md`](./MODELS.md)
 
