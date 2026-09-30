@@ -16,7 +16,9 @@ function allowlistKey(channel: string): string {
 }
 
 export async function isUserAllowed(userId: string): Promise<boolean> {
-  if (!env.OPT_IN_CHANNEL) {
+  // The owner never needs the terms — and a message landing in the seconds
+  // before the allowlist is built once told him to accept them.
+  if (!env.OPT_IN_CHANNEL || userId === env.OWNER_USER_ID) {
     return true;
   }
   try {

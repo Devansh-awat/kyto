@@ -69,13 +69,16 @@ setRedactionAlert(({ context, fresh, labels }) => {
 });
 
 try {
+  // BEFORE connecting: events start arriving the moment the socket is up, and
+  // an empty allowlist answered everyone — the owner included — with the
+  // opt-in prompt for the few seconds it took to build.
+  await buildAllowlist();
   await bot.initialize();
   // After the app's: it resolves the account id this connection's pings use.
   // A failure here must not take the app down with it.
   await userBot?.initialize().catch((error: unknown) => {
     logger.error({ err: error }, '[bot] user-account connection failed');
   });
-  await buildAllowlist();
   await startSitesServer();
   startReminderScheduler(bot);
   // Paused thread sandboxes keep costing storage; collect the idle ones.

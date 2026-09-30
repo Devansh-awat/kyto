@@ -185,6 +185,10 @@ export class SlackHarness {
     try {
       const self = await this.userAccountClient.auth.test();
       this.userAccountId = self.user_id ?? undefined;
+      this.logger.info(
+        { userAccountId: this.userAccountId },
+        '[harness] kyto user-account session ok'
+      );
     } catch (error) {
       this.logger.warn(
         { err: error },

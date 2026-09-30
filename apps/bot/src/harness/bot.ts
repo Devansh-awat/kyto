@@ -243,6 +243,10 @@ export class KytoBot {
     });
 
     await socket.start();
+    this.slackLogger.info(
+      { answersAs: this.answersAs },
+      '[harness] socket mode connected'
+    );
   }
 
   async shutdown(): Promise<void> {
@@ -364,6 +368,22 @@ export class KytoBot {
           }
         : built;
     const thread = this.thread(message.threadId);
+    // Only what is addressed to the account: it hears every message in every
+    // channel it is in, and logging those would be a firehose.
+    if (
+      this.answersAs === 'user' &&
+      (message.isMention || event.channel_type === 'im')
+    ) {
+      this.slackLogger.info(
+        {
+          channelType: event.channel_type,
+          isMention: message.isMention,
+          threadId: message.threadId,
+          userId: author.userId,
+        },
+        '[user-account] message for the account'
+      );
+    }
 
     if (event.channel_type === 'im') {
       await runAll2(this.dmHandlers, thread, message);
