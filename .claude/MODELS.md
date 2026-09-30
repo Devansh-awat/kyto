@@ -84,6 +84,18 @@ prompt). Measured on `z-ai/glm-5.3-flash` through the proxy: repeats read the
 routing nudge only; the `cache_control` 1h breakpoints (`cache-control.ts`) are
 what actually cache. Not sent to other providers, which may reject the field.
 
+## Upstream precision on Hack Club (2026-09-30)
+
+Hack Club's proxy is OpenRouter, which serves `z-ai/glm-5.3-flash` from ~30
+upstream hosts, several of them fp4/nvfp4. On long contexts the fp4 hosts turn
+GLM into word salad — the #kyto "spectroscopy / photon-for-photon kinship"
+thread, reproduced 1 in 2 on fp4 at ~30k tokens and 0 in 3 elsewhere, and once
+garbage is in a thread the next turns read it back and keep drifting. `tuneBody`
+sends `provider: { quantizations: ['fp8','fp16','bf16','fp32','unknown'] }` on
+every Hack Club request (the proxy honours OpenRouter's `provider` field —
+verified). `unknown` keeps Together/Fireworks/Cloudflare, which don't label
+theirs. Don't drop the filter to widen capacity.
+
 ## Fallback cache (2026-09-29)
 
 `lib/agent/fallback-cache.ts` (tested) remembers, in memory for 30 minutes, the

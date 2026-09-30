@@ -22,7 +22,7 @@ export type SegmentAction =
   | 'append'
   /** A task card belonging to the block currently open. */
   | 'emit'
-  /** A task card arriving AFTER visible reply text — end the block first. */
+  /** A NEW task card arriving after visible reply text — end the block first. */
   | 'split';
 
 /**
@@ -31,20 +31,30 @@ export type SegmentAction =
  * `[plan] text [plan] text` — the model can post an update and keep working in a
  * fresh block instead of one block growing all turn.
  *
+ * An UPDATE to a card already in this block stays in it, text or not: a tool
+ * called before the text and finishing after it (GLM writes its "let me check"
+ * after the call) must finish HERE. Sent to the next block, it lands in a
+ * `chatStream` with no such task, which Slack renders as a failed row under
+ * "Something went wrong" — on every such turn in #kyto, 2026-09-30, while the
+ * tools had all succeeded.
+ *
  * Create one per block; `next` reports what the caller should do with each item.
  */
 export function createSegmenter(): {
-  next(value: string | { type?: string }): SegmentAction;
+  next(
+    value: string | { type?: string },
+    options?: { inThisBlock?: boolean }
+  ): SegmentAction;
   sawText(): boolean;
 } {
   let sawVisibleText = false;
   return {
-    next(value) {
+    next(value, options) {
       if (typeof value === 'string') {
         sawVisibleText ||= isVisibleText(value);
         return 'append';
       }
-      return sawVisibleText ? 'split' : 'emit';
+      return sawVisibleText && !options?.inThisBlock ? 'split' : 'emit';
     },
     sawText() {
       return sawVisibleText;

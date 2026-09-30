@@ -65,4 +65,12 @@ describe('createSegmenter', () => {
     const second = createSegmenter();
     expect(second.next(card)).toBe('emit');
   });
+
+  test('an update to a card already in the block stays in it after text', () => {
+    const segmenter = createSegmenter();
+    expect(segmenter.next(card)).toBe('emit');
+    expect(segmenter.next('let me check that channel')).toBe('append');
+    expect(segmenter.next(card, { inThisBlock: true })).toBe('emit');
+    expect(segmenter.next(card)).toBe('split');
+  });
 });

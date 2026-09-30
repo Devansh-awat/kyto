@@ -582,6 +582,9 @@ function tunedFetch({
 // gone), kept because the failure mode is invisible without it.
 const REQUIRED_TOP_P: Record<string, number> = {};
 
+// OpenRouter's upstream precision labels kyto accepts — see tuneBody.
+const ALLOWED_QUANTIZATIONS = ['fp8', 'fp16', 'bf16', 'fp32', 'unknown'];
+
 function tuneBody(
   raw: string | undefined,
   attempt: ModelAttempt,
@@ -632,6 +635,19 @@ function tuneBody(
     const requiredTopP = REQUIRED_TOP_P[attempt.model];
     if (requiredTopP !== undefined && payload.top_p !== requiredTopP) {
       payload.top_p = requiredTopP;
+      changed = true;
+    }
+    // Hack Club's proxy is OpenRouter, which spreads a model over ~30 upstream
+    // hosts; the fp4 ones turned GLM 5.3 flash into word salad on long
+    // contexts (2026-09-30: "spectroscopy", "photon-for-photon kinship" in
+    // #kyto, reproduced 1 in 2 on fp4 at ~30k tokens, 0 in 3 elsewhere). Only
+    // 8-bit-or-better hosts may serve kyto; `unknown` keeps Together,
+    // Fireworks & co, which don't label theirs.
+    if (
+      attempt.provider === HACKCLUB_PROVIDER &&
+      payload.provider === undefined
+    ) {
+      payload.provider = { quantizations: ALLOWED_QUANTIZATIONS };
       changed = true;
     }
     if (

@@ -181,6 +181,7 @@ In `apps/bot/src/lib/ai/tools/`, registered in `lib/ai/toolset.ts`; `TOOLS.md` i
 ## Models / fallback — full detail in [`MODELS.md`](./MODELS.md)
 
 - **Primary: `z-ai/glm-5.3-flash` on Hack Club AI** (`PRIMARY_ATTEMPT`). TokenBom is removed — do not re-add without the owner's explicit ask. The DigitalOcean tier is gone.
+- **Hack Club requests exclude fp4 upstream hosts** (`provider.quantizations` in `tuneBody`) — fp4 GLM turns into word salad on long contexts.
 - **Hack Club 504s are its proxy's 5s header timeout** — time-to-first-byte is load-bearing; gateway statuses are replayed ≤2× inside the fetch (`gateway-retry.ts`), and a 504 does not condemn the tier (`condemnsHackclub`).
 - **`LEADERBOARD_FALLBACK` is CHEAP ON PURPOSE** — one $3/day cap. Price any new rung first. Fallback walks by TIER, best-first (`buildFallbackQueue`, an ALLOWLIST of tiers). **No provider whose terms allow training on inputs may be a tier** (Hack Club forbids training on Slack).
 - An attempt is **handled** iff it produced text or a `skip`; tools-but-no-text gets ONE `synthesizeFinalAnswer` nudge. A streamed turn may still fall back for exactly three reasons: degenerate loop, watchdog, `StreamInterruptedError`. A stream cut with no finish reason is a transport drop — continued or re-run in place.
