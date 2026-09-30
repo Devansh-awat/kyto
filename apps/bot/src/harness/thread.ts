@@ -164,6 +164,9 @@ export class ThreadHandle {
     const args = {
       ...(blocks ? { blocks } : {}),
       channel,
+      // What the Slack client attaches to every message a person sends; the
+      // user account's posts carry one so they are shaped like a person's.
+      ...(post.fromUserAccount ? { client_msg_id: crypto.randomUUID() } : {}),
       ...(post.iconEmoji ? { icon_emoji: post.iconEmoji } : {}),
       ...(post.iconUrl ? { icon_url: post.iconUrl } : {}),
       ...(post.metadata ? { metadata: post.metadata } : {}),
