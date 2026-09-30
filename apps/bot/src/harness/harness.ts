@@ -3,6 +3,7 @@ import { WebClient } from '@slack/web-api';
 import { mrkdwnToMarkdown } from './markdown';
 import { filterOutbound, filterOutboundDeep } from './outbound';
 import type { Author, Message, MessageAttachment, StreamChunk } from './types';
+import { UserAccountGateway } from './user-gateway';
 
 // Raw Slack message event fields the harness reads.
 export interface RawSlackMessage {
@@ -33,6 +34,8 @@ const USER_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 // thread with a bigger number costs the same calls and looks like it worked.
 const SLACK_MAX_PAGE = 1000;
 const SLACK_FILE_HOST = 'files.slack.com';
+// How often the typing indicator is re-sent; Slack's lasts a few seconds.
+const TYPING_PULSE_MS = 3000;
 
 // Slack keeps a single native stream (chat.startStream → appendStream) open only
 // ~5 minutes; past that the stream expires and further appends are dropped. A
@@ -142,6 +145,8 @@ export class SlackHarness {
    * its channels, inviting the app/owner) — keep it that way,
    * so nothing grows into a general "call Slack as that account" path. */
   private readonly userAccountClient: WebClient | undefined;
+  /** The session's websocket, for the typing indicator only (user-gateway). */
+  private readonly userAccountGateway: UserAccountGateway | undefined;
   /** The same session as request headers, for `url_private` file downloads. */
   private readonly userAccountHeaders: Record<string, string> | undefined;
   private readonly logger: Logger;
@@ -166,6 +171,9 @@ export class SlackHarness {
       : `d=${userAccount?.cookie}`;
     this.userAccountClient = userAccount
       ? new WebClient(userAccount.token, { headers: { Cookie: cookie } })
+      : undefined;
+    this.userAccountGateway = userAccount
+      ? new UserAccountGateway({ cookie, logger, token: userAccount.token })
       : undefined;
     this.userAccountHeaders = userAccount
       ? { Authorization: `Bearer ${userAccount.token}`, Cookie: cookie }
@@ -196,6 +204,24 @@ export class SlackHarness {
         '[harness] kyto user-account session rejected; re-copy it'
       );
     }
+  }
+
+  /**
+   * Show "kyto is typing…" as the USER account in a thread until the returned
+   * stop is called. Slack drops the indicator a few seconds after each pulse
+   * (and when the account posts), so it is re-sent while the work goes on.
+   */
+  startUserAccountTyping(threadId: string): () => void {
+    const gateway = this.userAccountGateway;
+    if (!gateway) {
+      return () => undefined;
+    }
+    const { channel, threadTs } = this.decodeThreadId(threadId);
+    const pulse = () =>
+      gateway.typing({ channel, threadTs: threadTs || undefined });
+    pulse();
+    const timer = setInterval(pulse, TYPING_PULSE_MS);
+    return () => clearInterval(timer);
   }
 
   /** The user-account client, or a clear error when no session is set. */

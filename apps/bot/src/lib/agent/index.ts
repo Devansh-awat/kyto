@@ -170,6 +170,9 @@ const ERROR_LOG_MAX_LENGTH = 800;
 // user's message plus carryover results are already in the prompt.
 const STREAMED_TEXT_MAX = 4000;
 
+// Longer than any text isBareSkipText accepts (e.g. "```skip()```.").
+const BARE_SKIP_MAX_CHARS = 16;
+
 // Slack caps an ephemeral message's text well below a normal post, and an
 // ephemeral cannot be length-split by createReply (that posts publicly). Cut on
 // blank lines like the normal reply path does, falling back to a hard cut.
@@ -1678,19 +1681,40 @@ async function executeTurn(
     // `skip`, which the attempt drops from the buffer once it ends — posted,
     // it would be the one thing a skip must never show.
     let sinceFlush = '';
-    for await (const part of renderTurn({
-      message: turnMessage,
-      thread: turnThread,
-    })) {
-      if (typeof part === 'string') {
-        await reply?.append({ text: part, thread: turnThread });
-        sinceFlush += part;
-        continue;
+    // "kyto is typing…": at once for a ping or a DM, which get an answer. A
+    // thread reply it was not pinged for may end in a skip, and a skip must
+    // show nothing — so there it waits for the model to actually write.
+    let stopTyping: (() => void) | undefined;
+    const startTyping = () => {
+      stopTyping ??= slack.startUserAccountTyping(turnThread.id);
+    };
+    if (turnMessage.isMention || slack.isDM(turnThread.id)) {
+      startTyping();
+    }
+    try {
+      for await (const part of renderTurn({
+        message: turnMessage,
+        thread: turnThread,
+      })) {
+        if (typeof part === 'string') {
+          await reply?.append({ text: part, thread: turnThread });
+          sinceFlush += part;
+          // Past the length a bare `skip` (backticks, parens and all) can
+          // reach, so a skip streamed a few letters at a time never starts it.
+          if (sinceFlush.trim().length > BARE_SKIP_MAX_CHARS) {
+            startTyping();
+          }
+          continue;
+        }
+        if (sinceFlush.trim() && !isBareSkipText(sinceFlush)) {
+          await reply?.flush({ thread: turnThread });
+          sinceFlush = '';
+        }
       }
-      if (sinceFlush.trim() && !isBareSkipText(sinceFlush)) {
-        await reply?.flush({ thread: turnThread });
-        sinceFlush = '';
-      }
+    } finally {
+      // Before the final flush: a pulse landing after the answer would show
+      // kyto typing again under its own last message.
+      stopTyping?.();
     }
   }
 
