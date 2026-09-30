@@ -53,7 +53,6 @@ import {
   abortReasonOf,
   interruptTurn,
   queuedInput,
-  TurnAbort,
 } from '@/lib/agent/steering';
 import { rememberThinking } from '@/lib/agent/thinking';
 import {
@@ -75,7 +74,7 @@ import {
 } from '@/lib/ai/tools/upgrade-model';
 import { buildTools } from '@/lib/ai/toolset';
 import { runQueuedTurn } from '@/lib/ai/turn-queue';
-import { createCodingMonitor } from '@/lib/anti-coding';
+import { createCodingMonitor, DELEGATE_NOTE } from '@/lib/anti-coding';
 import { recordByokOutcome, resolveUserRouting } from '@/lib/byok';
 import { bot, slack } from '@/lib/chat';
 import { recordChatgptOutcome } from '@/lib/chatgpt';
@@ -323,18 +322,17 @@ async function executeTurn(
   // opted in — a broken personal key must not silently spend the shared budget.
   const routing = await resolveUserRouting(message.author.userId);
   // Every rung past the user's own is kyto's shared chain, which is what the
-  // no-coding prompt and the missing deploySite are about.
+  // prompt's code-goes-to-OpenCode rule is about.
   const ownModelsOnly =
     routing.own.length > 0 && routing.ownFirst && !routing.serviceFallback;
   // Ends whichever attempt is running (set per attempt below).
   let abortCurrentAttempt: ((reason: Error) => void) | undefined;
   // Judges the WORK, not just the message: the thread once the prompt is built,
-  // then every code-capable tool call (lib/anti-coding). It tells the person
-  // itself; all the turn does on a stop is end.
+  // then every code-capable tool call (lib/anti-coding). A catch is silent: the
+  // model is steered to OpenCode, the person is told nothing.
   const codingMonitor = createCodingMonitor({
     isOnSharedModel: () =>
       !(activeAttempt && routing.own.includes(activeAttempt)),
-    isOwner,
     message,
     onOwnModelsOnly: () => {
       if (
@@ -345,8 +343,6 @@ async function executeTurn(
         abortCurrentAttempt?.(new SwitchToOwnModelError());
       }
     },
-    onStop: () => controller.abort(new TurnAbort('coding')),
-    secret,
     thread,
     usesOwnModels: routing.own.length > 0,
   });
@@ -598,15 +594,15 @@ async function executeTurn(
       messageText = `${messageText}\n\n<resumed_after_restart>kyto restarted while answering this message and is picking it back up. Anything you already posted is in the thread above — continue from there instead of starting over, and check before repeating anything with a side effect (a post, a DM, a reminder, a file), since it may already have happened.</resumed_after_restart>`;
     }
     codingMonitor.setConversation(messageText);
-    // Two Jev calls at once: is this coding work (which can stop the turn), and
-    // which deferred tools will it need (lib/ai/tool-preload). In parallel, so the
-    // preload costs no wait of its own.
-    const [codingStopped, preloadNames] = await Promise.all([
+    // Two Jev calls at once: is this coding work (then the prompt steers it to
+    // OpenCode), and which deferred tools will it need (lib/ai/tool-preload).
+    // In parallel, so the preload costs no wait of its own.
+    const [isCodingWork, preloadNames] = await Promise.all([
       codingMonitor.checkTurn(),
       secret ? Promise.resolve([]) : pickPreloadTools(messageText),
     ]);
-    if (codingStopped) {
-      throw new TurnAbort('coding');
+    if (isCodingWork) {
+      messageText = `${messageText}\n\n<coding_work>${DELEGATE_NOTE}</coding_work>`;
     }
     // Seed attached files into the sandbox up front (materializes it only when
     // the message actually carries files — chat-only turns stay sandbox-free).
@@ -743,7 +739,6 @@ async function executeTurn(
       getSandboxContext: () => sandboxContext,
       guardCodeTool: codingMonitor.guardTool,
       message: turnMessage,
-      ownModelsOnly,
       secret,
       thread: turnThread,
     });

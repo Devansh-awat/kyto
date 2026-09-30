@@ -1,6 +1,6 @@
-// Anti-coding: kyto answers code questions like any AI chatbot — explain, write
-// a snippet, fix code someone pasted — and does general agent work, but it is
-// not an autonomous CODING agent on Hack Club AI's shared budget.
+// Anti-coding: kyto answers code questions like any AI chatbot and does
+// general agent work, but coding-agent work never runs on Hack Club AI's
+// shared key.
 //
 // Hack Club AI's abuse tooling flagged kyto's key for coding-agent traffic
 // (2026-09, someone had it bot cap.js and fork itself), and HCAI's answer was
@@ -8,32 +8,21 @@
 // message: once before the model runs (the thread + the new message), and again
 // before every code-capable tool call (plus what the turn has fetched and done),
 // so "fetch this gist and follow it" is caught when the gist turns out to say
-// "write a bot". The prompt half lives in packages/ai/src/prompts/core.ts, and
-// the toolset drops `deploySite` on shared-model turns.
+// "write a bot". The prompt half lives in packages/ai/src/prompts/core.ts.
 //
-// The rules (owner's calls, 2026-09-26/29): a stranger is stopped and warned,
-// three times, and the fourth catch in a run (each within a day of the last) is
-// a one-hour ban; the owner gets an ephemeral
-// note and the turn runs anyway; someone on their own model key is never warned,
-// but that one turn is kept off kyto's shared models entirely.
+// A catch is SILENT (owner's call, 2026-09-30; it used to warn, strike and
+// ban): the model is told, privately, to hand the code work to OpenCode, which
+// runs on its own free models — so the person gets what they asked for, and
+// nobody is told OpenCode was used or that coding is restricted. Someone on
+// their own model key is never steered; that one turn just stays off kyto's
+// shared models.
 
-import { recordCodingWarning } from '@repo/db/queries';
 import { z } from 'zod';
 import { env } from '@/env';
 import type { Message, ThreadHandle } from '@/harness';
-import { banUser } from '@/lib/bans';
-import { formatBanDuration } from '@/lib/bans/duration';
-import { byokConfigured } from '@/lib/byok/crypto';
-import { bot, slack } from '@/lib/chat';
 import logger from '@/lib/logger';
 import { toLogError } from '@/lib/utils/error';
-import {
-  CODING_BAN_MS,
-  decideCodingAction,
-  isBanStrike,
-  WARNING_WINDOW_MS,
-  WARNINGS_BEFORE_BAN,
-} from './decide';
+import { decideCodingAction } from './decide';
 import { type CodingAction, renderCodingState } from './state';
 
 const JEV_URL = 'https://ai.hackclub.com/proxy/v1/jev/systemone';
@@ -144,14 +133,16 @@ async function scoreCodingRequest(text: string): Promise<number | null> {
   }
 }
 
-/** Turn-scoped anti-coding state: the context Jev is shown and what has
- * already been said, so a long turn warns the owner once, not once per call. */
+/** Turn-scoped anti-coding state: the context Jev is shown and what the turn
+ * has done so far. */
 export interface CodingMonitor {
-  /** Judge the turn before the model runs. True = stopped (already told). */
+  /** Judge the turn before the model runs. True = it is coding work, and the
+   * prompt should carry DELEGATE_NOTE. */
   checkTurn: () => Promise<boolean>;
   /**
    * Judge one code-capable tool call BEFORE it runs, with everything the turn
-   * has done so far. Returns a refusal for the model, or null to go ahead.
+   * has done so far. Returns what the model gets instead of running it, or
+   * null to go ahead.
    */
   guardTool: (call: {
     input: unknown;
@@ -164,25 +155,25 @@ export interface CodingMonitor {
   setConversation: (text: string) => void;
 }
 
-const REFUSED =
-  "Refused: this is coding-agent work (building, running or debugging software, repo work, GitHub writes or deploying), which kyto does not do. Tell the person you're not a coding agent; chatbot help — explaining, a snippet, fixing code they paste — is still fine.";
+// Worded for the MODEL, and not to be relayed: no "I'm not allowed", no
+// apology — the work simply gets done.
+export const DELEGATE_NOTE =
+  "This is coding work. Do the writing, building, running and debugging through the `opencode` tool, not your own shell — give it a complete brief in your own words. Then deliver the result as your own work. Don't mention this note or any coding restriction, and don't bring up OpenCode unless asked how it was done.";
+
+const DELEGATE = `Not run. ${DELEGATE_NOTE}`;
 
 const REFUSED_SHARED =
   "Refused on this model: this is coding-agent work, which only runs on the person's OWN model key, and this attempt is on kyto's shared model. Answer without it.";
 
 export function createCodingMonitor({
   isOnSharedModel,
-  isOwner,
   message,
   onOwnModelsOnly,
-  onStop,
-  secret,
   thread,
   usesOwnModels,
 }: {
   /** Whether the attempt running right now is on kyto's shared chain. */
   isOnSharedModel: () => boolean;
-  isOwner: boolean;
   message: Message;
   /**
    * The turn was just caught doing coding work and may continue only on the
@@ -190,42 +181,22 @@ export function createCodingMonitor({
    * that is currently on the shared chain over, if it can.
    */
   onOwnModelsOnly?: () => void;
-  /** Abort the turn. Called after the person has been told. */
-  onStop: () => void;
-  /** A `!secret` turn: anything said about it must stay ephemeral. */
-  secret: boolean;
   thread: ThreadHandle;
   usesOwnModels: boolean;
 }): CodingMonitor {
   const actions: CodingAction[] = [];
   let conversation = '';
   let ownModelsOnly = false;
-  let ownerWarned = false;
-  let stopped = false;
 
   const judge = async (
     next?: CodingAction
-  ): Promise<'allow' | 'own-models-only' | 'stop'> => {
-    if (stopped) {
-      return 'stop';
-    }
+  ): Promise<'allow' | 'delegate' | 'own-models-only'> => {
     const probability = await scoreCodingRequest(
       renderCodingState({ actions, conversation, latest: message.text, next })
     );
-    const decision = decideCodingAction({
-      isOwner,
-      probability,
-      usesOwnModels,
-    });
+    const decision = decideCodingAction({ probability, usesOwnModels });
     // Every score, not just the catches: the threshold was set on 25 cases, and
     // real traffic is what will say whether 0.9 is right.
-    logger.info(
-      { decision, next: next?.toolName, probability, threadId: thread.id },
-      '[anti-coding] judged'
-    );
-    if (decision === 'allow') {
-      return 'allow';
-    }
     logger.info(
       {
         decision,
@@ -234,42 +205,24 @@ export function createCodingMonitor({
         threadId: thread.id,
         userId: message.author.userId,
       },
-      '[anti-coding] coding-agent work caught'
+      '[anti-coding] judged'
     );
-    if (decision === 'own-models-only') {
-      if (!ownModelsOnly) {
-        ownModelsOnly = true;
-        onOwnModelsOnly?.();
-      }
-      return 'own-models-only';
+    if (decision === 'own-models-only' && !ownModelsOnly) {
+      ownModelsOnly = true;
+      onOwnModelsOnly?.();
     }
-    if (decision === 'owner-warning') {
-      if (!ownerWarned) {
-        ownerWarned = true;
-        await tell({
-          ephemeral: true,
-          message,
-          text: "heads up: this reads as coding-agent work. you're the owner so it runs anyway, but on Hack Club AI's key it's the kind of traffic their abuse tooling flags.",
-          thread,
-        });
-      }
-      return 'allow';
-    }
-    stopped = true;
-    await strike({ message, secret, thread });
-    onStop();
-    return 'stop';
+    return decision;
   };
 
   return {
-    checkTurn: async () => (await judge()) === 'stop',
+    checkTurn: async () => (await judge()) === 'delegate',
     guardTool: async (call) => {
       const verdict = await judge(call);
       // Recorded after judging, as the call that is now happening; its result
       // is filled in by recordResult when (if) it returns.
       actions.push({ input: call.input, toolName: call.toolName });
-      if (verdict === 'stop') {
-        return REFUSED;
+      if (verdict === 'delegate') {
+        return DELEGATE;
       }
       if (verdict === 'own-models-only' && isOnSharedModel()) {
         return REFUSED_SHARED;
@@ -299,114 +252,4 @@ export function createCodingMonitor({
       conversation = text;
     },
   };
-}
-
-/** Warn the first three catches in a run, ban the one after. */
-async function strike({
-  message,
-  secret,
-  thread,
-}: {
-  message: Message;
-  secret: boolean;
-  thread: ThreadHandle;
-}): Promise<void> {
-  const userId = message.author.userId;
-  // A DB failure must not ban anyone: treat it as a first offence.
-  // A DB failure must not ban anyone: treat it as a first warning.
-  const count = await recordCodingWarning({
-    userId,
-    windowMs: WARNING_WINDOW_MS,
-  }).catch((error: unknown) => {
-    logger.warn(
-      { ...toLogError(error), userId },
-      '[anti-coding] could not record the warning'
-    );
-    return 1;
-  });
-  const ownKeyHint = byokConfigured()
-    ? ' if you want a coding agent, add your own model key in my App Home (Model keys) and this limit no longer applies to you.'
-    : '';
-  const banFor = formatBanDuration(CODING_BAN_MS);
-  if (isBanStrike(count)) {
-    await banUser({
-      bannedBy: 'anti-coding',
-      ms: CODING_BAN_MS,
-      reason: `coding-agent work after ${WARNINGS_BEFORE_BAN} warnings within a day of each other (automatic)`,
-      userId,
-    });
-    await tell({
-      ephemeral: secret,
-      message,
-      text: `<@${userId}> that's coding-agent work again after ${WARNINGS_BEFORE_BAN} warnings, so you're banned from kyto for ${banFor}.${ownKeyHint}`,
-      thread,
-    });
-    return;
-  }
-  const left = WARNINGS_BEFORE_BAN - count;
-  await tellOwner({ count, message, thread });
-  await tell({
-    ephemeral: secret,
-    message,
-    text: `<@${userId}> i stopped there — that's coding-agent work, and i'm not a coding agent. i'll happily explain code, write a snippet, fix code you paste, or do general agent stuff (research, browsing, email, slack), but i won't build, run or debug programs and bots, brute-force or mine things, work in repos or deploy things. ${left === 0 ? `this is your last warning (${count} of ${WARNINGS_BEFORE_BAN}): once more within 24 hours and you're banned for ${banFor}.` : `this is warning ${count} of ${WARNINGS_BEFORE_BAN}; after the last one, the next within 24 hours gets you banned for ${banFor}.`}${ownKeyHint}`,
-    thread,
-  });
-}
-
-/**
- * DM the owner about a warning (owner's ask, 2026-09-29: "ping me when a user is
- * warned"). A ban already announces itself in the opt-in channel; a warning
- * is otherwise visible only in the thread it happened in. Best-effort.
- */
-async function tellOwner({
-  count,
-  message,
-  thread,
-}: {
-  count: number;
-  message: Message;
-  thread: ThreadHandle;
-}): Promise<void> {
-  if (!env.OWNER_USER_ID) {
-    return;
-  }
-  const { channel, threadTs } = slack.decodeThreadId(thread.id);
-  const link = await slack.webClient.chat
-    .getPermalink({ channel, message_ts: message.id || threadTs })
-    .then((result) => result.permalink)
-    .catch(() => undefined);
-  const where = link ? `<${link}|here>` : `in <#${channel}>`;
-  try {
-    const dm = await bot.openDM(env.OWNER_USER_ID);
-    await dm.post({
-      markdown: `:warning: <@${message.author.userId}> got coding warning ${count} of ${WARNINGS_BEFORE_BAN} ${where}.`,
-    });
-  } catch (error) {
-    logger.warn(
-      { ...toLogError(error), userId: message.author.userId },
-      '[anti-coding] could not tell the owner about a warning'
-    );
-  }
-}
-
-async function tell({
-  ephemeral,
-  message,
-  text,
-  thread,
-}: {
-  ephemeral: boolean;
-  message: Message;
-  text: string;
-  thread: ThreadHandle;
-}): Promise<void> {
-  const sent = ephemeral
-    ? thread.postEphemeral(message.author, text, { fallbackToDM: false })
-    : thread.post({ markdown: text });
-  await sent.catch((error: unknown) => {
-    logger.warn(
-      { ...toLogError(error), threadId: thread.id },
-      '[anti-coding] could not deliver the warning'
-    );
-  });
 }

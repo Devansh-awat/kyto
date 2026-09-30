@@ -19,6 +19,7 @@ export interface DefaultTaskRenderer {
 }
 
 export interface TaskRendererEntry {
+  error?: TaskRenderer;
   request?: TaskRenderer;
   response?: TaskRenderer;
   title: string;

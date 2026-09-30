@@ -9,7 +9,7 @@ export interface TurnInput {
   thread: Thread;
 }
 
-export type AbortReason = 'coding' | 'interrupt' | 'stop' | 'shutdown';
+export type AbortReason = 'interrupt' | 'stop' | 'shutdown';
 
 export interface ActiveTurn {
   controller: AbortController;

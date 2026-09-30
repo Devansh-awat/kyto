@@ -1,6 +1,6 @@
-import { asc, eq, gt, isNull, or, sql } from 'drizzle-orm';
+import { asc, eq, gt, isNull, or } from 'drizzle-orm';
 import { db } from '../client';
-import { type BannedUser, bannedUsers, codingWarnings } from '../schema';
+import { type BannedUser, bannedUsers } from '../schema';
 
 export type { BannedUser } from '../schema';
 
@@ -64,33 +64,4 @@ export async function listBans(): Promise<BannedUser[]> {
       or(isNull(bannedUsers.expiresAt), gt(bannedUsers.expiresAt, new Date()))
     )
     .orderBy(asc(bannedUsers.expiresAt));
-}
-
-/**
- * Record an anti-coding catch and return how many catches in a row this is.
- * A catch within `windowMs` of the previous one extends the run; a longer gap
- * starts over at 1. One statement, so two catches at once can't both read the
- * same count and both be let off with a warning.
- */
-export async function recordCodingWarning({
-  userId,
-  windowMs,
-}: {
-  userId: string;
-  windowMs: number;
-}): Promise<number> {
-  const now = new Date();
-  const cutoff = new Date(now.getTime() - windowMs);
-  const [row] = await db
-    .insert(codingWarnings)
-    .values({ count: 1, userId, warnedAt: now })
-    .onConflictDoUpdate({
-      set: {
-        count: sql`case when ${codingWarnings.warnedAt} > ${cutoff.toISOString()}::timestamptz then ${codingWarnings.count} + 1 else 1 end`,
-        warnedAt: now,
-      },
-      target: codingWarnings.userId,
-    })
-    .returning({ count: codingWarnings.count });
-  return row?.count ?? 1;
 }

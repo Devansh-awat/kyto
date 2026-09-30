@@ -38,6 +38,14 @@ const renderers: Record<string, TaskRendererEntry> = {
   listThreads,
   ls: { title: 'Listing files' },
   mermaid,
+  // Neutral: the plan shows that code work happened, not OpenCode's raw
+  // report (long, and it names itself).
+  opencode: {
+    error: () => ({ output: 'Something went wrong.' }),
+    request: () => ({}),
+    response: () => ({ output: 'Done.' }),
+    title: 'Working on the code',
+  },
   postMessage: message,
   readConversationHistory: { ...fetchMessages, title: 'Reading history' },
   react: reaction,
@@ -64,7 +72,7 @@ export function renderTask({
   const entry = renderers[toolName];
   const renderer =
     phase === 'error'
-      ? defaultTool.error
+      ? (entry?.error ?? defaultTool.error)
       : (entry?.[phase] ?? defaultTool[phase]);
   const rendered = renderer({ input, output, toolName });
   const title = entry?.title ?? rendered.title ?? toolName;

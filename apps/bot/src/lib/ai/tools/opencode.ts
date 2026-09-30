@@ -33,6 +33,11 @@ const BRIEF_PATH = '.kyto/opencode-brief.md';
 // biome-ignore lint/suspicious/noControlCharactersInRegex: that is what they are
 const ANSI = /\u001b\[[0-9;]*[A-Za-z]/g;
 
+// Owner's call (2026-09-30): Big Pickle, OpenCode's own free default. Only
+// FREE models work here (no account key in the sandbox); the free DeepSeek
+// (`opencode/deepseek-v4-flash-free`) was answering "Model is unavailable".
+const DEFAULT_MODEL = 'opencode/big-pickle';
+
 export function opencodeTool({
   extendAttemptDeadline,
   getSandboxContext,
@@ -42,7 +47,7 @@ export function opencodeTool({
 }) {
   return tool({
     description:
-      "Delegate code work to OpenCode, a coding agent in your sandbox: writing, building, running, testing or debugging programs, scripts and projects. Use this instead of writing or running code yourself. Give it a complete, self-contained brief in YOUR OWN words — what to build or fix, where the files are, constraints, and what to report back. NEVER paste Slack messages, people's names or anything else from Slack into the brief (OpenCode's models may train on what they are sent). It works in the persistent thread sandbox, so files it writes are there for bash/uploadFile afterwards, and `continue: true` resumes its last session there. Relay the result; don't mention OpenCode unless someone asks how it was done.",
+      "Delegate code work to OpenCode, a coding agent in your sandbox: writing, building, running, testing or debugging programs, scripts and projects. Use this instead of writing or running code yourself. Give it a complete, self-contained brief in YOUR OWN words — what to build or fix, where the files are, constraints, and what to report back. NEVER paste Slack messages, people's names or anything else from Slack into the brief (OpenCode's models may train on what they are sent). It works in the persistent thread sandbox, so files it writes are there for bash/uploadFile afterwards, and `continue: true` resumes its last session there. Deliver the result as your own work; don't bring up OpenCode unless someone asks how it was done.",
     inputSchema: z.object({
       brief: z
         .string()
@@ -67,7 +72,7 @@ export function opencodeTool({
         .regex(/^[\w./-]+$/)
         .optional()
         .describe(
-          "An OpenCode model id like 'opencode/big-pickle'. Leave unset for OpenCode's default."
+          `An OpenCode model id. Leave unset for the default, ${DEFAULT_MODEL}.`
         ),
     }),
     execute: async (
@@ -106,14 +111,12 @@ export function opencodeTool({
       });
 
       extendAttemptDeadline?.(RUN_TIMEOUT_SECONDS * 1000 + WATCHDOG_GRACE_MS);
-      const flags = [
-        ...(model ? [`--model '${model}'`] : []),
-        ...(resume ? ['--continue'] : []),
-      ].join(' ');
-      const result = await context.session.run({
-        abortSignal,
-        command: `mkdir -p '${workDir}' && cd '${workDir}' && timeout ${RUN_TIMEOUT_SECONDS} opencode run ${flags} "$(cat '${briefPath}')" 2>&1`,
-      });
+      const runWith = (runModel: string) =>
+        context.session.run({
+          abortSignal,
+          command: `mkdir -p '${workDir}' && cd '${workDir}' && timeout ${RUN_TIMEOUT_SECONDS} opencode run --model '${runModel}' ${resume ? '--continue' : ''} "$(cat '${briefPath}')" 2>&1`,
+        });
+      const result = await runWith(model ?? DEFAULT_MODEL);
       await disarmFetchedRepos({ abortSignal, context });
 
       const output = (result.stdout + result.stderr).replace(ANSI, '').trim();

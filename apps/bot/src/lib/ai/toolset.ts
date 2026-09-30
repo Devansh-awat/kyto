@@ -140,13 +140,14 @@ export interface BuiltTools {
  */
 // Every tool that can build, run or ship code — the ones the anti-coding check
 // judges before they run. Everything else (search, browse, email, Slack) is
-// general agent work and never waits on it. The five shells are all here:
+// general agent work and never waits on it. `deploySite` is not: hosting runs
+// no model on the shared key, and a steer to OpenCode (which cannot deploy)
+// would only block it. The five shells are all here:
 // `slackScript` is free-form bash despite its name. Scheduling is here because a
 // `bash`/`agent` reminder is code that runs on a timer.
 const CODE_TOOLS = new Set([
   'bash',
   'codeMode',
-  'deploySite',
   'editFile',
   'editReminder',
   'gh',
@@ -165,7 +166,6 @@ export async function buildTools({
   getSandboxContext,
   guardCodeTool,
   message,
-  ownModelsOnly = false,
   thread,
   secret = false,
   unattended = false,
@@ -195,13 +195,6 @@ export async function buildTools({
     toolName: string;
   }) => Promise<string | null>;
   message: Message;
-  /**
-   * The turn can only run on the person's own model key. Anything else may land
-   * on Hack Club AI's shared key, where building and hosting a site is the
-   * coding-agent work kyto is not allowed to do — so `deploySite` is not even
-   * registered. Defaults to false: a caller that forgets gets the safe toolset.
-   */
-  ownModelsOnly?: boolean;
   thread: ThreadHandle;
   /** A `!secret` turn: nothing may be posted publicly on its behalf. */
   secret?: boolean;
@@ -293,15 +286,11 @@ export async function buildTools({
     canvasList: canvasListTool({ thread }),
     getPermalink: getPermalinkTool({ thread }),
     fetchUrl: fetchUrlTool(),
-    ...(ownModelsOnly
-      ? {
-          deploySite: deploySiteTool({
-            getSandboxContext,
-            isOwner,
-            userId: authorUserId,
-          }),
-        }
-      : {}),
+    deploySite: deploySiteTool({
+      getSandboxContext,
+      isOwner,
+      userId: authorUserId,
+    }),
     listSites: listSitesTool(),
     removeSite: removeSiteTool({ isOwner, userId: authorUserId }),
     // Keyed off the constant: the stop condition that makes a skip terminal
