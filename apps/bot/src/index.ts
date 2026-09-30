@@ -1,5 +1,6 @@
 import { bot } from '@/bot';
 import { env } from '@/env';
+import { startChannelPairing } from '@/features/channel-pairing';
 import { setOutboundFilter } from '@/harness';
 import { runTurn, stopAllTurns } from '@/lib/agent';
 import { startSummaryReaper } from '@/lib/agent/compaction';
@@ -86,6 +87,7 @@ try {
   // Reap thread reasoning older than the retention window.
   startThinkingReaper();
   startKevinton();
+  startChannelPairing();
   startThreadLogs();
   // Same window, same reason, for compacted thread history.
   startSummaryReaper();
