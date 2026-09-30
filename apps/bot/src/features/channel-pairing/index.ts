@@ -34,7 +34,22 @@ function clientFor(identity: Identity): WebClient {
     : slack.requireUserAccountClient();
 }
 
+// What `client.counts` answers with: the Slack client's own list of the
+// conversations its user is in (DMs and group DMs are separate keys).
+const countsSchema = z.object({
+  channels: z.array(z.object({ id: z.string() })).default([]),
+});
+
 async function listChannelIds(identity: Identity): Promise<string[]> {
+  if (identity === 'user') {
+    // The enterprise refuses `users.conversations` to a browser session
+    // (`enterprise_is_restricted`); the Slack client lists its channels this
+    // way instead.
+    const counts = countsSchema.parse(
+      await slack.requireUserAccountClient().apiCall('client.counts')
+    );
+    return counts.channels.map((channel) => channel.id);
+  }
   const client = clientFor(identity);
   const ids: string[] = [];
   let cursor: string | undefined;
