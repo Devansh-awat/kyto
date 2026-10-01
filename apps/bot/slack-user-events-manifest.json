@@ -36,8 +36,6 @@
         "im:read",
         "im:write",
         "im:write.topic",
-        "links:read",
-        "links:write",
         "links.embed:write",
         "lists:read",
         "lists:write",
@@ -68,7 +66,6 @@
         "users.profile:read",
         "users.profile:write",
         "users:read",
-        "users:read.email",
         "users:write"
       ]
     }
