@@ -129,7 +129,18 @@ export function embedTool({
         };
       } catch (error) {
         logger.warn({ err: error, id: slug }, '[embed] failed');
-        return { error: errorMessage(error), published: false };
+        const message = errorMessage(error);
+        // Only the APP may post a live embed (Slack refuses the block from a
+        // user account: it needs the app's links scopes), so a channel the app
+        // isn't in can never show one. The model retried it as-is twice.
+        if (/not_in_channel|channel_not_found/.test(message)) {
+          return {
+            error:
+              "The kyto app isn't in this channel, and only the app can post a live embed, so it cannot render here — retrying won't help. The page itself is published: call again with post:false for its URL and share that link, saying it opens in the browser rather than inside Slack.",
+            published: false,
+          };
+        }
+        return { error: message, published: false };
       }
     },
   });

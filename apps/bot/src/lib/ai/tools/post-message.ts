@@ -444,11 +444,20 @@ export function postMessageTool({
           ? { id: currentThreadId, type: 'thread' }
           : { id, type },
       });
-      return redirectedToThread
+      if (redirectedToThread) {
+        return {
+          ...sent,
+          summary:
+            'Posted as a reply in this thread rather than as a new message in the channel — only the bot owner can have me start a top-level post. Say so if it matters; do not try another route. Your reply goes into this same thread, so do not repeat what you posted.',
+        };
+      }
+      // The model posted into the thread it is answering and then wrote the
+      // same thing again as its reply: two copies of one message.
+      return sent.threadId === currentThreadId
         ? {
             ...sent,
             summary:
-              'Posted as a reply in this thread rather than as a new message in the channel — only the bot owner can have me start a top-level post. Say so if it matters; do not try another route.',
+              'Posted in the thread you are answering — that message IS your reply. Do not repeat it; if there is nothing to add, call skip.',
           }
         : sent;
     },
