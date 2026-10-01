@@ -145,7 +145,7 @@ export class SlackHarness {
    * its channels, inviting the app/owner) — keep it that way,
    * so nothing grows into a general "call Slack as that account" path. */
   private readonly userAccountClient: WebClient | undefined;
-  /** The session's websocket, for the typing indicator only (user-gateway). */
+  /** The session's websocket: the typing indicator, and hearing the account's channels (user-gateway). */
   private readonly userAccountGateway: UserAccountGateway | undefined;
   /** The same session as request headers, for `url_private` file downloads. */
   private readonly userAccountHeaders: Record<string, string> | undefined;
@@ -222,6 +222,20 @@ export class SlackHarness {
     pulse();
     const timer = setInterval(pulse, TYPING_PULSE_MS);
     return () => clearInterval(timer);
+  }
+
+  /**
+   * Hear every event the account's own Slack client would, for good. False
+   * when no session is configured.
+   */
+  listenAsUserAccount(
+    onEvent: (event: Record<string, unknown>) => void
+  ): boolean {
+    if (!this.userAccountGateway) {
+      return false;
+    }
+    this.userAccountGateway.listen(onEvent);
+    return true;
   }
 
   /** The user-account client, or a clear error when no session is set. */

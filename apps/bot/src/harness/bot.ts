@@ -1,6 +1,7 @@
 import type { Logger } from '@repo/logging/logger';
 import { SocketModeClient } from '@slack/socket-mode';
 import { LogLevel } from '@slack/web-api';
+import { z } from 'zod';
 import type { RawSlackMessage, SlackHarness } from './harness';
 import { MemoryKV } from './kv';
 import { ThreadHandle } from './thread';
@@ -30,6 +31,29 @@ type ModalSubmitHandler = (
 ) => Promise<ModalSubmitResult> | ModalSubmitResult;
 
 const SEEN_EVENT_LIMIT = 1000;
+// A message off the account's client socket, read into RawSlackMessage.
+const optionalString = z.string().optional();
+const gatewayMessageSchema = z.looseObject({
+  bot_id: optionalString,
+  channel: z.string(),
+  files: z
+    .array(
+      z.looseObject({
+        id: optionalString,
+        mimetype: optionalString,
+        name: optionalString,
+        url_private: optionalString,
+      })
+    )
+    .optional(),
+  subtype: optionalString,
+  team: optionalString,
+  text: optionalString,
+  thread_ts: optionalString,
+  ts: z.string(),
+  type: z.literal('message'),
+  user: optionalString,
+});
 // Message subtypes that still carry a real user message.
 const ALLOWED_SUBTYPES = new Set(['file_share', 'thread_broadcast']);
 
@@ -247,6 +271,23 @@ export class KytoBot {
       { answersAs: this.answersAs },
       '[harness] socket mode connected'
     );
+    if (this.answersAs === 'user') {
+      // The account's events app is sent its DMs and nothing else; channel
+      // messages come from the account's own client socket. DMs stay on the
+      // app (only it says `channel_type: 'im'`, which routes them as DMs).
+      this.harness.listenAsUserAccount((event) => {
+        const parsed = gatewayMessageSchema.safeParse(event);
+        if (!parsed.success || parsed.data.channel.startsWith('D')) {
+          return;
+        }
+        this.dispatchMessage(parsed.data).catch((error: unknown) => {
+          this.slackLogger.error(
+            { err: error },
+            '[harness] user-account event handler failed'
+          );
+        });
+      });
+    }
   }
 
   async shutdown(): Promise<void> {
