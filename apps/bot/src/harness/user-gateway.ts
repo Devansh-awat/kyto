@@ -19,6 +19,10 @@ const RECONNECT_MIN_MS = 2000;
 const RECONNECT_MAX_MS = 5 * 60_000;
 
 const frameSchema = z.looseObject({ type: z.string() });
+const authTestSchema = z.object({ url: z.string() });
+const userBootSchema = z.object({
+  workspaces: z.array(z.object({ domain: z.string(), id: z.string() })),
+});
 
 type GatewayEventHandler = (event: Record<string, unknown>) => void;
 
@@ -35,6 +39,7 @@ export class UserAccountGateway {
   private lastFrameAt = 0;
   private onEvent: GatewayEventHandler | undefined;
   private nextId = 1;
+  private gatewayUrl: string | undefined;
 
   constructor({
     cookie,
@@ -74,7 +79,8 @@ export class UserAccountGateway {
         JSON.stringify({
           channel,
           id: this.nextId++,
-          type: 'typing',
+          // `typing` is accepted without an error and shown to nobody.
+          type: 'user_typing',
           ...(threadTs ? { thread_ts: threadTs } : {}),
         })
       );
@@ -145,12 +151,68 @@ export class UserAccountGateway {
       .catch(() => undefined);
   }
 
-  private connect(): Promise<WebSocket> {
-    return new Promise((resolve, reject) => {
-      const socket = new WebSocket(
-        `${GATEWAY_URL}?token=${encodeURIComponent(this.token)}`,
-        { headers: { Cookie: this.cookie, Origin: 'https://app.slack.com' } }
+  /**
+   * The URL the desktop client connects to: pinned to the workspace with
+   * `gateway_server`. Without it the socket still RECEIVES events, but typing
+   * sent over it never showed for anyone (found by testing against a client
+   * whose indicator works, 2026-10-01). Falls back to the bare URL.
+   */
+  private async resolveGatewayUrl(): Promise<string> {
+    if (this.gatewayUrl) {
+      return this.gatewayUrl;
+    }
+    const call = async (url: string, fields: Record<string, string> = {}) =>
+      (
+        await fetch(url, {
+          body: new URLSearchParams({ token: this.token, ...fields }),
+          headers: { Cookie: this.cookie },
+          method: 'POST',
+        })
+      ).json();
+    try {
+      const auth = authTestSchema.parse(
+        await call('https://slack.com/api/auth.test')
       );
+      const host = new URL(auth.url).hostname;
+      const boot = userBootSchema.parse(
+        await call(`https://${host}/api/client.userBoot`, {
+          _x_app_name: 'client',
+          _x_mode: 'online',
+          _x_reason: 'client.userBoot',
+          _x_sonic: 'true',
+        })
+      );
+      const domain = host.split('.')[0];
+      const workspace =
+        boot.workspaces.find((candidate) => candidate.domain === domain) ??
+        (boot.workspaces.length === 1 ? boot.workspaces[0] : undefined);
+      if (!workspace) {
+        throw new Error(`client.userBoot listed no workspace for ${host}.`);
+      }
+      const query = new URLSearchParams({
+        flannel: '3',
+        gateway_server: workspace.id,
+        lazy_channels: '1',
+        slack_client: 'desktop',
+        token: this.token,
+      });
+      this.gatewayUrl = `${GATEWAY_URL}?${query}`;
+      return this.gatewayUrl;
+    } catch (error) {
+      this.logger.warn(
+        { err: error },
+        '[user-gateway] could not resolve the workspace gateway; typing may not show'
+      );
+      return `${GATEWAY_URL}?token=${encodeURIComponent(this.token)}`;
+    }
+  }
+
+  private async connect(): Promise<WebSocket> {
+    const url = await this.resolveGatewayUrl();
+    return new Promise((resolve, reject) => {
+      const socket = new WebSocket(url, {
+        headers: { Cookie: this.cookie, Origin: 'https://app.slack.com' },
+      });
       const timer = setTimeout(() => {
         socket.close();
         reject(new Error('Slack gateway did not say hello in time.'));
