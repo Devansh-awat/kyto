@@ -37,7 +37,7 @@ export async function assertReadableChannel(
       // `channel_not_found` to the model.
       if (/channel_not_found|not_in_channel/i.test(errorMessage(error))) {
         throw new Error(
-          `Kyto cannot see that conversation (${raw}). If it is a public channel, kyto can join it and read it — check the id is right. If it is a DM or a private channel kyto is not in, it is unreadable: ask for the content instead of retrying.`
+          `Kyto cannot see that conversation (${raw}). The bot can see every public channel, so this is most likely a PRIVATE channel (or a wrong id) — do not call it public or joinable. If it is a DM or a private channel kyto is not in, it is unreadable: ask for the content instead of retrying.`
         );
       }
       throw error;

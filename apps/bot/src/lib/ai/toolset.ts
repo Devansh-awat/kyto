@@ -58,7 +58,7 @@ import {
 import { deleteFileTool, fileStatTool } from './tools/files';
 import { focusModeTool } from './tools/focus';
 import { generateImageTool } from './tools/generate-image';
-import { getChannelInfoTool } from './tools/get-channel-info';
+import { findChannelsTool, getChannelInfoTool } from './tools/get-channel-info';
 import { getFileTool } from './tools/get-file';
 import { getUserTool } from './tools/get-user';
 import { ghTool, githubAccessTool } from './tools/gh';
@@ -387,6 +387,10 @@ export async function buildTools({
 
   // Deferred: registered but hidden until loadTools names them.
   const deferred: Record<string, { summary: string; tool: Tool }> = {
+    findChannels: {
+      summary: 'find channels by name, private ones included (names only)',
+      tool: findChannelsTool(),
+    },
     browser: {
       summary: 'drive a real Chromium browser (screenshots, clicks, scraping)',
       tool: browserTool({

@@ -95,6 +95,7 @@ const userSearchResponseSchema = z.looseObject({
               channel: z
                 .looseObject({
                   id: z.string().optional(),
+                  is_private: z.boolean().optional(),
                   name: z.string().optional(),
                 })
                 .optional(),
@@ -109,6 +110,10 @@ const userSearchResponseSchema = z.looseObject({
               authorName: match.username,
               authorUserId: match.user,
               channelId: match.channel?.id,
+              // A hit from a channel the SEARCHER is in says nothing about
+              // whether anyone else can join it; kyto once called a private
+              // channel public on the strength of a search hit.
+              channelIsPrivate: match.channel?.is_private,
               channelName: match.channel?.name,
               content: match.text ?? '',
               messageTs: match.ts,

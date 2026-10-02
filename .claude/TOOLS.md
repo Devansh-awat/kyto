@@ -116,6 +116,10 @@ Tools: `scheduleRecurringReminder`, `listReminders`, `pauseReminder`, `resumeRem
 
 The scheduler fires due reminders **concurrently** and guards **overlapping fires** with an in-flight `Set` — a row is advanced only *after* it fires (else a multi-minute run restarts every poll). `advanceReminder` computes the next run from `max(nextRunAt, now)`, so a schedule left in the past doesn't re-fire every poll.
 
+## Channel directory (Flaron)
+
+`getChannelInfo` falls back to Flaron (`lib/flaron.ts`, https://flaron.halceon.dev, public and keyless, owner's pick 2026-10-02) when the bot can't see a channel, and returns `visibility: private|public|nonexistent` from Flaron's `/cman` (explicit `"private"`). The bot sees every public channel, so an unseen one is usually private — kyto once called a private channel public and joinable off a search hit. `findChannels` (deferred) merges Flaron's name search (PUBLIC only; private needs its admin key) with an exact-name lookup, which does resolve a private channel's name. `searchSlack` keeps `channelIsPrivate` from the user-token path.
+
 ## Slack search
 
 `assistant.search.context` runs with the **requesting user's** own Slack access, so it reaches private channels/DMs that user is in — but only with granted scopes (`search:read.public`/`.files`/`.users`/`.private`/`.im`/`.mpim`; the last three were missing once, silently limiting every search to public channels).
