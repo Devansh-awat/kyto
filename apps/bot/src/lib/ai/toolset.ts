@@ -24,7 +24,7 @@ import logger from '@/lib/logger';
 import { requestMcpPermission } from '@/lib/mcp-permissions/request';
 import { redactSecretsDeep } from '@/lib/redact';
 import { listSkills } from '@/lib/skills';
-import { slackWebConfigured } from '@/lib/slack-web-proxy';
+import { slackBrowserAvailable } from '@/lib/slack-browser';
 import { recallLoadedTools, rememberLoadedTools } from './loaded-tools';
 import { askQuestionTool } from './tools/ask-question';
 import { backgroundProcessTools } from './tools/background';
@@ -375,14 +375,10 @@ export async function buildTools({
   );
 
   // kyto's logged-in Slack, OWNER ONLY (owner's call, 2026-10-02): through it
-  // the sandbox can read everything kyto's user account can, DMs included.
+  // the model can read everything kyto's user account can, DMs included.
   const slackBrowser =
-    isOwner && slackWebConfigured()
-      ? slackBrowserTool({
-          asUserAccount,
-          getSandboxContext,
-          thread,
-        })
+    isOwner && slackBrowserAvailable()
+      ? slackBrowserTool({ asUserAccount, thread })
       : undefined;
 
   // Deferred: registered but hidden until loadTools names them.

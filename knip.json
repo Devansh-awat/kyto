@@ -5,6 +5,7 @@
     "@cspell/dict-bash",
     "@cspell/dict-npm",
     "@cspell/dict-redis",
+    "agent-browser",
     "@repo/cspell-config",
     "cspell",
     "pino-pretty"

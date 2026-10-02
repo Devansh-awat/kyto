@@ -35,6 +35,7 @@
         "@slack/socket-mode": "^2.0.7",
         "@slack/web-api": "^7.17.0",
         "@t3-oss/env-core": "catalog:",
+        "agent-browser": "0.38.2",
         "agentmail": "^0.5.13",
         "ai": "catalog:",
         "dotenv": "catalog:",
@@ -800,6 +801,8 @@
     "@workflow/serde": ["@workflow/serde@4.1.0", "", {}, "sha512-pav4F2BoirECWR7Nf1TKt+2eETcBj7jj4cBefQ8VXQCA6NPkaKeLfj/zMgi+3zYV5ZIBT4GuUiphsj0/b9hPQQ=="],
 
     "agent-base": ["agent-base@6.0.2", "", { "dependencies": { "debug": "4" } }, "sha512-RZNwNclF7+MS/8bDg70amg32dyeZGZxiDuQmZxKLAlQjr3jGyLx+4Kkk58UO7D2QdgFIQCovuSuZESne6RG6XQ=="],
+
+    "agent-browser": ["agent-browser@0.38.2", "", { "bin": { "agent-browser": "./bin/agent-browser.js" } }, "sha512-b/7hvo2RrqocvybjB9kwpX12kGkxkFvtdJ4XPDoott5TLK2n3aPX+lYg7ALd+2YvPi2LrTKGzQYu/rxZC2Y7ZA=="],
 
     "agentmail": ["agentmail@0.5.13", "", { "dependencies": { "ws": "^8.20.0" } }, "sha512-eA+yBnQ/9jvnFXtOa/xuETosjV0Fbb9oAFaEUcQNnMfRchrwUJvL6uuXHANHTnuhAsP51HsccNdnC/a+CCKX9w=="],
 

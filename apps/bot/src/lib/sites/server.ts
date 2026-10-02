@@ -7,14 +7,14 @@ import { handleDashboard } from '@/lib/dashboard';
 import { ensureEmbedAssets } from '@/lib/embeds';
 import { handleGithubProxy } from '@/lib/github-proxy';
 import logger from '@/lib/logger';
+import {
+  handleSlackViewRequest,
+  isSlackViewSocket,
+  type SlackViewSocketData,
+  slackViewSocketHandlers,
+} from '@/lib/slack-browser/live-view';
 import { handleSlackOauth } from '@/lib/slack-oauth';
 import { handleSlackProxy } from '@/lib/slack-proxy';
-import {
-  handleSlackWebProxy,
-  isSlackWebSocket,
-  type SlackWebSocketData,
-  slackWebSocketHandlers,
-} from '@/lib/slack-web-proxy';
 import {
   isWhiteboardSocket,
   upgradeWhiteboardSocket,
@@ -145,7 +145,7 @@ export async function startSitesServer(): Promise<void> {
     // HTTP; serving HTTPS there makes the proxy fail upstream with 502.
     const tls = env.SITES_TLS ? await ensureSelfSignedCert() : undefined;
 
-    Bun.serve<WhiteboardSocketData | SlackWebSocketData>({
+    Bun.serve<WhiteboardSocketData | SlackViewSocketData>({
       fetch: async (request, server) => {
         const { pathname } = new URL(request.url);
 
@@ -155,15 +155,11 @@ export async function startSitesServer(): Promise<void> {
           return await upgradeWhiteboardSocket({ request, server });
         }
 
-        // The owner's logged-in Slack browser (lib/slack-web-proxy): answers
-        // only a live per-turn token, so null falls through for everyone else.
-        const slackWeb = await handleSlackWebProxy({
-          pathname,
-          request,
-          server,
-        });
-        if (slackWeb !== null) {
-          return slackWeb;
+        // The live view of the owner's Slack browser (lib/slack-browser): an
+        // unknown or ended view is null and falls through to a plain 404.
+        const slackView = handleSlackViewRequest({ pathname, request, server });
+        if (slackView !== null) {
+          return slackView;
         }
 
         // Read-only Slack proxy (secret-gated) for sandbox scripts. Handled
@@ -219,26 +215,25 @@ export async function startSitesServer(): Promise<void> {
       },
       port: env.SITES_PORT,
       ...(tls ? { tls } : {}),
-      // A socket is a whiteboard session or the Slack browser's relay; each
+      // A socket is a whiteboard session or a Slack browser live view; each
       // upgrade above tags which.
       websocket: {
         close(socket, code, reason) {
-          if (isSlackWebSocket(socket)) {
-            slackWebSocketHandlers.close(socket);
+          if (isSlackViewSocket(socket)) {
+            slackViewSocketHandlers.close(socket);
           } else if (isWhiteboardSocket(socket)) {
             whiteboardSocketHandlers.close?.(socket, code, reason);
           }
         },
         message(socket, raw) {
-          if (isSlackWebSocket(socket)) {
-            slackWebSocketHandlers.message(socket, raw);
-          } else if (isWhiteboardSocket(socket)) {
+          // Nothing a live-view viewer sends is read: it is watch-only.
+          if (isWhiteboardSocket(socket)) {
             whiteboardSocketHandlers.message(socket, raw);
           }
         },
         open(socket) {
-          if (isSlackWebSocket(socket)) {
-            slackWebSocketHandlers.open(socket);
+          if (isSlackViewSocket(socket)) {
+            slackViewSocketHandlers.open(socket);
           } else if (isWhiteboardSocket(socket)) {
             whiteboardSocketHandlers.open?.(socket);
           }

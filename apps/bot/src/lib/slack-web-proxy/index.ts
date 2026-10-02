@@ -1,35 +1,36 @@
-import { randomBytes } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { createHash, createPublicKey } from 'node:crypto';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import nodePath from 'node:path';
+import { promisify } from 'node:util';
 import type { Server, ServerWebSocket } from 'bun';
 import { env } from '@/env';
 import logger from '@/lib/logger';
 
 /**
- * The host half of the owner's logged-in Slack browser (tools/slack-browser).
+ * The network half of the owner's logged-in Slack browser (lib/slack-browser).
  *
  * kyto's user-account session (`KYTO_USER_TOKEN` + its `d` cookie) must never
- * enter a sandbox: the model has a shell there, and either value read out of it
- * is the whole account. So the sandbox's Chromium never holds them. An
- * intercepting proxy in the box (mitmproxy, see slack-browser.ts) forwards every
- * `*.slack.com` request HERE, and this end:
+ * sit in the browser itself: the model reads that page (snapshots, `get html`),
+ * and either value read out of it is the whole account. So the browser's
+ * resolver sends every `*.slack.com` connection to a TLS listener on loopback
+ * — one per session, alive only while it is — and this end:
  *   - adds the `d` cookie, and strips any `d` Slack tries to set back;
  *   - swaps a DUMMY token for the real `xoxc-` on the way out, and the real one
  *     for the dummy in every response — the web client learns its token from
  *     the boot payload, so without this the real one would sit in the page;
  *   - refuses only signing out: that would end the real session the user-account
  *     kyto runs on. Everything else goes through — owner's call, 2026-10-02:
- *     "since owner only, the proxy should allow everything" (it first refused
- *     sending, editing, uploads and channel/profile/admin changes).
+ *     "since owner only, the proxy should allow everything".
  *
- * Owner-only: the token is minted only for an owner's turn, because what this
- * exposes is everything that account can read and do, DMs included.
+ * Owner-only: what this exposes is everything that account can read and do,
+ * DMs included.
  */
 
-export const SLACK_WEB_PREFIX = '/_slackweb/';
-export const SLACK_WEB_TOKEN_HEADER = 'x-kyto-slack-web';
-/** What the sandbox sees in place of the real `xoxc-` token. */
+/** What the browser sees in place of the real `xoxc-` token. */
 const DUMMY_SLACK_TOKEN = 'xoxc-kyto-sandbox-session-placeholder';
 
-const PROXY_TOKEN_TTL_MS = 60 * 60 * 1000;
 const UPSTREAM_TIMEOUT_MS = 60_000;
 const SLACK_HOST = /^(?:[a-z0-9-]+\.)*slack\.com$/;
 const SESSION_COOKIES = new Set(['d', 'd-s']);
@@ -46,6 +47,8 @@ const HOP_HEADERS = new Set([
 
 const SIGN_OUT_METHODS = new Set(['auth.revoke', 'auth.signout']);
 const SIGN_OUT_PAGE = /^\/signout\b/i;
+
+const execFileAsync = promisify(execFile);
 
 /** Whether a Web API method may be called from the logged-in browser. */
 export function isSlackWebMethodAllowed(method: string): boolean {
@@ -126,40 +129,8 @@ export function mergeCookies({
   return [...kept, session].join('; ');
 }
 
-const tokens = new Map<string, number>();
-
 export function slackWebConfigured(): boolean {
-  return Boolean(
-    env.SITES_ENABLED && env.KYTO_USER_TOKEN && env.KYTO_USER_COOKIE
-  );
-}
-
-/** Mint the per-turn secret the sandbox's interceptor presents. */
-export function registerSlackWebToken(): string {
-  const secret = randomBytes(24).toString('base64url');
-  tokens.set(secret, Date.now() + PROXY_TOKEN_TTL_MS);
-  return secret;
-}
-
-export function revokeSlackWebToken(secret: string | undefined): void {
-  if (secret) {
-    tokens.delete(secret);
-  }
-}
-
-function isValidToken(secret: string | null): boolean {
-  if (!secret) {
-    return false;
-  }
-  const expiry = tokens.get(secret);
-  if (!expiry) {
-    return false;
-  }
-  if (Date.now() > expiry) {
-    tokens.delete(secret);
-    return false;
-  }
-  return true;
+  return Boolean(env.KYTO_USER_TOKEN && env.KYTO_USER_COOKIE);
 }
 
 function refused(reason: string): Response {
@@ -170,8 +141,7 @@ function refused(reason: string): Response {
   });
 }
 
-export interface SlackWebSocketData {
-  kind: 'slack-web';
+interface SlackWebSocketData {
   origin: string | null;
   /** Frames the browser sent before the upstream socket opened. */
   pending: string[];
@@ -179,7 +149,7 @@ export interface SlackWebSocketData {
   upstreamUrl: string;
 }
 
-/** Strip the real token and cookie from text headed back into the sandbox. */
+/** Strip the real token and cookie from text headed back into the browser. */
 function scrub(text: string): string {
   let out = text;
   for (const value of secretValues()) {
@@ -194,39 +164,24 @@ function withRealToken(text: string): string {
     : text;
 }
 
-/**
- * Handle a forwarded Slack request, or return null if the path is not ours (so
- * a site called `_slackweb` is never shadowed for an ordinary visitor). A
- * websocket upgrade returns undefined once Bun has taken the socket over.
- */
-export async function handleSlackWebProxy({
-  pathname,
+async function forward({
   request,
   server,
 }: {
-  pathname: string;
   request: Request;
   server: Pick<Server<SlackWebSocketData>, 'upgrade'>;
-}): Promise<Response | null | undefined> {
-  if (!pathname.startsWith(SLACK_WEB_PREFIX)) {
-    return null;
-  }
-  if (!isValidToken(request.headers.get(SLACK_WEB_TOKEN_HEADER))) {
-    return null;
-  }
+}): Promise<Response | undefined> {
   const session = sessionCookie();
   if (!(session && env.KYTO_USER_TOKEN)) {
     return refused('kyto_session_not_configured');
   }
-  const rest = pathname.slice(SLACK_WEB_PREFIX.length);
-  const slash = rest.indexOf('/');
-  const host = slash === -1 ? rest : rest.slice(0, slash);
-  const path = slash === -1 ? '/' : rest.slice(slash);
+  const url = new URL(request.url);
+  const host = url.hostname;
+  const path = url.pathname;
   if (!isSlackHost(host)) {
     return new Response('Not a Slack host', { status: 403 });
   }
-  const { search } = new URL(request.url);
-  const query = withRealToken(search);
+  const query = withRealToken(url.search);
 
   const apiMethod = path.startsWith('/api/')
     ? decodeURIComponent(path.slice('/api/'.length).split('/')[0] ?? '')
@@ -238,12 +193,10 @@ export async function handleSlackWebProxy({
     logger.info({ host, path }, '[slack-web] refused signing out');
     return refused("blocked_by_kyto: signing out would end kyto's session");
   }
-  const readOnly = request.method === 'GET' || request.method === 'HEAD';
 
   if (request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
     const upgraded = server.upgrade(request, {
       data: {
-        kind: 'slack-web',
         origin: request.headers.get('origin'),
         pending: [],
         upstreamUrl: `wss://${host}${path}${query}`,
@@ -257,13 +210,7 @@ export async function handleSlackWebProxy({
   const headers = new Headers();
   for (const [name, value] of request.headers) {
     const lower = name.toLowerCase();
-    if (
-      lower === 'host' ||
-      lower === 'cookie' ||
-      lower === SLACK_WEB_TOKEN_HEADER ||
-      lower.startsWith('x-forwarded-') ||
-      HOP_HEADERS.has(lower)
-    ) {
+    if (lower === 'host' || lower === 'cookie' || HOP_HEADERS.has(lower)) {
       continue;
     }
     headers.set(name, withRealToken(value));
@@ -272,6 +219,7 @@ export async function handleSlackWebProxy({
     'cookie',
     mergeCookies({ browser: request.headers.get('cookie'), session })
   );
+  const readOnly = request.method === 'GET' || request.method === 'HEAD';
   const body = readOnly
     ? undefined
     : replaceBytes({
@@ -319,26 +267,8 @@ export async function handleSlackWebProxy({
   });
 }
 
-function relayToUpstream(
-  socket: ServerWebSocket<SlackWebSocketData>,
-  frame: string
-): void {
-  const upstream = socket.data.upstream;
-  if (upstream?.readyState === WebSocket.OPEN) {
-    upstream.send(withRealToken(frame));
-  } else {
-    socket.data.pending.push(frame);
-  }
-}
-
-export function isSlackWebSocket(
-  socket: ServerWebSocket<SlackWebSocketData | object>
-): socket is ServerWebSocket<SlackWebSocketData> {
-  return 'kind' in socket.data && socket.data.kind === 'slack-web';
-}
-
-/** The relay between the sandbox's socket and Slack's, with the session added. */
-export const slackWebSocketHandlers = {
+/** The relay between the browser's socket and Slack's, with the session added. */
+const socketHandlers = {
   close(socket: ServerWebSocket<SlackWebSocketData>): void {
     socket.data.upstream?.close();
   },
@@ -346,15 +276,20 @@ export const slackWebSocketHandlers = {
     socket: ServerWebSocket<SlackWebSocketData>,
     raw: string | Buffer
   ): void {
-    relayToUpstream(socket, typeof raw === 'string' ? raw : raw.toString());
+    const frame = typeof raw === 'string' ? raw : raw.toString();
+    const upstream = socket.data.upstream;
+    if (upstream?.readyState === WebSocket.OPEN) {
+      upstream.send(withRealToken(frame));
+    } else {
+      socket.data.pending.push(frame);
+    }
   },
   open(socket: ServerWebSocket<SlackWebSocketData>): void {
-    const session = sessionCookie() ?? '';
     // Bun's WebSocket takes request headers; the session rides only on this
-    // host-side leg.
+    // leg, never through the browser.
     const upstream = new WebSocket(socket.data.upstreamUrl, {
       headers: {
-        Cookie: session,
+        Cookie: sessionCookie() ?? '',
         ...(socket.data.origin ? { Origin: socket.data.origin } : {}),
       },
     });
@@ -373,3 +308,80 @@ export const slackWebSocketHandlers = {
     upstream.addEventListener('error', () => socket.close());
   },
 };
+
+interface Certificate {
+  cert: string;
+  key: string;
+  /** base64 SHA-256 of the public key, for `--ignore-certificate-errors-spki-list`. */
+  spki: string;
+}
+
+let certificate: Promise<Certificate> | undefined;
+
+/**
+ * One throwaway key per process. The browser trusts exactly this key (by its
+ * SPKI hash) — not a blanket certificate bypass — and only ever meets it on
+ * loopback, where its resolver points `*.slack.com`.
+ */
+function ensureCertificate(): Promise<Certificate> {
+  certificate ??= (async () => {
+    const dir = await mkdtemp(nodePath.join(tmpdir(), 'kyto-slack-tls-'));
+    try {
+      const keyPath = nodePath.join(dir, 'key.pem');
+      const certPath = nodePath.join(dir, 'cert.pem');
+      await execFileAsync('openssl', [
+        'req',
+        '-x509',
+        '-newkey',
+        'ec',
+        '-pkeyopt',
+        'ec_paramgen_curve:prime256v1',
+        '-nodes',
+        '-keyout',
+        keyPath,
+        '-out',
+        certPath,
+        '-days',
+        '3650',
+        '-subj',
+        '/CN=kyto-slack-browser',
+      ]);
+      const [cert, key] = await Promise.all([
+        readFile(certPath, 'utf8'),
+        readFile(keyPath, 'utf8'),
+      ]);
+      const der = createPublicKey(cert).export({ format: 'der', type: 'spki' });
+      const spki = createHash('sha256').update(der).digest('base64');
+      return { cert, key, spki };
+    } finally {
+      await rm(dir, { force: true, recursive: true });
+    }
+  })();
+  certificate.catch(() => {
+    certificate = undefined;
+  });
+  return certificate;
+}
+
+export interface SlackWebProxy {
+  port: number;
+  spki: string;
+  stop: () => void;
+}
+
+/** Start one session's loopback listener; `stop` when the session ends. */
+export async function startSlackWebProxy(): Promise<SlackWebProxy> {
+  const { cert, key, spki } = await ensureCertificate();
+  const server = Bun.serve<SlackWebSocketData>({
+    fetch: (request, bunServer) => forward({ request, server: bunServer }),
+    hostname: '127.0.0.1',
+    port: 0,
+    tls: { cert, key },
+    websocket: socketHandlers,
+  });
+  if (!server.port) {
+    server.stop(true);
+    throw new Error('Slack browser proxy did not get a port');
+  }
+  return { port: server.port, spki, stop: () => server.stop(true) };
+}
