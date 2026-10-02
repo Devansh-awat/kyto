@@ -18,6 +18,7 @@ const SOCKET_SUFFIX = '/socket';
 const FRAME_QUALITY = 60;
 const MAX_FRAME_WIDTH = 1440;
 const MAX_FRAME_HEIGHT = 900;
+const CDP_TIMEOUT_MS = 15_000;
 
 export interface SlackViewSocketData {
   kind: 'slack-view';
@@ -41,6 +42,10 @@ const frameSchema = z.object({ data: z.string(), sessionId: z.number() });
 class ScreencastHub {
   private readonly viewers = new Set<ServerWebSocket<SlackViewSocketData>>();
   private socket: WebSocket | undefined;
+  // Set synchronously, so viewers joining together share one CDP connection —
+  // two would split the request ids and the frames between them.
+  private connection: Promise<void> | undefined;
+  private framesSent = 0;
   private nextId = 0;
   private readonly pending = new Map<number, (result: unknown) => void>();
   private pageSession: string | undefined;
@@ -56,21 +61,31 @@ class ScreencastHub {
 
   add(viewer: ServerWebSocket<SlackViewSocketData>): void {
     this.viewers.add(viewer);
+    logger.info(
+      { viewers: this.viewers.size },
+      '[slack-browser] live view viewer joined'
+    );
     if (this.lastFrame) {
       viewer.send(this.lastFrame);
     }
-    if (!this.socket) {
-      this.connect().catch((error: unknown) => {
-        logger.warn(
-          { error: errorMessage(error) },
-          '[slack-browser] live view could not attach'
-        );
-      });
+    if (this.connection) {
+      return;
     }
+    this.connection = this.connect().catch((error: unknown) => {
+      this.connection = undefined;
+      logger.warn(
+        { error: errorMessage(error) },
+        '[slack-browser] live view could not attach'
+      );
+    });
   }
 
   remove(viewer: ServerWebSocket<SlackViewSocketData>): void {
     this.viewers.delete(viewer);
+    logger.info(
+      { framesSent: this.framesSent, viewers: this.viewers.size },
+      '[slack-browser] live view viewer left'
+    );
   }
 
   close(): void {
@@ -91,9 +106,20 @@ class ScreencastHub {
     sessionId?: string;
   }): Promise<unknown> {
     const id = ++this.nextId;
-    return new Promise((resolve) => {
-      this.pending.set(id, resolve);
-      this.socket?.send(JSON.stringify({ id, method, params, sessionId }));
+    const socket = this.socket;
+    if (socket?.readyState !== WebSocket.OPEN) {
+      return Promise.reject(new Error(`CDP is not connected for ${method}`));
+    }
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`CDP ${method} timed out`));
+      }, CDP_TIMEOUT_MS);
+      this.pending.set(id, (result) => {
+        clearTimeout(timer);
+        resolve(result);
+      });
+      socket.send(JSON.stringify({ id, method, params, sessionId }));
     });
   }
 
@@ -106,7 +132,6 @@ class ScreencastHub {
         ).json()
       );
     const socket = new WebSocket(version.webSocketDebuggerUrl);
-    this.socket = socket;
     socket.addEventListener('message', (event) => {
       this.onMessage(String(event.data));
     });
@@ -114,6 +139,7 @@ class ScreencastHub {
       socket.addEventListener('open', resolve, { once: true });
       socket.addEventListener('error', reject, { once: true });
     });
+    this.socket = socket;
     await this.call({
       method: 'Target.setDiscoverTargets',
       params: { discover: true },
@@ -144,15 +170,26 @@ class ScreencastHub {
       if (!frame.success) {
         return;
       }
-      this.lastFrame = frame.data.data;
-      for (const viewer of this.viewers) {
-        viewer.send(frame.data.data);
-      }
+      this.broadcast(frame.data.data);
       this.call({
         method: 'Page.screencastFrameAck',
         params: { sessionId: frame.data.sessionId },
         sessionId: message.sessionId,
       }).catch(() => undefined);
+    }
+  }
+
+  private broadcast(frame: string): void {
+    if (this.framesSent === 0) {
+      logger.info(
+        { viewers: this.viewers.size },
+        '[slack-browser] live view first frame'
+      );
+    }
+    this.framesSent++;
+    this.lastFrame = frame;
+    for (const viewer of this.viewers) {
+      viewer.send(frame);
     }
   }
 
@@ -207,6 +244,19 @@ class ScreencastHub {
         return;
       }
       this.pageSession = attached.sessionId;
+      logger.info({ targetId }, '[slack-browser] live view following a page');
+      // The screencast only sends a frame when the page repaints, so a page
+      // sitting idle would leave a new viewer blank; start them on a still.
+      const still = z.object({ data: z.string() }).safeParse(
+        await this.call({
+          method: 'Page.captureScreenshot',
+          params: { format: 'jpeg', quality: FRAME_QUALITY },
+          sessionId: attached.sessionId,
+        })
+      );
+      if (still.success && this.pageSession === attached.sessionId) {
+        this.broadcast(still.data.data);
+      }
       await this.call({
         method: 'Page.startScreencast',
         params: {
@@ -254,13 +304,14 @@ function viewerPage(socketPath: string): string {
 <title>kyto's Slack browser</title>
 <style>html,body{margin:0;height:100%;background:#1a1d21;color:#ccc;font:14px system-ui,sans-serif}#v{width:100%;height:100%;object-fit:contain;display:block}#s{position:fixed;top:8px;left:8px;opacity:.8}</style>
 </head>
-<body><span id="s">Waiting for the browser…</span><img id="v" alt="">
+<body><span id="s">Connecting…</span><img id="v" alt="">
 <script>
 const img = document.getElementById('v');
 const status = document.getElementById('s');
 const socket = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + ${JSON.stringify(socketPath)});
+socket.onopen = () => { status.textContent = 'Connected, waiting for the first frame…'; };
 socket.onmessage = (event) => { status.textContent = ''; img.src = 'data:image/jpeg;base64,' + event.data; };
-socket.onclose = () => { status.textContent = 'The Slack browser has closed.'; };
+socket.onclose = (event) => { status.textContent = 'The live view closed (' + event.code + (event.reason ? ': ' + event.reason : '') + ').'; };
 </script>
 </body>
 </html>
@@ -290,7 +341,11 @@ export function handleSlackViewRequest({
     return null;
   }
   if (isSocket) {
-    return server.upgrade(request, { data: { kind: 'slack-view', viewId } })
+    const upgraded = server.upgrade(request, {
+      data: { kind: 'slack-view', viewId },
+    });
+    logger.info({ upgraded }, '[slack-browser] live view socket requested');
+    return upgraded
       ? undefined
       : new Response('Upgrade failed', { status: 400 });
   }
