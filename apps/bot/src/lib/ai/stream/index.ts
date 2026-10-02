@@ -462,7 +462,12 @@ export async function* renderStream({
     // The stream died or was aborted mid-thought. Finish the open cards on the
     // way out — the plan message is already in Slack, so a row left spinning
     // stays visible after the failure — then let the caller route the error.
+    // A tool card left in_progress is what Slack draws as "Something went
+    // wrong" once the stream stops, which is all a `!stop` showed.
     yield* closeAllReasoning();
+    for (const chunk of cards.endMessage()) {
+      yield chunk;
+    }
     throw error;
   }
   // A provider that ended without its own `reasoning-end` (or a step whose
