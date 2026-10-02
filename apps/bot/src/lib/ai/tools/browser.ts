@@ -4,6 +4,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import type { ThreadHandle } from '@/harness';
 import { ensureCloakBrowser } from '@/lib/browser/cloak';
+import { postLiveView as postLiveViewInThread } from '@/lib/browser/live-view-post';
 import logger from '@/lib/logger';
 import { errorMessage, toLogError } from '@/lib/utils/error';
 
@@ -54,15 +55,11 @@ async function postLiveView({
       host: await context.session.getHost(LIVE_VIEW_PORT),
       password,
     });
-    const markdown = `_watching the browser live: [open the view](${url}) (watch-only, ends when this reply does)_`;
-    // From the app, whichever kyto is answering. The user account can be in a
-    // channel the app is not (and can't be invited to), where the app's post
-    // fails — there the account posts the link itself, or nobody sees it.
-    await thread.post({ markdown }).catch(async (error: unknown) => {
-      if (!asUserAccount) {
-        throw error;
-      }
-      await thread.post({ fromUserAccount: true, markdown });
+    await postLiveViewInThread({
+      asUserAccount,
+      thread,
+      title: 'watching the browser live',
+      url,
     });
     return url;
   } catch (error) {

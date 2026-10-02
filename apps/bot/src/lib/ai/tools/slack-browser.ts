@@ -4,6 +4,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { env } from '@/env';
 import type { ThreadHandle } from '@/harness';
+import { postLiveView } from '@/lib/browser/live-view-post';
 import logger from '@/lib/logger';
 import {
   registerSlackWebToken,
@@ -201,13 +202,11 @@ async function sendLiveView({
     });
     // In the thread, like the plain browser's (owner's call, 2026-10-02) —
     // anyone there can watch kyto's Slack, DMs included, while it runs.
-    const markdown = `_watching kyto's Slack browser live: [open the view](${url}) (watch-only, ends when this reply does)_`;
-    await thread.post({ markdown }).catch(async (error: unknown) => {
-      // The user account can be in a channel the app is not.
-      if (!asUserAccount) {
-        throw error;
-      }
-      await thread.post({ fromUserAccount: true, markdown });
+    await postLiveView({
+      asUserAccount,
+      thread,
+      title: "watching kyto's Slack browser live",
+      url,
     });
     return true;
   } catch (error) {
