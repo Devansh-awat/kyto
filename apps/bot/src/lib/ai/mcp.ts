@@ -37,6 +37,11 @@ const LIST_CACHE_TTL_MS = 10 * 60 * 1000;
 // is assembled — so one dead entry used to add that to EVERY turn of that
 // user's, forever, silently.
 const FAILURE_TTL_MS = 60 * 1000;
+// A rejected credential stays rejected until someone edits the entry, which
+// clears the failure (`forgetMcpFailure`) — retrying it every minute only
+// added its round trip to the owner's turns.
+const AUTH_FAILURE_TTL_MS = 30 * 60 * 1000;
+const AUTH_FAILURE = /\b(401|403)\b/;
 // An auth-scheme token followed by a credential (RFC 7235), e.g. `Bearer x`.
 const HAS_AUTH_SCHEME = /^[A-Za-z][\w-]*\s+\S/;
 const MAX_FAILURE_MESSAGE = 200;
@@ -370,7 +375,11 @@ export async function buildMcpTools({
     servers.map(async ({ namespace, server, sharedBy }) => {
       const key = failureKey(server.id);
       const recent = failures.get(key);
-      if (recent && Date.now() - recent.at < FAILURE_TTL_MS) {
+      const ttl =
+        recent && AUTH_FAILURE.test(recent.message)
+          ? AUTH_FAILURE_TTL_MS
+          : FAILURE_TTL_MS;
+      if (recent && Date.now() - recent.at < ttl) {
         return;
       }
       const connection = new McpConnection({ server });

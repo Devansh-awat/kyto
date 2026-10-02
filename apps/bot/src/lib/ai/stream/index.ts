@@ -10,6 +10,7 @@ import {
   createReasoningTracker,
 } from './reasoning-tracker';
 import { renderTask } from './tasks';
+import { createStreamTimer, type StreamTiming } from './timing';
 import { createToolComplaintFilter } from './tool-complaints';
 import { createToolMarkupFilter } from './tool-markup';
 
@@ -56,6 +57,7 @@ export interface StreamTally {
   finishReasons: string[];
   reasoningParts: number;
   textChars: number;
+  timing?: StreamTiming;
   toolCalls: number;
   toolResults: number;
 }
@@ -185,6 +187,7 @@ export async function* renderStream({
     toolCalls: 0,
     toolResults: 0,
   };
+  const timer = createStreamTimer();
 
   /**
    * Render a finished block: attach the thinking to its card and keep the text
@@ -228,6 +231,7 @@ export async function* renderStream({
 
   try {
     for await (const part of stream) {
+      timer.observe(part.type);
       if (LOG_FULLSTREAM) {
         logger.info(
           {
@@ -542,6 +546,7 @@ export async function* renderStream({
   for (const chunk of cards.endMessage()) {
     yield chunk;
   }
+  tally.timing = timer.summary();
   logger.info(
     { ...context, ...tally, droppedTextDeltas },
     '[stream] attempt stream ended'

@@ -947,6 +947,10 @@ async function executeTurn(
             attempt: attemptLog(currentAttempt),
             continuing: isFallback && streamedText.length > 0,
             index: attempts.length,
+            // Time spent before the model was asked anything: prompt, preload,
+            // anti-coding, toolset (MCP listings) — and, from the 2nd attempt,
+            // every earlier attempt too.
+            sinceTurnStartMs: Date.now() - turnStart,
             threadId,
           },
           '[agent] attempt started'

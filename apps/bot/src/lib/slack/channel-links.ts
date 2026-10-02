@@ -61,14 +61,15 @@ async function refresh(): Promise<void> {
 }
 
 /**
- * Load (or refresh) the channel-name index. Cheap after the first call, and
- * safe to call on every turn — a refresh in flight is shared, and a failure
- * leaves the previous index in place rather than emptying it.
+ * Load (or refresh) the channel-name index. Only the first load is waited
+ * on; later refreshes run behind the caller. A refresh in flight is shared,
+ * and a failure leaves the previous index in place rather than emptying it.
  */
 export function ensureChannelIndex(): Promise<void> {
   if (index.size > 0 && Date.now() - loadedAt < REFRESH_MS) {
     return Promise.resolve();
   }
+  const stale = index.size > 0;
   inFlight ??= refresh()
     .catch((error: unknown) => {
       logger.warn({ err: error }, '[slack] channel name index refresh failed');
@@ -76,7 +77,9 @@ export function ensureChannelIndex(): Promise<void> {
     .finally(() => {
       inFlight = undefined;
     });
-  return inFlight;
+  // A stale index still links almost every name, and the refresh pages the
+  // whole public channel list (~2s): every 30 min a turn sat waiting on it.
+  return stale ? Promise.resolve() : inFlight;
 }
 
 /**
