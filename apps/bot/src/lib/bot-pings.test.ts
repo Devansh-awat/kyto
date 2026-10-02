@@ -1,36 +1,40 @@
 import { describe, expect, test } from 'bun:test';
-import { allowBotTurn, noteHumanMessage } from './bot-pings';
+import {
+  allowBotTurn,
+  MAX_BOT_TURNS_IN_A_ROW,
+  noteHumanMessage,
+} from './bot-pings';
+
+function fill(thread: string): void {
+  for (let i = 0; i < MAX_BOT_TURNS_IN_A_ROW; i += 1) {
+    expect(allowBotTurn(thread, i)).toBe('allowed');
+  }
+}
 
 describe('allowBotTurn', () => {
-  test('three bot turns in a row, then silence', () => {
+  test('fifty bot turns in a row, one stop notice, then silence', () => {
     const thread = 'slack:C1:1';
-    expect(allowBotTurn(thread, 0)).toBe(true);
-    expect(allowBotTurn(thread, 1)).toBe(true);
-    expect(allowBotTurn(thread, 2)).toBe(true);
-    expect(allowBotTurn(thread, 3)).toBe(false);
+    fill(thread);
+    expect(allowBotTurn(thread, 100)).toBe('stopped-now');
+    expect(allowBotTurn(thread, 101)).toBe('stopped');
+    expect(allowBotTurn(thread, 102)).toBe('stopped');
   });
 
   test('a person speaking resets the streak', () => {
     const thread = 'slack:C1:2';
-    for (let i = 0; i < 3; i += 1) {
-      allowBotTurn(thread, i);
-    }
+    fill(thread);
     noteHumanMessage(thread);
-    expect(allowBotTurn(thread, 10)).toBe(true);
+    expect(allowBotTurn(thread, 200)).toBe('allowed');
   });
 
   test('a streak goes stale after a quiet window', () => {
     const thread = 'slack:C1:3';
-    for (let i = 0; i < 3; i += 1) {
-      allowBotTurn(thread, i);
-    }
-    expect(allowBotTurn(thread, 16 * 60 * 1000)).toBe(true);
+    fill(thread);
+    expect(allowBotTurn(thread, 16 * 60 * 1000)).toBe('allowed');
   });
 
   test('threads are counted separately', () => {
-    for (let i = 0; i < 3; i += 1) {
-      allowBotTurn('slack:C1:4', i);
-    }
-    expect(allowBotTurn('slack:C1:5', 5)).toBe(true);
+    fill('slack:C1:4');
+    expect(allowBotTurn('slack:C1:5', 5)).toBe('allowed');
   });
 });

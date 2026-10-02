@@ -4,7 +4,11 @@ import { runTurn, stopTurn } from '@/lib/agent';
 import { isFocusAllowed } from '@/lib/agent/focus';
 import { isUserAllowed } from '@/lib/allowed-users';
 import { activeBan, banNotice, runBanCommand } from '@/lib/bans';
-import { allowBotTurn, noteHumanMessage } from '@/lib/bot-pings';
+import {
+  allowBotTurn,
+  MAX_BOT_TURNS_IN_A_ROW,
+  noteHumanMessage,
+} from '@/lib/bot-pings';
 import { bot, slack, userBot } from '@/lib/chat';
 import { isCodeChannel } from '@/lib/code-channels';
 import { handleCommand } from '@/lib/commands';
@@ -179,6 +183,77 @@ function listen(target: KytoBot): void {
   });
 }
 
+const ADDRESSED_BOT_WINDOW_SECONDS = 60 * 60;
+
+/**
+ * The bot-loop cap (lib/bot-pings), and the one line kyto says when it hits it
+ * — otherwise the conversation just goes quiet and nobody knows why.
+ */
+async function allowBotTurnHere({
+  asUserAccount,
+  message,
+  thread,
+}: {
+  asUserAccount: boolean;
+  message: Message;
+  thread: Thread;
+}): Promise<boolean> {
+  const verdict = allowBotTurn(thread.id);
+  if (verdict === 'allowed') {
+    return true;
+  }
+  logger.info(
+    { botId: message.author.userId, threadId: thread.id, verdict },
+    '[bots] ignored a bot: too many bot turns in a row here'
+  );
+  if (verdict === 'stopped-now') {
+    await thread
+      .post({
+        ...(asUserAccount ? { fromUserAccount: true } : {}),
+        markdown: `_stopped automatically after ${MAX_BOT_TURNS_IN_A_ROW} bot turns in a row. anyone can ping me to keep going._`,
+      })
+      .catch((error: unknown) =>
+        logger.warn(toLogError(error), '[bots] stop notice failed')
+      );
+  }
+  return false;
+}
+
+/**
+ * A bot that answers without pinging back (Kevin): its reply in a thread this
+ * kyto follows counts as addressed to kyto if kyto @mentioned that bot there in
+ * the last hour — the two are mid-conversation. Anything else a bot says in a
+ * followed thread (coolton's "Done", a haiku) stays ignored.
+ */
+async function kytoPingedThisBot({
+  asUserAccount,
+  message,
+  thread,
+}: {
+  asUserAccount: boolean;
+  message: Message;
+  thread: Thread;
+}): Promise<boolean> {
+  const selfId = asUserAccount ? slack.userAccountId : slack.botUserId;
+  if (!selfId) {
+    return false;
+  }
+  const since = Number(message.id) - ADDRESSED_BOT_WINDOW_SECONDS;
+  const recent = await slack
+    .fetchMessages(thread.id, {
+      asUserAccount,
+      ...(Number.isFinite(since) ? { oldest: since.toFixed(6) } : {}),
+    })
+    .catch(() => undefined);
+  const ping = `<@${message.author.userId}>`;
+  return (recent?.messages ?? []).some(
+    (earlier) =>
+      earlier.author.userId === selfId &&
+      earlier.id !== message.id &&
+      (rawSlackText(earlier) ?? '').includes(ping)
+  );
+}
+
 // A mention, or a top-level message in a code channel (which is answered as if
 // it were one): the same gates either way — bans, opt-in, focus, the bot loop.
 async function answerMention({
@@ -194,11 +269,10 @@ async function answerMention({
     return;
   }
   const fromBot = message.author.isBot === true;
-  if (fromBot && !allowBotTurn(thread.id)) {
-    logger.info(
-      { botId: message.author.userId, threadId: thread.id },
-      '[bots] ignored a bot mention: too many bot turns in a row here'
-    );
+  if (
+    fromBot &&
+    !(await allowBotTurnHere({ asUserAccount, message, thread }))
+  ) {
     return;
   }
   if (!fromBot) {
@@ -268,16 +342,26 @@ async function answerThreadMessage({
     state?.respondOnThreadMessages === true &&
     (state.respondAs ?? 'app') === (asUserAccount ? 'user' : 'app');
 
-  if (shouldIgnore(message)) {
+  // A bot that answers without pinging back (Kevin) is heard when kyto pinged
+  // it here first; see kytoPingedThisBot.
+  const heard =
+    message.author.isBot === true &&
+    message.author.isMe !== true &&
+    !message.isMention &&
+    shouldRespondToThread &&
+    (await kytoPingedThisBot({ asUserAccount, message, thread }))
+      ? { ...message, isMention: true }
+      : message;
+  if (shouldIgnore(heard)) {
     return;
   }
-  const fromBot = message.author.isBot === true;
+  const fromBot = heard.author.isBot === true;
   if (!fromBot) {
     noteHumanMessage(thread.id);
   }
   if (
     !(
-      (shouldRespondToThread || message.isMention) &&
+      (shouldRespondToThread || heard.isMention) &&
       isFocusAllowed(state, message.author.userId)
     ) ||
     (await activeBan(message.author.userId)) !== null ||
@@ -285,14 +369,13 @@ async function answerThreadMessage({
   ) {
     return;
   }
-  if (fromBot && !allowBotTurn(thread.id)) {
-    logger.info(
-      { botId: message.author.userId, threadId: thread.id },
-      '[bots] ignored a bot mention: too many bot turns in a row here'
-    );
+  if (
+    fromBot &&
+    !(await allowBotTurnHere({ asUserAccount, message: heard, thread }))
+  ) {
     return;
   }
-  await runCommandOrTurn({ asUserAccount, message, thread });
+  await runCommandOrTurn({ asUserAccount, message: heard, thread });
 }
 
 /**
