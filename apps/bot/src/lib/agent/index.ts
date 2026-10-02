@@ -273,6 +273,17 @@ export function runTurn(input: {
     });
   }
 
+  // A bot never interrupts a running turn. Orpheus's haiku pinged kyto 1.5s
+  // into the owner's "wait for Kevin, then talk again" turn and cut it short,
+  // so the waiting was lost to a bot's one-liner. What the bot said is still in
+  // the thread, which the running turn reads again.
+  if (input.message.author.isBot === true) {
+    logger.info(
+      { botId: input.message.author.userId, threadId: input.thread.id },
+      '[bots] a bot message arrived during a running turn; not interrupting'
+    );
+    return Promise.resolve();
+  }
   interruptTurn({ activeTurn: turn, input });
   // The ✅ is the app's; a person doesn't react to say they read you.
   if (input.asUserAccount) {
