@@ -19,7 +19,7 @@ import {
   OPT_IN_NO_JOIN_ACTION,
   offerOptIn,
 } from '@/lib/onboarding';
-import { handleSecret } from '@/lib/secret';
+import { handleSecret, secretQuestion } from '@/lib/secret';
 import { toLogError } from '@/lib/utils/error';
 import {
   isAddressedOnly,
@@ -296,7 +296,9 @@ async function answerMention({
   // replies, as whichever kyto was pinged: the last one pinged takes the
   // thread over, so it never gets an answer from both. Not for a bot —
   // joining would have kyto answering a thread nobody human asked it into.
-  if (!fromBot) {
+  // Not for `!secret` either: subscribing makes the thread's later replies
+  // kyto's to answer, and a private question shouldn't leave that trail.
+  if (!fromBot && secretQuestion(message) === null) {
     await thread.setState({
       respondAs: asUserAccount ? 'user' : 'app',
       respondOnThreadMessages: true,
