@@ -38,23 +38,33 @@ export type SegmentAction =
  * "Something went wrong" — on every such turn in #kyto, 2026-09-30, while the
  * tools had all succeeded.
  *
+ * "Already in this block" means an id THIS segmenter emitted. It was once asked
+ * of the card budget instead, but renderStream claims a budget slot before it
+ * yields a new card, so every new card looked like an update: no split ever
+ * fired and a whole turn's status lines piled into one plan message.
+ *
  * Create one per block; `next` reports what the caller should do with each item.
  */
 export function createSegmenter(): {
-  next(
-    value: string | { type?: string },
-    options?: { inThisBlock?: boolean }
-  ): SegmentAction;
+  next(value: string | { id?: string; type?: string }): SegmentAction;
   sawText(): boolean;
 } {
   let sawVisibleText = false;
+  const emitted = new Set<string>();
   return {
-    next(value, options) {
+    next(value) {
       if (typeof value === 'string') {
         sawVisibleText ||= isVisibleText(value);
         return 'append';
       }
-      return sawVisibleText && !options?.inThisBlock ? 'split' : 'emit';
+      const inThisBlock = value.id !== undefined && emitted.has(value.id);
+      if (sawVisibleText && !inThisBlock) {
+        return 'split';
+      }
+      if (value.id !== undefined) {
+        emitted.add(value.id);
+      }
+      return 'emit';
     },
     sawText() {
       return sawVisibleText;

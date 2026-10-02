@@ -68,9 +68,18 @@ describe('createSegmenter', () => {
 
   test('an update to a card already in the block stays in it after text', () => {
     const segmenter = createSegmenter();
-    expect(segmenter.next(card)).toBe('emit');
+    const started = { id: 'call-1', type: 'task_update' };
+    expect(segmenter.next(started)).toBe('emit');
     expect(segmenter.next('let me check that channel')).toBe('append');
-    expect(segmenter.next(card, { inThisBlock: true })).toBe('emit');
-    expect(segmenter.next(card)).toBe('split');
+    expect(segmenter.next({ id: 'call-1', type: 'task_update' })).toBe('emit');
+  });
+
+  test('a NEW card after text splits even though it is an update shape', () => {
+    // The budget marks a card visible before renderStream yields it; asking it
+    // "is this in the block?" kept every turn in one plan message.
+    const segmenter = createSegmenter();
+    expect(segmenter.next({ id: 'call-1', type: 'task_update' })).toBe('emit');
+    expect(segmenter.next('found it, checking one more thing')).toBe('append');
+    expect(segmenter.next({ id: 'call-2', type: 'task_update' })).toBe('split');
   });
 });

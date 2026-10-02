@@ -1745,12 +1745,7 @@ async function executeTurn(
       const segment = async function* (): AsyncGenerator<StreamChunk> {
         while (!pending.done) {
           const value = pending.value;
-          const action = segmenter.next(value, {
-            inThisBlock:
-              typeof value !== 'string' &&
-              value.type === 'task_update' &&
-              cards.isVisible(value.id),
-          });
+          const action = segmenter.next(value);
           if (action === 'append') {
             await reply?.append({ text: value as string, thread: turnThread });
             pending = await nextRendered();
