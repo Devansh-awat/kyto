@@ -21,6 +21,12 @@ export async function annotateMentions(text: string): Promise<string> {
       mentionNames.set(userId, BOT_NAME);
       continue;
     }
+    // Both identities are display-named kyto; tell them apart in the text so
+    // neither persona mistakes a ping for the other one as its own.
+    if (slack.userAccountId && userId === slack.userAccountId) {
+      mentionNames.set(userId, `${BOT_NAME} [user account]`);
+      continue;
+    }
     if (label) {
       mentionNames.set(userId, label);
       continue;
