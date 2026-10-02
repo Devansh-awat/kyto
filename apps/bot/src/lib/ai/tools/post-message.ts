@@ -161,7 +161,7 @@ export function postMessageTool({
       : " Pass `fromUserAccount: true` to send it from kyto's own Slack USER account (a normal member account named kyto) instead of the app — the same rules, confirmations and approvals apply. It only reaches channels that account has joined, and it cannot be combined with a custom identity.";
   }
   return tool({
-    description: `Post a message. ${permission} Body is markdown; pass \`blocks\` to send Block Kit instead (the markdown body is then the notification fallback text). Broadcast pings (<!channel>/<!here>/<!everyone>) NEVER survive a post into a different channel or a DM — they are stripped to plain text there even for the owner, who can only broadcast in the channel kyto was invoked in.${
+    description: `Post a message. ${permission} Body is markdown; pass \`blocks\` to send Block Kit instead (the markdown body is then the notification fallback text). Broadcast pings (<!channel>/<!here>/<!everyone>) NEVER survive a post into a different channel or a DM — they are stripped to plain text there even for the owner, who can only broadcast in the channel kyto was invoked in. Those tokens are LIVE pings, not text: to merely talk about @here/@channel (quoting a rule, answering a question about it), write the words without angle brackets — a post holding a real token from anyone but the owner is held for the owner's approval instead of being sent.${
       isOwner
         ? ' You can post under a custom identity: `asName` + `asIcon` for a fully custom display name and avatar, or `asUser` (a user/bot id or @mention) to post looking like that person/bot (their name + avatar). Slack still marks it as an app.'
         : ''
