@@ -7,47 +7,20 @@ import {
 } from '@/lib/slack-web-proxy';
 
 describe('isSlackWebMethodAllowed', () => {
-  test('refuses every way of sending, editing or deleting a message', () => {
+  test("refuses only signing out, which would end kyto's session", () => {
+    expect(isSlackWebMethodAllowed('auth.signout')).toBe(false);
+    expect(isSlackWebMethodAllowed('auth.revoke')).toBe(false);
+  });
+
+  test('lets everything else through (owner only)', () => {
     for (const method of [
       'chat.postMessage',
-      'chat.update',
       'chat.delete',
-      'chat.meMessage',
-      'chat.scheduleMessage',
-      'chat.someMethodSlackAddsLater',
-      'drafts.create',
       'files.upload',
-      'files.completeUploadExternal',
-    ]) {
-      expect(isSlackWebMethodAllowed(method)).toBe(false);
-    }
-  });
-
-  test('refuses account, channel and admin changes', () => {
-    for (const method of [
-      'auth.signout',
-      'conversations.leave',
-      'conversations.archive',
-      'conversations.invite',
-      'users.profile.set',
-      'admin.users.remove',
-      'emoji.remove',
-    ]) {
-      expect(isSlackWebMethodAllowed(method)).toBe(false);
-    }
-  });
-
-  test('lets reads and button clicks through', () => {
-    for (const method of [
+      'conversations.join',
       'client.userBoot',
-      'conversations.history',
-      'conversations.view',
-      'chat.getPermalink',
-      'drafts.list',
       'blocks.actions',
-      'views.submit',
-      'users.info',
-      'files.info',
+      'workflows.trigger',
     ]) {
       expect(isSlackWebMethodAllowed(method)).toBe(true);
     }

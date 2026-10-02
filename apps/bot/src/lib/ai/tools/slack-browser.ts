@@ -4,7 +4,6 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { env } from '@/env';
 import type { ThreadHandle } from '@/harness';
-import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
 import {
   registerSlackWebToken,
@@ -19,12 +18,11 @@ import { errorMessage, toLogError } from '@/lib/utils/error';
 // account. Neither half of that session is ever in the sandbox: a second
 // Chromium, on its OWN display, goes through mitmproxy, which hands every
 // `*.slack.com` request to the host (lib/slack-web-proxy). The host adds the
-// cookie, swaps the token, and refuses sending/deleting/admin calls. Everything
-// else the box does is untouched — mitmproxy tunnels other hosts unopened.
+// cookie and swaps the token; it refuses only signing out. Everything else the
+// box does is untouched — mitmproxy tunnels other hosts unopened.
 //
-// Its own display, not the shared one: the plain browser's live-view link is
-// posted publicly, and kyto's Slack (DMs included) must never be on it. This
-// one's link goes to the owner alone.
+// Its own display, so the plain browser's view never shows it; its own view
+// link is posted in the thread too (owner's call).
 
 const MAX_OUTPUT_CHARS = 8000;
 const STATE_DIR = '/home/user/.kyto/slack-web';
@@ -128,7 +126,7 @@ if ! alive; then
   mkdir -p $SW/home
   # Its own HOME too, so nothing it writes lands beside the plain browser's.
   HOME=$SW/home DISPLAY=:${DISPLAY_NUMBER} setsid nohup "$BIN" \\
-    --remote-debugging-port=${CDP_PORT} --no-sandbox --no-first-run \\
+    --remote-debugging-port=${CDP_PORT} --no-sandbox --test-type --no-first-run \\
     --user-data-dir=$SW/profile \\
     --proxy-server=http://127.0.0.1:${MITM_PORT} \\
     --ignore-certificate-errors-spki-list="$SPKI" \\
@@ -170,13 +168,13 @@ function truncate(text: string): string {
 /** The link goes to the owner alone: this display shows kyto's whole Slack. */
 async function sendLiveView({
   abortSignal,
+  asUserAccount,
   context,
-  ownerId,
   thread,
 }: {
   abortSignal?: AbortSignal;
+  asUserAccount: boolean;
   context: SandboxContext;
-  ownerId: string;
   thread: ThreadHandle;
 }): Promise<boolean> {
   try {
@@ -201,21 +199,15 @@ async function sendLiveView({
       host: await context.session.getHost(WEB_PORT),
       password,
     });
-    // A DM, not an ephemeral: an ephemeral in a thread shows only to someone
-    // looking at that thread right then and is gone on reload — the owner
-    // never saw the first one.
-    const dm = await slack.webClient.conversations.open({ users: ownerId });
-    if (!dm.channel?.id) {
-      return false;
-    }
-    const { channel, threadTs } = slack.decodeThreadId(thread.id);
-    const permalink = await slack.webClient.chat
-      .getPermalink({ channel, message_ts: threadTs ?? '' })
-      .then((result) => result.permalink)
-      .catch(() => undefined);
-    await slack.webClient.chat.postMessage({
-      channel: dm.channel.id,
-      text: `watching kyto's Slack browser live: <${url}|open the view> (watch-only, only you have this link, ends when the reply is done)${permalink ? ` — for <${permalink}|this thread>` : ''}`,
+    // In the thread, like the plain browser's (owner's call, 2026-10-02) —
+    // anyone there can watch kyto's Slack, DMs included, while it runs.
+    const markdown = `_watching kyto's Slack browser live: [open the view](${url}) (watch-only, ends when this reply does)_`;
+    await thread.post({ markdown }).catch(async (error: unknown) => {
+      // The user account can be in a channel the app is not.
+      if (!asUserAccount) {
+        throw error;
+      }
+      await thread.post({ fromUserAccount: true, markdown });
     });
     return true;
   } catch (error) {
@@ -225,12 +217,13 @@ async function sendLiveView({
 }
 
 export function slackBrowserTool({
+  asUserAccount,
   getSandboxContext,
-  ownerId,
   thread,
 }: {
+  /** Answering as kyto's user account (the live-view post's fallback sender). */
+  asUserAccount: boolean;
   getSandboxContext: () => SandboxContext | undefined;
-  ownerId: string;
   thread: ThreadHandle;
 }) {
   let secret: string | undefined;
@@ -238,7 +231,7 @@ export function slackBrowserTool({
   let usedContext: SandboxContext | undefined;
 
   const slackBrowser = tool({
-    description: `Drive a real browser LOGGED IN to Slack as kyto's own user account (owner only) — for what the Slack tools can't do: running workflows, clicking buttons on other apps' messages or App Homes, forms, settings pages. Same agent-browser CLI as the \`browser\` tool (pass its sub-command in \`command\`; run "skills get core" first if you need the reference), but a separate browser that starts on https://app.slack.com/client. It can NOT send, edit or delete messages, upload files, change channels or profiles, or sign out — those calls are refused before they reach Slack (an error reading "blocked_by_kyto"), so do not try to type into a message box; post with postMessage instead. A workflow you start may still post on its own. The owner is sent a private live view.`,
+    description: `Drive a real browser LOGGED IN to Slack as kyto's own user account (owner only) — for what the Slack tools can't do: running workflows, clicking buttons on other apps' messages or App Homes, forms, settings pages. Same agent-browser CLI as the \`browser\` tool (pass its sub-command in \`command\`; run "skills get core" first if you need the reference), but a separate browser that starts on https://app.slack.com/client. Nothing is blocked except signing out (owner only, owner's call): it can send, edit, react, join, upload and run workflows AS kyto's user account, so act only on what the owner asked. A live view is posted in the thread.`,
     inputSchema: z.object({
       command: z
         .string()
@@ -270,7 +263,12 @@ export function slackBrowserTool({
           const error = `Could not start the Slack browser: ${(ready.stdout.trim() || ready.stderr.trim()).slice(-1500)}`;
           return { error, success: false, summary: error };
         }
-        liveView ??= sendLiveView({ abortSignal, context, ownerId, thread });
+        liveView ??= sendLiveView({
+          abortSignal,
+          asUserAccount,
+          context,
+          thread,
+        });
         const result = await context.session.run({
           abortSignal,
           // Bounded: a click on a half-loaded Slack page once hung for minutes
@@ -290,7 +288,7 @@ export function slackBrowserTool({
           ...(viewSent
             ? {
                 liveView:
-                  'The owner already has a private live-view link; do not share it.',
+                  'A watch-only live view link is already posted in the thread; no need to share it again.',
               }
             : {}),
           stderr: truncate(result.stderr),

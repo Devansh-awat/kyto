@@ -377,10 +377,10 @@ export async function buildTools({
   // kyto's logged-in Slack, OWNER ONLY (owner's call, 2026-10-02): through it
   // the sandbox can read everything kyto's user account can, DMs included.
   const slackBrowser =
-    isOwner && env.OWNER_USER_ID && slackWebConfigured()
+    isOwner && slackWebConfigured()
       ? slackBrowserTool({
+          asUserAccount,
           getSandboxContext,
-          ownerId: env.OWNER_USER_ID,
           thread,
         })
       : undefined;

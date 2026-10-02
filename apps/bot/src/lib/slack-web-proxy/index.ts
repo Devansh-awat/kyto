@@ -15,15 +15,13 @@ import logger from '@/lib/logger';
  *   - swaps a DUMMY token for the real `xoxc-` on the way out, and the real one
  *     for the dummy in every response — the web client learns its token from
  *     the boot payload, so without this the real one would sit in the page;
- *   - refuses the calls the owner does not want made from it at all: sending,
- *     editing or deleting messages, uploads, sign-out, and channel/profile/admin
- *     changes (owner's ask, 2026-10-02: "i need a way to stop it sending").
+ *   - refuses only signing out: that would end the real session the user-account
+ *     kyto runs on. Everything else goes through — owner's call, 2026-10-02:
+ *     "since owner only, the proxy should allow everything" (it first refused
+ *     sending, editing, uploads and channel/profile/admin changes).
  *
- * Every Slack byte the sandbox can produce has to pass through here — the box
- * has no cookie of its own — so the block holds for `curl` in a shell exactly
- * as it does for the browser. Owner-only: the token is minted only for an
- * owner's turn, because what this exposes is everything that account can read,
- * DMs included.
+ * Owner-only: the token is minted only for an owner's turn, because what this
+ * exposes is everything that account can read and do, DMs included.
  */
 
 export const SLACK_WEB_PREFIX = '/_slackweb/';
@@ -46,83 +44,12 @@ const HOP_HEADERS = new Set([
   'transfer-encoding',
 ]);
 
-// Namespaces refused whole: everything in them writes, and a new method Slack
-// adds there should be refused before anyone has heard of it.
-const BLOCKED_PREFIXES = [
-  'admin.',
-  'calls.',
-  'canvases.',
-  'chat.',
-  'drafts.',
-  'huddles.',
-  'oauth.',
-  'rooms.',
-  'users.admin.',
-  'users.profile.set',
-];
-// The reads inside those namespaces that the client needs to render a page.
-const ALLOWED_IN_BLOCKED = new Set(['chat.getPermalink', 'drafts.list']);
-const BLOCKED_METHODS = new Set([
-  'apps.uninstall',
-  'auth.revoke',
-  'auth.signout',
-  'bookmarks.add',
-  'bookmarks.edit',
-  'bookmarks.remove',
-  'conversations.archive',
-  'conversations.close',
-  'conversations.convertToPrivate',
-  'conversations.create',
-  'conversations.delete',
-  'conversations.invite',
-  'conversations.inviteShared',
-  'conversations.kick',
-  'conversations.leave',
-  'conversations.rename',
-  'conversations.setPurpose',
-  'conversations.setTopic',
-  'conversations.unarchive',
-  'emoji.add',
-  'emoji.remove',
-  'files.completeUploadExternal',
-  'files.delete',
-  'files.edit',
-  'files.getUploadURLExternal',
-  'files.share',
-  'files.sharedPublicURL',
-  'files.upload',
-  'files.uploadAsync',
-  'pins.add',
-  'pins.remove',
-  'reminders.add',
-  'reminders.delete',
-  'usergroups.create',
-  'usergroups.disable',
-  'usergroups.update',
-  'usergroups.users.update',
-  'users.deletePhoto',
-  'users.setPhoto',
-]);
-// Web pages (not `/api/`) that act on GET.
-const BLOCKED_PAGES =
-  /^\/(?:signout|admin|customize|account\/(?:deactivate|delete))/i;
-// Telemetry the client posts outside `/api/`; refusing it would only make the
-// client retry, so it is accepted and dropped.
-const SWALLOWED_POSTS = /^\/(?:beacon|clog)\b/;
-// The client's lookups (users, channels, permissions, emoji) are POSTs to
-// edgeapi's cache; refusing them as writes left the page half-loaded and the
-// first click hanging.
-const READ_POSTS = /^\/cache\//;
+const SIGN_OUT_METHODS = new Set(['auth.revoke', 'auth.signout']);
+const SIGN_OUT_PAGE = /^\/signout\b/i;
 
 /** Whether a Web API method may be called from the logged-in browser. */
 export function isSlackWebMethodAllowed(method: string): boolean {
-  if (ALLOWED_IN_BLOCKED.has(method)) {
-    return true;
-  }
-  if (BLOCKED_METHODS.has(method)) {
-    return false;
-  }
-  return !BLOCKED_PREFIXES.some((prefix) => method.startsWith(prefix));
+  return !SIGN_OUT_METHODS.has(method);
 }
 
 export function isSlackHost(host: string): boolean {
@@ -304,32 +231,14 @@ export async function handleSlackWebProxy({
   const apiMethod = path.startsWith('/api/')
     ? decodeURIComponent(path.slice('/api/'.length).split('/')[0] ?? '')
     : undefined;
-  if (apiMethod !== undefined && !isSlackWebMethodAllowed(apiMethod)) {
-    logger.info({ host, method: apiMethod }, '[slack-web] refused a call');
-    return refused(
-      `blocked_by_kyto: ${apiMethod} is not allowed from kyto's browser`
-    );
-  }
-  if (apiMethod === undefined && BLOCKED_PAGES.test(path)) {
-    logger.info({ host, path }, '[slack-web] refused a page');
-    return new Response('Blocked by kyto', { status: 403 });
+  if (
+    (apiMethod !== undefined && !isSlackWebMethodAllowed(apiMethod)) ||
+    (apiMethod === undefined && SIGN_OUT_PAGE.test(path))
+  ) {
+    logger.info({ host, path }, '[slack-web] refused signing out');
+    return refused("blocked_by_kyto: signing out would end kyto's session");
   }
   const readOnly = request.method === 'GET' || request.method === 'HEAD';
-  if (
-    apiMethod === undefined &&
-    !readOnly &&
-    request.method !== 'OPTIONS' &&
-    !(host === 'edgeapi.slack.com' && READ_POSTS.test(path))
-  ) {
-    if (SWALLOWED_POSTS.test(path)) {
-      return new Response(null, { status: 204 });
-    }
-    logger.info(
-      { host, method: request.method, path },
-      '[slack-web] refused a non-API write'
-    );
-    return new Response('Blocked by kyto', { status: 403 });
-  }
 
   if (request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
     const upgraded = server.upgrade(request, {
@@ -410,29 +319,10 @@ export async function handleSlackWebProxy({
   });
 }
 
-/** An outgoing websocket frame that would send a message. */
-function isSendFrame(frame: string): boolean {
-  try {
-    const parsed: unknown = JSON.parse(frame);
-    return (
-      typeof parsed === 'object' &&
-      parsed !== null &&
-      'type' in parsed &&
-      parsed.type === 'message'
-    );
-  } catch {
-    return false;
-  }
-}
-
 function relayToUpstream(
   socket: ServerWebSocket<SlackWebSocketData>,
   frame: string
 ): void {
-  if (isSendFrame(frame)) {
-    logger.info('[slack-web] dropped a message frame on the socket');
-    return;
-  }
   const upstream = socket.data.upstream;
   if (upstream?.readyState === WebSocket.OPEN) {
     upstream.send(withRealToken(frame));

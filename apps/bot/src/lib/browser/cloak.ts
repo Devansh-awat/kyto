@@ -42,7 +42,9 @@ fi
 DISPLAY_ID="$(kyto-display 2>>/tmp/cloak.log)"
 
 SEED=$(( ($$ % 90000) + 10000 ))
-ARGS="--remote-debugging-port=$CDP --no-sandbox --fingerprint=$SEED --fingerprint-platform=windows --user-data-dir=$HOME/.cloakbrowser-profile"
+# --test-type hides the "unsupported command-line flag: --no-sandbox" bar the
+# live view showed; the sandbox still needs --no-sandbox itself.
+ARGS="--remote-debugging-port=$CDP --no-sandbox --test-type --fingerprint=$SEED --fingerprint-platform=windows --user-data-dir=$HOME/.cloakbrowser-profile"
 wait_alive() {
   i=0
   while [ $i -lt 60 ]; do
