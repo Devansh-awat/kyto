@@ -28,10 +28,12 @@ function truncate(text: string): string {
  */
 async function postLiveView({
   abortSignal,
+  asUserAccount,
   context,
   thread,
 }: {
   abortSignal?: AbortSignal;
+  asUserAccount: boolean;
   context: SandboxContext;
   thread: ThreadHandle;
 }): Promise<string | undefined> {
@@ -52,8 +54,15 @@ async function postLiveView({
       host: await context.session.getHost(LIVE_VIEW_PORT),
       password,
     });
-    await thread.post({
-      markdown: `_watching the browser live: [open the view](${url}) (watch-only, ends when this reply does)_`,
+    const markdown = `_watching the browser live: [open the view](${url}) (watch-only, ends when this reply does)_`;
+    // From the app, whichever kyto is answering. The user account can be in a
+    // channel the app is not (and can't be invited to), where the app's post
+    // fails — there the account posts the link itself, or nobody sees it.
+    await thread.post({ markdown }).catch(async (error: unknown) => {
+      if (!asUserAccount) {
+        throw error;
+      }
+      await thread.post({ fromUserAccount: true, markdown });
     });
     return url;
   } catch (error) {
@@ -63,9 +72,12 @@ async function postLiveView({
 }
 
 export function browserTool({
+  asUserAccount = false,
   getSandboxContext,
   thread,
 }: {
+  /** Answering as kyto's user account (see postLiveView). */
+  asUserAccount?: boolean;
   getSandboxContext: () => SandboxContext | undefined;
   /** Where the live-view link goes. Unset (a `!secret` turn) posts none. */
   thread?: ThreadHandle;
@@ -98,7 +110,12 @@ export function browserTool({
           return { error: ready.error, success: false, summary: ready.error };
         }
         if (thread) {
-          liveView ??= postLiveView({ abortSignal, context, thread });
+          liveView ??= postLiveView({
+            abortSignal,
+            asUserAccount,
+            context,
+            thread,
+          });
         }
         // Forward the turn's abort signal so a browser command that never
         // returns (a page that hangs loading) is killed when the turn is

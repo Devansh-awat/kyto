@@ -24,6 +24,7 @@ import logger from '@/lib/logger';
 import { requestMcpPermission } from '@/lib/mcp-permissions/request';
 import { redactSecretsDeep } from '@/lib/redact';
 import { listSkills } from '@/lib/skills';
+import { slackWebConfigured } from '@/lib/slack-web-proxy';
 import { recallLoadedTools, rememberLoadedTools } from './loaded-tools';
 import { askQuestionTool } from './tools/ask-question';
 import { backgroundProcessTools } from './tools/background';
@@ -101,6 +102,7 @@ import { searchWebTool } from './tools/search-web';
 import { editAsUserTool, sendAsUserTool } from './tools/send-as-user';
 import { loadSkillTool, manageSkillsTool } from './tools/skills';
 import { skipTool } from './tools/skip';
+import { slackBrowserTool } from './tools/slack-browser';
 import { slackDocsTool } from './tools/slack-docs';
 import { slackScriptTool } from './tools/slack-script';
 import { runSubagentTool } from './tools/subagent';
@@ -372,11 +374,23 @@ export async function buildTools({
     env.HACKCLUB_REPLICATE_API_KEY || env.GEMINI_API_KEY
   );
 
+  // kyto's logged-in Slack, OWNER ONLY (owner's call, 2026-10-02): through it
+  // the sandbox can read everything kyto's user account can, DMs included.
+  const slackBrowser =
+    isOwner && env.OWNER_USER_ID && slackWebConfigured()
+      ? slackBrowserTool({
+          getSandboxContext,
+          ownerId: env.OWNER_USER_ID,
+          thread,
+        })
+      : undefined;
+
   // Deferred: registered but hidden until loadTools names them.
   const deferred: Record<string, { summary: string; tool: Tool }> = {
     browser: {
       summary: 'drive a real Chromium browser (screenshots, clicks, scraping)',
       tool: browserTool({
+        asUserAccount,
         getSandboxContext,
         ...(secret ? {} : { thread }),
       }),
@@ -577,6 +591,15 @@ export async function buildTools({
           manageSkills: {
             summary: 'install, write, edit or remove skills (owner only)',
             tool: manageSkillsTool({ userId: authorUserId }),
+          },
+        }
+      : {}),
+    ...(slackBrowser
+      ? {
+          slackBrowser: {
+            summary:
+              "a browser logged in to Slack as kyto's user account: workflows, other apps' buttons (owner only)",
+            tool: slackBrowser.tool,
           },
         }
       : {}),
@@ -814,7 +837,7 @@ export async function buildTools({
         },
         '[tools] turn summary'
       );
-      await mcp.close();
+      await Promise.all([mcp.close(), slackBrowser?.close()]);
     },
     drainImages: () => pendingImages.splice(0),
     // Deliberately NOT remembered for the thread (unlike a model's own

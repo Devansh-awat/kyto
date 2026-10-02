@@ -10,8 +10,16 @@ import logger from '@/lib/logger';
 import { handleSlackOauth } from '@/lib/slack-oauth';
 import { handleSlackProxy } from '@/lib/slack-proxy';
 import {
+  handleSlackWebProxy,
+  isSlackWebSocket,
+  type SlackWebSocketData,
+  slackWebSocketHandlers,
+} from '@/lib/slack-web-proxy';
+import {
+  isWhiteboardSocket,
   upgradeWhiteboardSocket,
   WHITEBOARD_SOCKET_PREFIX,
+  type WhiteboardSocketData,
   whiteboardSocketHandlers,
 } from '@/lib/whiteboard';
 import {
@@ -137,7 +145,7 @@ export async function startSitesServer(): Promise<void> {
     // HTTP; serving HTTPS there makes the proxy fail upstream with 502.
     const tls = env.SITES_TLS ? await ensureSelfSignedCert() : undefined;
 
-    Bun.serve({
+    Bun.serve<WhiteboardSocketData | SlackWebSocketData>({
       fetch: async (request, server) => {
         const { pathname } = new URL(request.url);
 
@@ -145,6 +153,17 @@ export async function startSitesServer(): Promise<void> {
         // upgrade is a GET that must never be answered with a file.
         if (pathname.startsWith(WHITEBOARD_SOCKET_PREFIX)) {
           return await upgradeWhiteboardSocket({ request, server });
+        }
+
+        // The owner's logged-in Slack browser (lib/slack-web-proxy): answers
+        // only a live per-turn token, so null falls through for everyone else.
+        const slackWeb = await handleSlackWebProxy({
+          pathname,
+          request,
+          server,
+        });
+        if (slackWeb !== null) {
+          return slackWeb;
         }
 
         // Read-only Slack proxy (secret-gated) for sandbox scripts. Handled
@@ -200,9 +219,31 @@ export async function startSitesServer(): Promise<void> {
       },
       port: env.SITES_PORT,
       ...(tls ? { tls } : {}),
-      // Every socket this server accepts is a whiteboard session; the upgrade
-      // above is the only place one is created.
-      websocket: whiteboardSocketHandlers,
+      // A socket is a whiteboard session or the Slack browser's relay; each
+      // upgrade above tags which.
+      websocket: {
+        close(socket, code, reason) {
+          if (isSlackWebSocket(socket)) {
+            slackWebSocketHandlers.close(socket);
+          } else if (isWhiteboardSocket(socket)) {
+            whiteboardSocketHandlers.close?.(socket, code, reason);
+          }
+        },
+        message(socket, raw) {
+          if (isSlackWebSocket(socket)) {
+            slackWebSocketHandlers.message(socket, raw);
+          } else if (isWhiteboardSocket(socket)) {
+            whiteboardSocketHandlers.message(socket, raw);
+          }
+        },
+        open(socket) {
+          if (isSlackWebSocket(socket)) {
+            slackWebSocketHandlers.open(socket);
+          } else if (isWhiteboardSocket(socket)) {
+            whiteboardSocketHandlers.open?.(socket);
+          }
+        },
+      },
     });
     logger.info(
       { port: env.SITES_PORT, tls: Boolean(tls) },

@@ -44,12 +44,18 @@ interface ClientMessage {
   type?: unknown;
 }
 
+export function isWhiteboardSocket(
+  socket: ServerWebSocket<WhiteboardSocketData | object>
+): socket is ServerWebSocket<WhiteboardSocketData> {
+  return 'boardId' in socket.data;
+}
+
 export async function upgradeWhiteboardSocket({
   request,
   server,
 }: {
   request: Request;
-  server: Server<WhiteboardSocketData>;
+  server: Pick<Server<WhiteboardSocketData>, 'upgrade'>;
 }): Promise<Response | undefined> {
   const url = new URL(request.url);
   const id = url.pathname

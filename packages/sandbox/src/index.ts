@@ -14,6 +14,7 @@ export {
 export {
   LIVE_VIEW_COMMAND,
   LIVE_VIEW_PORT,
+  liveViewCommand,
   liveViewUrl,
 } from './live-view';
 export { OPENCODE_SETUP_COMMAND } from './opencode';
