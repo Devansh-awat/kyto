@@ -125,3 +125,17 @@ One row per banned user, replaced on a re-ban and deleted on an unban — a ban 
 a current state, not a history, so there is deliberately no record of who has
 ever been banned. `expires_at` null means indefinite; an expired row simply stops
 applying (`listBans` filters on it), so nothing sweeps it.
+
+## The `notebooks` table (2026-10-02)
+
+```sql
+CREATE TABLE IF NOT EXISTS notebooks (
+  scope text PRIMARY KEY,               -- 'global' or a Slack channel id
+  content text NOT NULL DEFAULT '',
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+```
+
+kyto's notebooks, written only by kevinton (`lib/notebooks.ts`). "Your data"
+erase deletes the person's DM-with-the-app notebook; shared-channel and global
+ones are derived from everyone and stay.

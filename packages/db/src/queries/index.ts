@@ -14,6 +14,7 @@ export * from './kyto-channels';
 export * from './mcp';
 export * from './memories';
 export * from './model-credentials';
+export * from './notebooks';
 export * from './opt-ins';
 export * from './reminders';
 export * from './sandbox';

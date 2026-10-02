@@ -1,16 +1,24 @@
+import { getNotebooks, saveNotebook } from '@repo/db/queries';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { env } from '@/env';
 import { requestApproval } from '@/lib/approvals/request';
 import { bot, slack } from '@/lib/chat';
 import logger from '@/lib/logger';
+import {
+  applyNotebookEdit,
+  GLOBAL_NOTEBOOK,
+  MAX_CHANNEL_NOTEBOOK_CHARS,
+  MAX_GLOBAL_NOTEBOOK_CHARS,
+} from '@/lib/notebooks';
 import { redactSecrets } from '@/lib/redact';
 import { getSkill } from '@/lib/skills';
 import { parseSkill } from '@/lib/skills/parse';
 import { threadLogText } from '@/lib/thread-logs';
 import { errorMessage } from '@/lib/utils/error';
 
-// kevinton's only two ways to leave a mark. Everything else it can do is
+// kevinton's ways to leave a mark: an issue, a skill proposal, and kyto's
+// notebooks (lib/notebooks.ts). Everything else it can do is
 // looking: it never posts in the thread it reviews, and never changes code.
 
 // Owner's call, 2026-09-29: issues go straight onto kyto's own public repo.
@@ -69,9 +77,12 @@ function publicText(text: string): string {
 const MAX_LOG_CHARS = 150_000;
 
 export function kevintonTools({
+  globalNotebookAllowed,
   reviewedAt,
   threadId,
 }: {
+  /** False for a DM or group DM, or when the channel's type is unknown. */
+  globalNotebookAllowed: boolean;
   reviewedAt: Date | null;
   threadId: string;
 }) {
@@ -252,5 +263,81 @@ export function kevintonTools({
     },
   });
 
-  return { filed, kytoIssues, proposeSkill, proposed, threadLogs };
+  const channelId = slack.decodeThreadId(threadId).channel;
+  const notebookEdits: string[] = [];
+  const notebook = tool({
+    description: `kyto's notebooks. \`channel\` is THIS channel's (max ${MAX_CHANNEL_NOTEBOOK_CHARS} chars) — both kytos read it here. \`global\` is workspace-wide (max ${MAX_GLOBAL_NOTEBOOK_CHARS} chars) — kyto's user account reads it in EVERY channel and DM.${globalNotebookAllowed ? '' : ' This thread is a DM, so the global notebook is read-only here.'} \`read\` returns both. \`append\` adds lines; \`replace\` swaps one exact, unique \`find\` for \`text\` (empty text deletes it); \`rewrite\` replaces the whole notebook — use it to condense.`,
+    inputSchema: z.object({
+      action: z.enum(['read', 'append', 'replace', 'rewrite']),
+      find: z.string().optional(),
+      notebook: z.enum(['channel', 'global']).optional(),
+      text: z.string().optional(),
+    }),
+    execute: async ({ action, find, notebook: which, text }) => {
+      try {
+        const found = await getNotebooks([GLOBAL_NOTEBOOK, channelId]);
+        if (action === 'read') {
+          return {
+            channel: found.get(channelId) ?? '',
+            global: found.get(GLOBAL_NOTEBOOK) ?? '',
+          };
+        }
+        if (!which) {
+          return { error: `${action} needs \`notebook\`.`, success: false };
+        }
+        if (which === 'global' && !globalNotebookAllowed) {
+          return {
+            error:
+              'Nothing from a DM may go into the global notebook — it would be read in every channel.',
+            success: false,
+          };
+        }
+        if (
+          text === undefined ||
+          (action === 'replace' && find === undefined)
+        ) {
+          return { error: `${action} needs its fields.`, success: false };
+        }
+        const scope = which === 'global' ? GLOBAL_NOTEBOOK : channelId;
+        const max =
+          which === 'global'
+            ? MAX_GLOBAL_NOTEBOOK_CHARS
+            : MAX_CHANNEL_NOTEBOOK_CHARS;
+        const clean = redactSecrets(text, 'kevinton notebook');
+        const edited = applyNotebookEdit({
+          content: found.get(scope) ?? '',
+          edit:
+            action === 'replace'
+              ? { action, find: find ?? '', text: clean }
+              : { action, text: clean },
+          max,
+        });
+        if ('error' in edited) {
+          return { error: edited.error, success: false };
+        }
+        await saveNotebook({ content: edited.content, scope });
+        notebookEdits.push(`${which} ${action}`);
+        logger.info(
+          { action, chars: edited.content.length, scope, threadId },
+          '[kevinton] edited a notebook'
+        );
+        return {
+          success: true,
+          summary: `The ${which} notebook is now ${edited.content.length} of ${max} characters.`,
+        };
+      } catch (error) {
+        return { error: errorMessage(error), success: false };
+      }
+    },
+  });
+
+  return {
+    filed,
+    kytoIssues,
+    notebook,
+    notebookEdits,
+    proposeSkill,
+    proposed,
+    threadLogs,
+  };
 }

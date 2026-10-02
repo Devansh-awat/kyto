@@ -13,6 +13,7 @@ import { annotateMentions } from '@/lib/agent/mentions';
 import { recallThinking, renderThinking } from '@/lib/agent/thinking';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
+import { renderNotebooks } from '@/lib/notebooks';
 import { isHiddenFromBot, rawSlackText } from '@/lib/utils/message';
 
 // We never persist a session, so the whole Slack thread is the agent's only
@@ -123,6 +124,18 @@ export async function buildPrompt(
   // (and the dead ends) of the one before it.
   const thinking = thread
     ? renderThinking(await recallThinking(thread.id))
+    : '';
+
+  // The user account reads the global notebook too; the app, only the
+  // channel's (lib/notebooks.ts). A failed read costs the notes, not the turn.
+  const notebooks = thread
+    ? await renderNotebooks({
+        channelId: slack.decodeThreadId(thread.id).channel,
+        includeGlobal: asUserAccount,
+      }).catch((error: unknown) => {
+        logger.warn({ err: error }, '[prompt] could not load the notebooks');
+        return '';
+      })
     : '';
 
   let history = '';
@@ -252,6 +265,7 @@ export async function buildPrompt(
   //   user_instructions   changes only when the user edits them
   //   compacted           changes once per COMPACT_BATCH of overflow
   //   history             append-only until the thread passes MAX_THREAD_MESSAGES
+  //   notebooks           changes whenever kevinton edits one, any thread's review
   //   thinking            CHANGES EVERY TURN (last turn's reasoning is appended)
   //   nowLine + current   the clock, the message id, and the new message
   //
@@ -273,6 +287,7 @@ export async function buildPrompt(
       : '',
     compacted,
     history,
+    notebooks,
     thinking,
     nowLine,
     latest,

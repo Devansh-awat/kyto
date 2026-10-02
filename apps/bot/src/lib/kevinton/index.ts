@@ -73,7 +73,7 @@ const KEVINTON_NOTE = `
 <kevinton>
 You are kevinton, kyto's silent reviewer. You are NOT answering anyone: nobody will see your text, and you cannot post in this thread. The conversation above already happened; kyto (you, in another role) took part in it.
 
-Look at what kyto did — its replies, the thinking it left, errors and failed tool calls, gaps where a reply should be, what people said back — and decide whether either of these is warranted. The expected, common outcome is NEITHER; doing nothing is a good review.
+Look at what kyto did — its replies, the thinking it left, errors and failed tool calls, gaps where a reply should be, what people said back — and decide whether either of the first two is warranted, then tend the notebooks (3). For the first two the expected, common outcome is NEITHER; doing nothing is a good review.
 
 1. An ISSUE on kyto's repo, only for a real defect in kyto itself: it stopped mid-turn or went silent, a tool errored or misbehaved, a wrong or broken behaviour people pushed back on, a loop, a refusal it should not have made, a missing capability people clearly needed. Not for a person's mistake, a third-party outage, or a one-off model slip.
 2. A SKILL proposal, only for a genuinely reusable, non-obvious method this conversation worked out that would save real work next time — and only if \`loadSkill\`'s list has nothing covering it.
@@ -93,6 +93,11 @@ A filed issue is DETAILED. Use these sections:
 - **How to reproduce** — if you can tell.
 
 Include whatever from the conversation makes the issue clear — what was asked, what was said back. Never include a secret, a password or a token.
+
+3. NOTEBOOK edits — this one is routine, unlike the other two. kyto keeps notes it reads walking into a conversation: one per channel, and one global that kyto's user account reads in EVERY channel and DM. \`notebook\` \`read\` both first. Add what will help kyto next time: who people are and what they work on, ongoing projects and decisions, preferences and channel norms, recurring questions and their answers, things kyto got wrong and the correction. Not passing chatter, not what is obvious from Slack, never a secret, password or token.
+- The channel notebook may hold anything from this channel.
+- The global notebook is for what is useful ACROSS channels. Anything you put there can surface anywhere, to anyone. From a private channel, add only what the people in it would not mind being known outside it — personal matters, private plans and anything said in confidence stay in the channel notebook. From a DM or group DM, NEVER (the tool refuses).
+- Keep both tight: the limits are hard (channel 20,000 characters, global 50,000), and long before them, merge duplicates, update facts in place with \`replace\`, and drop what is stale. Condense with \`rewrite\` when it grows. A short, current notebook beats a long one.
 
 When you are done, write one line saying what you did (or "nothing to do").
 </kevinton>`;
@@ -232,7 +237,13 @@ async function review({
     close = async () => {
       await Promise.all([built.close(), logs.close()]);
     };
-    const own = kevintonTools({ reviewedAt, threadId });
+    // Fail closed: a channel whose type can't be read may be a DM.
+    const metadata = await thread.fetchMetadata().catch(() => null);
+    const own = kevintonTools({
+      globalNotebookAllowed: metadata ? !metadata.isDM : false,
+      reviewedAt,
+      threadId,
+    });
     const tools: ToolSet = {
       ...Object.fromEntries(
         LOOKING_TOOLS.flatMap((name) =>
@@ -241,6 +252,7 @@ async function review({
       ),
       ...logs.tools,
       kytoIssues: own.kytoIssues,
+      notebook: own.notebook,
       proposeSkill: own.proposeSkill,
       threadLogs: own.threadLogs,
     };
@@ -272,6 +284,7 @@ async function review({
         logger.info(
           {
             filed: own.filed,
+            notebook: own.notebookEdits,
             model: attempt.model,
             outcome: text.trim().slice(0, 300),
             proposed: own.proposed,
@@ -283,7 +296,11 @@ async function review({
       } catch (error) {
         // Nothing was said anywhere, so the next rung can simply try again —
         // unless this one already acted, which a second run would repeat.
-        if (own.filed.length > 0 || own.proposed.length > 0) {
+        if (
+          own.filed.length > 0 ||
+          own.proposed.length > 0 ||
+          own.notebookEdits.length > 0
+        ) {
           return;
         }
         logger.warn(

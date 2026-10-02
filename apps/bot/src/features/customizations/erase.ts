@@ -2,6 +2,7 @@ import {
   clearThreadSandbox,
   clearUserCustomization,
   deleteChatgptAccount,
+  deleteNotebook,
   deletePrivateMemoriesByAuthor,
   deleteSummariesForChannel,
   deleteThinkingForChannel,
@@ -54,6 +55,8 @@ export interface EraseResult {
     mcpServers: number;
     memories: number;
     modelKeys: number;
+    /** Whether kyto's notebook (lib/notebooks.ts) for the DM was deleted. */
+    dmNotebook: boolean;
     sandboxes: number;
     /** DM threads whose compacted history (lib/agent/compaction) was deleted. */
     summarizedThreads: number;
@@ -139,7 +142,15 @@ export async function eraseUserData({
   let thinkingThreads = 0;
   let summarizedThreads = 0;
   let sandboxes = 0;
+  let dmNotebook = false;
   if (dmChannelId) {
+    dmNotebook = await deleteNotebook(dmChannelId).catch((error: unknown) => {
+      logger.error(
+        { err: errorMessage(error), userId },
+        '[erase] failed to delete the DM notebook'
+      );
+      return false;
+    });
     thinkingThreads = await deleteThinkingForChannel(dmChannelId).catch(
       (error: unknown) => {
         logger.error(
@@ -176,6 +187,7 @@ export async function eraseUserData({
   logger.info(
     {
       ...settings,
+      dmNotebook,
       memoryCount,
       sandboxes,
       summarizedThreads,
@@ -189,6 +201,7 @@ export async function eraseUserData({
     promotedMemories,
     removed: {
       ...settings,
+      dmNotebook,
       memories: memoryCount,
       sandboxes,
       summarizedThreads,
@@ -273,6 +286,9 @@ export function summarize(result: EraseResult): string {
     `• compacted history deleted for ${removed.summarizedThreads} of your DM ${removed.summarizedThreads === 1 ? 'thread' : 'threads'}`,
     `• ${removed.sandboxes} sandbox ${removed.sandboxes === 1 ? 'workspace' : 'workspaces'} destroyed`,
   ];
+  if (removed.dmNotebook) {
+    lines.push("• kyto's notes from your DM with it deleted");
+  }
   if (removed.customInstructions) {
     lines.push(
       `• custom instructions, ${removed.mcpServers} MCP ${removed.mcpServers === 1 ? 'server' : 'servers'}, ${removed.modelKeys} model ${removed.modelKeys === 1 ? 'key' : 'keys'} and any linked ChatGPT account removed`
@@ -280,7 +296,7 @@ export function summarize(result: EraseResult): string {
   }
   // Never let this read as a clean sweep when it isn't.
   lines.push(
-    "• kyto's reasoning and compacted history in SHARED channels are keyed by thread, not by person, and derived from everyone who was in it — they aren't deleted here, and age out on their own within about 30 days"
+    "• kyto's reasoning and compacted history in SHARED channels are keyed by thread, not by person, and derived from everyone who was in it — they aren't deleted here, and age out on their own within about 30 days. kyto's notebooks for shared channels and its workspace-wide one are likewise written from everyone there and aren't deleted here"
   );
   if (result.promotedMemories.length > 0) {
     lines.push(
