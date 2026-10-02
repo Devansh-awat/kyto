@@ -126,6 +126,12 @@ function extractTables(event: RawSlackMessage): string | undefined {
  * construction, posting/fetching, reactions, assistant status, and native
  * streaming. Replaces @chat-adapter/slack.
  */
+/** Slack wants `thumbsup`, not `:thumbsup:` — models write it with the colons
+ * and every such reaction failed with `invalid_name`. */
+export function reactionName(name: string): string {
+  return name.trim().replace(/^:+|:+$/g, '');
+}
+
 export class SlackHarness {
   readonly webClient: WebClient;
   botUserId: string | undefined;
@@ -564,7 +570,7 @@ export class SlackHarness {
     const { channel } = this.decodeThreadId(threadId);
     return this.webClient.reactions.add({
       channel,
-      name,
+      name: reactionName(name),
       timestamp: messageId,
     });
   }
@@ -577,7 +583,7 @@ export class SlackHarness {
     const { channel } = this.decodeThreadId(threadId);
     return this.webClient.reactions.remove({
       channel,
-      name,
+      name: reactionName(name),
       timestamp: messageId,
     });
   }
