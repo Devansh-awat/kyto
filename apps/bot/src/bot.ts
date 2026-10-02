@@ -119,6 +119,22 @@ function listen(target: KytoBot): void {
       }
       return;
     }
+    // The user account pinging the app: its posts are `isMe` (so neither kyto
+    // answers its own words), which dropped this ping too. Answered as a bot's
+    // ping instead — explicit mention only, the bot-loop cap, never joining the
+    // thread. One way only: the account still ignores the app, so the two can't
+    // ping-pong.
+    if (message.author.userId === slack.userAccountId) {
+      await answerMention({
+        asUserAccount,
+        message: {
+          ...message,
+          author: { ...message.author, isBot: true, isMe: false },
+        },
+        thread,
+      });
+      return;
+    }
     // Not awaited one after the other: each resolves only when its whole
     // turn is done, and a message pinging both kytos is for both.
     await Promise.all([
