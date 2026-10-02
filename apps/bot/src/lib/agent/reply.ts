@@ -4,6 +4,7 @@ import {
   restoreAnnotatedMentions,
   type ThreadHandle as Thread,
 } from '@/harness';
+import { slack } from '@/lib/chat';
 import { resolveIdentity } from '@/lib/identity';
 import logger from '@/lib/logger';
 import { linkChannelNames } from '@/lib/slack/channel-links';
@@ -22,6 +23,14 @@ const SOFT_FLUSH = 900;
 const IDLE_MS = 1500;
 const FENCE_REOPEN_PADDING = 3;
 const TABLE_SEPARATOR = /^\|?[\s:|-]*-{2,}[\s:|-]*$/;
+
+function isNotInChannel(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    'data' in error &&
+    (error.data as { error?: unknown } | undefined)?.error === 'not_in_channel'
+  );
+}
 
 export function createReply({
   allowBroadcast = false,
@@ -60,18 +69,61 @@ export function createReply({
       const identity = fromUserAccount
         ? { fromUserAccount }
         : await resolveIdentity('normal');
-      await thread
+      try {
         // `post` denies broadcasts by default; the owner's streamed reply is
         // one of the two paths allowed to opt in (this thread IS the channel
         // kyto was invoked in). `take` has already neutralized the chunk when
         // allowBroadcast is false, so this is belt and braces either way.
-        .post({ allowBroadcast, ...identity, markdown: chunk })
-        .then(() => {
-          lastPostAt = Date.now();
-        })
-        .catch((error: unknown) => {
+        await thread.post({ allowBroadcast, ...identity, markdown: chunk });
+        lastPostAt = Date.now();
+      } catch (error) {
+        if (fromUserAccount || !isNotInChannel(error)) {
           logger.warn({ err: error, threadId }, '[agent] reply post failed');
-        });
+          continue;
+        }
+        await postOutsideChannel({ chunk, identity, thread });
+      }
+    }
+  }
+
+  // The app was asked in a channel it isn't in (the user account heard it):
+  // Slack refused the reply and it vanished while the turn logged complete.
+  // Join (public channels) and retry; failing that, send it from kyto's user
+  // account, which is in the channel if it heard the message.
+  async function postOutsideChannel({
+    chunk,
+    identity,
+    thread,
+  }: {
+    chunk: string;
+    identity:
+      | Awaited<ReturnType<typeof resolveIdentity>>
+      | { fromUserAccount: true };
+    thread: Thread;
+  }): Promise<void> {
+    const channel = threadId.split(':')[1] ?? '';
+    try {
+      await slack.webClient.conversations.join({ channel });
+      await thread.post({ allowBroadcast, ...identity, markdown: chunk });
+      lastPostAt = Date.now();
+      return;
+    } catch (error) {
+      logger.error(
+        { channel, err: error, threadId },
+        '[agent] reply refused (not_in_channel) and joining did not help; trying the user account'
+      );
+    }
+    if (!slack.userAccountId) {
+      return;
+    }
+    try {
+      await thread.post({ fromUserAccount: true, markdown: chunk });
+      lastPostAt = Date.now();
+    } catch (error) {
+      logger.error(
+        { channel, err: error, threadId },
+        '[agent] reply lost: neither the app nor the user account could post'
+      );
     }
   }
 
