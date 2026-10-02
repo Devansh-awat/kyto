@@ -118,6 +118,8 @@ export async function startSlackBrowser(): Promise<SlackBrowserSession> {
       '--no-first-run',
       '--no-default-browser-check',
       '--disable-background-networking',
+      '--disable-breakpad',
+      '--disable-crash-reporter',
       '--disable-component-update',
       '--disable-extensions',
       '--disable-sync',
