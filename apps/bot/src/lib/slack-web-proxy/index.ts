@@ -61,7 +61,7 @@ const BLOCKED_PREFIXES = [
   'users.profile.set',
 ];
 // The reads inside those namespaces that the client needs to render a page.
-const ALLOWED_IN_BLOCKED = new Set(['chat.getPermalink']);
+const ALLOWED_IN_BLOCKED = new Set(['chat.getPermalink', 'drafts.list']);
 const BLOCKED_METHODS = new Set([
   'apps.uninstall',
   'auth.revoke',
@@ -109,6 +109,10 @@ const BLOCKED_PAGES =
 // Telemetry the client posts outside `/api/`; refusing it would only make the
 // client retry, so it is accepted and dropped.
 const SWALLOWED_POSTS = /^\/(?:beacon|clog)\b/;
+// The client's lookups (users, channels, permissions, emoji) are POSTs to
+// edgeapi's cache; refusing them as writes left the page half-loaded and the
+// first click hanging.
+const READ_POSTS = /^\/cache\//;
 
 /** Whether a Web API method may be called from the logged-in browser. */
 export function isSlackWebMethodAllowed(method: string): boolean {
@@ -311,7 +315,12 @@ export async function handleSlackWebProxy({
     return new Response('Blocked by kyto', { status: 403 });
   }
   const readOnly = request.method === 'GET' || request.method === 'HEAD';
-  if (apiMethod === undefined && !readOnly && request.method !== 'OPTIONS') {
+  if (
+    apiMethod === undefined &&
+    !readOnly &&
+    request.method !== 'OPTIONS' &&
+    !(host === 'edgeapi.slack.com' && READ_POSTS.test(path))
+  ) {
     if (SWALLOWED_POSTS.test(path)) {
       return new Response(null, { status: 204 });
     }

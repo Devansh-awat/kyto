@@ -43,6 +43,7 @@ describe('isSlackWebMethodAllowed', () => {
       'conversations.history',
       'conversations.view',
       'chat.getPermalink',
+      'drafts.list',
       'blocks.actions',
       'views.submit',
       'users.info',

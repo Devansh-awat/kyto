@@ -4,6 +4,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { env } from '@/env';
 import type { ThreadHandle } from '@/harness';
+import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
 import {
   registerSlackWebToken,
@@ -33,6 +34,9 @@ const DISPLAY_NUMBER = 77;
 const VNC_PORT = 5977;
 const WEB_PORT = 6077;
 const SESSION = 'kyto-slack';
+const COMMAND_TIMEOUT_SECONDS = 90;
+// `timeout`'s exit status when it had to stop the command.
+const TIMED_OUT_EXIT = 124;
 
 const ADDON = `import os
 from mitmproxy import http
@@ -197,11 +201,22 @@ async function sendLiveView({
       host: await context.session.getHost(WEB_PORT),
       password,
     });
-    await thread.postEphemeral(
-      ownerId,
-      `_watching kyto's Slack browser live (only you can see this): <${url}|open the view> (watch-only, ends when this reply does)_`,
-      { fallbackToDM: true }
-    );
+    // A DM, not an ephemeral: an ephemeral in a thread shows only to someone
+    // looking at that thread right then and is gone on reload — the owner
+    // never saw the first one.
+    const dm = await slack.webClient.conversations.open({ users: ownerId });
+    if (!dm.channel?.id) {
+      return false;
+    }
+    const { channel, threadTs } = slack.decodeThreadId(thread.id);
+    const permalink = await slack.webClient.chat
+      .getPermalink({ channel, message_ts: threadTs ?? '' })
+      .then((result) => result.permalink)
+      .catch(() => undefined);
+    await slack.webClient.chat.postMessage({
+      channel: dm.channel.id,
+      text: `watching kyto's Slack browser live: <${url}|open the view> (watch-only, only you have this link, ends when the reply is done)${permalink ? ` — for <${permalink}|this thread>` : ''}`,
+    });
     return true;
   } catch (error) {
     logger.warn(toLogError(error), '[slack-browser] live view failed');
@@ -258,10 +273,18 @@ export function slackBrowserTool({
         liveView ??= sendLiveView({ abortSignal, context, ownerId, thread });
         const result = await context.session.run({
           abortSignal,
-          command: `agent-browser --session ${SESSION} --cdp ${CDP_PORT} ${command}`,
+          // Bounded: a click on a half-loaded Slack page once hung for minutes
+          // and left the daemon "busy" for the next command, freezing the turn.
+          command: `timeout ${COMMAND_TIMEOUT_SECONDS} agent-browser --session ${SESSION} --cdp ${CDP_PORT} ${command}`,
           workingDirectory: context.sessionWorkDir,
         });
         const viewSent = await liveView;
+        let summary = `Slack browser ${command} exited ${result.exitCode}.`;
+        if (result.exitCode === 0) {
+          summary = `Ran Slack browser ${command}.`;
+        } else if (result.exitCode === TIMED_OUT_EXIT) {
+          summary = `Slack browser ${command} took over ${COMMAND_TIMEOUT_SECONDS}s and was stopped; take a snapshot to see where the page is.`;
+        }
         return {
           exitCode: result.exitCode,
           ...(viewSent
@@ -273,10 +296,7 @@ export function slackBrowserTool({
           stderr: truncate(result.stderr),
           stdout: truncate(result.stdout),
           success: result.exitCode === 0,
-          summary:
-            result.exitCode === 0
-              ? `Ran Slack browser ${command}.`
-              : `Slack browser ${command} exited ${result.exitCode}.`,
+          summary,
         };
       } catch (error) {
         return {
