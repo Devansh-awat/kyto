@@ -24,6 +24,9 @@ function truncate(text: string): string {
     : text;
 }
 
+const WEDGED =
+  /CDP command timed out|not responding|os error 11|daemon may be busy/i;
+
 export function slackBrowserTool({
   asUserAccount,
   thread,
@@ -102,6 +105,10 @@ export function slackBrowserTool({
         let summary = `Ran Slack browser ${command}.`;
         if (result.timedOut) {
           summary = `Slack browser ${command} took too long and was stopped; take a snapshot to see where the page is, or "${RESTART}" if the browser stopped answering.`;
+        } else if (WEDGED.test(result.stderr)) {
+          // A hung tab fails fast like this on EVERY later command too, so
+          // without the hint the model kept retrying a dead browser.
+          summary = `Slack browser ${command} failed: the browser stopped answering. Run "${RESTART}" before trying again.`;
         } else if (result.exitCode !== 0) {
           summary = `Slack browser ${command} exited ${result.exitCode}.`;
         }
