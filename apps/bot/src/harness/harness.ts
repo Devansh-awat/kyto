@@ -141,8 +141,9 @@ export class SlackHarness {
    * `requireUserAccountClient`, whose only callers are `ThreadHandle.post`
    * with `fromUserAccount`, `KytoBot.openUserAccountDM`, and reading back the
    * thread that account was pinged in (`fetchMessages` with `asUserAccount`,
-   * the in-flight resume's refetch), and features/channel-pairing (listing
-   * its channels, inviting the app/owner) — keep it that way,
+   * the in-flight resume's refetch), features/channel-pairing (listing
+   * its channels, inviting the app/owner), and pins/unpins with
+   * `as: 'account'` — keep it that way,
    * so nothing grows into a general "call Slack as that account" path. */
   private readonly userAccountClient: WebClient | undefined;
   /** The session's websocket: the typing indicator, and hearing the account's channels (user-gateway). */

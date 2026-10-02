@@ -11,12 +11,23 @@ const okSchema = z.looseObject({
   ok: z.boolean(),
 });
 
+// 'user' used to mean the OWNER: the user-account persona read it as "my
+// own user account" and pinned under the owner's name, then told people it
+// was its own token. Each actor is now named for whose name the pin shows.
 const actAsSchema = z
-  .enum(['bot', 'user'])
+  .enum(['app', 'account', 'owner'])
   .optional()
   .describe(
-    "Who performs the action: 'bot' (default) pins as the bot; 'user' pins as the owner. 'user' only works when the owner triggered this turn."
+    "Whose name the pin shows: 'app' = the kyto app (bot); 'account' = kyto's own Slack user account (only in channels it has joined); 'owner' = the OWNER's personal account, never kyto — only when the owner triggered this turn AND explicitly asked for it to be under their name. Defaults to whichever kyto you are answering as."
   );
+
+type Actor = 'app' | 'account' | 'owner';
+
+const ACTOR_LABEL: Record<Actor, string> = {
+  account: "kyto's user account",
+  app: 'the kyto app',
+  owner: "the owner's personal account",
+};
 
 const channelIdSchema = z
   .string()
@@ -60,22 +71,30 @@ function ownerUserToken(authorUserId: string): string | null {
 }
 
 /**
- * Call a Slack pins API method. As the bot we use the shared web client and, on
+ * Call a Slack pins API method. As the app we use the shared web client and, on
  * `not_in_channel`, try to join the (public) channel once and retry — that's the
- * usual reason a bot can't pin in another channel. As the user we call with the
- * owner's token so the pin is attributed to them.
+ * usual reason a bot can't pin in another channel. As kyto's account we use its
+ * session (never joining for it); as the owner, the owner's token.
  */
 async function callPins({
+  actor,
   method,
   channelId,
   timestamp,
-  userToken,
 }: {
+  actor: { as: Actor; ownerToken: string | null };
   method: 'pins.add' | 'pins.remove';
   channelId: string;
   timestamp: string;
-  userToken: string | null;
 }): Promise<{ ok: boolean; error?: string }> {
+  if (actor.as === 'account') {
+    return okSchema.parse(
+      await slack
+        .requireUserAccountClient()
+        .apiCall(method, { channel: channelId, timestamp })
+    );
+  }
+  const userToken = actor.ownerToken;
   if (userToken) {
     const response = await fetch(`https://slack.com/api/${method}`, {
       body: JSON.stringify({ channel: channelId, timestamp }),
@@ -106,29 +125,48 @@ async function callPins({
   );
 }
 
-/** Resolve which token to use, enforcing the owner gate for `as: 'user'`. */
-function tokenForActor(
-  as: 'bot' | 'user' | undefined,
-  authorUserId: string
-): { ok: true; userToken: string | null } | { ok: false; error: string } {
-  if (as !== 'user') {
-    return { ok: true, userToken: null };
+/** Resolve who acts, enforcing the owner gate for `as: 'owner'`. */
+function resolveActor({
+  as,
+  asUserAccount,
+  authorUserId,
+}: {
+  as: Actor | undefined;
+  asUserAccount: boolean;
+  authorUserId: string;
+}):
+  | { ok: true; as: Actor; ownerToken: string | null }
+  | { ok: false; error: string } {
+  const actor = as ?? (asUserAccount ? 'account' : 'app');
+  if (actor === 'account') {
+    if (!slack.userAccountId) {
+      return {
+        error: "kyto's user account is not configured; use 'app'.",
+        ok: false,
+      };
+    }
+    return { as: actor, ok: true, ownerToken: null };
   }
-  const userToken = ownerUserToken(authorUserId);
-  if (!userToken) {
+  if (actor === 'app') {
+    return { as: actor, ok: true, ownerToken: null };
+  }
+  const ownerToken = ownerUserToken(authorUserId);
+  if (!ownerToken) {
     return {
       error:
         'Pinning as the owner is only available when the owner triggers it.',
       ok: false,
     };
   }
-  return { ok: true, userToken };
+  return { as: actor, ok: true, ownerToken };
 }
 
 export function pinMessageTool({
+  asUserAccount,
   authorUserId,
   thread,
 }: {
+  asUserAccount: boolean;
   authorUserId: string;
   thread: Thread;
 }) {
@@ -151,22 +189,22 @@ export function pinMessageTool({
         if (!channel.ok) {
           return { error: channel.error, success: false };
         }
-        const actor = tokenForActor(as, authorUserId);
+        const actor = resolveActor({ as, asUserAccount, authorUserId });
         if (!actor.ok) {
           return { error: actor.error, success: false };
         }
         const result = await callPins({
           channelId: channel.channelId,
           method: 'pins.add',
+          actor,
           timestamp: messageTs,
-          userToken: actor.userToken,
         });
         if (!result.ok) {
           return { error: `Pin failed: ${result.error}`, success: false };
         }
         return {
           success: true,
-          summary: `Pinned the message to <#${channel.channelId}>${as === 'user' ? ' as the owner' : ''}.`,
+          summary: `Pinned the message to <#${channel.channelId}> as ${ACTOR_LABEL[actor.as]}.`,
         };
       } catch (error) {
         logger.warn({ error: errorMessage(error) }, '[pinMessage] failed');
@@ -177,9 +215,11 @@ export function pinMessageTool({
 }
 
 export function unpinMessageTool({
+  asUserAccount,
   authorUserId,
   thread,
 }: {
+  asUserAccount: boolean;
   authorUserId: string;
   thread: Thread;
 }) {
@@ -202,22 +242,22 @@ export function unpinMessageTool({
         if (!channel.ok) {
           return { error: channel.error, success: false };
         }
-        const actor = tokenForActor(as, authorUserId);
+        const actor = resolveActor({ as, asUserAccount, authorUserId });
         if (!actor.ok) {
           return { error: actor.error, success: false };
         }
         const result = await callPins({
           channelId: channel.channelId,
           method: 'pins.remove',
+          actor,
           timestamp: messageTs,
-          userToken: actor.userToken,
         });
         if (!result.ok) {
           return { error: `Unpin failed: ${result.error}`, success: false };
         }
         return {
           success: true,
-          summary: `Removed the pin from <#${channel.channelId}>.`,
+          summary: `Removed the pin from <#${channel.channelId}> as ${ACTOR_LABEL[actor.as]}.`,
         };
       } catch (error) {
         logger.warn({ error: errorMessage(error) }, '[unpinMessage] failed');

@@ -153,7 +153,7 @@ export function postMessageTool({
   );
   const permission = isOwner
     ? 'Post to another target. Type must be thread, channel, or user.'
-    : 'You may post into the current thread freely — and `type: "channel"` on the channel you were mentioned in is delivered as a reply in that thread, because starting a top-level post is the owner\'s alone. A DM to a user (type user) is held until the owner clicks Confirm, which can take a while or never come. Posting into a DIFFERENT channel is queued for the owner\'s approval — it is posted in this thread with Approve/Deny buttons, never expires, and nothing is sent unless they approve. Say it is waiting; do not claim it was sent, and do not look for another way to send it.';
+    : 'You may post into the current thread freely — and `type: "channel"` on the channel you were mentioned in is delivered as a reply in that thread, because starting a top-level post is the owner\'s alone. A DM to the person who asked you for it (type user, their own id) is sent straight away; a DM to anyone else is held until the owner clicks Confirm, which can take a while or never come. Posting into a DIFFERENT channel is queued for the owner\'s approval — it is posted in this thread with Approve/Deny buttons, never expires, and nothing is sent unless they approve. Say it is waiting; do not claim it was sent, and do not look for another way to send it.';
   let userAccountNote = '';
   if (userAccountConfigured) {
     userAccountNote = asUserAccount
@@ -268,6 +268,11 @@ export function postMessageTool({
       // restrictions, so the check cannot be "may they post here" — instead the
       // post is placed where they demonstrably could have put it, which is the
       // thread they are talking to kyto in.
+      // A DM to the person who asked for it reaches nobody who isn't already
+      // in this conversation, so holding it for the owner's click only made
+      // "dm me" wait on someone else (owner's call, 2026-10-02).
+      const dmToRequester =
+        type === 'user' && toRawSlackUserId(id) === authorUserId;
       const redirectedToThread =
         !isOwner && type === 'channel' && target === currentChannel;
       const crossChannelForNonOwner =
@@ -286,7 +291,11 @@ export function postMessageTool({
       // A non-owner's DM request is not refused — it is held for the OWNER to
       // approve. Without a configured owner there is nobody to approve, so it
       // stays impossible.
-      if (!isOwner && type === 'user' && !env.OWNER_USER_ID) {
+      if (
+        !(isOwner || dmToRequester) &&
+        type === 'user' &&
+        !env.OWNER_USER_ID
+      ) {
         return {
           error:
             'Not allowed: DMing a user requires owner approval, and no owner is configured.',
@@ -394,7 +403,9 @@ export function postMessageTool({
       // waits for the owner to click a confirm button. This is the human-click
       // gate that a prompt injection cannot forge — it can request the post but
       // can't press the button. Same-channel replies still post immediately.
-      const crossChannel = type === 'user' || target !== currentChannel;
+      const crossChannel =
+        (type === 'user' && !dmToRequester) ||
+        (type !== 'user' && target !== currentChannel);
       if (crossChannel || mirrored) {
         let where = 'this channel';
         if (crossChannel) {

@@ -452,11 +452,11 @@ export async function buildTools({
     },
     pinMessage: {
       summary: 'pin a message',
-      tool: pinMessageTool({ authorUserId, thread }),
+      tool: pinMessageTool({ asUserAccount, authorUserId, thread }),
     },
     unpinMessage: {
       summary: 'unpin a message',
-      tool: unpinMessageTool({ authorUserId, thread }),
+      tool: unpinMessageTool({ asUserAccount, authorUserId, thread }),
     },
     poll: {
       summary: 'post an interactive poll',
