@@ -89,6 +89,8 @@ import {
 import { buildReplyFooter } from '@/lib/feedback/footer';
 import { scheduleKevinton } from '@/lib/kevinton';
 import logger, { threadLogContext } from '@/lib/logger';
+import { moderateTurn } from '@/lib/moderation';
+import type { ModerationItem } from '@/lib/moderation-flags';
 import { openSandboxProxies } from '@/lib/sandbox/proxies';
 import { acquireThreadSandbox, threadSandboxStore } from '@/lib/sandbox/store';
 import { ensureChannelIndex } from '@/lib/slack/channel-links';
@@ -420,6 +422,9 @@ async function executeTurn(
   // took, feedback buttons, and a note when a weaker model had to answer.
   // Unset on a skip or a turn that failed, which get no footer.
   let answeredBy: ModelAttempt | undefined;
+  // What the turn read and wrote, for the moderation check once it is over.
+  const moderationTools: ModerationItem[] = [];
+  let moderationReply = '';
   // The answering attempt's prompt-token split, logged on `turn complete`. Kept
   // separate from usageFooter: the footer is a user-facing opt-out, this is
   // operational (is the 1h cache actually being hit?) and always recorded.
@@ -490,6 +495,22 @@ async function executeTurn(
         })
         .catch(() => undefined);
     }
+    // Not awaited: the reply is already out, and a flag only pings the owner.
+    moderateTurn({
+      asUserAccount,
+      authorUserId: message.author.userId,
+      items: [
+        { source: 'message', text: message.text },
+        {
+          source: 'custom instructions',
+          text: hints.customization?.prompt ?? '',
+        },
+        { source: 'reply', text: moderationReply },
+        ...moderationTools,
+      ],
+      secret,
+      thread,
+    });
     if (!(secret || asUserAccount) && answeredBy) {
       await postReplyFooter({
         answeredBy,
@@ -1072,6 +1093,7 @@ async function executeTurn(
             attemptText = true;
             errorStage = 'after_text';
             attemptRawText += text;
+            moderationReply += text;
             streamedText = appendStreamedText(streamedText, text);
             // Progress: reset the stall watchdog (see armWatchdog).
             armWatchdog(ATTEMPT_TIMEOUT_MS);
@@ -1092,6 +1114,13 @@ async function executeTurn(
             }
             gatheredKeys.add(key);
             gatheredResults.push(info);
+            moderationTools.push({
+              source: 'tool result',
+              text:
+                typeof info.output === 'string'
+                  ? info.output
+                  : (JSON.stringify(info.output) ?? ''),
+            });
           },
           onFinish: (reason) => {
             attemptFinishReason = reason;
