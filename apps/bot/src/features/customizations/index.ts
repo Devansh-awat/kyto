@@ -38,8 +38,8 @@ import {
 } from '@repo/db/queries';
 import { z } from 'zod';
 import { env } from '@/env';
-import type { ModalSubmitEvent, ModalSubmitResult } from '@/harness';
-import { mrkdwn, plainText } from '@/harness';
+import type { ModalSubmitEvent, ModalSubmitResult } from '@/harness/types';
+import { mrkdwn, plainText } from '@/harness/views';
 import { forgetMcpFailure, normalizeMcpAuthorization } from '@/lib/ai/mcp';
 import {
   DEFAULT_MCP_RULES,
@@ -48,13 +48,8 @@ import {
   type McpServerRules,
   parseToolOverrides,
 } from '@/lib/ai/mcp-permissions';
-import { checkMcpUrl } from '@/lib/ai/mcp-url';
-import {
-  byokConfigured,
-  encryptSecret,
-  keyPreview,
-  validateCredential,
-} from '@/lib/byok';
+import { validateCredential } from '@/lib/byok';
+import { byokConfigured, encryptSecret, keyPreview } from '@/lib/byok/crypto';
 import { bot, slack } from '@/lib/chat';
 import {
   chatgptConfigured,
@@ -64,8 +59,9 @@ import {
 } from '@/lib/chatgpt';
 import { IDENTITY_TYPES, resetIdentityCache } from '@/lib/identity';
 import logger from '@/lib/logger';
+import { assertPublicHost, checkPublicUrl } from '@/lib/public-url';
 import { slackAuthorizeUrl } from '@/lib/slack-oauth';
-import { toLogError } from '@/lib/utils/error';
+import { errorMessage, toLogError } from '@/lib/utils/error';
 import { eraseUserData, summarize } from './erase';
 import {
   openedViewSchema,
@@ -765,7 +761,7 @@ bot.onModalSubmit(
         errors: { mcp_name: 'Use letters, digits, - or _ only.' },
       };
     }
-    const checkedUrl = checkMcpUrl(url);
+    const checkedUrl = checkPublicUrl(url);
     if (!checkedUrl.ok) {
       return { action: 'errors', errors: { mcp_url: checkedUrl.reason } };
     }
@@ -814,7 +810,7 @@ bot.onModalSubmit(
       };
     }
     const url = event.values.mcp_url?.trim();
-    const checkedUrl = checkMcpUrl(url);
+    const checkedUrl = checkPublicUrl(url);
     if (!checkedUrl.ok) {
       return { action: 'errors', errors: { mcp_url: checkedUrl.reason } };
     }
@@ -979,6 +975,20 @@ bot.onModalSubmit(
         action: 'errors',
         errors: { byok_base_url: 'A custom provider needs a base URL.' },
       };
+    }
+    // The key is validated (and later used) by a fetch from kyto's own network,
+    // and a rejection's body is shown back here — so the URL must be public.
+    if (baseUrl) {
+      const checked = checkPublicUrl(baseUrl);
+      const reason = checked.ok
+        ? await assertPublicHost(baseUrl).then(
+            () => undefined,
+            (error: unknown) => errorMessage(error)
+          )
+        : checked.reason;
+      if (reason) {
+        return { action: 'errors', errors: { byok_base_url: reason } };
+      }
     }
 
     const existing = (

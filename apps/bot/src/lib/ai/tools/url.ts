@@ -1,11 +1,15 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import type { ThreadHandle as Thread } from '@/harness';
+import type { ThreadHandle as Thread } from '@/harness/thread';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
+import { publicFetch } from '@/lib/public-url';
 import { errorMessage } from '@/lib/utils/error';
 
 const MAX_CONTENT_CHARS = 20_000;
+// Read at most this much of the body: the text is cut to MAX_CONTENT_CHARS
+// anyway, and an unbounded read of a multi-gigabyte URL would OOM the bot.
+const MAX_BODY_BYTES = 5 * 1024 * 1024;
 
 // Slack workspace/message/file URLs (e.g. foo.slack.com, files.slack.com) —
 // these require an authenticated session, so fetchUrl can't read them.
@@ -86,15 +90,19 @@ export async function fetchUrlText(url: string): Promise<{
       "That's a Slack link, which isn't publicly fetchable. Use Slack tools instead: readConversationHistory for a message/thread (the URL path is /archives/<CHANNEL>/p<TS> — the ts is the digits with a dot before the last 6), or getFile for a file link."
     );
   }
-  const response = await fetch(url, {
+  // publicFetch, not fetch: this runs on kyto's host, so a URL (or a redirect)
+  // pointing at the metadata endpoint or a neighbouring container would be
+  // read and printed back.
+  const response = await publicFetch(url, {
     headers: { 'User-Agent': 'kyto-slack-bot' },
     signal: AbortSignal.timeout(15_000),
   });
   if (!response.ok) {
+    await response.body?.cancel();
     throw new Error(`Fetch failed: ${response.status}`);
   }
   const contentType = response.headers.get('content-type') ?? '';
-  const raw = await response.text();
+  const raw = await readCapped(response);
   // Strip tags for HTML so the reader gets readable text, not markup.
   const text = contentType.includes('text/html')
     ? raw
@@ -110,6 +118,32 @@ export async function fetchUrlText(url: string): Promise<{
     contentType,
     truncated,
   };
+}
+
+async function readCapped(response: Response): Promise<string> {
+  if (!response.body) {
+    return '';
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  let bytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      bytes += value.byteLength;
+      text += decoder.decode(value, { stream: true });
+      if (bytes >= MAX_BODY_BYTES) {
+        break;
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  return text;
 }
 
 export function fetchUrlTool() {

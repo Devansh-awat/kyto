@@ -110,7 +110,7 @@ No Chat SDK / Pi / `@ai-sdk/harness*`.
 - **Agent loop** on `ai`'s `streamText` (`packages/ai/src/agent.ts` + `apps/bot/src/lib/agent/index.ts`), `MAX_STEPS` 1000 — the real bounds are the watchdog, the degenerate guard and `skip`. `renderStream` renders the plan.
 - **Deferred tools**: uncommon tools and every MCP tool hide behind `loadTools` (`prepareStep`/`activeTools`). Deferral is MEASURED — `[tools] turn summary` (`loaded`/`loadedUsed`/`loadedUnused`/`coreUsed`, `preloaded`/`preloadedUnused`). **Jev preloads** tool groups at turn start (`lib/ai/tool-preload.ts`, parallel with the anti-coding check, ≥0.5, 3s, failure preloads nothing, never removes anything).
 - **Per-user MCP servers** (`lib/ai/mcp.ts`, App Home), deferred, namespaced `mcp_<server>_<tool>`. Load-bearing:
-  - **The URL must be PUBLIC, checked at save AND at connect with a DNS resolve** (`mcp-url.ts`) — else `169.254.169.254` or a neighbouring container is readable from Slack.
+  - **The URL must be PUBLIC, checked at save AND at connect with a DNS resolve** (`lib/public-url.ts`, which also guards `fetchUrl` and BYOK base URLs) — else `169.254.169.254` or a neighbouring container is readable from Slack.
   - **Shareable with a channel or channel group**; the credential is not copied. The SPEAKER approves an `ask`; a STANDING rule stays with the credential's owner.
   - **Namespaces resolved deterministically** (`resolveTurnMcpServers`): own names win, a colliding share gets `_2`, order stable (else the prompt cache reshuffles).
   - Bare token → `Bearer <token>` at save; a failed listing is RECORDED (App Home shows it, doubles as a 60s negative cache); listing cache keyed by URL **and** credential.

@@ -3,11 +3,11 @@ import type { Logger } from '@repo/logging/logger';
 import { jsonSchema, type Tool, tool } from 'ai';
 import { z } from 'zod';
 import type { McpServerForTurn } from '@/lib/ai/mcp-scope';
-import { assertPublicMcpHost } from '@/lib/ai/mcp-url';
 import {
   redactSecrets as redactEmailSecrets,
   redactionNote,
 } from '@/lib/email/redact';
+import { assertPublicHost } from '@/lib/public-url';
 import {
   classifyMcpTool,
   type McpCategory,
@@ -72,7 +72,7 @@ const callResultSchema = z.looseObject({
   isError: z.boolean().optional(),
 });
 
-export interface McpToolInfo {
+interface McpToolInfo {
   annotations?: Record<string, unknown>;
   description?: string;
   inputSchema?: Record<string, unknown>;
@@ -129,7 +129,7 @@ export function forgetMcpFailure(serverId: string): void {
   failures.delete(failureKey(serverId));
 }
 
-export class McpConnection {
+class McpConnection {
   private readonly server: UserMcpServer;
   private sessionId: string | undefined;
   private initialized: Promise<void> | undefined;
@@ -148,8 +148,10 @@ export class McpConnection {
     // Re-checked at CONNECT time, not only when the entry was saved: a hostname
     // that resolved to a public address yesterday can resolve to 127.0.0.1
     // today, and this fetch runs from inside kyto's own network with the
-    // response printed back into a Slack thread.
-    await assertPublicMcpHost(this.server.url);
+    // response printed back into a Slack thread. Redirects are never followed
+    // (a 3xx fails as !ok): a public server could 307 to an internal one, and
+    // the hop would carry this server's credential with it.
+    await assertPublicHost(this.server.url);
     const response = await fetch(this.server.url, {
       body: JSON.stringify({
         jsonrpc: '2.0',
@@ -167,6 +169,7 @@ export class McpConnection {
         'mcp-protocol-version': PROTOCOL_VERSION,
       },
       method: 'POST',
+      redirect: 'manual',
       signal: AbortSignal.timeout(timeoutMs),
     });
     const session = response.headers.get('mcp-session-id');
@@ -254,6 +257,13 @@ export class McpConnection {
     if (!this.sessionId) {
       return;
     }
+    const isPublic = await assertPublicHost(this.server.url).then(
+      () => true,
+      () => false
+    );
+    if (!isPublic) {
+      return;
+    }
     await fetch(this.server.url, {
       headers: {
         ...(this.server.authorization
@@ -262,6 +272,7 @@ export class McpConnection {
         'mcp-session-id': this.sessionId,
       },
       method: 'DELETE',
+      redirect: 'manual',
       signal: AbortSignal.timeout(3000),
     }).catch(() => undefined);
   }
@@ -284,7 +295,10 @@ async function readSseResponse(
       if (done) {
         break;
       }
-      buffer += decoder.decode(value, { stream: true });
+      // SSE allows CRLF line endings; normalized so `\n\n` finds every event.
+      buffer += decoder
+        .decode(value, { stream: true })
+        .replaceAll('\r\n', '\n');
       for (const event of buffer.split('\n\n').slice(0, -1)) {
         const data = event
           .split('\n')
@@ -294,8 +308,18 @@ async function readSseResponse(
         if (!data) {
           continue;
         }
-        const parsed = JSON.parse(data) as { id?: unknown };
-        if (parsed.id === id) {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(data);
+        } catch {
+          continue; // a keepalive or other non-JSON event, not our reply
+        }
+        if (
+          typeof parsed === 'object' &&
+          parsed !== null &&
+          'id' in parsed &&
+          parsed.id === id
+        ) {
           return parsed;
         }
       }

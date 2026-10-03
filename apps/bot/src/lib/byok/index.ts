@@ -13,15 +13,9 @@ import {
 import { byokConfigured, decryptSecret } from '@/lib/byok/crypto';
 import { resolveChatgptRouting } from '@/lib/chatgpt';
 import logger from '@/lib/logger';
+import { assertPublicHost } from '@/lib/public-url';
 import { registerSecret } from '@/lib/redact';
 import { deepErrorText, errorStatus } from '@/lib/utils/error';
-
-export {
-  byokConfigured,
-  encryptSecret,
-  keyPreview,
-  SecretCryptoError,
-} from '@/lib/byok/crypto';
 
 /**
  * How the acting user's turn is routed. "Own" attempts are the ones the user
@@ -131,6 +125,23 @@ export async function resolveUserRouting(userId: string): Promise<UserRouting> {
     if (!attempt) {
       continue;
     }
+    // Re-checked every turn, not only at save: the name may since have been
+    // re-pointed at an address inside kyto's network.
+    if (credential.baseUrl) {
+      const blocked = await assertPublicHost(credential.baseUrl).then(
+        () => false,
+        (error: unknown) => {
+          logger.warn(
+            { err: error, provider: credential.provider, userId },
+            '[byok] base URL is not public, skipping the key'
+          );
+          return true;
+        }
+      );
+      if (blocked) {
+        continue;
+      }
+    }
     own.push(attempt);
     // Any key that opts in unlocks the service chain for the turn.
     serviceFallback ||= credential.serviceFallback;
@@ -232,6 +243,7 @@ export async function validateCredential(input: {
     return { message: 'Missing a base URL or model id.', valid: false };
   }
   try {
+    await assertPublicHost(attempt.baseURL);
     const response = await fetch(
       `${trimSlash(attempt.baseURL)}/chat/completions`,
       {
@@ -245,6 +257,7 @@ export async function validateCredential(input: {
           'Content-Type': 'application/json',
         },
         method: 'POST',
+        redirect: 'manual',
         signal: AbortSignal.timeout(VALIDATION_TIMEOUT_MS),
       }
     );

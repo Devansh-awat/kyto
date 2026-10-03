@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { checkMcpUrl, isPrivateAddress } from './mcp-url';
+import { checkPublicUrl, isPrivateAddress } from './public-url';
 
 describe('isPrivateAddress', () => {
   test('catches the ranges a bot can reach from inside its own network', () => {
@@ -17,6 +17,16 @@ describe('isPrivateAddress', () => {
       'fd00::1',
       'fe80::1',
       '::ffff:127.0.0.1',
+      // The URL parser rewrites the line above to this hex form before any
+      // check sees it — the spelling that used to get through.
+      '::ffff:7f00:1',
+      '::ffff:a9fe:a9fe',
+      '[::ffff:7f00:1]',
+      '::127.0.0.1',
+      '64:ff9b::7f00:1',
+      'fec0::1',
+      '2002:7f00:1::',
+      '2001:db8::1',
     ]) {
       expect(isPrivateAddress(address)).toBe(true);
     }
@@ -28,22 +38,24 @@ describe('isPrivateAddress', () => {
       '1.1.1.1',
       '172.32.0.1',
       '2606:4700::1',
+      '::ffff:8.8.8.8',
+      '2002:808:808::',
     ]) {
       expect(isPrivateAddress(address)).toBe(false);
     }
   });
 });
 
-describe('checkMcpUrl', () => {
+describe('checkPublicUrl', () => {
   test('accepts an ordinary public endpoint', () => {
-    const result = checkMcpUrl('https://mcp.example.com/v1');
+    const result = checkPublicUrl('https://mcp.example.com/v1');
     expect(result.ok).toBe(true);
   });
 
   test('refuses a non-http scheme', () => {
-    expect(checkMcpUrl('file:///etc/passwd').ok).toBe(false);
-    expect(checkMcpUrl('not a url').ok).toBe(false);
-    expect(checkMcpUrl(undefined).ok).toBe(false);
+    expect(checkPublicUrl('file:///etc/passwd').ok).toBe(false);
+    expect(checkPublicUrl('not a url').ok).toBe(false);
+    expect(checkPublicUrl(undefined).ok).toBe(false);
   });
 
   test('refuses kyto’s own network', () => {
@@ -55,8 +67,11 @@ describe('checkMcpUrl', () => {
       'http://postgres.internal/mcp',
       'http://db.local/mcp',
       'http://10.0.0.5/mcp',
+      'http://[::ffff:127.0.0.1]/',
+      'http://[::ffff:169.254.169.254]/',
+      'http://localhost./',
     ]) {
-      expect(checkMcpUrl(url).ok).toBe(false);
+      expect(checkPublicUrl(url).ok).toBe(false);
     }
   });
 });

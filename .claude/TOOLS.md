@@ -69,6 +69,7 @@ pointing at it and demotes the memories scoped to it.
 - **`writeFile`** takes `append`. One tool call can't carry a very large file (its args ride in the model's token budget), so the description tells the model to chunk a big write (`append:false` then `append:true`).
 - **`editFile` is exact-match and fails loudly.** `oldString` must match byte-for-byte and (without `replaceAll`) exactly once; a miss or an ambiguous match refuses instead of guessing. On a miss `noMatchReason` names WHICH of the three usual causes it was — CRLF vs LF, whitespace-only difference (checked by comparing both sides with runs of whitespace squashed), or a first line that does match so the divergence is later — because a bare "not found" sends the model into guess-and-retry.
 - **Post-edit diagnostics** (`lib/sandbox/diagnostics.ts`, wired into `writeFile` + `editFile`): after a successful write the file is checked and any errors ride back in the tool result as `diagnostics: {checker, output}`, so the model sees what it just broke instead of only finding out if it thinks to run something. Per-extension parse check first (`node --check`, `py_compile`, `bash -n`, JSON parse, `bun build` for TS/JS), then — for TS/JS only — the nearest `tsconfig.json` above the file plus the nearest `node_modules/.bin/tsc` above THAT, run as `tsc --noEmit -p`, output filtered to lines naming the edited file (an unrelated pre-existing failure is not this edit's diagnostic). **Two invariants**: a check that cannot run (missing interpreter → exit 127, `timeout` → 124, unknown extension, sandbox threw) reports NOTHING — a fabricated error is worse than none; and it is advisory, the write still succeeded. The project typecheck is debounced per sandbox+directory (`TYPECHECK_MIN_INTERVAL_MS`, 10s) so a burst of edits doesn't pay for it each time, and `append` writes are skipped entirely — a chunked file is incomplete by construction and would report "unexpected end of file" on every chunk but the last, which just teaches the model to ignore diagnostics. The module is deliberately free of `@/lib/logger` (and so of the validated env) so its tests can run the REAL checkers.
+- **`fetchUrl` goes through `publicFetch`** (`lib/public-url.ts`): host checked before the request and at every redirect hop, body read capped at 5 MB — it runs on kyto's host, so `169.254.169.254` or a neighbouring container would otherwise be read back. The same guard covers a BYOK base URL (save, validation, every turn).
 - **`fetchUrl` rejects Slack links** (`isSlackLink`): a `*.slack.com` URL 302s to a login wall, so it refuses and points to the Slack read tools (readConversationHistory for a message — path `/archives/<CHANNEL>/p<TS>`; getFile for a file).
 - **`getFile` sends the bot token ONLY to Slack hosts** (`isSlackFileHost`): the download carries `Authorization: Bearer SLACK_BOT_TOKEN`, so the resolved URL must be `files.slack.com`/`*.slack.com`/`slack-files.com` over https — any other URL is refused before the header is attached. Do NOT restore an arbitrary-URL passthrough: a prompt injection once used it to mail the bot token out in the auth header. Non-Slack URLs go through `fetchUrl` or the sandbox.
 - **Email** (`tools/email.ts`) runs **host-side** via the AgentMail SDK using `AGENTMAIL_API_KEY`; registered only when that key is set. Not in the sandbox.
@@ -226,10 +227,13 @@ touching the gate. The mechanics:
   tool array does not reshuffle between turns and cost the thread its cache.
   The multi-select values arrive on `ModalSubmitEvent.multiValues` (the flat
   `values` map only carries `value`/`selected_option.value`).
-- **URL safety** (`lib/ai/mcp-url.ts`, tested): `checkMcpUrl` on save (scheme,
-  blocked hostnames/suffixes, private literals) and `assertPublicMcpHost` before
+- **URL safety** (`lib/public-url.ts`, tested): `checkPublicUrl` on save (scheme,
+  blocked hostnames/suffixes, private literals) and `assertPublicHost` before
   every JSON-RPC call (DNS resolve, 60s memo). Both, not either — a save-time
-  check alone loses to a hostname repointed afterwards.
+  check alone loses to a hostname repointed afterwards. IPv6 is an ALLOWLIST
+  (global unicast `2000::/3` only, embedded v4 checked): the URL parser rewrites
+  `::ffff:127.0.0.1` to `::ffff:7f00:1`, which a regex denylist missed. MCP
+  never follows a redirect (the hop would carry the credential).
 
 ## Approvals (`lib/approvals/`)
 
