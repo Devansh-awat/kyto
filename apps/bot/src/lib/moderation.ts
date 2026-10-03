@@ -23,8 +23,8 @@ const MAX_INPUTS = 32;
 const checkedInstructions = new Set<string>();
 
 /**
- * Check one finished turn and, if anything is flagged, ping the owner in the
- * thread (a `!secret` turn: in his DM, no content). It never blocks, deletes
+ * Check one finished turn and, if anything is flagged, add the owner to the
+ * channel and ping him in the thread (a `!secret` turn: in his DM, no content). It never blocks, deletes
  * or bans — banning is the owner's, by hand (owner's call, 2026-10-02).
  */
 export async function moderateTurn({
@@ -97,6 +97,28 @@ export async function moderateTurn({
       { authorUserId, flags, threadId: thread.id },
       '[moderation] turn flagged'
     );
+    // Into the channel first, even one he left (owner's call, 2026-10-03): he
+    // can't act on a flag in a channel he can't see, and a private channel's
+    // ping doesn't notify a non-member. A DM or group DM can't take him.
+    const client = asUserAccount
+      ? thread.adapter.requireUserAccountClient()
+      : thread.adapter.webClient;
+    const { channel } = thread.adapter.decodeThreadId(thread.id);
+    const info = await client.conversations
+      .info({ channel })
+      .catch(() => undefined);
+    if (info?.channel && !(info.channel.is_im || info.channel.is_mpim)) {
+      await client.conversations
+        .invite({ channel, users: owner })
+        .catch((error: unknown) => {
+          if (!String(error).includes('already_in_channel')) {
+            logger.warn(
+              { ...toLogError(error), channel },
+              '[moderation] adding the owner failed'
+            );
+          }
+        });
+    }
     const lines = flags.map(
       (flag) => `• ${flag.source}: ${flag.categories.join(', ')}`
     );
