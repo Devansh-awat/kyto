@@ -242,7 +242,8 @@ export async function getDueReminders(now: Date): Promise<Reminder[]> {
 }
 
 /**
- * Advance a fired reminder to its next occurrence, incrementing its run count.
+ * Claim a due reminder by advancing it to its next occurrence (false: another
+ * instance, or an edit, got there first — don't fire it), incrementing its run count.
  * When a run cap is set and reached, the reminder is deactivated instead.
  *
  * The next run is computed from `nextRunAt` or from now, whichever is later. If
@@ -251,23 +252,30 @@ export async function getDueReminders(now: Date): Promise<Reminder[]> {
  * harmless repeat for a 'message' reminder, but a burst of sandbox boots or
  * model calls for a 'bash'/'agent' one.
  */
-export async function advanceReminder(reminder: Reminder): Promise<void> {
+export async function advanceReminder(reminder: Reminder): Promise<boolean> {
   const runCount = (reminder.runCount ?? 0) + 1;
   const capReached = reminder.maxRuns !== null && runCount >= reminder.maxRuns;
-  if (capReached) {
-    await db
-      .update(reminders)
-      .set({ active: false, runCount })
-      .where(eq(reminders.id, reminder.id));
-    return;
-  }
   const now = new Date();
   const base = reminder.nextRunAt > now ? reminder.nextRunAt : now;
-  const nextRunAt = computeNextRun(scheduleOf(reminder), base);
-  await db
+  // Conditional on the row still being the one that was read: this is the
+  // CLAIM. Two instances overlap during a deploy and both see the same due row;
+  // only the one whose update lands may fire it.
+  const claimed = await db
     .update(reminders)
-    .set({ nextRunAt, runCount })
-    .where(eq(reminders.id, reminder.id));
+    .set(
+      capReached
+        ? { active: false, runCount }
+        : { nextRunAt: computeNextRun(scheduleOf(reminder), base), runCount }
+    )
+    .where(
+      and(
+        eq(reminders.id, reminder.id),
+        eq(reminders.active, true),
+        eq(reminders.nextRunAt, reminder.nextRunAt)
+      )
+    )
+    .returning({ id: reminders.id });
+  return claimed.length > 0;
 }
 
 function scheduleOf(reminder: Reminder): ReminderSchedule {

@@ -237,6 +237,8 @@ export async function completeChatgptLink(input: {
     ...(tokens.id_token ? { idToken: tokens.id_token } : {}),
     refreshToken: tokens.refresh_token,
   };
+  registerSecret({ label: 'a ChatGPT token', value: stored.accessToken });
+  registerSecret({ label: 'a ChatGPT token', value: stored.refreshToken });
   try {
     await upsertChatgptAccount({
       accountLabel: label,
@@ -287,7 +289,24 @@ function pickDefaultModel(
 // Load, decrypt, and (if needed) refresh the tokens for a user. Persists a
 // refreshed token blob. Returns undefined if there's no account or it can't be
 // read/refreshed.
-async function loadFreshTokens(
+// One refresh per user at a time. Two turns at once (both kytos, a subagent)
+// both saw the same expiring token and both spent the refresh token; with
+// rotation the second got a 400 and marked a working login "expired".
+const refreshing = new Map<string, Promise<StoredTokens | undefined>>();
+
+function loadFreshTokens(userId: string): Promise<StoredTokens | undefined> {
+  const inFlight = refreshing.get(userId);
+  if (inFlight) {
+    return inFlight;
+  }
+  const load = readFreshTokens(userId).finally(() => {
+    refreshing.delete(userId);
+  });
+  refreshing.set(userId, load);
+  return load;
+}
+
+async function readFreshTokens(
   userId: string
 ): Promise<StoredTokens | undefined> {
   const row = await getChatgptAccountSecret(userId).catch(() => undefined);
@@ -334,10 +353,19 @@ async function loadFreshTokens(
       // OpenAI rotates the refresh token on some responses; keep the new one.
       refreshToken: refreshed.refresh_token ?? stored.refreshToken,
     };
+    registerSecret({ label: 'a ChatGPT token', value: next.accessToken });
+    registerSecret({ label: 'a ChatGPT token', value: next.refreshToken });
+    // Not swallowed silently: if a ROTATED refresh token is not saved, the
+    // next refresh presents the spent one and the login dies.
     await updateChatgptTokens({
       encryptedTokens: encryptSecret(JSON.stringify(next)),
       userId,
-    }).catch(() => undefined);
+    }).catch((error: unknown) => {
+      logger.error(
+        { err: deepErrorText(error), userId },
+        '[chatgpt] could not save refreshed tokens'
+      );
+    });
     return next;
   } catch (error) {
     const status = errorStatus(error);

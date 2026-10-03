@@ -4,8 +4,10 @@ import {
   deleteChatgptAccount,
   deleteNotebook,
   deletePrivateMemoriesByAuthor,
+  deleteSlackGrant,
   deleteSummariesForChannel,
   deleteThinkingForChannel,
+  deleteThreadLogsForChannel,
   deleteUserModelCredential,
   getUserCustomization,
   listMcpServers,
@@ -14,7 +16,7 @@ import {
   listUserModelCredentials,
   removeMcpServer,
 } from '@repo/db/queries';
-import { killSandbox } from '@repo/sandbox';
+import { isMissingSandboxError, killSandbox } from '@repo/sandbox';
 import { env } from '@/env';
 import { bot } from '@/lib/chat';
 import logger from '@/lib/logger';
@@ -58,6 +60,8 @@ export interface EraseResult {
     /** Whether kyto's notebook (lib/notebooks.ts) for the DM was deleted. */
     dmNotebook: boolean;
     sandboxes: number;
+    /** Sandboxes E2B would not kill this time; their rows are kept. */
+    sandboxesLeft: number;
     /** DM threads whose compacted history (lib/agent/compaction) was deleted. */
     summarizedThreads: number;
     thinkingThreads: number;
@@ -142,6 +146,7 @@ export async function eraseUserData({
   let thinkingThreads = 0;
   let summarizedThreads = 0;
   let sandboxes = 0;
+  let sandboxesLeft = 0;
   let dmNotebook = false;
   if (dmChannelId) {
     dmNotebook = await deleteNotebook(dmChannelId).catch((error: unknown) => {
@@ -172,7 +177,18 @@ export async function eraseUserData({
         return 0;
       }
     );
-    sandboxes = await eraseDmSandboxes({ dmChannelId, userId });
+    ({ failed: sandboxesLeft, killed: sandboxes } = await eraseDmSandboxes({
+      dmChannelId,
+      userId,
+    }));
+    // Every line logged during a turn in the DM, tool inputs and results
+    // included, is captured for 7 days (lib/thread-logs).
+    await deleteThreadLogsForChannel(dmChannelId).catch((error: unknown) => {
+      logger.error(
+        { err: errorMessage(error), userId },
+        '[erase] failed to delete captured thread logs'
+      );
+    });
   }
 
   const settings = includeSettings
@@ -203,6 +219,7 @@ export async function eraseUserData({
       ...settings,
       dmNotebook,
       memories: memoryCount,
+      sandboxesLeft,
       sandboxes,
       summarizedThreads,
       thinkingThreads,
@@ -221,7 +238,7 @@ async function eraseDmSandboxes({
 }: {
   dmChannelId: string;
   userId: string;
-}): Promise<number> {
+}): Promise<{ failed: number; killed: number }> {
   const rows = await listThreadSandboxesForChannel(dmChannelId).catch(
     (error: unknown) => {
       logger.error(
@@ -232,20 +249,32 @@ async function eraseDmSandboxes({
     }
   );
   let killed = 0;
+  let failed = 0;
   for (const row of rows) {
-    await killSandbox(row.sandboxId, env.E2B_API_KEY).catch(
+    // Already gone (expired, reaped) is the common case and not a failure. Any
+    // OTHER error leaves the row in place: dropping it would orphan a sandbox
+    // that still holds the user's files.
+    const gone = await killSandbox(row.sandboxId, env.E2B_API_KEY).then(
+      () => true,
       (error: unknown) => {
-        // Already gone (expired, reaped) is the common case and not a failure.
-        logger.info(
-          { err: errorMessage(error), sandboxId: row.sandboxId },
-          '[erase] sandbox was already gone'
+        if (isMissingSandboxError(error)) {
+          return true;
+        }
+        logger.error(
+          { err: errorMessage(error), sandboxId: row.sandboxId, userId },
+          '[erase] could not kill a sandbox; keeping its row'
         );
+        return false;
       }
     );
+    if (!gone) {
+      failed += 1;
+      continue;
+    }
     await clearThreadSandbox(row.threadId).catch(() => undefined);
     killed += 1;
   }
-  return killed;
+  return { failed, killed };
 }
 
 async function eraseSettings(userId: string): Promise<{
@@ -269,6 +298,8 @@ async function eraseSettings(userId: string): Promise<{
     }).catch(() => undefined);
   }
   await deleteChatgptAccount(userId).catch(() => undefined);
+  // Their own Slack token (search-as-them, !secret): "everything" includes it.
+  await deleteSlackGrant(userId).catch(() => undefined);
   return {
     chatgptAccount: true,
     customInstructions: true,
@@ -286,12 +317,17 @@ export function summarize(result: EraseResult): string {
     `• compacted history deleted for ${removed.summarizedThreads} of your DM ${removed.summarizedThreads === 1 ? 'thread' : 'threads'}`,
     `• ${removed.sandboxes} sandbox ${removed.sandboxes === 1 ? 'workspace' : 'workspaces'} destroyed`,
   ];
+  if (removed.sandboxesLeft > 0) {
+    lines.push(
+      `• ${removed.sandboxesLeft} sandbox ${removed.sandboxesLeft === 1 ? 'workspace' : 'workspaces'} could NOT be destroyed right now — run this again in a few minutes`
+    );
+  }
   if (removed.dmNotebook) {
     lines.push("• kyto's notes from your DM with it deleted");
   }
   if (removed.customInstructions) {
     lines.push(
-      `• custom instructions, ${removed.mcpServers} MCP ${removed.mcpServers === 1 ? 'server' : 'servers'}, ${removed.modelKeys} model ${removed.modelKeys === 1 ? 'key' : 'keys'} and any linked ChatGPT account removed`
+      `• custom instructions, ${removed.mcpServers} MCP ${removed.mcpServers === 1 ? 'server' : 'servers'}, ${removed.modelKeys} model ${removed.modelKeys === 1 ? 'key' : 'keys'} and any linked ChatGPT or Slack account removed`
     );
   }
   // Never let this read as a clean sweep when it isn't.

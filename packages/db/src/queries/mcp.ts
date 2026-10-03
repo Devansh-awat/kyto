@@ -187,21 +187,25 @@ export async function setMcpServerShares(input: {
   serverId: string;
   sharedBy: string;
 }): Promise<void> {
-  await db
-    .delete(mcpServerShares)
-    .where(eq(mcpServerShares.serverId, input.serverId));
-  const wanted = input.scopes.filter((scope) => scope.scopeId);
-  if (wanted.length === 0) {
-    return;
-  }
-  await db.insert(mcpServerShares).values(
-    wanted.map((scope) => ({
-      scopeId: scope.scopeId,
-      scopeKind: scope.scopeKind,
-      serverId: input.serverId,
-      sharedBy: input.sharedBy,
-    }))
-  );
+  // One transaction: a failed insert after the delete silently un-shared the
+  // server everywhere.
+  await db.transaction(async (tx) => {
+    await tx
+      .delete(mcpServerShares)
+      .where(eq(mcpServerShares.serverId, input.serverId));
+    const wanted = input.scopes.filter((scope) => scope.scopeId);
+    if (wanted.length === 0) {
+      return;
+    }
+    await tx.insert(mcpServerShares).values(
+      wanted.map((scope) => ({
+        scopeId: scope.scopeId,
+        scopeKind: scope.scopeKind,
+        serverId: input.serverId,
+        sharedBy: input.sharedBy,
+      }))
+    );
+  });
 }
 
 /** Drop every share pointing at a group, used when the group is deleted. */

@@ -109,12 +109,6 @@ async function fireReminder(bot: Chat, reminder: Reminder): Promise<void> {
       '[reminders] failed to post reminder'
     );
   }
-  await advanceReminder(reminder).catch((error: unknown) => {
-    logger.error(
-      { err: errorMessage(error), reminderId: reminder.id },
-      '[reminders] failed to advance reminder to its next run'
-    );
-  });
 }
 
 async function pollOnce(bot: Chat): Promise<void> {
@@ -125,7 +119,21 @@ async function pollOnce(bot: Chat): Promise<void> {
     ready.map(async (reminder) => {
       inFlight.add(reminder.id);
       try {
-        await fireReminder(bot, reminder);
+        // Claimed BEFORE it fires, not after: a 'bash'/'agent' fire takes
+        // minutes, and the other instance of a rolling deploy fired the same
+        // row in the meantime.
+        const claimed = await advanceReminder(reminder).catch(
+          (error: unknown) => {
+            logger.error(
+              { err: errorMessage(error), reminderId: reminder.id },
+              '[reminders] failed to claim reminder'
+            );
+            return false;
+          }
+        );
+        if (claimed) {
+          await fireReminder(bot, reminder);
+        }
       } finally {
         inFlight.delete(reminder.id);
       }
