@@ -121,19 +121,21 @@ function orphaned({
  * Take ownership of turns another instance left behind: interrupted by a
  * shutdown (fewer than `maxRestartResumes` times so far), or still `running`
  * with a stale heartbeat (a crash, never resumed before). Atomic — two
- * instances polling at once can never both get the same row. Only turns started
- * after `startedAfter`.
+ * instances polling at once can never both get the same row. Only turns last
+ * alive after `aliveAfter` — measured from the heartbeat, not the start: a turn
+ * that had run 39 minutes when a deploy cut it was dropped without a word
+ * (2026-10-03) because it STARTED outside the window.
  */
 export async function claimOrphanedTurns({
   instanceId,
   maxRestartResumes,
   staleBefore,
-  startedAfter,
+  aliveAfter,
 }: {
   instanceId: string;
   maxRestartResumes: number;
   staleBefore: Date;
-  startedAfter: Date;
+  aliveAfter: Date;
 }): Promise<InflightTurn[]> {
   return await db
     .update(inflightTurns)
@@ -145,7 +147,7 @@ export async function claimOrphanedTurns({
     })
     .where(
       and(
-        gt(inflightTurns.startedAt, startedAfter),
+        gt(inflightTurns.heartbeatAt, aliveAfter),
         or(
           and(
             eq(inflightTurns.status, 'interrupted'),
@@ -169,18 +171,18 @@ export async function claimAbandonedTurns({
   instanceId,
   maxRestartResumes,
   staleBefore,
-  startedAfter,
+  aliveAfter,
 }: {
   instanceId: string;
   maxRestartResumes: number;
   staleBefore: Date;
-  startedAfter: Date;
+  aliveAfter: Date;
 }): Promise<InflightTurn[]> {
   return await db
     .delete(inflightTurns)
     .where(
       and(
-        gt(inflightTurns.startedAt, startedAfter),
+        gt(inflightTurns.heartbeatAt, aliveAfter),
         or(
           and(
             eq(inflightTurns.status, 'interrupted'),
@@ -197,8 +199,8 @@ export async function claimAbandonedTurns({
 }
 
 /** Drop rows too old to resume, so the table cannot grow without bound. */
-export async function pruneInflightTurns(startedBefore: Date): Promise<void> {
+export async function pruneInflightTurns(aliveBefore: Date): Promise<void> {
   await db
     .delete(inflightTurns)
-    .where(lt(inflightTurns.startedAt, startedBefore));
+    .where(lt(inflightTurns.heartbeatAt, aliveBefore));
 }

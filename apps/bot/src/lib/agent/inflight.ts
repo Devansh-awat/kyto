@@ -30,8 +30,9 @@ const INSTANCE_ID = randomUUID();
 const HEARTBEAT_MS = 30_000;
 // Four missed heartbeats: that instance is gone, not just busy.
 const STALE_AFTER_MS = 2 * 60 * 1000;
-// Older than this, the conversation has moved on and a resumed answer would be
-// noise. Also what the table is pruned to.
+// Silent for longer than this (counted from the last heartbeat, so a long
+// OpenCode turn still qualifies), the conversation has moved on and a resumed
+// answer would be noise. Also what the table is pruned to.
 const RESUME_WINDOW_MS = 30 * 60 * 1000;
 // Clean shutdowns a turn survives. More than one, because deploys land in
 // bursts; bounded, because a turn can itself restart kyto (the Coolify MCP),
@@ -148,7 +149,7 @@ async function resumeOnce({
     instanceId: INSTANCE_ID,
     maxRestartResumes: MAX_RESTART_RESUMES,
     staleBefore: new Date(now - STALE_AFTER_MS),
-    startedAfter: new Date(now - RESUME_WINDOW_MS),
+    aliveAfter: new Date(now - RESUME_WINDOW_MS),
   };
   const claimed = await claimOrphanedTurns(window).catch((error: unknown) => {
     logger.warn(toLogError(error), '[inflight] claim failed');
