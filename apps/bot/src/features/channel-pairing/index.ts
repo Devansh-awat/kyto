@@ -80,22 +80,23 @@ async function invite({
   inviter: Identity;
   userId: string;
   who: string;
-}): Promise<void> {
+}): Promise<boolean> {
   try {
     await clientFor(inviter).conversations.invite({
       channel: channelId,
       users: userId,
     });
     logger.info({ channelId, inviter, who }, '[channel-pairing] invited');
+    return true;
   } catch (error) {
     const code = slackErrorSchema.safeParse(error).data?.data?.error;
-    if (code && HARMLESS.has(code)) {
-      return;
+    if (!(code && HARMLESS.has(code))) {
+      logger.warn(
+        { ...toLogError(error), channelId, code, inviter, who },
+        '[channel-pairing] invite failed'
+      );
     }
-    logger.warn(
-      { ...toLogError(error), channelId, code, inviter, who },
-      '[channel-pairing] invite failed'
-    );
+    return false;
   }
 }
 
@@ -120,14 +121,36 @@ async function pairChannel({
   if (otherId) {
     await invite({ channelId, inviter: joined, userId: otherId, who: other });
   }
-  if (channel.is_private && env.OWNER_USER_ID) {
-    await invite({
-      channelId,
-      inviter: joined,
-      userId: env.OWNER_USER_ID,
-      who: 'owner',
-    });
+  const owner = env.OWNER_USER_ID;
+  if (!(channel.is_private && owner)) {
+    return;
   }
+  const added = await invite({
+    channelId,
+    inviter: joined,
+    userId: owner,
+    who: 'owner',
+  });
+  if (!added) {
+    return;
+  }
+  // Said out loud, with a real ping (owner's call, 2026-10-03): Slack's own
+  // "joined by invitation from kyto" line is easy to miss, and a channel that
+  // finds the owner there unexplained reads it as kyto spying for him — it
+  // happened in #big-brains-ts. The members must know, and be able to remove
+  // him, so the pairing can't be used to slip someone in unnoticed.
+  await bot
+    .channel(channelId)
+    .post({
+      ...(joined === 'user' ? { fromUserAccount: true } : {}),
+      markdown: `Heads up: I added <@${owner}> (my owner) to this channel. I bring him into every private channel I'm added to, so he can see how I'm used here and step in if something goes wrong. If he shouldn't be here, feel free to remove him.`,
+    })
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), channelId },
+        '[channel-pairing] owner-added notice failed'
+      );
+    });
 }
 
 /** Record a join; pair the channel only if this identity had not been seen there. */
