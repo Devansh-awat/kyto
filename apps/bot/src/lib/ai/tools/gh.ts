@@ -12,7 +12,7 @@ import { githubAuthHint } from '@/lib/github/diagnose';
 import { GITHUB_LOGIN, guardGithubCommand } from '@/lib/github/guard';
 import { disarmFetchedRepos } from '@/lib/sandbox/git-safety';
 import { errorMessage } from '@/lib/utils/error';
-import { canEdit, editorsSchema, parseEditors } from './editors';
+import { editorsSchema, parseEditors } from './editors';
 
 // gh/git are pre-authenticated inside the sandbox WITHOUT any GitHub credential
 // being there: they are pointed at the host-side proxy (`lib/github-proxy`),
@@ -159,16 +159,11 @@ export function githubAccessTool({
           success: false,
         };
       }
-      if (
-        !canEdit({
-          editorUserIds: claim.editorUserIds ?? null,
-          isOwner,
-          ownerUserId: claim.ownerUserId,
-          userId,
-        })
-      ) {
+      // Not canEdit: an editor may WRITE to the repo, but releasing the claim
+      // (ungating it for everyone) or rewriting the editor list is the owner's.
+      if (!(isOwner || claim.ownerUserId === userId)) {
         return {
-          error: `"${claim.repo}" belongs to <@${claim.ownerUserId}>. Only they, their editors, and the bot owner can change who may write to it.`,
+          error: `"${claim.repo}" belongs to <@${claim.ownerUserId}>. Only they and the bot owner can change who may write to it.`,
           success: false,
         };
       }

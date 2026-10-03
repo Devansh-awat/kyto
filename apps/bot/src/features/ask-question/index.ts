@@ -198,16 +198,25 @@ bot.onModalSubmit(ASK_OTHER_MODAL, async (event) => {
     return;
   }
   // The modal has no message attached, so the state is re-read from the
-  // message it came from rather than trusted from the payload.
-  const history = await slack.webClient.conversations
-    .history({
+  // message it came from rather than trusted from the payload. The question is
+  // a thread REPLY, which conversations.history never returns — and without
+  // include_all_metadata the state isn't on it either — so every "Other"
+  // answer used to be dropped silently.
+  const threadTs = meta.threadId.split(':').at(2) ?? meta.messageId;
+  const replies = await slack.webClient.conversations
+    .replies({
       channel: meta.channel,
       inclusive: true,
+      include_all_metadata: true,
       latest: meta.messageId,
       limit: 1,
+      oldest: meta.messageId,
+      ts: threadTs,
     })
     .catch(() => undefined);
-  const raw = { message: history?.messages?.at(0) };
+  const raw = {
+    message: replies?.messages?.find((reply) => reply.ts === meta.messageId),
+  };
   const state = parseAskStateFromRaw(raw);
   if (!state) {
     return;

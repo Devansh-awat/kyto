@@ -552,15 +552,41 @@ export class KytoBot {
       multiValues[blockId] = modalStateValues(element);
     }
     const user = (body.user ?? {}) as { id?: string; username?: string };
-    const result = await handler({
-      callbackId: view.callback_id ?? '',
-      privateMetadata: view.private_metadata,
-      raw: body,
-      triggerId: body.trigger_id ? String(body.trigger_id) : undefined,
-      multiValues,
-      user: { userId: user.id ?? '', userName: user.username ?? user.id ?? '' },
-      values,
-    });
+    let result: Awaited<ReturnType<typeof handler>>;
+    try {
+      result = await handler({
+        callbackId: view.callback_id ?? '',
+        privateMetadata: view.private_metadata,
+        raw: body,
+        triggerId: body.trigger_id ? String(body.trigger_id) : undefined,
+        multiValues,
+        user: {
+          userId: user.id ?? '',
+          userName: user.username ?? user.id ?? '',
+        },
+        values,
+      });
+    } catch (error) {
+      // Never leave a submission un-acked: Slack shows "trouble connecting" and
+      // redelivers it. Keep the modal open with the failure on its first field
+      // rather than closing it as if the save had worked.
+      this.slackLogger.error(
+        { callbackId: view.callback_id, err: error },
+        '[harness] modal handler threw'
+      );
+      const firstBlock = Object.keys(values)[0];
+      await envelope.ack(
+        firstBlock
+          ? {
+              errors: {
+                [firstBlock]: 'Something went wrong saving this. Try again.',
+              },
+              response_action: 'errors',
+            }
+          : undefined
+      );
+      return;
+    }
     if (result?.action === 'errors') {
       await envelope.ack({ errors: result.errors, response_action: 'errors' });
       return;

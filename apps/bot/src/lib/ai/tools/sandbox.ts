@@ -340,9 +340,12 @@ export function editFileTool({
           `oldString matches ${occurrences} times in ${resolved}, so this edit is ambiguous and was NOT applied. Include more surrounding lines to make it unique, or set replaceAll:true if you really mean all ${occurrences}.`
         );
       }
+      // A replacer FUNCTION, not the string: as a string, `$&`, `$$`, `$'` and
+      // `` $` `` in newString are replacement patterns, which mangled shell and
+      // regex code (`$$` became `$`).
       const updated = replaceAll
-        ? text.replaceAll(oldString, newString)
-        : text.replace(oldString, newString);
+        ? text.replaceAll(oldString, () => newString)
+        : text.replace(oldString, () => newString);
       await context.session.writeBinaryFile({
         content: new TextEncoder().encode(updated),
         path: resolved,

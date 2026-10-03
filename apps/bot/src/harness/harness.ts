@@ -1,5 +1,6 @@
 import type { Logger } from '@repo/logging/logger';
 import { WebClient } from '@slack/web-api';
+import { isSlackFileHost } from './file-host';
 import { mrkdwnToMarkdown } from './markdown';
 import { filterOutbound, filterOutboundDeep } from './outbound';
 import type { Author, Message, MessageAttachment, StreamChunk } from './types';
@@ -28,6 +29,7 @@ interface RawSlackFile {
 }
 
 const USER_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const FAILED_USER_RETRY_MS = 60 * 1000;
 
 // Slack's own ceiling on `limit` for the conversations.* read methods. Asking
 // for more is not an error, it just silently returns fewer — so paging a long
@@ -161,6 +163,7 @@ export class SlackHarness {
     string,
     { at: number; author: Author }
   >();
+  private readonly userLookups = new Map<string, Promise<Author>>();
 
   constructor({
     botToken,
@@ -328,6 +331,11 @@ export class SlackHarness {
   }
 
   private async downloadFile(url: string): Promise<Uint8Array | null> {
+    // The URL comes from the event payload, but the bot token still goes only
+    // to a Slack host — the same rule getFile enforces.
+    if (!isSlackFileHost(url)) {
+      return null;
+    }
     const asBot = await this.fetchFile({
       headers: { Authorization: `Bearer ${this.webClient.token ?? ''}` },
       url,
@@ -367,11 +375,25 @@ export class SlackHarness {
     }
   }
 
-  async getUser(userId: string): Promise<Author> {
+  getUser(userId: string): Promise<Author> {
     const cached = this.userCache.get(userId);
     if (cached && Date.now() - cached.at < USER_CACHE_TTL_MS) {
-      return cached.author;
+      return Promise.resolve(cached.author);
     }
+    // One lookup per user at a time: hydrating a thread asks for the same
+    // author once per message, all at once, which hit users.info's rate limit.
+    const inFlight = this.userLookups.get(userId);
+    if (inFlight) {
+      return inFlight;
+    }
+    const lookup = this.lookUpUser(userId).finally(() => {
+      this.userLookups.delete(userId);
+    });
+    this.userLookups.set(userId, lookup);
+    return lookup;
+  }
+
+  private async lookUpUser(userId: string): Promise<Author> {
     let author: Author = {
       isMe: userId === this.botUserId || userId === this.userAccountId,
       userId,
@@ -395,6 +417,13 @@ export class SlackHarness {
       };
     } catch (error) {
       this.logger.warn({ err: error, userId }, '[harness] users.info failed');
+      // The fallback is NOT cached for the full TTL: it says isBot undefined,
+      // and a bot read as a human for six hours skips the bot-loop gates.
+      this.userCache.set(userId, {
+        at: Date.now() - USER_CACHE_TTL_MS + FAILED_USER_RETRY_MS,
+        author,
+      });
+      return author;
     }
     this.userCache.set(userId, { at: Date.now(), author });
     return author;

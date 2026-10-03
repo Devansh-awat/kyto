@@ -186,6 +186,10 @@ export function runSubagentTool({
           let close: (() => Promise<void>) | undefined;
           let ranTools = false;
           let report = '';
+          // Text from an attempt that then THREW: kept only as a last resort, so
+          // a half-written report isn't handed to the parent as a finished one
+          // while a fallback model could still write the real thing.
+          let cutOffReport = '';
           let lastError: unknown;
 
           try {
@@ -270,6 +274,10 @@ export function runSubagentTool({
                   );
                 } catch (error) {
                   lastError = error;
+                  if (report.trim()) {
+                    cutOffReport = report;
+                  }
+                  report = '';
                   yield card(
                     modelTaskId,
                     modelTitle,
@@ -301,7 +309,12 @@ export function runSubagentTool({
                   break;
                 }
               }
-              const finalReport = report.trim();
+              const finalReport =
+                report.trim() ||
+                (cutOffReport.trim()
+                  ? `${cutOffReport.trim()}\n\n(The subagent was cut off here; this report is incomplete.)`
+                  : '');
+              report = finalReport;
               if (finalReport || ranTools) {
                 yield card('response', 'Response', 'in_progress');
                 yield card(
