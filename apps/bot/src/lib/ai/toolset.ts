@@ -185,7 +185,7 @@ export async function buildTools({
    * leaves the tool unregistered for them.
    */
   escalation?: Escalation;
-  extendAttemptDeadline?: (extraMs: number) => void;
+  extendAttemptDeadline?: (extraMs: number) => () => void;
   getSandboxContext: () => SandboxContext;
   /**
    * The anti-coding check (lib/anti-coding), run BEFORE each code-capable tool

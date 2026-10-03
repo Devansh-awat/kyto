@@ -739,7 +739,7 @@ async function executeTurn(
     // Set per attempt (the watchdog is armed inside the loop below), but the
     // toolset is built ONCE up front — so the tools get a stable indirection
     // that always reaches the currently running attempt's watchdog.
-    let extendDeadline: ((extraMs: number) => void) | undefined;
+    let extendDeadline: ((extraMs: number) => () => void) | undefined;
     // Built once: the toolset does not depend on the chosen model. Its keys let
     // renderStream hide hallucinated calls to non-existent tools; activeTools
     // drives deferred-tool visibility via prepareStep.
@@ -767,7 +767,11 @@ async function executeTurn(
       asUserAccount,
       bot,
       escalation,
-      extendAttemptDeadline: (extraMs) => extendDeadline?.(extraMs),
+      extendAttemptDeadline: (extraMs) =>
+        extendDeadline?.(extraMs) ??
+        (() => {
+          // No attempt is running, so there is no hold to release.
+        }),
       getSandboxContext: () => sandboxContext,
       guardCodeTool: codingMonitor.guardTool,
       message: turnMessage,
@@ -924,17 +928,34 @@ async function executeTurn(
       // the length of a deliberate pause (up to an hour) on top of this.
       const attemptAbort = new AbortController();
       let attemptTimer: ReturnType<typeof setTimeout> | undefined;
+      // An extension is a HOLD the re-arms below cannot shorten. It used to be
+      // a one-off re-arm, so a parallel tool's result put the watchdog back to
+      // 5 minutes while an 18-minute OpenCode run was still going — the turn
+      // was aborted under it and ended silently.
+      const deadlineHolds = new Set<{ until: number }>();
       const armWatchdog = (ms: number) => {
         clearTimeout(attemptTimer);
+        let delay = ms;
+        for (const hold of deadlineHolds) {
+          delay = Math.max(delay, hold.until - Date.now());
+        }
         attemptTimer = setTimeout(() => {
-          attemptAbort.abort(new AttemptTimeoutError(ms));
-        }, ms);
+          attemptAbort.abort(new AttemptTimeoutError(delay));
+        }, delay);
       };
       armWatchdog(ATTEMPT_TIMEOUT_MS);
       abortCurrentAttempt = (reason) => attemptAbort.abort(reason);
       // Grant the full idle budget on TOP of the pause, so the model still has
-      // its normal working window once the wait is over.
-      extendDeadline = (extraMs) => armWatchdog(ATTEMPT_TIMEOUT_MS + extraMs);
+      // its normal working window once the wait is over. The returned release
+      // lets a tool that finishes early drop its hold.
+      extendDeadline = (extraMs) => {
+        const hold = { until: Date.now() + ATTEMPT_TIMEOUT_MS + extraMs };
+        deadlineHolds.add(hold);
+        armWatchdog(ATTEMPT_TIMEOUT_MS);
+        return () => {
+          deadlineHolds.delete(hold);
+        };
+      };
       // Per-ATTEMPT outcome (the turn-level flags above persist across attempts).
       // A continuation attempt inherits `producedText` from the interrupted one,
       // so "did THIS model answer?" has to be tracked separately or the fallback
@@ -1239,6 +1260,13 @@ async function executeTurn(
         // thought, and the old code called the turn "handled" and went quiet:
         // exactly the "kyto stopped in the middle" report. Raise it so the
         // fallback chain CONTINUES the turn on the next model.
+        // The watchdog's abort does not throw either: the stream just ends. A
+        // turn that had already said "On it" then counted as handled and went
+        // silent mid-task. Raise the timeout so it continues on the next model.
+        if (attemptAbort.signal.reason instanceof AttemptTimeoutError) {
+          throw attemptAbort.signal.reason;
+        }
+
         if (attemptStreamError && attemptFinishReason !== 'stop') {
           throw new StreamInterruptedError(
             `Model ${currentAttempt.model} died mid-task (${attemptStreamError.status ?? 'stream error'}): ${attemptStreamError.message}`,
