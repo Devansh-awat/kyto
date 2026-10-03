@@ -1,4 +1,4 @@
-import { and, eq, gt, lt, or, sql } from 'drizzle-orm';
+import { and, eq, gt, gte, lt, or, sql } from 'drizzle-orm';
 import { db } from '../client';
 import { type InflightTurn, inflightTurns } from '../schema';
 
@@ -29,6 +29,7 @@ export async function startInflightTurn({
       instanceId,
       messageId,
       resumed,
+      resumes: 0,
       startedAt: now,
       status: 'running',
       threadId,
@@ -41,6 +42,8 @@ export async function startInflightTurn({
         instanceId,
         messageId,
         resumed,
+        // A resumption keeps its count; a new turn in the thread starts over.
+        resumes: resumed ? sql`${inflightTurns.resumes}` : 0,
         startedAt: now,
         status: 'running',
         userId,
@@ -100,34 +103,92 @@ export async function markInstanceInterrupted(
     );
 }
 
+function orphaned({
+  instanceId,
+  staleBefore,
+}: {
+  instanceId: string;
+  staleBefore: Date;
+}) {
+  return and(
+    eq(inflightTurns.status, 'running'),
+    lt(inflightTurns.heartbeatAt, staleBefore),
+    sql`${inflightTurns.instanceId} <> ${instanceId}`
+  );
+}
+
 /**
  * Take ownership of turns another instance left behind: interrupted by a
- * shutdown, or still `running` with a stale heartbeat (a crash). Atomic — two
+ * shutdown (fewer than `maxRestartResumes` times so far), or still `running`
+ * with a stale heartbeat (a crash, never resumed before). Atomic — two
  * instances polling at once can never both get the same row. Only turns started
- * after `startedAfter`, and never one that was already resumed once.
+ * after `startedAfter`.
  */
 export async function claimOrphanedTurns({
   instanceId,
+  maxRestartResumes,
   staleBefore,
   startedAfter,
 }: {
   instanceId: string;
+  maxRestartResumes: number;
   staleBefore: Date;
   startedAfter: Date;
 }): Promise<InflightTurn[]> {
   return await db
     .update(inflightTurns)
-    .set({ instanceId, resumed: true, status: 'resuming' })
+    .set({
+      instanceId,
+      resumed: true,
+      resumes: sql`${inflightTurns.resumes} + 1`,
+      status: 'resuming',
+    })
     .where(
       and(
-        eq(inflightTurns.resumed, false),
         gt(inflightTurns.startedAt, startedAfter),
         or(
-          eq(inflightTurns.status, 'interrupted'),
           and(
-            eq(inflightTurns.status, 'running'),
-            lt(inflightTurns.heartbeatAt, staleBefore),
-            sql`${inflightTurns.instanceId} <> ${instanceId}`
+            eq(inflightTurns.status, 'interrupted'),
+            lt(inflightTurns.resumes, maxRestartResumes)
+          ),
+          and(
+            orphaned({ instanceId, staleBefore }),
+            eq(inflightTurns.resumes, 0)
+          )
+        )
+      )
+    )
+    .returning();
+}
+
+/**
+ * Remove the orphaned turns that will NOT be resumed (out of resumes), so the
+ * caller can say so in the thread instead of the turn just stopping.
+ */
+export async function claimAbandonedTurns({
+  instanceId,
+  maxRestartResumes,
+  staleBefore,
+  startedAfter,
+}: {
+  instanceId: string;
+  maxRestartResumes: number;
+  staleBefore: Date;
+  startedAfter: Date;
+}): Promise<InflightTurn[]> {
+  return await db
+    .delete(inflightTurns)
+    .where(
+      and(
+        gt(inflightTurns.startedAt, startedAfter),
+        or(
+          and(
+            eq(inflightTurns.status, 'interrupted'),
+            gte(inflightTurns.resumes, maxRestartResumes)
+          ),
+          and(
+            orphaned({ instanceId, staleBefore }),
+            gt(inflightTurns.resumes, 0)
           )
         )
       )

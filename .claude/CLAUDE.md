@@ -193,7 +193,7 @@ In `apps/bot/src/lib/ai/tools/`, registered in `lib/ai/toolset.ts`; `TOOLS.md` i
 - **Prompt caching**: nothing volatile in the system prompt; per-turn facts in the user message's tail; `stabilizeToolOrder` appends tools loaded mid-turn; one shared `prompt_cache_key` on Hack Club. Gemini needs `thought_signature` replay.
 - **Stall watchdog** `ATTEMPT_TIMEOUT_MS` (5m idle, re-armed on activity; aborts the attempt only). A truncated tool call is repaired.
 - **BYOK / Sign in with ChatGPT**: gated on `BYOK_ENCRYPTION_KEY` (AES-256-GCM); `packages/db` returns plaintext only via `listUserModelCredentialSecrets`/`getChatgptAccountSecret`; a key is never logged, prompted, put in a sandbox or `private_metadata`. **Model mode** per user: own first / kyto's only / kyto's with a switch to own on a coding flag. A spent ChatGPT quota is PARKED until reset.
-- **A turn a restart cut short is resumed** (`lib/agent/inflight.ts`, `inflight_turns`): SIGTERM marks rows `interrupted` BEFORE `stopAllTurns`; the new instance CLAIMS them atomically (or a >2 min stale heartbeat), once, within 30 min, never `!secret`.
+- **A turn a restart cut short is resumed** (`lib/agent/inflight.ts`, `inflight_turns`): SIGTERM marks rows `interrupted` BEFORE `stopAllTurns`; the new instance CLAIMS them atomically within 30 min, never `!secret`: a clean shutdown up to 3 times (`resumes`; deploys come in bursts, and a turn can restart kyto itself), a crash (>2 min stale heartbeat) once. Out of resumes, the thread is TOLD it stopped.
 - Every routing failure is in the container logs (Coolify, NOT `journalctl`); "Turn logging" in MODELS.md.
 
 ## Sandbox, memory, compaction
