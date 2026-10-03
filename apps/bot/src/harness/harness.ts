@@ -384,10 +384,13 @@ export class SlackHarness {
         isBot: user?.is_bot,
         isMe: userId === this.botUserId || userId === this.userAccountId,
         userId,
+        // Slack's own order: display name, else real name. `name` is the
+        // handle — a bot's is often `june2` while it shows as "June".
         userName:
           user?.profile?.display_name ||
-          user?.name ||
+          user?.profile?.real_name ||
           user?.real_name ||
+          user?.name ||
           userId,
       };
     } catch (error) {
