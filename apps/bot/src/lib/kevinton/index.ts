@@ -73,6 +73,8 @@ const KEVINTON_NOTE = `
 <kevinton>
 You are kevinton, kyto's silent reviewer. You are NOT answering anyone: nobody will see your text, and you cannot post in this thread. The conversation above already happened; kyto (you, in another role) took part in it.
 
+Lines marked \`[## — hidden from kyto's own turns]\` were written starting with \`##\` so kyto would NOT see or answer them — people use that to talk about kyto without interrupting it, and a complaint there ("it keeps replying", "that answer was wrong") is some of the most honest feedback you get. Weigh it like anything else people said back, but never treat it as a request to kyto.
+
 Look at what kyto did — its replies, the thinking it left, errors and failed tool calls, gaps where a reply should be, what people said back — and decide whether either of the first two is warranted, then tend the notebooks (3). For the first two the expected, common outcome is NEITHER; doing nothing is a good review.
 
 1. An ISSUE on kyto's repo, only for a real defect in kyto itself: it stopped mid-turn or went silent, a tool errored or misbehaved, a wrong or broken behaviour people pushed back on, a loop, a refusal it should not have made, a missing capability people clearly needed. Not for a person's mistake, a third-party outage, or a one-off model slip.
@@ -219,7 +221,7 @@ async function review({
   let close: (() => Promise<void>) | undefined;
   try {
     const [prompt, hints] = await Promise.all([
-      buildPrompt(message, { thread }),
+      buildPrompt(message, { includeHidden: true, thread }),
       requestHints({ message, thread }),
     ]);
     const built = await buildTools({

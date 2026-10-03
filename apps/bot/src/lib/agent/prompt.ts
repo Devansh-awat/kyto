@@ -104,6 +104,7 @@ export async function buildPrompt(
     asUserAccount = false,
     codeChannel = false,
     customizationPrompt,
+    includeHidden = false,
     ownModelsOnly = false,
     thread,
   }: {
@@ -112,6 +113,12 @@ export async function buildPrompt(
     /** In a code channel (lib/code-channels). Per channel, so volatile tail. */
     codeChannel?: boolean;
     customizationPrompt?: string;
+    /**
+     * Kevinton's review: replay `##` messages too, marked as hidden. People
+     * complain about kyto there precisely so it isn't interrupted, which is
+     * what a review needs to read. Never for a turn that answers anyone.
+     */
+    includeHidden?: boolean;
     /** Runs only on the asker's own model key, where the no-coding rule lifts. */
     ownModelsOnly?: boolean;
     thread?: Thread;
@@ -140,6 +147,7 @@ export async function buildPrompt(
 
   let history = '';
   let compacted = '';
+  let pulledInLater = false;
   if (thread) {
     // Focus mode: drop messages from non-focused users so kyto genuinely never
     // sees what other people said in a focused thread (not just declines to
@@ -176,14 +184,33 @@ export async function buildPrompt(
         contiguous = false;
       }
     }
+    const visible = (entry: Message) =>
+      entry.id !== message.id &&
+      isFocusAllowed(focusState, entry.author.userId, {
+        isMe: entry.author.isMe === true,
+      });
     const prior = (fetched?.messages ?? []).filter(
-      (entry): entry is Message =>
-        entry.id !== message.id &&
-        !isHiddenFromBot(entry) &&
-        isFocusAllowed(focusState, entry.author.userId, {
-          isMe: entry.author.isMe === true,
-        })
+      (entry) => visible(entry) && !isHiddenFromBot(entry)
     );
+    // A reply kyto wasn't pinged for, in a thread whose top didn't ping it
+    // either: someone pulled it in partway, so most of what follows is people
+    // talking to each other, and answering all of it was the complaint. Only
+    // when the root was actually read — unknown means the old behaviour.
+    const { threadTs } = slack.decodeThreadId(thread.id);
+    const selfId = asUserAccount ? slack.userAccountId : slack.botUserId;
+    const root = fetched?.messages.find((entry) => entry.id === threadTs);
+    pulledInLater =
+      !(
+        includeHidden ||
+        codeChannel ||
+        message.isMention ||
+        slack.isDM(thread.id)
+      ) &&
+      message.id !== threadTs &&
+      root !== undefined &&
+      selfId !== undefined &&
+      root.author.userId !== selfId &&
+      !(rawSlackText(root) ?? '').includes(`<@${selfId}>`);
     // Split AFTER filtering, so a focused thread's window is 100 messages kyto
     // may actually see rather than 100 slots partly spent on hidden ones.
     const start = replayWindowStart({
@@ -192,8 +219,22 @@ export async function buildPrompt(
       sizes: prior.map((entry) => (rawSlackText(entry) || entry.text).length),
       step: REPLAY_STEP,
     });
-    const replayed = prior.slice(start);
     const overflow = prior.slice(0, start);
+    // The `##` messages ride along only inside the replay window, never into
+    // `overflow`: the digest it feeds is shared with every later turn, and a
+    // hidden message folded into it would reach kyto after all.
+    const firstReplayed = prior[start]?.id;
+    const inWindow = new Set(prior.slice(start));
+    const replayed = includeHidden
+      ? (fetched?.messages ?? []).filter(
+          (entry) =>
+            visible(entry) &&
+            (isHiddenFromBot(entry)
+              ? overflow.length === 0 ||
+                (firstReplayed !== undefined && entry.id >= firstReplayed)
+              : inWindow.has(entry))
+        )
+      : prior.slice(start);
     if (!contiguous) {
       compacted = renderUnreadableBlock({
         summary: stored?.summary,
@@ -212,7 +253,13 @@ export async function buildPrompt(
       });
     }
     if (replayed.length > 0) {
-      const rendered = await Promise.all(replayed.map(renderMessage));
+      const rendered = await Promise.all(
+        replayed.map(async (entry) =>
+          isHiddenFromBot(entry)
+            ? `[## — hidden from kyto's own turns] ${await renderMessage(entry)}`
+            : renderMessage(entry)
+        )
+      );
       history = [
         'Conversation so far in this Slack thread (oldest first):',
         ...rendered,
@@ -251,6 +298,11 @@ export async function buildPrompt(
           // read a ping to its own id as one for "another kyto" and skipped.
           `In THIS turn you are kyto's user account, Slack id ${slack.userAccountId ?? 'unknown'}: a message mentioning <@${slack.userAccountId ?? 'unknown'}> is addressed to YOU, and the "your own Slack user id" line above (${slack.botUserId ?? 'unknown'}) is the kyto app, your other half, not you this turn.`,
           'You are answering as kyto\'s own Slack USER account — a regular member account named kyto, not the kyto app — so talk like a person in Slack does: short and casual, usually a line or two, no headings, no bullet lists unless the answer really is a list, no sign-offs or offers of more help. Nobody sees your plan, tool calls or reasoning, only what you write. On a longer task, one or two very short status lines before the answer are fine ("on it, give me a sec"); otherwise write only the answer. If the message isn\'t for you or needs no reply, call skip — nothing at all is shown. Your tools are the same as always.',
+        ]
+      : []),
+    ...(pulledInLater
+      ? [
+          "This message doesn't mention you, and this thread didn't start with you — someone brought you in partway, so you're seeing every reply here, most of them people talking to each other. Decide whether this one needs you: reply only if it's addressed to you, follows up on something you said, or asks something you should clearly answer. Otherwise call skip — nothing is posted.",
         ]
       : []),
     ...(codeChannel
