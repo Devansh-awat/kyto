@@ -24,7 +24,6 @@
   "dependencies": {
     "@ai-sdk/openai": "catalog:",
     "@ai-sdk/openai-compatible": "catalog:",
-    "@ai-sdk/provider-utils": "catalog:",
     "@openrouter/ai-sdk-provider": "catalog:",
     "@t3-oss/env-core": "catalog:",
     "ai": "catalog:",

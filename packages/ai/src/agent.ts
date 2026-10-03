@@ -359,9 +359,17 @@ export function streamAttempt({
  * an append. Returns null when the fragment can't be closed into valid JSON, in
  * which case the SDK's normal error path takes over.
  */
+// Only tools whose long field is CONTENT. A command tool cut off mid-argument
+// must not run the prefix that arrived: `rm -rf /work/old-proj` cut from
+// `…-proj/tmp`, or `gh repo delete foo` cut from `foo-bar`.
+const REPAIRABLE_TOOLS = new Set(['postMessage', 'writeFile']);
+
 const repairTruncatedToolCall: ToolCallRepairFunction<ToolSet> = ({
   toolCall,
 }) => {
+  if (!REPAIRABLE_TOOLS.has(toolCall.toolName)) {
+    return Promise.resolve(null);
+  }
   const closed = closeTruncatedJson(toolCall.input);
   return Promise.resolve(
     closed === null ? null : { ...toolCall, input: closed }
