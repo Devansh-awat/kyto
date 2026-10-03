@@ -51,6 +51,7 @@ function isPrivateIpv4(address: string): boolean {
 }
 
 const IPV6_GROUPS = 8;
+const BYTE = 256;
 
 /** The eight 16-bit groups of an address `isIP` already accepted as v6. */
 function ipv6Groups(address: string): number[] {
@@ -58,8 +59,10 @@ function ipv6Groups(address: string): number[] {
   // A dotted IPv4 tail (`::ffff:10.0.0.1`) is two more groups.
   const tail = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(value);
   if (tail) {
-    const [a, b, c, d] = tail.slice(1).map(Number);
-    value = `${value.slice(0, tail.index)}${(((a ?? 0) << 8) | (b ?? 0)).toString(16)}:${(((c ?? 0) << 8) | (d ?? 0)).toString(16)}`;
+    const [a = 0, b = 0, c = 0, d = 0] = tail.slice(1).map(Number);
+    const high = (a * BYTE + b).toString(16);
+    const low = (c * BYTE + d).toString(16);
+    value = `${value.slice(0, tail.index)}${high}:${low}`;
   }
   const [head = '', rest] = value.split('::');
   const left = head ? head.split(':') : [];
@@ -72,7 +75,12 @@ function ipv6Groups(address: string): number[] {
 }
 
 function ipv4FromGroups(high: number, low: number): string {
-  return [high >> 8, high & 0xff, low >> 8, low & 0xff].join('.');
+  return [
+    Math.floor(high / BYTE),
+    high % BYTE,
+    Math.floor(low / BYTE),
+    low % BYTE,
+  ].join('.');
 }
 
 // An ALLOWLIST, not a denylist: only global unicast (2000::/3) is public. The

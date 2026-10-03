@@ -1,8 +1,24 @@
 import { describe, expect, test } from 'bun:test';
-import { graphqlTarget, looksLikeNodeId } from './index';
+import {
+  graphqlTarget as classify,
+  looksLikeNodeId,
+  type NodeInfo,
+} from './graphql';
 
 const body = (query: string, variables: Record<string, unknown> = {}) =>
   JSON.stringify({ query, variables });
+
+const KNOWN: Record<string, NodeInfo> = {
+  I_kwDOVictim0001: { repo: 'victim/repo', type: 'Issue' },
+  R_kgDOKytoRepo01: { repo: 'kyto-agent/x', type: 'Repository' },
+  U_kgDOSomeUser01: { type: 'User' },
+};
+const graphqlTarget = (raw: string) =>
+  classify({
+    body: raw,
+    resolveNodes: (ids) =>
+      Promise.resolve(new Map(ids.map((id) => [id, KNOWN[id] ?? {}]))),
+  });
 
 describe('graphqlTarget', () => {
   test('a read is open', async () => {
@@ -70,6 +86,61 @@ describe('graphqlTarget', () => {
       )
     );
     expect(inline.repos).toEqual(['victim/repo']);
+  });
+
+  test('a node id inline in the query text is resolved', async () => {
+    const target = await graphqlTarget(
+      body(
+        'mutation { addComment(input: {subjectId: "I_kwDOVictim0001", body: "x"}) { clientMutationId } }',
+        { name: 'x', owner: 'kyto-agent' }
+      )
+    );
+    expect(target.repos).toEqual(['victim/repo']);
+  });
+
+  test('a node id under any key is resolved', async () => {
+    const target = await graphqlTarget(
+      body('mutation($input: X!) { a(input: $input) { b } }', {
+        input: { labelableThing: 'I_kwDOVictim0001' },
+      })
+    );
+    expect(target.repos).toEqual(['victim/repo']);
+  });
+
+  test('an id that resolves to no repo refuses, unless it is a person', async () => {
+    const unknown = await graphqlTarget(
+      body('mutation($input: X!) { a(input: $input) { b } }', {
+        input: {
+          repositoryId: 'R_kgDOKytoRepo01',
+          subjectId: 'I_kwDOUnknown999',
+        },
+      })
+    );
+    expect(unknown.understood).toBe(false);
+    const reviewers = await graphqlTarget(
+      body('mutation($input: X!) { a(input: $input) { b } }', {
+        input: {
+          repositoryId: 'R_kgDOKytoRepo01',
+          userIds: ['U_kgDOSomeUser01'],
+        },
+      })
+    );
+    expect(reviewers).toMatchObject({
+      repos: ['kyto-agent/x'],
+      understood: true,
+    });
+  });
+
+  test('a git object id is not a node', async () => {
+    const target = await graphqlTarget(
+      body('mutation($input: X!) { mergePullRequest(input: $input) { b } }', {
+        input: {
+          expectedHeadOid: 'a'.repeat(40),
+          repositoryId: 'R_kgDOKytoRepo01',
+        },
+      })
+    );
+    expect(target).toMatchObject({ repos: ['kyto-agent/x'], understood: true });
   });
 
   test('unparseable bodies refuse', async () => {
