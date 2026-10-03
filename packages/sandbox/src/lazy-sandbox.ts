@@ -180,6 +180,11 @@ export class LazySandbox {
         ...(this.sessionId ? { threadId: this.sessionId } : {}),
       },
       timeoutMs: config.timeoutMs,
+      // E2B's default is to KILL a sandbox whose timeout lapses, and two things
+      // let it lapse: a restart (the dying process never reaches `destroy()`)
+      // and a turn idle for longer than the timeout. Either wiped the thread's
+      // files; pausing keeps them for `connect()` to resume.
+      lifecycle: { onTimeout: 'pause' },
     });
     await sandbox.files.makeDir(config.workdir).catch(() => undefined);
     if (this.store && this.sessionId) {
@@ -284,7 +289,9 @@ export class LazySandbox {
   }): Promise<{ exitCode: number; stderr: string; stdout: string }> {
     abortSignal?.throwIfAborted();
     const sandbox = await this.ensure();
-    await sandbox.setTimeout(commandTimeoutMs());
+    // `connect`, not `setTimeout`: it also resumes a sandbox that auto-paused
+    // while this turn sat idle past the timeout.
+    await sandbox.connect({ timeoutMs: commandTimeoutMs() });
     // Aborting only drops E2B's stream; the command runs on. Sent on the
     // sandbox already held, never through ensure(), which would resume one
     // destroy() had just paused and leave it running.

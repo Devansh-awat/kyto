@@ -23,6 +23,10 @@ the same id — it auto-resumes in around half a second, with the same filesyste
 That is what makes a recurring `bash` reminder useful: write and test a script
 once, then schedule it, and every fire runs in the same box.
 
+A sandbox whose timeout lapses is **paused too**, not killed (E2B's default).
+A restart never reaches the pause at turn end, and a turn can sit idle past the
+timeout; both used to wipe the thread's files.
+
 - A **thread**, not a "conversation": every message roots its own thread, so a
   new top-level DM gets a new sandbox.
 - Persistence is opt-in through an injected `SandboxStore`, so
