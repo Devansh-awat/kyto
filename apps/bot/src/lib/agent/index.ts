@@ -420,6 +420,7 @@ async function executeTurn(
   const sandboxContext: SandboxContext = {
     session: sandboxSession,
     sessionWorkDir: sandboxSession.workDir,
+    suspendSlack: proxies.suspendSlack,
   };
   let closeTools: (() => Promise<void>) | undefined;
   let activeAttempt: ModelAttempt | undefined;

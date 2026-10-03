@@ -150,6 +150,12 @@ export class LazySandbox {
       await sandbox.setTimeout(commandTimeoutMs());
       return sandbox;
     } catch (error) {
+      // Only a sandbox E2B says is GONE is forgotten. A network blip or a 5xx
+      // used to be read the same way: the thread got a fresh, empty sandbox
+      // while the old one (and every file in it) was orphaned, still billing.
+      if (!isMissingSandboxError(error)) {
+        throw error;
+      }
       this.logger.info(
         { err: errorText(error), sandboxId },
         '[sandbox] remembered sandbox is gone; creating a fresh one'

@@ -10,6 +10,7 @@ import {
   revokeProxyToken,
   slackHelperInstall,
   slackProxyEnv,
+  suspendProxyToken,
 } from '@/lib/slack-proxy';
 
 // Everything a sandbox needs to reach the two host-side proxies, in one place
@@ -24,6 +25,8 @@ export interface SandboxProxies {
   /** Re-sent on EVERY command, so a resumed sandbox never uses a revoked token. */
   env: Record<string, string>;
   revoke(): void;
+  /** Turn the Slack proxy off until the returned function is called. */
+  suspendSlack(): () => void;
 }
 
 /**
@@ -46,7 +49,12 @@ export function openSandboxProxies({
   userId?: string;
 }): SandboxProxies {
   if (!env.SITES_ENABLED) {
-    return { bootstrapCommand: undefined, env: {}, revoke: () => undefined };
+    return {
+      bootstrapCommand: undefined,
+      env: {},
+      revoke: () => undefined,
+      suspendSlack: () => () => undefined,
+    };
   }
   const host = env.SITES_PUBLIC_HOST;
   const slackSecret = registerProxyToken();
@@ -63,5 +71,6 @@ export function openSandboxProxies({
       revokeProxyToken(slackSecret);
       revokeGithubProxyToken(githubSecret);
     },
+    suspendSlack: () => suspendProxyToken(slackSecret),
   };
 }

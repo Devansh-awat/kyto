@@ -38,7 +38,9 @@ const READ_ONLY_METHODS = new Set<string>([
 // Where the proxy is mounted on the public sites server.
 const SLACK_PROXY_PREFIX = '/_slackapi/';
 
-const PROXY_TOKEN_TTL_MS = 15 * 60 * 1000;
+// An hour, like the GitHub proxy's: a turn may run commands for 20 minutes
+// each, and a token that expired mid-turn turned `slack` into a silent 401.
+const PROXY_TOKEN_TTL_MS = 60 * 60 * 1000;
 
 // Per-turn secrets → expiry. In-memory only; a restart invalidates all (turns
 // don't survive restarts anyway).
@@ -54,7 +56,31 @@ export function registerProxyToken(): string {
 export function revokeProxyToken(secret: string | undefined): void {
   if (secret) {
     tokens.delete(secret);
+    suspended.delete(secret);
   }
+}
+
+// Tokens switched off for a while (an OpenCode run), with their expiry.
+const suspended = new Map<string, number>();
+
+/**
+ * Switch a token off until the returned function is called. A token revoked in
+ * the meantime (the turn ended) stays revoked.
+ */
+export function suspendProxyToken(secret: string): () => void {
+  const expiry = tokens.get(secret);
+  if (expiry === undefined) {
+    return () => undefined;
+  }
+  tokens.delete(secret);
+  suspended.set(secret, expiry);
+  return () => {
+    const kept = suspended.get(secret);
+    if (kept !== undefined) {
+      suspended.delete(secret);
+      tokens.set(secret, kept);
+    }
+  };
 }
 
 function isValidToken(secret: string | undefined): boolean {
@@ -99,7 +125,12 @@ export async function handleSlackProxy(
   if (!isValidToken(secret)) {
     return json({ error: 'unauthorized', ok: false }, 401);
   }
-  const method = decodeURIComponent(pathname.slice(SLACK_PROXY_PREFIX.length));
+  let method: string;
+  try {
+    method = decodeURIComponent(pathname.slice(SLACK_PROXY_PREFIX.length));
+  } catch {
+    return json({ error: 'invalid_method', ok: false }, 400);
+  }
   if (!READ_ONLY_METHODS.has(method)) {
     return json({ error: `method_not_allowed: ${method}`, ok: false }, 403);
   }

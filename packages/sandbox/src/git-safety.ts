@@ -94,61 +94,68 @@ const EXEC_SECTIONS = [
 // `[merge]` are mostly harmless (their exec keys are in EXEC_KEYS).
 const EXEC_SUBSECTIONS = ['diff', 'merge'];
 
+// `<section>.<any subsection>.<key>` names that run a command.
+const EXEC_SUBSECTION_KEYS = [
+  'remote.uploadpack',
+  'remote.receivepack',
+  'remote.vcs',
+  'submodule.update',
+];
+
 const SANITIZER = `
-import json, os, sys
+import json, os, subprocess, sys
 
 EXEC_KEYS = set(${JSON.stringify(EXEC_KEYS)})
 EXEC_SECTIONS = set(${JSON.stringify(EXEC_SECTIONS)})
 EXEC_SUBSECTIONS = set(${JSON.stringify(EXEC_SUBSECTIONS)})
+EXEC_SUBSECTION_KEYS = set(${JSON.stringify(EXEC_SUBSECTION_KEYS)})
 MAX_DIRS = 50000
 
 removed_hooks = 0
 removed_keys = []
 repos = []
 
+def is_exec_key(name):
+    parts = name.split('.')
+    section, variable = parts[0], parts[-1]
+    if section in EXEC_SECTIONS:
+        return True
+    if len(parts) == 2:
+        return name in EXEC_KEYS
+    return section in EXEC_SUBSECTIONS or (
+        section + '.' + variable in EXEC_SUBSECTION_KEYS
+    )
+
 def clean_config(path):
+    # git's OWN parser, not a hand-rolled one: config syntax has forms a line
+    # reader misses ('[core] hooksPath = x' on one line, '[filter.x]'), and a
+    # missed key runs on the next git command. Reading a config file with
+    # --file executes nothing.
     try:
-        with open(path, 'r', encoding='utf-8', errors='replace') as handle:
-            lines = handle.readlines()
-    except OSError:
+        listed = subprocess.run(
+            ['git', 'config', '--file', path, '--null', '--name-only', '--list'],
+            capture_output=True, timeout=20,
+        )
+    except (OSError, subprocess.TimeoutExpired):
         return
-    out = []
-    section = ''
-    subsection = False
-    drop_section = False
-    changed = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith('['):
-            head = stripped[1:].split(']')[0].strip()
-            parts = head.split(None, 1)
-            section = parts[0].strip('"').lower()
-            subsection = len(parts) > 1
-            drop_section = section in EXEC_SECTIONS or (
-                subsection and section in EXEC_SUBSECTIONS
-            )
-            if drop_section:
-                removed_keys.append(head)
-                changed = True
-                continue
-            out.append(line)
-            continue
-        if drop_section:
-            changed = True
-            continue
-        if '=' in stripped and not stripped.startswith('#') and not stripped.startswith(';'):
-            key = stripped.split('=', 1)[0].strip().lower()
-            if section + '.' + key in EXEC_KEYS:
-                removed_keys.append(section + '.' + key)
-                changed = True
-                continue
-        out.append(line)
-    if changed:
+    if listed.returncode != 0:
+        # Unparseable: git refuses to work in this repo too. Move it aside so
+        # nothing half-reads it.
         try:
-            with open(path, 'w', encoding='utf-8') as handle:
-                handle.writelines(out)
+            os.replace(path, path + '.kyto-disarmed')
+            removed_keys.append('(unparseable config)')
         except OSError:
             pass
+        return
+    names = [n.decode('utf-8', 'replace') for n in listed.stdout.split(b'\\0') if n]
+    for name in sorted(set(names)):
+        if not is_exec_key(name.lower()):
+            continue
+        subprocess.run(
+            ['git', 'config', '--file', path, '--unset-all', name],
+            capture_output=True, timeout=20,
+        )
+        removed_keys.append(name.lower())
 
 def clean_gitdir(gitdir):
     global removed_hooks
@@ -185,12 +192,15 @@ def resolve_gitfile(path):
 
 visited = 0
 for root in sys.argv[1:]:
-    if not os.path.isdir(root):
+    if not os.path.isdir(root) or visited > MAX_DIRS:
         continue
     for dirpath, dirnames, filenames in os.walk(root):
         visited += 1
         if visited > MAX_DIRS:
             break
+        # A big dependency tree would spend the whole budget before reaching
+        # the repo next to it.
+        dirnames[:] = [d for d in dirnames if d != 'node_modules']
         if os.path.basename(dirpath) == '.git' or (
             'HEAD' in filenames and 'config' in filenames and 'objects' in dirnames
         ):

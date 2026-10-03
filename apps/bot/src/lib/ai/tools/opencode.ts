@@ -114,6 +114,10 @@ export function opencodeTool({
       const releaseDeadline = extendAttemptDeadline?.(
         RUN_TIMEOUT_SECONDS * 1000 + WATCHDOG_GRACE_MS
       );
+      // The real Slack boundary for OpenCode (its providers may train on what
+      // it reads): the token is switched off host-side for the run. The PATH
+      // wrapper's `unset` alone left it readable in /proc/$PPID/environ.
+      const resumeSlack = context.suspendSlack?.();
       let result: { exitCode: number; stderr: string; stdout: string };
       try {
         // fd 9 is closed for setup and OpenCode: a dev server OpenCode leaves
@@ -131,6 +135,7 @@ export function opencodeTool({
           ].join('\n'),
         });
       } finally {
+        resumeSlack?.();
         releaseDeadline?.();
         // Best-effort: a leftover brief must not turn a finished run into an error.
         await Promise.resolve(

@@ -156,6 +156,7 @@ async function runAgent(
   const sandboxContext: SandboxContext = {
     session: sandboxSession,
     sessionWorkDir: sandboxSession.workDir,
+    suspendSlack: proxies.suspendSlack,
   };
 
   const { buildTools } = await import('@/lib/ai/toolset');

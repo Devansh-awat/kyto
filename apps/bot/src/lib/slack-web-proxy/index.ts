@@ -105,7 +105,14 @@ function secretValues(): string[] {
   for (const part of (sessionCookie() ?? '').split(';')) {
     const value = part.split('=').slice(1).join('=').trim();
     if (value.length > 8) {
-      values.push(value, decodeURIComponent(value));
+      values.push(value);
+      // A stray `%` in the cookie must not throw here: this runs on every
+      // response, so it would break the whole session.
+      try {
+        values.push(decodeURIComponent(value));
+      } catch {
+        // the raw value above is still scrubbed
+      }
     }
   }
   return values;
@@ -183,9 +190,14 @@ async function forward({
   }
   const query = withRealToken(url.search);
 
-  const apiMethod = path.startsWith('/api/')
-    ? decodeURIComponent(path.slice('/api/'.length).split('/')[0] ?? '')
-    : undefined;
+  let apiMethod: string | undefined;
+  try {
+    apiMethod = path.startsWith('/api/')
+      ? decodeURIComponent(path.slice('/api/'.length).split('/')[0] ?? '')
+      : undefined;
+  } catch {
+    return new Response('Malformed path', { status: 400 });
+  }
   if (
     (apiMethod !== undefined && !isSlackWebMethodAllowed(apiMethod)) ||
     (apiMethod === undefined && SIGN_OUT_PAGE.test(path))

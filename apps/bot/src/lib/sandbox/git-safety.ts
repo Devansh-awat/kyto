@@ -27,11 +27,12 @@ export async function disarmFetchedRepos({
   if (command !== undefined && !mayHaveFetchedRepo(command)) {
     return;
   }
-  const dirs = [context.sessionWorkDir];
-  if (
-    workingDirectory &&
-    !workingDirectory.startsWith(context.sessionWorkDir)
-  ) {
+  // /tmp too: an archive extracted there is as live as one in the workspace.
+  const dirs = [context.sessionWorkDir, '/tmp'];
+  const insideWorkspace =
+    workingDirectory === context.sessionWorkDir ||
+    workingDirectory?.startsWith(`${context.sessionWorkDir}/`);
+  if (workingDirectory && !insideWorkspace) {
     dirs.push(workingDirectory);
   }
   const result = await sanitizeGitRepos({

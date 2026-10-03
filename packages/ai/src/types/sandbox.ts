@@ -21,4 +21,10 @@ export interface SandboxContext {
     destroy(): PromiseLike<void>;
   };
   sessionWorkDir: string;
+  /**
+   * Cut the sandbox off from Slack until the returned function is called. The
+   * proxy token is in the environment of every process in the sandbox, so
+   * hiding it from one child is not a boundary — this revokes it host-side.
+   */
+  suspendSlack?: () => () => void;
 }
