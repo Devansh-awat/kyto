@@ -144,7 +144,7 @@ export function postMessageTool({
   authorUserId: string;
   bot: Chat;
   currentThreadId: string;
-  extendAttemptDeadline?: (extraMs: number) => void;
+  extendAttemptDeadline?: (extraMs: number) => () => void;
   isOwner: boolean;
 }) {
   const currentChannel = rawChannelOf(currentThreadId);

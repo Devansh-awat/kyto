@@ -191,7 +191,7 @@ export function sendAsUserTool({
   thread,
 }: {
   authorUserId: string;
-  extendAttemptDeadline?: (extraMs: number) => void;
+  extendAttemptDeadline?: (extraMs: number) => () => void;
   thread: Thread;
 }) {
   return tool({
@@ -341,7 +341,7 @@ export function editAsUserTool({
   thread,
 }: {
   authorUserId: string;
-  extendAttemptDeadline?: (extraMs: number) => void;
+  extendAttemptDeadline?: (extraMs: number) => () => void;
   thread: Thread;
 }) {
   return tool({

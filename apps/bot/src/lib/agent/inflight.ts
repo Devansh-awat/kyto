@@ -60,7 +60,7 @@ export function trackTurn({
   message: Message;
   resumed: boolean;
   threadId: string;
-}): () => Promise<void> {
+}): (options: { cutByShutdown: boolean }) => Promise<void> {
   const ids = { instanceId: INSTANCE_ID, threadId };
   startInflightTurn({
     ...ids,
@@ -74,9 +74,12 @@ export function trackTurn({
   const beat = setInterval(() => {
     heartbeatInflightTurn(ids).catch(() => undefined);
   }, HEARTBEAT_MS);
-  return async () => {
+  return async ({ cutByShutdown }) => {
     clearInterval(beat);
-    if (shuttingDown) {
+    // Only a turn the shutdown actually CUT stays resumable. One that finished
+    // on its own inside the shutdown window keeps no row — left `interrupted`,
+    // the next instance answered it a second time.
+    if (shuttingDown && cutByShutdown) {
       return;
     }
     await finishInflightTurn(ids).catch(() => undefined);
@@ -175,7 +178,15 @@ async function resumeOnce({
     }
   }
   for (const row of claimed) {
-    const message = await refetchMessage(row);
+    // A throw here (a users.info lookup failing while the message is rebuilt)
+    // would strand this row and every one after it: claimed, never run.
+    const message = await refetchMessage(row).catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), threadId: row.threadId },
+        '[inflight] could not rebuild the interrupted message'
+      );
+      return null;
+    });
     const thread = bot.thread(row.threadId);
     if (!message) {
       logger.info(
@@ -231,11 +242,15 @@ export function startResumingOrphanedTurns({
     if (shuttingDown) {
       return;
     }
-    resumeOnce({ bot, runTurn }).finally(() => {
-      if (Date.now() - started < POLL_FOR_MS) {
-        setTimeout(tick, POLL_EVERY_MS);
-      }
-    });
+    resumeOnce({ bot, runTurn })
+      .catch((error: unknown) => {
+        logger.warn(toLogError(error), '[inflight] resume pass failed');
+      })
+      .finally(() => {
+        if (Date.now() - started < POLL_FOR_MS) {
+          setTimeout(tick, POLL_EVERY_MS);
+        }
+      });
   };
   tick();
 }

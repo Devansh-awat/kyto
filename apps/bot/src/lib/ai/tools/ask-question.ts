@@ -32,7 +32,7 @@ export function askQuestionTool({
   extendAttemptDeadline,
   thread,
 }: {
-  extendAttemptDeadline?: (extraMs: number) => void;
+  extendAttemptDeadline?: (extraMs: number) => () => void;
   thread: Thread;
 }) {
   return tool({
@@ -113,7 +113,7 @@ export function askQuestionTool({
       // A deliberate pause, not a stall — tell the attempt watchdog, the same
       // way the `wait` tool and the confirm gate do, or a slow answer gets the
       // turn killed while it is doing exactly what it was asked to.
-      extendAttemptDeadline?.(ASK_WAIT_MS + 30_000);
+      const releaseDeadline = extendAttemptDeadline?.(ASK_WAIT_MS + 30_000);
 
       const answered = await Promise.race([
         waitForAnswers(id),
@@ -128,7 +128,7 @@ export function askQuestionTool({
             { once: true }
           );
         }),
-      ]);
+      ]).finally(() => releaseDeadline?.());
       abandonQuestion(id);
 
       if (!answered) {

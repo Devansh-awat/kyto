@@ -110,9 +110,10 @@ import type { AttemptFailure } from '@/types/attempts';
 // HackClub's shared budget is exhausted. Matches both shapes it has returned:
 // a 429 "Daily spending limit of $3 reached", and the upstream 403
 // "Key limit exceeded (daily limit)". Both live in the response BODY, not the
-// error message — see deepErrorText.
-const SPEND_LIMIT_PATTERN =
-  /spending limit|insufficient credits|daily limit|limit exceeded/i;
+// error message — see deepErrorText. NOT a bare "limit exceeded": an upstream
+// "Rate limit exceeded" 429 is transient, and matching it wrote the whole tier
+// off for 30 minutes for everyone (fallback-cache).
+const SPEND_LIMIT_PATTERN = /spending limit|insufficient credits|daily limit/i;
 
 // How many non-budget HackClub PROXY failures in a turn before we treat HackClub
 // as down and skip its remaining rungs. ONE is enough: every HackClub rung shares
@@ -325,7 +326,8 @@ async function executeTurn(
     {
       attachments: message.attachments.length,
       isOwner,
-      text: message.text,
+      // A `!secret` question must leave no trace, container logs included.
+      text: secret ? undefined : message.text,
       threadId,
       userId: message.author.userId,
     },
@@ -366,17 +368,24 @@ async function executeTurn(
   };
   const slot = turnSlot({ asUserAccount, threadId });
   setTurn({ threadId: slot, turn: activeTurn });
+  // Until the try below owns it, a setup failure must clear the slot itself —
+  // left set, every later message in the thread "interrupts" a turn that is not
+  // running and gets nothing but a ✅, until the next restart.
+  const failSetup = (error: unknown): never => {
+    clearTurn({ threadId: slot, turn: activeTurn });
+    throw error;
+  };
   // "kyto is thinking" is the app's assistant status — the user account shows
   // nothing until it speaks.
   if (!asUserAccount) {
-    await startThinking({ thread });
+    await startThinking({ thread }).catch(failSetup);
   }
   // Keep the channel name→id index fresh (30-min TTL, shared in-flight
   // refresh) so `#some-channel` in the reply becomes a real link. A no-op on
   // all but one turn in thirty minutes, and it swallows its own failures — a
   // stale index just leaves a name as plain text.
-  await ensureChannelIndex();
-  const hints = await requestHints({ thread, message });
+  await ensureChannelIndex().catch(failSetup);
+  const hints = await requestHints({ thread, message }).catch(failSetup);
 
   // Per-turn proxy secrets, revoked at turn end: the read-only Slack proxy (so
   // a script can query Slack without the bot token) and the GitHub proxy, which
@@ -402,7 +411,10 @@ async function executeTurn(
     env: proxies.env,
     logger,
     // The channel, in a code channel: its threads share one workspace.
-    sessionId: await sandboxKey(threadId),
+    sessionId: await sandboxKey(threadId).catch((error: unknown) => {
+      proxies.revoke();
+      return failSetup(error);
+    }),
     store: threadSandboxStore,
   });
   const sandboxContext: SandboxContext = {
@@ -459,12 +471,17 @@ async function executeTurn(
 
   // Hold this thread's sandbox for the whole turn, so a bash reminder firing on
   // the scheduler can't pause the sandbox out from under a running command.
-  const releaseSandbox = await acquireThreadSandbox(threadId);
+  const releaseSandbox = await acquireThreadSandbox(threadId).catch(
+    (error: unknown) => {
+      proxies.revoke();
+      return failSetup(error);
+    }
+  );
   // Recorded so a restart can pick this turn back up — here, right before the
   // try, so the finally below is guaranteed to end it. Not a `!secret` turn: its
   // question is already deleted, and resuming it would mean remembering it.
   const endTracking = secret
-    ? () => Promise.resolve()
+    ? (_: { cutByShutdown: boolean }) => Promise.resolve()
     : trackTurn({ asUserAccount, message, resumed, threadId });
 
   try {
@@ -560,6 +577,17 @@ async function executeTurn(
       );
       await reply?.flush({ thread });
       await cleanup();
+      // A `!secret` failure goes to the asker alone: a public "something broke"
+      // under a deleted question announces the exchange it was meant to hide.
+      if (secret) {
+        await thread
+          .postEphemeral(
+            message.author,
+            'Something went wrong answering that privately. Try again in a bit.'
+          )
+          .catch(() => undefined);
+        return;
+      }
       await thread
         .post(
           asUserAccount
@@ -579,7 +607,9 @@ async function executeTurn(
   } finally {
     // cleanup() (which pauses the sandbox) has already run on both paths above.
     releaseSandbox();
-    await endTracking();
+    await endTracking({
+      cutByShutdown: abortReasonOf(controller.signal) === 'shutdown',
+    });
     // Not for a `!secret` turn, which must leave nothing behind to review.
     if (!secret) {
       scheduleKevinton(threadId).catch(() => undefined);
@@ -1105,6 +1135,7 @@ async function executeTurn(
           // can split the plan on text→tool boundaries; onTextDelta only tracks
           // flags now — the actual posting happens in streamSegmented.
           emitText: true,
+          secret,
           knownTools,
           onSkip: () => {
             // A skip is a deliberate, successful "no reply".
@@ -1362,8 +1393,10 @@ async function executeTurn(
               attemptText = true;
               errorStage = 'after_text';
               streamedText = appendStreamedText(streamedText, text);
+              moderationReply += text;
             },
             results: gatheredResults,
+            secret,
             signal: AbortSignal.any([controller.signal, attemptAbort.signal]),
             system: systemPrompt({ hints }),
             task: messageText,
@@ -1400,7 +1433,9 @@ async function executeTurn(
                 producedText = true;
                 errorStage = 'after_text';
                 streamedText = appendStreamedText(streamedText, text);
+                moderationReply += text;
               },
+              secret,
               signal: AbortSignal.any([controller.signal, attemptAbort.signal]),
               streamedText,
               system: systemPrompt({ hints }),
@@ -1988,6 +2023,7 @@ async function* synthesizeFinalAnswer({
   knownTools,
   onText,
   results,
+  secret,
   signal,
   system,
   task,
@@ -1998,6 +2034,7 @@ async function* synthesizeFinalAnswer({
   knownTools: Set<string>;
   onText: (text: string) => void;
   results: GatheredResult[];
+  secret: boolean;
   signal: AbortSignal;
   system: string;
   task: string;
@@ -2024,6 +2061,7 @@ async function* synthesizeFinalAnswer({
       tools,
     });
     yield* renderStream({
+      secret,
       // Tools ARE on for this one, so a sentence claiming they are missing is
       // not merely unhelpful, it is false. Never let it reach the thread.
       dropToolComplaints: true,
@@ -2059,6 +2097,7 @@ async function* continueTruncatedReply({
   knownTools,
   onFinish,
   onText,
+  secret,
   signal,
   streamedText,
   system,
@@ -2070,6 +2109,7 @@ async function* continueTruncatedReply({
   knownTools: Set<string>;
   onFinish: (reason: string) => void;
   onText: (text: string) => void;
+  secret: boolean;
   signal: AbortSignal;
   streamedText: string;
   system: string;
@@ -2092,6 +2132,7 @@ async function* continueTruncatedReply({
       tools,
     });
     yield* renderStream({
+      secret,
       // Prose-only call: a sentence about missing tools cannot be a legitimate
       // answer here, so it never reaches the thread even if the model writes one.
       dropToolComplaints: true,

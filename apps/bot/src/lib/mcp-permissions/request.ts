@@ -201,7 +201,7 @@ export async function requestMcpPermission({
   abortSignal?: AbortSignal;
   approverUserId: string;
   args: unknown;
-  extendAttemptDeadline?: (extraMs: number) => void;
+  extendAttemptDeadline?: (extraMs: number) => () => void;
   gate: McpToolGate;
   thread: ThreadHandle;
 }): Promise<{ allowed: boolean; detail: string }> {
@@ -250,7 +250,9 @@ export async function requestMcpPermission({
 
   // Same deal as the confirm-post gate and the `wait` tool: tell the attempt
   // watchdog this pause is deliberate, so a slow decision doesn't kill the turn.
-  extendAttemptDeadline?.(MCP_PERMISSION_WAIT_MS + 30_000);
+  const releaseDeadline = extendAttemptDeadline?.(
+    MCP_PERMISSION_WAIT_MS + 30_000
+  );
 
   const outcome = await new Promise<McpPermissionOutcome | null>((resolve) => {
     let done = false;
@@ -276,7 +278,7 @@ export async function requestMcpPermission({
       abortSignal?.removeEventListener('abort', onAbort);
       finish(value);
     });
-  });
+  }).finally(() => releaseDeadline?.());
 
   if (!outcome) {
     return {

@@ -17,7 +17,7 @@ export function waitTool({
   getSandboxContext,
 }: {
   /** Push the attempt watchdog out by this many ms, so a long wait can't trip it. */
-  extendAttemptDeadline?: (extraMs: number) => void;
+  extendAttemptDeadline?: (extraMs: number) => () => void;
   getSandboxContext?: () => SandboxContext;
 }) {
   return tool({
@@ -43,7 +43,7 @@ export function waitTool({
       const ms = seconds * 1000;
       // The attempt watchdog would otherwise abort a wait longer than its own
       // timeout as a stall. Tell it this pause is deliberate.
-      extendAttemptDeadline?.(ms);
+      const releaseDeadline = extendAttemptDeadline?.(ms);
 
       const shouldPause =
         pauseSandbox === true && seconds >= PAUSE_WORTHWHILE_SECONDS;
@@ -65,6 +65,7 @@ export function waitTool({
           resolve();
         });
       });
+      releaseDeadline?.();
       const waitedSeconds = Math.round((Date.now() - start) / 1000);
 
       return {

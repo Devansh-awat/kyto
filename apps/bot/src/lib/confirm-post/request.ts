@@ -128,7 +128,7 @@ export async function requestPostConfirmation({
 }: {
   abortSignal?: AbortSignal;
   approverUserId: string;
-  extendAttemptDeadline?: (extraMs: number) => void;
+  extendAttemptDeadline?: (extraMs: number) => () => void;
   post: PendingPost;
   thread: ThreadHandle;
 }): Promise<ConfirmResult> {
@@ -152,7 +152,7 @@ export async function requestPostConfirmation({
 
   // Tell the attempt watchdog this deliberate pause isn't a stall (same as the
   // `wait` tool), so a slow decision doesn't get the turn killed mid-wait.
-  extendAttemptDeadline?.(CONFIRM_WAIT_MS + 30_000);
+  const releaseDeadline = extendAttemptDeadline?.(CONFIRM_WAIT_MS + 30_000);
 
   const outcome = await new Promise<ConfirmOutcome | null>((resolve) => {
     let done = false;
@@ -180,7 +180,7 @@ export async function requestPostConfirmation({
       abortSignal?.removeEventListener('abort', onAbort);
       finish(value);
     });
-  });
+  }).finally(() => releaseDeadline?.());
 
   return outcomeToResult(outcome, post, Boolean(abortSignal?.aborted));
 }

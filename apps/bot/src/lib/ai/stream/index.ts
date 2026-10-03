@@ -82,6 +82,7 @@ export async function* renderStream({
   onError,
   onFinish,
   onTally,
+  secret = false,
   stream,
 }: {
   /**
@@ -103,6 +104,8 @@ export async function* renderStream({
   dropToolComplaints?: boolean;
   /** Receives the attempt's tally once the stream ends (for the caller's log). */
   onTally?: (tally: StreamTally) => void;
+  /** A `!secret` turn: tool calls are logged by name only, never their I/O. */
+  secret?: boolean;
   // When true, reply text is ALSO yielded as plain strings (the message body),
   // not only routed through onTextDelta. The main turn keeps this off (its text
   // is posted as separate messages via createReply); the subagent turns it on so
@@ -345,7 +348,7 @@ export async function* renderStream({
           onToolActivity?.();
           logger.info(
             {
-              input: part.input,
+              input: secret ? undefined : part.input,
               toolCallId: part.toolCallId,
               toolName: part.toolName,
             },
@@ -396,8 +399,8 @@ export async function* renderStream({
           const input = toolInputs.get(part.toolCallId);
           logger.info(
             {
-              input,
-              output: part.output,
+              input: secret ? undefined : input,
+              output: secret ? undefined : part.output,
               toolCallId: part.toolCallId,
               toolName: part.toolName,
             },
