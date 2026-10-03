@@ -6,8 +6,9 @@ import { z } from 'zod';
 const TOOL_RESULT_CATEGORIES = /^sexual/;
 // Off everywhere (owner's call, 2026-10-03): in its first day every ping was
 // one of these on banter — "kick em" (from a channel) read as violence, "noob
-// bot" as harassment. The /threatening and /graphic sub-categories go too.
-const IGNORED_CATEGORIES = /^(violence|harassment)/;
+// bot" as harassment. Only the bare categories: `violence/graphic` and
+// `harassment/threatening` still alert.
+const IGNORED_CATEGORIES = new Set(['violence', 'harassment']);
 
 export const responseSchema = z.object({
   results: z.array(
@@ -52,7 +53,7 @@ export function flaggedItems({
       .filter(
         ([category, hit]) =>
           hit &&
-          !IGNORED_CATEGORIES.test(category) &&
+          !IGNORED_CATEGORIES.has(category) &&
           (item.source !== 'tool result' ||
             TOOL_RESULT_CATEGORIES.test(category))
       )

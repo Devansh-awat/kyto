@@ -24,14 +24,18 @@ describe('flaggedItems', () => {
     ]);
   });
 
-  test('violence and harassment never count, sub-categories included', () => {
+  test('bare violence and harassment never count; their sub-categories do', () => {
     expect(
       flaggedItems({
         items: [
           { source: 'message', text: 'kick em' },
           { source: 'reply', text: 'noob bot' },
+          { source: 'message', text: 'gore' },
+          { source: 'message', text: 'threat' },
         ],
         results: [
+          { categories: { violence: true }, flagged: true },
+          { categories: { harassment: true }, flagged: true },
           {
             categories: { violence: true, 'violence/graphic': true },
             flagged: true,
@@ -42,6 +46,9 @@ describe('flaggedItems', () => {
           },
         ],
       })
-    ).toEqual([]);
+    ).toEqual([
+      { categories: ['violence/graphic'], source: 'message' },
+      { categories: ['harassment/threatening'], source: 'message' },
+    ]);
   });
 });
