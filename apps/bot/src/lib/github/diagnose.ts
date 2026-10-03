@@ -1,18 +1,17 @@
 /**
  * Turn git/gh authentication failures into something the model can act on.
  *
- * kyto's GitHub credentials are brokered at the network egress layer, so from
- * inside the sandbox there is no token to inspect and no `gh auth status` that
- * means anything. When the brokered token is revoked or expired, every GitHub
- * command fails in a way that looks like something else entirely: a plain
- * `git clone` of a PUBLIC repo comes back with "could not read Username for
- * 'https://github.com'", because the proxy attaches a credential GitHub then
- * rejects, and git falls through to asking for one.
+ * kyto's GitHub credential lives on the host, behind the GitHub proxy
+ * (lib/github-proxy), so from inside the sandbox there is no token to inspect
+ * and no `gh auth status` that means anything. When the token is revoked or
+ * expired the proxy leaves it OFF, so public reads keep working anonymously and
+ * what fails is anything that needs auth — with messages ("could not read
+ * Username", "requires authentication") that read like the repo is private.
  *
  * That has already cost a turn: kyto read the message as evidence the repo was
  * private, went looking for other explanations, and reported an environment
- * fault. Naming the real cause — and the workaround that still works for public
- * repos — is the difference between a stuck turn and a useful one.
+ * fault. Naming the real cause is the difference between a stuck turn and a
+ * useful one.
  */
 
 // Deliberately excludes a bare `gh: Not Found` / HTTP 404. A missing repo and a
@@ -26,7 +25,7 @@ const AUTH_FAILURE =
 const TOUCHES_GITHUB = /github\.com|gh:\s|\bgh\b/i;
 
 const HINT =
-  "GitHub rejected kyto's brokered credentials. That token lives on the host, behind kyto's GitHub proxy, so nothing inside the sandbox can read, refresh, or replace it and `gh auth` commands won't help — it needs the bot owner to rotate GH_TOKEN. Note this does NOT mean the repo is private or missing: this failure looks identical for a public repo, because the rejected credential is attached before GitHub ever considers the request anonymous. To read a PUBLIC repo meanwhile, skip git auth entirely and download the tarball, e.g. `curl -sL https://codeload.github.com/OWNER/REPO/tar.gz/refs/heads/main | tar xz`. Tell whoever asked that the token needs rotating rather than retrying the same command.";
+  "GitHub refused this for lack of valid credentials. kyto's GitHub token lives on the host, behind kyto's GitHub proxy, so nothing inside the sandbox can read, refresh, or replace it and `gh auth` commands won't help. If this was a WRITE (push, PR, issue, comment), the token is most likely dead and needs the bot owner to rotate GH_TOKEN — tell whoever asked rather than retrying. Public reads still work without it (the proxy leaves a dead token off), so a failing READ more likely means the repo really is private or the name is wrong.";
 
 // A repo can refuse a pull request from kyto's account outright — GitHub answers
 // `GraphQL: <login> does not have the correct permissions to execute

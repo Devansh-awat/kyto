@@ -21,8 +21,8 @@ const MARKUP_LOG_MAX_LENGTH = 400;
 
 // Opt-in raw-stream dump for diagnosing the Thinking card (e.g. "N more steps"
 // showing where reasoning should be). Set KYTO_LOG_FULLSTREAM=1 and restart to
-// log every fullStream part's type + a text snippet to the journal, so a real
-// turn's parts can be read back (`journalctl -u kyto.service | grep fullStream`).
+// log every fullStream part's type + a text snippet, so a real turn's parts can
+// be read back from the container logs (`grep fullStream`).
 // Off by default — it is verbose and per-part.
 const LOG_FULLSTREAM = process.env.KYTO_LOG_FULLSTREAM === '1';
 const FULLSTREAM_SNIPPET_MAX = 240;

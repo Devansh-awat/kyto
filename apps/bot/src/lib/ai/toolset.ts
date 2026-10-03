@@ -135,13 +135,6 @@ export interface BuiltTools {
   tools: ToolSet;
 }
 
-/**
- * Build the turn's toolset. Core tools are always visible; uncommon tools
- * (browser, email, rare Slack ops) and the user's MCP tools are DEFERRED —
- * registered but hidden from the model until it calls `loadTools`, so their
- * schemas don't ride along in every prompt. `activeTools` feeds streamText's
- * prepareStep, which is what actually gates visibility per step.
- */
 // Every tool that can build, run or ship code — the ones the anti-coding check
 // judges before they run. Everything else (search, browse, email, Slack) is
 // general agent work and never waits on it. `deploySite` is not: hosting runs
@@ -162,6 +155,13 @@ const CODE_TOOLS = new Set([
   'writeFile',
 ]);
 
+/**
+ * Build the turn's toolset. Core tools are always visible; uncommon tools
+ * (browser, email, rare Slack ops) and the user's MCP tools are DEFERRED —
+ * registered but hidden from the model until it calls `loadTools`, so their
+ * schemas don't ride along in every prompt. `activeTools` feeds streamText's
+ * prepareStep, which is what actually gates visibility per step.
+ */
 export async function buildTools({
   asUserAccount = false,
   bot,
@@ -176,17 +176,18 @@ export async function buildTools({
 }: {
   bot: KytoBot;
   /**
-   * Push the running attempt's watchdog out. The `wait` tool calls it so a long
-   * deliberate pause is never mistaken for a stalled attempt. Absent for callers
-   * with no watchdog of their own (the subagent, reminders).
-   */
-  /**
    * The turn's escalation slot. The `upgradeModel` tool writes into it and the
    * agent loop reads it after the attempt ends. Absent for callers with no
    * fallback ladder of their own (the subagent, reminders), which is what
    * leaves the tool unregistered for them.
    */
   escalation?: Escalation;
+  /**
+   * Push the running attempt's watchdog out, so a long deliberate pause (`wait`,
+   * a confirm click, an `ask`) is never mistaken for a stall. Returns the
+   * release, for when the pause ends early. Absent for callers with no watchdog
+   * of their own (the subagent, reminders).
+   */
   extendAttemptDeadline?: (extraMs: number) => () => void;
   getSandboxContext: () => SandboxContext;
   /**
@@ -584,10 +585,8 @@ export async function buildTools({
           },
         }
       : {}),
-    // Removal is the owner's alone: every emoji kyto adds goes in under HIS
-    // account (Slack has no app-level API), and Slack only lets the adding
-    // account remove one — so an open version would let anyone delete anything
-    // kyto has ever added for anyone.
+    // Registration is the owner's alone: a skill is prompt text every turn
+    // loads.
     ...(isOwner
       ? {
           manageSkills: {
@@ -605,6 +604,10 @@ export async function buildTools({
           },
         }
       : {}),
+    // Removal is the owner's alone: every emoji kyto adds goes in under HIS
+    // account (Slack has no app-level API), and Slack only lets the adding
+    // account remove one — so an open version would let anyone delete anything
+    // kyto has ever added for anyone.
     ...(isOwner && emojiUploadConfigured()
       ? {
           removeEmoji: {
@@ -720,7 +723,7 @@ export async function buildTools({
   // have been a cached read. Which way that trade lands is an empirical
   // question nobody has data for, so every turn now records what was loaded,
   // what was actually CALLED, and what was loaded and then never used. Read it
-  // back with `journalctl -u kyto.service | grep '\[tools\] turn summary'`:
+  // back from the container logs (Coolify) with `grep '\[tools\] turn summary'`:
   // a deferred tool that is always loaded and always used should be promoted
   // into `core`; a core tool that never appears in `coreUsed` should be
   // deferred.

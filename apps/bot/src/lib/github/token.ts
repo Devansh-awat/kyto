@@ -4,24 +4,18 @@ import logger from '@/lib/logger';
 /**
  * Is kyto's GitHub token actually usable?
  *
- * This exists because of how the token is brokered. `githubNetwork` installs an
- * E2B egress rule that rewrites `Authorization` on EVERY outbound request to
- * github.com, so the sandbox can act as the token's identity without ever
- * holding it. The rule is unconditional, which means a DEAD token doesn't just
- * break authenticated work — it breaks anonymous work too. `git clone` of a
- * PUBLIC repo fails with "Invalid username or token", because a credential
- * GitHub rejects is attached before GitHub ever gets to consider the request
- * anonymous. A whole turn was spent concluding hackclub/stardance must be
- * private when it is public and a plain unauthenticated clone would have worked.
+ * The GitHub proxy (lib/github-proxy) attaches the token to requests it
+ * forwards. A DEAD token attached to a request doesn't just break authenticated
+ * work — it breaks anonymous work too: `git clone` of a PUBLIC repo fails with
+ * "Invalid username or token", because GitHub rejects the credential before it
+ * considers the request anonymous. A whole turn was once spent concluding a
+ * public repo must be private.
  *
- * So: ask GitHub once whether the token is any good, and only broker it if it
- * is. A rejected token is left out of the egress rules entirely, which costs
- * nothing that wasn't already broken (authenticated work fails either way) and
- * buys back every public read.
- *
- * The verdict is re-checked periodically so rotating GH_TOKEN doesn't need a
- * restart — though a given thread still only picks up the change on its NEXT
- * fresh sandbox, since egress rules are fixed at sandbox-create time.
+ * So: ask GitHub once whether the token is any good, and only attach it if it
+ * is. A rejected token is left off entirely, which costs nothing that wasn't
+ * already broken (authenticated work fails either way) and buys back every
+ * public read. The verdict is re-checked periodically, so rotating GH_TOKEN
+ * doesn't need a restart.
  */
 
 // How long a verdict is trusted. Short enough that a rotated token starts
@@ -80,10 +74,9 @@ async function askGithub(token: string): Promise<Verdict> {
 }
 
 /**
- * The GitHub token to broker into a sandbox's egress rules, or `undefined` when
- * there is none configured or the configured one is rejected. Passing
- * `undefined` to `LazySandbox` leaves the github.com rewrite rule off, so git
- * and `gh` reach GitHub unauthenticated — which is what makes public reads work.
+ * The GitHub token for the proxy to attach, or `undefined` when there is none
+ * configured or the configured one is rejected — then requests go to GitHub
+ * unauthenticated, which is what keeps public reads working.
  */
 export async function brokerableGithubToken(): Promise<string | undefined> {
   const token = env.GH_TOKEN;
