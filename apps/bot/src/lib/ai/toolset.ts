@@ -316,11 +316,18 @@ export async function buildTools({
     fetchMemory: fetchMemoryTool(memoryActor),
     editMemory: editMemoryTool(memoryActor),
     deleteMemory: deleteMemoryTool(memoryActor),
-    listThreads: listThreadsTool({ currentThreadId: thread.id }),
-    readConversationHistory: readConversationHistoryTool({
+    listThreads: listThreadsTool({
+      askerUserId: authorUserId,
       currentThreadId: thread.id,
     }),
-    getChannelInfo: getChannelInfoTool({ currentThreadId: thread.id }),
+    readConversationHistory: readConversationHistoryTool({
+      askerUserId: authorUserId,
+      currentThreadId: thread.id,
+    }),
+    getChannelInfo: getChannelInfoTool({
+      askerUserId: authorUserId,
+      currentThreadId: thread.id,
+    }),
     scheduleReminder: scheduleReminderTool({ message }),
     scheduleRecurringReminder: scheduleRecurringReminderTool({ message }),
     listReminders: listRemindersTool({ message }),
@@ -330,7 +337,11 @@ export async function buildTools({
     resumeReminder: resumeReminderTool({ message }),
     searchSlack: searchSlackTool({ message }),
     searchWeb: searchWebTool({ apiKey: env.EXA_API_KEY }),
-    summarizeThread: summarizeThreadTool({ bot, threadId: thread.id }),
+    summarizeThread: summarizeThreadTool({
+      askerUserId: authorUserId,
+      bot,
+      threadId: thread.id,
+    }),
     loadSkill: loadSkillTool({ skills: await listSkills() }),
     generateImage: generateImageTool({
       getSandboxContext,

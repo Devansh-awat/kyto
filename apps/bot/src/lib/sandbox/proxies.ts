@@ -57,7 +57,10 @@ export function openSandboxProxies({
     };
   }
   const host = env.SITES_PUBLIC_HOST;
-  const slackSecret = registerProxyToken();
+  const slackSecret = registerProxyToken({
+    channelId: threadId?.split(':')[1],
+    userId,
+  });
   const githubSecret = registerGithubProxyToken({ isOwner, threadId, userId });
   return {
     bootstrapCommand: [slackHelperInstall(), githubProxyGitConfig(host)].join(

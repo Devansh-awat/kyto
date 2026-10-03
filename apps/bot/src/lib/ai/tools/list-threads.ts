@@ -5,13 +5,15 @@ import { toChatSlackChannelId } from '@/lib/slack/ids';
 import { assertReadableChannel, joinChannel } from './utils';
 
 export function listThreadsTool({
+  askerUserId,
   currentThreadId,
 }: {
+  askerUserId: string;
   currentThreadId: string;
 }) {
   return tool({
     description:
-      'List recent Slack channel threads so you can pick a thread id before reading it. The current channel always works (even if private); other channels must be public.',
+      'List recent Slack channel threads so you can pick a thread id before reading it. The current channel always works (even if private); another PRIVATE channel only if the person asking is a member of it.',
     inputSchema: z.object({
       channelId: z.string(),
       cursor: z.string().optional(),
@@ -20,7 +22,10 @@ export function listThreadsTool({
     execute: async ({ channelId, cursor, limit }) => {
       const chatChannelId = toChatSlackChannelId(channelId);
 
-      await assertReadableChannel(chatChannelId, { currentThreadId });
+      await assertReadableChannel(chatChannelId, {
+        askerUserId,
+        currentThreadId,
+      });
 
       await joinChannel(chatChannelId);
 

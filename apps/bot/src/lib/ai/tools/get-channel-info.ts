@@ -7,8 +7,10 @@ import { assertReadableChannel } from './utils';
 const CHANNEL_ID = /^[CG][A-Z0-9]{6,}$/;
 
 export function getChannelInfoTool({
+  askerUserId,
   currentThreadId,
 }: {
+  askerUserId: string;
   currentThreadId: string;
 }) {
   return tool({
@@ -21,6 +23,7 @@ export function getChannelInfoTool({
       const chatChannelId = toChatSlackChannelId(channelId);
       try {
         const info = await assertReadableChannel(chatChannelId, {
+          askerUserId,
           currentThreadId,
         });
         return {

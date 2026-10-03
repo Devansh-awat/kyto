@@ -1,4 +1,8 @@
 import { bot, slack } from '@/lib/chat';
+import {
+  mayReadChannel,
+  PRIVATE_CHANNEL_REFUSAL,
+} from '@/lib/slack/channel-access';
 import { toRawSlackChannelId } from '@/lib/slack/ids';
 import { errorMessage } from '@/lib/utils/error';
 
@@ -16,9 +20,9 @@ const UNREACHABLE_CONVERSATION =
 
 export async function assertReadableChannel(
   chatChannelId: string,
-  options?: { currentThreadId?: string }
+  options: { askerUserId: string; currentThreadId?: string }
 ) {
-  const currentChannelId = options?.currentThreadId
+  const currentChannelId = options.currentThreadId
     ? slack.channelIdFromThreadId(options.currentThreadId)
     : undefined;
   const isCurrent = Boolean(
@@ -47,6 +51,15 @@ export async function assertReadableChannel(
   }
   if (metadata.isDM) {
     throw new Error(UNREACHABLE_CONVERSATION);
+  }
+  if (
+    !(await mayReadChannel({
+      askerUserId: options.askerUserId,
+      channelId: chatChannelId,
+      currentChannelId,
+    }))
+  ) {
+    throw new Error(PRIVATE_CHANNEL_REFUSAL);
   }
   // A Slack Connect channel is `external`, but it reads exactly like a normal
   // channel once kyto is a member of it — `conversations.history` works. Only

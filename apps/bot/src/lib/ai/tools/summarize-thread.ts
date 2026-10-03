@@ -6,9 +6,11 @@ import { slack } from '@/lib/chat';
 import { assertReadableChannel, joinChannel } from './utils';
 
 export function summarizeThreadTool({
+  askerUserId,
   bot,
   threadId,
 }: {
+  askerUserId: string;
   bot: Chat;
   threadId: string;
 }) {
@@ -24,7 +26,10 @@ export function summarizeThreadTool({
     execute: async (input) => {
       const targetThreadId = input.threadId ?? threadId;
       const channelId = slack.channelIdFromThreadId(targetThreadId);
-      await assertReadableChannel(channelId, { currentThreadId: threadId });
+      await assertReadableChannel(channelId, {
+        askerUserId,
+        currentThreadId: threadId,
+      });
       await joinChannel(channelId);
       const result = await bot
         .thread(targetThreadId)

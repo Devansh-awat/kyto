@@ -5,13 +5,15 @@ import { toChatSlackChannelId } from '@/lib/slack/ids';
 import { assertReadableChannel, joinChannel } from './utils';
 
 export function readConversationHistoryTool({
+  askerUserId,
   currentThreadId,
 }: {
+  askerUserId: string;
   currentThreadId: string;
 }) {
   return tool({
     description:
-      'Read channel history or thread replies. The current conversation is always readable; other channels must be public.',
+      'Read channel history or thread replies. The current conversation is always readable; another private channel or DM only if the person asking is a member of it.',
     inputSchema: z.object({
       channelId: z.string().optional(),
       threadId: z.string().optional(),
@@ -36,7 +38,10 @@ export function readConversationHistoryTool({
 
       const chatChannelId = toChatSlackChannelId(resolvedChannelId);
 
-      await assertReadableChannel(chatChannelId, { currentThreadId });
+      await assertReadableChannel(chatChannelId, {
+        askerUserId,
+        currentThreadId,
+      });
 
       await joinChannel(chatChannelId);
 

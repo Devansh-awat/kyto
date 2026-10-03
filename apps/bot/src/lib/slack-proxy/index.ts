@@ -1,6 +1,11 @@
 import { randomBytes } from 'node:crypto';
+import { z } from 'zod';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
+import {
+  mayReadChannel,
+  PRIVATE_CHANNEL_REFUSAL,
+} from '@/lib/slack/channel-access';
 
 // A host-side, READ-ONLY Slack proxy the sandbox can call so a script can batch
 // Slack reads (e.g. "who is in the most channels") without N LLM round-trips —
@@ -42,14 +47,32 @@ const SLACK_PROXY_PREFIX = '/_slackapi/';
 // each, and a token that expired mid-turn turned `slack` into a silent 401.
 const PROXY_TOKEN_TTL_MS = 60 * 60 * 1000;
 
-// Per-turn secrets → expiry. In-memory only; a restart invalidates all (turns
-// don't survive restarts anyway).
-const tokens = new Map<string, number>();
+interface ProxyToken {
+  /** The turn's own channel: always readable. */
+  channelId?: string;
+  expiry: number;
+  /** Whom reads are made for — the private-channel rule is checked against them. */
+  userId?: string;
+}
+
+// Per-turn secrets. In-memory only; a restart invalidates all (turns don't
+// survive restarts anyway).
+const tokens = new Map<string, ProxyToken>();
 
 /** Mint a per-turn proxy secret valid for the turn (bounded by a TTL). */
-export function registerProxyToken(): string {
+export function registerProxyToken({
+  channelId,
+  userId,
+}: {
+  channelId?: string;
+  userId?: string;
+}): string {
   const secret = randomBytes(24).toString('base64url');
-  tokens.set(secret, Date.now() + PROXY_TOKEN_TTL_MS);
+  tokens.set(secret, {
+    channelId,
+    expiry: Date.now() + PROXY_TOKEN_TTL_MS,
+    userId,
+  });
   return secret;
 }
 
@@ -60,20 +83,20 @@ export function revokeProxyToken(secret: string | undefined): void {
   }
 }
 
-// Tokens switched off for a while (an OpenCode run), with their expiry.
-const suspended = new Map<string, number>();
+// Tokens switched off for a while (an OpenCode run).
+const suspended = new Map<string, ProxyToken>();
 
 /**
  * Switch a token off until the returned function is called. A token revoked in
  * the meantime (the turn ended) stays revoked.
  */
 export function suspendProxyToken(secret: string): () => void {
-  const expiry = tokens.get(secret);
-  if (expiry === undefined) {
+  const token = tokens.get(secret);
+  if (token === undefined) {
     return () => undefined;
   }
   tokens.delete(secret);
-  suspended.set(secret, expiry);
+  suspended.set(secret, token);
   return () => {
     const kept = suspended.get(secret);
     if (kept !== undefined) {
@@ -83,19 +106,52 @@ export function suspendProxyToken(secret: string): () => void {
   };
 }
 
-function isValidToken(secret: string | undefined): boolean {
+function liveToken(secret: string | undefined): ProxyToken | undefined {
   if (!secret) {
-    return false;
+    return;
   }
-  const expiry = tokens.get(secret);
-  if (!expiry) {
-    return false;
+  const token = tokens.get(secret);
+  if (!token) {
+    return;
   }
-  if (Date.now() > expiry) {
+  if (Date.now() > token.expiry) {
     tokens.delete(secret);
-    return false;
+    return;
   }
-  return true;
+  return token;
+}
+
+// Methods whose result lists conversations or items from many conversations:
+// entries the requester may not read are dropped from the answer.
+const LISTING_METHODS = new Set(['conversations.list', 'users.conversations']);
+
+const conversationSchema = z.looseObject({ id: z.string().optional() });
+const reactionItemSchema = z.looseObject({ channel: z.string().optional() });
+
+async function readableOnly<T extends { channel?: string; id?: string }>({
+  entries,
+  key,
+  token,
+}: {
+  entries: T[];
+  key: 'channel' | 'id';
+  token: ProxyToken;
+}): Promise<T[]> {
+  const kept: T[] = [];
+  for (const entry of entries) {
+    const channelId = entry[key];
+    if (
+      channelId &&
+      (await mayReadChannel({
+        askerUserId: token.userId,
+        channelId,
+        currentChannelId: token.channelId,
+      }))
+    ) {
+      kept.push(entry);
+    }
+  }
+  return kept;
 }
 
 function json(body: unknown, status: number): Response {
@@ -122,7 +178,8 @@ export async function handleSlackProxy(
   }
   const auth = request.headers.get('authorization') ?? '';
   const secret = auth.replace(/^Bearer\s+/i, '').trim();
-  if (!isValidToken(secret)) {
+  const token = liveToken(secret);
+  if (!token) {
     return json({ error: 'unauthorized', ok: false }, 401);
   }
   let method: string;
@@ -143,8 +200,38 @@ export async function handleSlackProxy(
       return json({ error: 'invalid_json_body', ok: false }, 400);
     }
   }
+  // The same rule the read tools apply: a private channel or DM other than the
+  // turn's own is readable only for a member of it.
+  const target = args.channel ?? args.channel_id;
+  if (
+    typeof target === 'string' &&
+    !(await mayReadChannel({
+      askerUserId: token.userId,
+      channelId: target,
+      currentChannelId: token.channelId,
+    }))
+  ) {
+    return json({ error: PRIVATE_CHANNEL_REFUSAL, ok: false }, 403);
+  }
   try {
-    const result = await slack.webClient.apiCall(method, args);
+    const result = z
+      .looseObject({ channels: z.unknown(), items: z.unknown() })
+      .partial()
+      .parse(await slack.webClient.apiCall(method, args));
+    if (LISTING_METHODS.has(method) && Array.isArray(result.channels)) {
+      result.channels = await readableOnly({
+        entries: z.array(conversationSchema).parse(result.channels),
+        key: 'id',
+        token,
+      });
+    }
+    if (method === 'reactions.list' && Array.isArray(result.items)) {
+      result.items = await readableOnly({
+        entries: z.array(reactionItemSchema).parse(result.items),
+        key: 'channel',
+        token,
+      });
+    }
     return json(result, 200);
   } catch (error) {
     logger.warn({ err: error, method }, '[slack-proxy] call failed');
