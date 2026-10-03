@@ -4,7 +4,7 @@ import nodePath from 'node:path';
 import { promisify } from 'node:util';
 import { env } from '@/env';
 import { handleDashboard } from '@/lib/dashboard';
-import { ensureEmbedAssets } from '@/lib/embeds';
+import { ensureEmbedAssets, LIVE_EMBED_PREFIX } from '@/lib/embeds';
 import { handleGithubProxy } from '@/lib/github-proxy';
 import logger from '@/lib/logger';
 import {
@@ -45,6 +45,27 @@ const FRAMEABLE_HEADERS: Record<string, string> = {
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
 };
+
+// Every hosted site and embed shares this origin with the owner's dashboard, so
+// a page's script could fetch /_dashboard (the session cookie rides along on a
+// same-origin request), read its CSRF token and post as the owner. `sandbox`
+// without allow-same-origin gives the page an opaque origin: its requests to
+// this host are cross-site, the SameSite=Strict cookie stays home, and a popup
+// it opens inherits the sandbox. The cost is that pages lose localStorage and
+// cookies of their own. CORS is opened on these (public) files because an
+// opaque-origin page loads even this host's module scripts and fonts as
+// cross-origin.
+const USER_CONTENT_HEADERS: Record<string, string> = {
+  'Access-Control-Allow-Origin': '*',
+  'Content-Security-Policy':
+    'sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads',
+};
+
+// kyto's own live-view frame pages (lib/browser/live-view-post), the one embed
+// kind exempt from the sandbox: they frame noVNC, which reads localStorage
+// without a guard and dies in an opaque origin. The embed tool refuses this
+// prefix, so nobody else can publish a page that lands here.
+const KYTO_LIVE_EMBED_PREFIX = `/${EMBED_SITE_NAME}/${LIVE_EMBED_PREFIX}`;
 
 async function ensureSelfSignedCert(): Promise<{ cert: string; key: string }> {
   const tlsDir = nodePath.join(sitesRoot(), '.tls');
@@ -210,7 +231,12 @@ export async function startSitesServer(): Promise<void> {
         // clickjacking target.
         const framed = pathname.startsWith(`/${EMBED_SITE_NAME}/`);
         return new Response(Bun.file(filePath), {
-          headers: framed ? FRAMEABLE_HEADERS : SECURITY_HEADERS,
+          headers: {
+            ...(framed ? FRAMEABLE_HEADERS : SECURITY_HEADERS),
+            ...(pathname.startsWith(KYTO_LIVE_EMBED_PREFIX)
+              ? {}
+              : USER_CONTENT_HEADERS),
+          },
         });
       },
       port: env.SITES_PORT,

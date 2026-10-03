@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { ThreadHandle } from '@/harness/thread';
-import { publishEmbed, thumbnailUrl } from '@/lib/embeds';
+import { LIVE_EMBED_PREFIX, publishEmbed, thumbnailUrl } from '@/lib/embeds';
 
 // The live view, playing INSIDE the Slack message (owner's ask, 2026-10-02:
 // "like whiteboards can it not render in slack?"). Slack's video block frames
@@ -46,7 +46,7 @@ export async function postLiveView({
   url: string;
 }): Promise<void> {
   // Random: the page carries the view's password, exactly as the link does.
-  const id = `live-${randomBytes(9).toString('hex')}`;
+  const id = `${LIVE_EMBED_PREFIX}${randomBytes(9).toString('hex')}`;
   const pageUrl = await publishEmbed({ html: framePage({ title, url }), id });
   const markdown = `_${title}: [open the view](${url}) (watch-only, ends when this reply does)_`;
   await thread

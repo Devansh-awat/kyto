@@ -40,6 +40,9 @@ const THUMBNAIL_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="1280" heig
 /** Slug shape for one embed. Same DNS-label rule the site names use. */
 const EMBED_ID = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
+/** Ids kyto's own live-view pages use; reserved (see lib/sites/server.ts). */
+export const LIVE_EMBED_PREFIX = 'live-';
+
 export function isValidEmbedId(id: string): boolean {
   return EMBED_ID.test(id);
 }

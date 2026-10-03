@@ -5,6 +5,7 @@ import {
   deleteEmbed,
   embedUrl,
   isValidEmbedId,
+  LIVE_EMBED_PREFIX,
   MAX_EMBED_BYTES,
   publishEmbed,
   thumbnailUrl,
@@ -77,6 +78,14 @@ export function embedTool({
         return {
           error:
             'Invalid id. Use lowercase letters, digits and hyphens, 2-63 characters.',
+          published: false,
+        };
+      }
+      // Reserved: kyto's live-view pages are served without the sandbox the
+      // server puts on every other embed.
+      if (slug.startsWith(LIVE_EMBED_PREFIX)) {
+        return {
+          error: `Ids starting "${LIVE_EMBED_PREFIX}" are reserved. Pick another id.`,
           published: false,
         };
       }
@@ -155,7 +164,7 @@ export function removeEmbedTool() {
     }),
     execute: async ({ id }) => {
       const slug = id.trim().toLowerCase();
-      if (!isValidEmbedId(slug)) {
+      if (!isValidEmbedId(slug) || slug.startsWith(LIVE_EMBED_PREFIX)) {
         return { error: 'Invalid id.', removed: false };
       }
       await deleteEmbed(slug);
