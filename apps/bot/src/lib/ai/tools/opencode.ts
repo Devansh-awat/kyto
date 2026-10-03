@@ -32,6 +32,14 @@ const WATCHDOG_GRACE_MS = 2 * 60 * 1000;
 // one SIGKILLed for memory in the 1 GB sandbox. Taken inside the sandbox, so
 // it holds across turns, threads sharing a code channel's sandbox, and bash.
 const LOCK_PATH = '/home/user/.kyto/opencode.lock';
+// The lock holder: `<started epoch> <run id> <shell pid> <process group>`.
+// `timeout` counts on the sandbox's monotonic clock, which stops while it is
+// paused — a run left going when its turn ended was frozen at each pause and
+// woke for seconds per turn, so it held the lock for over an hour (verified
+// 2026-10-03). The wall clock is synced on resume, so it decides staleness,
+// and an aborted run is killed before the pause (`onAbortCommand`).
+const STATE_PATH = '/home/user/.kyto/opencode.run';
+const STALE_SECONDS = RUN_TIMEOUT_SECONDS + WATCHDOG_GRACE_MS / 1000;
 const BUSY_EXIT = 75;
 const SETUP_FAILED_EXIT = 76;
 const KILLED_EXIT = 137;
@@ -102,9 +110,10 @@ export function opencodeTool({
 
       // Per call: parallel calls used to share one brief file and could run
       // each other's task.
+      const runId = crypto.randomUUID();
       const briefPath = nodePath.join(
         context.sessionWorkDir,
-        `.kyto/opencode-brief-${crypto.randomUUID()}.md`
+        `.kyto/opencode-brief-${runId}.md`
       );
       await context.session.writeBinaryFile({
         content: new TextEncoder().encode(brief),
@@ -122,17 +131,34 @@ export function opencodeTool({
       try {
         // fd 9 is closed for setup and OpenCode: a dev server OpenCode leaves
         // running would otherwise hold the lock for the sandbox's lifetime.
+        // `timeout` puts OpenCode in its own process group, which E2B's kill
+        // (the shell's pid only) never reaches — so the group is recorded too.
         result = await context.session.run({
           abortSignal,
           command: [
             `mkdir -p "$(dirname '${LOCK_PATH}')"`,
             `exec 9>'${LOCK_PATH}'`,
-            `flock -n 9 || exit ${BUSY_EXIT}`,
+            'if ! flock -n 9; then',
+            `  read -r started _ shell group 2>/dev/null < '${STATE_PATH}' || started=''`,
+            `  if [ -z "$started" ] || [ $(( $(date +%s) - started )) -lt ${STALE_SECONDS} ]; then exit ${BUSY_EXIT}; fi`,
+            '  kill -KILL -- "$shell" 2>/dev/null; [ -n "$group" ] && kill -KILL -- "-$group" 2>/dev/null',
+            `  flock -w 10 9 || exit ${BUSY_EXIT}`,
+            'fi',
+            // Holding the lock, a recorded group is a killed run's leftover.
+            `if read -r _ _ _ group 2>/dev/null < '${STATE_PATH}' && [ -n "$group" ]; then kill -KILL -- "-$group" 2>/dev/null; fi`,
+            `echo "$(date +%s) ${runId} $$" > '${STATE_PATH}'`,
             'SETUP_LOG=$(mktemp)',
-            `( ${OPENCODE_SETUP_COMMAND}\n) 9>&- >"$SETUP_LOG" 2>&1 || { cat "$SETUP_LOG"; exit ${SETUP_FAILED_EXIT}; }`,
+            `( ${OPENCODE_SETUP_COMMAND}\n) 9>&- >"$SETUP_LOG" 2>&1 || { cat "$SETUP_LOG"; rm -f '${STATE_PATH}'; exit ${SETUP_FAILED_EXIT}; }`,
             `mkdir -p '${workDir}' && cd '${workDir}'`,
-            `timeout ${RUN_TIMEOUT_SECONDS} opencode run --model '${model ?? DEFAULT_MODEL}' ${resume ? '--continue' : ''} "$(cat '${briefPath}')" 9>&- 2>&1`,
+            `timeout ${RUN_TIMEOUT_SECONDS} opencode run --model '${model ?? DEFAULT_MODEL}' ${resume ? '--continue' : ''} "$(cat '${briefPath}')" 9>&- 2>&1 &`,
+            'RUN_PID=$!',
+            `echo "$(date +%s) ${runId} $$ $RUN_PID" > '${STATE_PATH}'`,
+            'wait "$RUN_PID"',
+            'CODE=$?',
+            `rm -f '${STATE_PATH}'`,
+            'exit "$CODE"',
           ].join('\n'),
+          onAbortCommand: `if read -r _ id shell group 2>/dev/null < '${STATE_PATH}' && [ "$id" = '${runId}' ]; then kill -KILL -- "$shell" 2>/dev/null; [ -n "$group" ] && kill -KILL -- "-$group" 2>/dev/null; rm -f '${STATE_PATH}'; fi`,
         });
       } finally {
         resumeSlack?.();

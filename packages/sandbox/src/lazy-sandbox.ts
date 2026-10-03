@@ -31,6 +31,9 @@ const GIT_NON_INTERACTIVE: Record<string, string> = {
   GIT_TERMINAL_PROMPT: '0',
 };
 
+// Bounds how long a turn's end (and the sandbox's pause) waits on one.
+const ABORT_COMMAND_TIMEOUT_MS = 15_000;
+
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -91,6 +94,9 @@ export class LazySandbox {
   private readonly store: SandboxStore | undefined;
   private sandbox: Sandbox | null = null;
   private creating: Promise<Sandbox> | null = null;
+  // `onAbortCommand`s still running; `destroy()` waits for them, or the pause
+  // would freeze the very process they were sent to stop.
+  private readonly aborting = new Set<Promise<unknown>>();
 
   constructor({
     apiKey,
@@ -267,16 +273,42 @@ export class LazySandbox {
     abortSignal,
     command,
     env,
+    onAbortCommand,
     workingDirectory,
   }: {
     abortSignal?: AbortSignal;
     command: string;
     env?: Record<string, string>;
+    onAbortCommand?: string;
     workingDirectory?: string;
   }): Promise<{ exitCode: number; stderr: string; stdout: string }> {
     abortSignal?.throwIfAborted();
     const sandbox = await this.ensure();
     await sandbox.setTimeout(commandTimeoutMs());
+    // Aborting only drops E2B's stream; the command runs on. Sent on the
+    // sandbox already held, never through ensure(), which would resume one
+    // destroy() had just paused and leave it running.
+    const stop = () => {
+      if (!onAbortCommand) {
+        return;
+      }
+      const stopping = sandbox.commands
+        .run(onAbortCommand, {
+          cwd: workingDirectory ?? this.workDir,
+          timeoutMs: ABORT_COMMAND_TIMEOUT_MS,
+        })
+        .catch((error: unknown) => {
+          this.logger.warn(
+            { err: errorText(error), sandboxId: sandbox.sandboxId },
+            '[sandbox] abort command failed'
+          );
+        })
+        .finally(() => {
+          this.aborting.delete(stopping);
+        });
+      this.aborting.add(stopping);
+    };
+    abortSignal?.addEventListener('abort', stop, { once: true });
     try {
       const result = await sandbox.commands.run(command, {
         cwd: workingDirectory ?? this.workDir,
@@ -298,6 +330,8 @@ export class LazySandbox {
         };
       }
       throw error;
+    } finally {
+      abortSignal?.removeEventListener('abort', stop);
     }
   }
 
@@ -360,6 +394,7 @@ export class LazySandbox {
     if (pending) {
       await pending.catch(() => undefined);
     }
+    await Promise.all(this.aborting);
     const sandbox = this.sandbox;
     this.sandbox = null;
     if (!sandbox) {

@@ -12,6 +12,11 @@ export interface SandboxContext {
       workingDirectory?: string;
       env?: Record<string, string>;
       abortSignal?: AbortSignal;
+      /**
+       * Run in the sandbox if `abortSignal` fires, before it is released.
+       * Aborting only drops the connection — the command itself keeps going.
+       */
+      onAbortCommand?: string;
     }): PromiseLike<{ exitCode: number; stderr: string; stdout: string }>;
     /**
      * Release the sandbox. On a persistent (per-thread) sandbox this PAUSES it —
