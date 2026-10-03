@@ -1,12 +1,12 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { env } from '@/env';
-import type { ThreadHandle as Thread } from '@/harness';
 import {
   neutralizeBroadcast,
   neutralizeBroadcastDeep,
   restoreAnnotatedMentions,
-} from '@/harness';
+} from '@/harness/markdown';
+import type { ThreadHandle as Thread } from '@/harness/thread';
 import { requestPostConfirmation } from '@/lib/confirm-post/request';
 import logger from '@/lib/logger';
 import { normalizeSlackChannelArg, toRawSlackUserId } from '@/lib/slack/ids';

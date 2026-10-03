@@ -1,4 +1,5 @@
-import type { Message, ThreadHandle as Thread } from '@/harness';
+import type { ThreadHandle as Thread } from '@/harness/thread';
+import type { Message } from '@/harness/types';
 
 export type AgentErrorStage = 'after_progress' | 'after_text' | 'before_output';
 

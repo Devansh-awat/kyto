@@ -1,5 +1,6 @@
 import { getSlackGrant } from '@repo/db/queries';
-import type { Message, ThreadHandle as Thread } from '@/harness';
+import type { ThreadHandle as Thread } from '@/harness/thread';
+import type { Message } from '@/harness/types';
 import { runTurn } from '@/lib/agent';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';

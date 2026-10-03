@@ -1,8 +1,6 @@
-import {
-  type Message,
-  mrkdwnToMarkdown,
-  type ThreadHandle as Thread,
-} from '@/harness';
+import { mrkdwnToMarkdown } from '@/harness/markdown';
+import type { ThreadHandle as Thread } from '@/harness/thread';
+import type { Message } from '@/harness/types';
 import { compactOverflow, loadThreadSummary } from '@/lib/agent/compaction';
 import {
   renderUnreadableBlock,

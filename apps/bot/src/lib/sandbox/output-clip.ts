@@ -21,7 +21,7 @@ export const OUTPUT_MAX = 12_000;
 const HEAD_BUDGET = 8000;
 const TAIL_BUDGET = 3000;
 
-export interface ClipStats {
+interface ClipStats {
   headLines: number;
   hiddenLines: number;
   tailLines: number;

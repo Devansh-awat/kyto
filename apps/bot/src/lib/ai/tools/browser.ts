@@ -2,7 +2,7 @@ import type { SandboxContext } from '@repo/ai';
 import { LIVE_VIEW_COMMAND, LIVE_VIEW_PORT, liveViewUrl } from '@repo/sandbox';
 import { tool } from 'ai';
 import { z } from 'zod';
-import type { ThreadHandle } from '@/harness';
+import type { ThreadHandle } from '@/harness/thread';
 import { ensureCloakBrowser } from '@/lib/browser/cloak';
 import { postLiveView as postLiveViewInThread } from '@/lib/browser/live-view-post';
 import logger from '@/lib/logger';

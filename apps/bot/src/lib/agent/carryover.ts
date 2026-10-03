@@ -15,14 +15,14 @@ export interface GatheredResult {
 // (web-search results are large): keep the most recent results and clamp each.
 export const CARRYOVER_MAX_RESULTS = 12;
 export const CARRYOVER_OUTPUT_MAX = 1500;
-export const CARRYOVER_INPUT_MAX = 400;
+const CARRYOVER_INPUT_MAX = 400;
 
 // Bounds on the tool observations persisted into the thinking store, kept
 // smaller than the carryover so reasoning + observations both fit the per-turn
 // thinking budget (MAX_TURN_CHARS). Keeps the most recent results.
 export const OBSERVATION_MAX_RESULTS = 14;
-export const OBSERVATION_OUTPUT_MAX = 1000;
-export const OBSERVATION_INPUT_MAX = 300;
+const OBSERVATION_OUTPUT_MAX = 1000;
+const OBSERVATION_INPUT_MAX = 300;
 
 /** A stable string for a tool input, used both for rendering and for dedupe. */
 export function stableInput(input: unknown): string {

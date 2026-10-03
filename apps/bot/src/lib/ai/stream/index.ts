@@ -1,5 +1,5 @@
 import type { TextStreamPart, ToolSet } from 'ai';
-import type { StreamChunk } from '@/harness';
+import type { StreamChunk } from '@/harness/types';
 import logger from '@/lib/logger';
 import { deepErrorText, errorStatus } from '@/lib/utils/error';
 import { clamp } from '@/lib/utils/text';

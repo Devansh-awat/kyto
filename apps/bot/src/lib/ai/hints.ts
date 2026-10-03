@@ -5,7 +5,8 @@ import {
   listMemoryIndex,
 } from '@repo/db/queries';
 import { env } from '@/env';
-import type { Message, ThreadHandle as Thread } from '@/harness';
+import type { ThreadHandle as Thread } from '@/harness/thread';
+import type { Message } from '@/harness/types';
 import { slack } from '@/lib/chat';
 import { resolveKytoEmail } from '@/lib/email/address';
 import { resolveChannelName, resolveWorkspaceName } from '@/lib/slack/names';

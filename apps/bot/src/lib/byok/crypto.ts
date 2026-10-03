@@ -3,7 +3,6 @@ import {
   createDecipheriv,
   randomBytes,
   scryptSync,
-  timingSafeEqual,
 } from 'node:crypto';
 
 /**
@@ -127,11 +126,4 @@ const PREVIEW_TAIL = 4;
 export function keyPreview(plaintext: string): string {
   const tail = plaintext.slice(-PREVIEW_TAIL);
   return `…${tail}`;
-}
-
-/** Constant-time compare, for anything that ever checks a secret by value. */
-export function secretsMatch(a: string, b: string): boolean {
-  const left = Buffer.from(a);
-  const right = Buffer.from(b);
-  return left.length === right.length && timingSafeEqual(left, right);
 }

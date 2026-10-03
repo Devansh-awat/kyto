@@ -13,7 +13,7 @@ import {
 import { LazySandbox } from '@repo/sandbox';
 import { type ToolSet, tool } from 'ai';
 import { env } from '@/env';
-import type { Message } from '@/harness';
+import type { Message } from '@/harness/types';
 import { buildPrompt } from '@/lib/agent/prompt';
 import { requestHints } from '@/lib/ai/hints';
 import { buildMcpTools } from '@/lib/ai/mcp';

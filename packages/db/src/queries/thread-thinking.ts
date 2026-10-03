@@ -40,10 +40,6 @@ export async function saveThreadThinking(
     });
 }
 
-export async function clearThreadThinking(threadId: string): Promise<void> {
-  await db.delete(threadThinking).where(eq(threadThinking.threadId, threadId));
-}
-
 /**
  * Count, then delete, the reasoning stored for every thread rooted in one
  * channel. Thread ids are `slack:CHANNEL[:TS]`, so a channel's threads share the

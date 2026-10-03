@@ -52,7 +52,7 @@ export type StreamChunk =
     }
   | { text: string; type: 'markdown_text' };
 
-export interface PostFile {
+interface PostFile {
   data: Uint8Array;
   filename: string;
 }

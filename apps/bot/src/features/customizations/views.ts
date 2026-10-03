@@ -8,7 +8,7 @@ import type {
   UserMcpServer,
   UserModelCredential,
 } from '@repo/db/queries';
-import { mrkdwn, plainText } from '@/harness';
+import { mrkdwn, plainText } from '@/harness/views';
 import {
   formatMcpRules,
   formatToolOverrides,

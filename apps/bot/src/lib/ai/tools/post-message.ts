@@ -1,14 +1,14 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { env } from '@/env';
+import type { KytoBot as Chat } from '@/harness/bot';
 import {
-  type KytoBot as Chat,
   hasBroadcastToken,
   neutralizeBroadcast,
   neutralizeBroadcastDeep,
-  type PostContent,
   restoreAnnotatedMentions,
-} from '@/harness';
+} from '@/harness/markdown';
+import type { PostContent } from '@/harness/types';
 import { requestApproval } from '@/lib/approvals/request';
 import { slack } from '@/lib/chat';
 import { requestPostConfirmation } from '@/lib/confirm-post/request';

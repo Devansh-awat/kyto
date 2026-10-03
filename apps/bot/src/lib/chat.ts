@@ -1,5 +1,6 @@
 import { env } from '@/env';
-import { KytoBot, SlackHarness } from '@/harness';
+import { KytoBot } from '@/harness/bot';
+import { SlackHarness } from '@/harness/harness';
 import logger from '@/lib/logger';
 
 // kyto's custom Slack harness (replaces the chat-sdk + @chat-adapter/slack).

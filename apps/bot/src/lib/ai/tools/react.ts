@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import type { KytoBot as Chat } from '@/harness';
+import type { KytoBot as Chat } from '@/harness/bot';
 import { errorMessage } from '@/lib/utils/error';
 
 // A bare `invalid_name` left the model retrying blind with more invented names.

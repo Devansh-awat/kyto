@@ -1,5 +1,5 @@
 import { env } from '@/env';
-import type { ActionEvent } from '@/harness';
+import type { ActionEvent } from '@/harness/types';
 import { executePostMessage } from '@/lib/ai/tools/post-message';
 import {
   executeEditAsUser,

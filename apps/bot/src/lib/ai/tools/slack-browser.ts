@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import type { ThreadHandle } from '@/harness';
+import type { ThreadHandle } from '@/harness/thread';
 import { postLiveView } from '@/lib/browser/live-view-post';
 import logger from '@/lib/logger';
 import {

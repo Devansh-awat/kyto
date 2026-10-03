@@ -1,8 +1,12 @@
 import { randomBytes } from 'node:crypto';
 import { getSlackGrantSecret, upsertSlackGrant } from '@repo/db/queries';
 import { env } from '@/env';
-import { byokConfigured, encryptSecret } from '@/lib/byok';
-import { decryptSecret } from '@/lib/byok/crypto';
+import {
+  byokConfigured,
+  decryptSecret,
+  encryptSecret,
+} from '@/lib/byok/crypto';
+import { escapeHtml } from '@/lib/dashboard/render';
 import logger from '@/lib/logger';
 import { registerSecret } from '@/lib/redact';
 
@@ -24,7 +28,7 @@ import { registerSecret } from '@/lib/redact';
  * Mounted on the sites Bun.serve, which is the only public HTTP kyto has.
  */
 
-export const SLACK_OAUTH_PREFIX = '/_slackauth/';
+const SLACK_OAUTH_PREFIX = '/_slackauth/';
 
 // How long an authorize link stays usable. Long enough to read the Slack
 // consent screen and think about it, short enough that a link pasted somewhere
@@ -229,13 +233,6 @@ async function exchange(code: string): Promise<{
     token: user.access_token,
     userId: user.id,
   };
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;');
 }
 
 /**

@@ -1,7 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { env } from '@/env';
-import type { ThreadHandle as Thread } from '@/harness';
+import type { ThreadHandle as Thread } from '@/harness/thread';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
 import { errorMessage } from '@/lib/utils/error';

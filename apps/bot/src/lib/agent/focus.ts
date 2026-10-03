@@ -1,12 +1,12 @@
 import { env } from '@/env';
-import type { ThreadState } from '@/harness';
+import type { ThreadState } from '@/harness/types';
 
 // Focus mode: kyto can be told to respond to (and only see) specific users in a
 // thread, so other people can't distract it in a public thread. The owner is
 // always allowed through so a focus can never lock the owner out of the thread,
 // and kyto's own messages are always kept in context.
 
-export function focusUsers(state: ThreadState | null): string[] | null {
+function focusUsers(state: ThreadState | null): string[] | null {
   const ids = state?.focusUserIds;
   return Array.isArray(ids) && ids.length > 0 ? ids : null;
 }

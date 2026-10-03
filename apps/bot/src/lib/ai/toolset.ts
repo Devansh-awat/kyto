@@ -14,7 +14,9 @@ import {
 import { type Tool, type ToolSet, tool } from 'ai';
 import { z } from 'zod';
 import { env } from '@/env';
-import type { KytoBot, Message, ThreadHandle } from '@/harness';
+import type { KytoBot } from '@/harness/bot';
+import type { ThreadHandle } from '@/harness/thread';
+import type { Message } from '@/harness/types';
 import { buildMcpTools } from '@/lib/ai/mcp';
 import { withBuiltinMcpServers } from '@/lib/ai/mcp-builtin';
 import { resolveTurnMcpServers } from '@/lib/ai/mcp-scope';

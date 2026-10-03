@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import type { ThreadHandle as Thread } from '@/harness';
+import type { ThreadHandle as Thread } from '@/harness/thread';
 import { abandonQuestion, waitForAnswers } from '@/lib/ask-question/pending';
 import {
   type AskState,

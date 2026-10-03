@@ -9,7 +9,9 @@ import {
 import type { ToolSet } from 'ai';
 import { tool } from 'ai';
 import { z } from 'zod';
-import type { KytoBot, Message, StreamChunk, ThreadHandle } from '@/harness';
+import type { KytoBot } from '@/harness/bot';
+import type { ThreadHandle } from '@/harness/thread';
+import type { Message, StreamChunk } from '@/harness/types';
 import { requestHints } from '@/lib/ai/hints';
 import { renderStream } from '@/lib/ai/stream';
 import { stripToolComplaints } from '@/lib/ai/stream/tool-complaints';

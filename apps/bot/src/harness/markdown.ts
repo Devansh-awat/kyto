@@ -181,7 +181,7 @@ export function healMarkdown(markdown: string): string {
 }
 
 /** The open fence's language if `text` ends inside a fenced block, else null. */
-export function openFenceLanguage(text: string): string | null {
+function openFenceLanguage(text: string): string | null {
   let open: string | null = null;
   for (const line of text.split('\n')) {
     const match = /^\s*(?:```|~~~)(.*)$/.exec(line);

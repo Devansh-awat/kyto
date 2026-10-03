@@ -1,5 +1,4 @@
 import {
-  clearThreadThinking,
   getThreadThinking,
   pruneThreadThinking,
   saveThreadThinking,
@@ -105,11 +104,6 @@ export async function rememberThinking({
  * the char budget). */
 export async function recallThinking(threadId: string): Promise<string[]> {
   return await getThreadThinking(threadId, RETENTION_MS).catch(() => []);
-}
-
-/** Forget a thread's train of thought (a new turn is starting from scratch). */
-export async function forgetThinking(threadId: string): Promise<void> {
-  await clearThreadThinking(threadId).catch(() => undefined);
 }
 
 // Reap reasoning older than the retention window, on startup and daily after.

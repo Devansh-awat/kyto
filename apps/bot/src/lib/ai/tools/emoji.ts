@@ -7,7 +7,7 @@ import {
 } from '@repo/ai';
 import { tool } from 'ai';
 import { z } from 'zod';
-import { neutralizeBroadcast } from '@/harness';
+import { neutralizeBroadcast } from '@/harness/markdown';
 import { slack } from '@/lib/chat';
 import {
   addEmoji,

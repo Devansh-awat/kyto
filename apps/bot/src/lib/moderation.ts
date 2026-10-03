@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { env } from '@/env';
-import type { ThreadHandle as Thread } from '@/harness';
+import type { ThreadHandle as Thread } from '@/harness/thread';
 import { bot } from '@/lib/chat';
 import logger from '@/lib/logger';
 import {

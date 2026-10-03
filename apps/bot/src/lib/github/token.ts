@@ -101,11 +101,3 @@ export async function brokerableGithubToken(): Promise<string | undefined> {
   verdict = await inFlight;
   return verdict.live ? token : undefined;
 }
-
-/**
- * Whether GitHub work can be expected to succeed at all, for tools that want to
- * refuse up front rather than let a command fail confusingly.
- */
-export async function githubTokenIsLive(): Promise<boolean> {
-  return (await brokerableGithubToken()) !== undefined;
-}

@@ -2,8 +2,8 @@ import {
   healMarkdown,
   neutralizeBroadcast,
   restoreAnnotatedMentions,
-  type ThreadHandle as Thread,
-} from '@/harness';
+} from '@/harness/markdown';
+import type { ThreadHandle as Thread } from '@/harness/thread';
 import { slack } from '@/lib/chat';
 import { resolveIdentity } from '@/lib/identity';
 import logger from '@/lib/logger';

@@ -1,7 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { env } from '@/env';
-import type { Message } from '@/harness';
+import type { Message } from '@/harness/types';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
 import { slackAuthorizeUrl, userSlackToken } from '@/lib/slack-oauth';

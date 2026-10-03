@@ -1,6 +1,7 @@
 import { removeOptIn } from '@repo/db/queries';
 import { env } from '@/env';
-import type { Message, ThreadHandle as Thread } from '@/harness';
+import type { ThreadHandle as Thread } from '@/harness/thread';
+import type { Message } from '@/harness/types';
 import { stopTurn } from '@/lib/agent';
 import { removeAllowedUser } from '@/lib/allowed-users';
 import { runBanCommand } from '@/lib/bans';

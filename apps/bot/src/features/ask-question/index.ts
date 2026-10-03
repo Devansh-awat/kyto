@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ActionEvent } from '@/harness';
+import type { ActionEvent } from '@/harness/types';
 import { plainText } from '@/harness/views';
 import { settleAnswers } from '@/lib/ask-question/pending';
 import {

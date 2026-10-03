@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { Message } from '@/harness';
+import type { Message } from '@/harness/types';
 import type { ActiveTurn, TurnInput } from '@/types/agent';
 import { queuedInput } from './steering';
 

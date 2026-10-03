@@ -13,8 +13,8 @@ import { mrkdwn, plainText } from '@/harness/views';
 // State lives in the message's own Slack metadata, like polls do, so the
 // message keeps working across a bot restart instead of leaving dead buttons.
 
-export const ASK_METADATA_TYPE = 'kyto_ask';
-export const ASK_OPTION_ACTION = 'ask_option';
+const ASK_METADATA_TYPE = 'kyto_ask';
+const ASK_OPTION_ACTION = 'ask_option';
 export const ASK_SUBMIT_ACTION = 'ask_submit';
 export const ASK_OTHER_ACTION = 'ask_other';
 export const ASK_OTHER_MODAL = 'ask_other_modal';
@@ -30,7 +30,7 @@ export const ASK_OPTION_ACTIONS = Array.from(
   (_, index) => `${ASK_OPTION_ACTION}_${index}`
 );
 
-export interface AskOption {
+interface AskOption {
   description?: string;
   label: string;
 }

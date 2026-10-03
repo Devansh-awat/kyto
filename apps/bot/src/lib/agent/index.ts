@@ -16,8 +16,9 @@ import {
 import { LazySandbox } from '@repo/sandbox';
 import type { ToolSet } from 'ai';
 import { env } from '@/env';
-import type { Message, StreamChunk, ThreadHandle } from '@/harness';
-import { restoreAnnotatedMentions } from '@/harness';
+import { restoreAnnotatedMentions } from '@/harness/markdown';
+import type { ThreadHandle } from '@/harness/thread';
+import type { Message, StreamChunk } from '@/harness/types';
 import {
   type GatheredResult,
   renderCarryover,

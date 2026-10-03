@@ -65,7 +65,7 @@ export async function resolveUserProfile(
  * A human label for a Slack user id — real name, else display name, else the
  * raw id. For surfaces (the dashboard) that would otherwise show a bare `U…`.
  */
-export async function resolveUserName(userId: string): Promise<string> {
+async function resolveUserName(userId: string): Promise<string> {
   const profile = await resolveUserProfile(userId).catch(() => undefined);
   return profile?.realName || profile?.displayName || userId;
 }

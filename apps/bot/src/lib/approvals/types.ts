@@ -13,7 +13,7 @@
  */
 export type ApprovalKind = 'post' | 'broadcast' | 'github' | 'skill';
 
-export const APPROVAL_KINDS: readonly ApprovalKind[] = [
+const APPROVAL_KINDS: readonly ApprovalKind[] = [
   'post',
   'broadcast',
   'github',

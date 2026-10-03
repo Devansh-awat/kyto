@@ -14,7 +14,7 @@ import {
 import { tool } from 'ai';
 import { z } from 'zod';
 import { env } from '@/env';
-import type { Message } from '@/harness';
+import type { Message } from '@/harness/types';
 import { toRawSlackChannelId } from '@/lib/slack/ids';
 import { errorMessage } from '@/lib/utils/error';
 import { editorsSchema, parseEditors } from './editors';

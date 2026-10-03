@@ -1,4 +1,4 @@
-import type { ThreadHandle } from '@/harness';
+import type { ThreadHandle } from '@/harness/thread';
 import { mrkdwn, plainText } from '@/harness/views';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';

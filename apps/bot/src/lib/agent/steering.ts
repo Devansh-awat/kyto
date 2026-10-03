@@ -1,4 +1,4 @@
-import type { Message } from '@/harness';
+import type { Message } from '@/harness/types';
 import type { AbortReason, ActiveTurn, TurnInput } from '@/types/agent';
 
 export class TurnAbort extends Error {

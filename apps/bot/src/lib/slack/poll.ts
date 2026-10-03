@@ -1,8 +1,8 @@
 import { z } from 'zod';
-import { neutralizeBroadcast } from '@/harness';
+import { neutralizeBroadcast } from '@/harness/markdown';
 
-export const POLL_VOTE_ACTION = 'poll_vote';
-export const POLL_METADATA_TYPE = 'kyto_poll';
+const POLL_VOTE_ACTION = 'poll_vote';
+const POLL_METADATA_TYPE = 'kyto_poll';
 
 const BAR_SLOTS = 10;
 const BUTTON_LABEL_MAX = 70;

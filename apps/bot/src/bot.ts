@@ -1,5 +1,7 @@
 import { env } from '@/env';
-import type { KytoBot, Message, ThreadHandle as Thread } from '@/harness';
+import type { KytoBot } from '@/harness/bot';
+import type { ThreadHandle as Thread } from '@/harness/thread';
+import type { Message } from '@/harness/types';
 import { runTurn, stopTurn } from '@/lib/agent';
 import { isFocusAllowed } from '@/lib/agent/focus';
 import { isUserAllowed } from '@/lib/allowed-users';

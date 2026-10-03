@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { ThreadHandle } from '@/harness';
+import type { ThreadHandle } from '@/harness/thread';
 import { mrkdwn, plainText } from '@/harness/views';
 import type { McpToolGate } from '@/lib/ai/mcp';
 import logger from '@/lib/logger';

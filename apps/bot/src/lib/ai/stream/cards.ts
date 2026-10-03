@@ -24,7 +24,7 @@
 // plan message stopped with a non-terminal row renders that row as broken once
 // it collapses.
 
-import type { StreamChunk } from '@/harness';
+import type { StreamChunk } from '@/harness/types';
 
 // NO CAP (owner's call, 2026-08-09: "i want ZERO budget"). Every tool call and
 // every thinking block gets its own row, however long the turn runs.
@@ -37,8 +37,8 @@ import type { StreamChunk } from '@/harness';
 // The overflow machinery below is KEPT, not deleted: a caller can still pass a
 // limit (and the tests exercise one), so re-capping is a one-line change if a
 // real Slack ceiling ever turns up. What changed is the default.
-export const MAX_VISIBLE_TOOL_CARDS = Number.POSITIVE_INFINITY;
-export const MAX_VISIBLE_REASONING_CARDS = Number.POSITIVE_INFINITY;
+const MAX_VISIBLE_TOOL_CARDS = Number.POSITIVE_INFINITY;
+const MAX_VISIBLE_REASONING_CARDS = Number.POSITIVE_INFINITY;
 
 export type CardKind = 'reasoning' | 'tool';
 

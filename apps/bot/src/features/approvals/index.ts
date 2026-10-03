@@ -4,7 +4,7 @@ import {
   setApprovalOutcome,
 } from '@repo/db/queries';
 import { env } from '@/env';
-import type { ActionEvent } from '@/harness';
+import type { ActionEvent } from '@/harness/types';
 import { mrkdwn } from '@/harness/views';
 import { executeApproval } from '@/lib/approvals/execute';
 import { APPROVE_ACTION, DENY_ACTION } from '@/lib/approvals/request';

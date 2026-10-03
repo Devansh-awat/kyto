@@ -12,7 +12,7 @@ import {
 } from '@repo/db/queries';
 import { env } from '@/env';
 import { getMcpFailure } from '@/lib/ai/mcp';
-import { byokConfigured } from '@/lib/byok';
+import { byokConfigured } from '@/lib/byok/crypto';
 import { slack } from '@/lib/chat';
 import { slackOauthConfigured } from '@/lib/slack-oauth';
 import { previewUserData } from './erase';

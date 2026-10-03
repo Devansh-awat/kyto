@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import type { ThreadHandle as Thread } from '@/harness';
+import type { ThreadHandle as Thread } from '@/harness/thread';
 
 // Slack user ids look like U0123ABCD / W0123ABCD. Validate loosely so the model
 // can't accidentally pass a name where an id is required.

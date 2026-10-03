@@ -143,7 +143,7 @@ async function applyBan({
  * answers after being banned. Not owner-checked: the callers are the owner's own
  * command and the anti-coding gate, never the model.
  */
-export async function banUser({
+async function banUser({
   bannedBy,
   ms,
   reason,

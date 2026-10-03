@@ -1,7 +1,7 @@
 import { provider } from '@repo/ai';
 import { generateText, tool } from 'ai';
 import { z } from 'zod';
-import type { KytoBot as Chat } from '@/harness';
+import type { KytoBot as Chat } from '@/harness/bot';
 import { slack } from '@/lib/chat';
 import { assertReadableChannel, joinChannel } from './utils';
 

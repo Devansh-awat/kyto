@@ -36,7 +36,7 @@ const READ_ONLY_METHODS = new Set<string>([
 ]);
 
 // Where the proxy is mounted on the public sites server.
-export const SLACK_PROXY_PREFIX = '/_slackapi/';
+const SLACK_PROXY_PREFIX = '/_slackapi/';
 
 const PROXY_TOKEN_TTL_MS = 15 * 60 * 1000;
 

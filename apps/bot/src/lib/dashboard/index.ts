@@ -35,7 +35,7 @@ import {
 // and every mutation is a POST carrying the session's CSRF token. Unset the
 // password and the whole surface 404s.
 
-export const DASHBOARD_PREFIX = '/_dashboard';
+const DASHBOARD_PREFIX = '/_dashboard';
 
 const HTML_HEADERS: Record<string, string> = {
   'Content-Type': 'text/html; charset=utf-8',

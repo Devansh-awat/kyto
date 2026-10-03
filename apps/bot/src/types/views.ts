@@ -1,4 +1,4 @@
-import type { mrkdwn, plainText } from '@/harness';
+import type { mrkdwn, plainText } from '@/harness/views';
 
 type SlackText = ReturnType<typeof mrkdwn | typeof plainText>;
 

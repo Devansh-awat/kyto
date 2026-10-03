@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import type { ThreadHandle } from '@/harness';
+import type { ThreadHandle } from '@/harness/thread';
 import { publishEmbed, thumbnailUrl } from '@/lib/embeds';
 
 // The live view, playing INSIDE the Slack message (owner's ask, 2026-10-02:

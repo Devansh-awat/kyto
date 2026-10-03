@@ -1,7 +1,7 @@
 import { bot } from '@/bot';
 import { env } from '@/env';
 import { startChannelPairing } from '@/features/channel-pairing';
-import { setOutboundFilter } from '@/harness';
+import { setOutboundFilter } from '@/harness/outbound';
 import { runTurn, stopAllTurns } from '@/lib/agent';
 import { startSummaryReaper } from '@/lib/agent/compaction';
 import {

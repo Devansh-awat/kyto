@@ -1,8 +1,9 @@
 import { recordOptIn } from '@repo/db/queries';
 import { z } from 'zod';
 import { env } from '@/env';
-import type { ActionEvent, Author, ThreadHandle } from '@/harness';
-import { mrkdwn, plainText } from '@/harness';
+import type { ThreadHandle } from '@/harness/thread';
+import type { ActionEvent, Author } from '@/harness/types';
+import { mrkdwn, plainText } from '@/harness/views';
 import { addAllowedUser } from '@/lib/allowed-users';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';

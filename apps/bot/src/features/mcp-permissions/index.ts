@@ -1,6 +1,6 @@
 import { getMcpServerById, updateMcpServer } from '@repo/db/queries';
 import { publishHome } from '@/features/customizations/service';
-import type { ActionEvent } from '@/harness';
+import type { ActionEvent } from '@/harness/types';
 import { forgetMcpFailure, type McpToolGate } from '@/lib/ai/mcp';
 import { type McpRule, parseMcpRules } from '@/lib/ai/mcp-permissions';
 import { bot } from '@/lib/chat';

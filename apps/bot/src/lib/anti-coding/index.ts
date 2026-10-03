@@ -19,7 +19,8 @@
 
 import { z } from 'zod';
 import { env } from '@/env';
-import type { Message, ThreadHandle } from '@/harness';
+import type { ThreadHandle } from '@/harness/thread';
+import type { Message } from '@/harness/types';
 import logger from '@/lib/logger';
 import { toLogError } from '@/lib/utils/error';
 import { decideCodingAction } from './decide';

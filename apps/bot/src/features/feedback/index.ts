@@ -1,7 +1,7 @@
 import { recordReplyFeedback } from '@repo/db/queries';
 import { z } from 'zod';
 import { env } from '@/env';
-import type { ActionEvent } from '@/harness';
+import type { ActionEvent } from '@/harness/types';
 import { mrkdwn, plainText } from '@/harness/views';
 import { bot, slack } from '@/lib/chat';
 import {

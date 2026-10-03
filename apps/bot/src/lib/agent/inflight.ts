@@ -8,7 +8,8 @@ import {
   pruneInflightTurns,
   startInflightTurn,
 } from '@repo/db/queries';
-import type { KytoBot, Message } from '@/harness';
+import type { KytoBot } from '@/harness/bot';
+import type { Message } from '@/harness/types';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
 import { toLogError } from '@/lib/utils/error';
