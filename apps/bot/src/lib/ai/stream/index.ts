@@ -483,17 +483,20 @@ export async function* renderStream({
   {
     const rest = inlineReasoning.flush();
     inlineReasoningText += rest.reasoning;
+    // rest.text is the tail the splitter held back in case it became a tag — a
+    // reply ending "I love you <3" or "a < b" lost it when this was ignored.
+    const held = toolMarkup.push(rest.text);
     const clean = toolMarkup.flush();
-    droppedMarkup += clean.dropped;
-    let text = clean.text;
+    droppedMarkup += held.dropped + clean.dropped;
+    let text = `${held.text}${clean.text}`;
     // The complaint filter holds the tail after the last sentence boundary, so
     // its flush is what judges a reply whose final sentence WAS the complaint —
     // by far the commonest shape.
     if (toolComplaints) {
-      const held = toolComplaints.push(text);
+      const kept = toolComplaints.push(text);
       const tail = toolComplaints.flush();
-      droppedComplaints += held.dropped + tail.dropped;
-      text = `${held.text}${tail.text}`;
+      droppedComplaints += kept.dropped + tail.dropped;
+      text = `${kept.text}${tail.text}`;
     }
     if (text && !skipped && !isPlaceholderText(text)) {
       tally.textChars += text.length;

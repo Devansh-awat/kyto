@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
-import { guardGithubTargets } from '@/lib/github/guard';
+import { z } from 'zod';
+import { GITHUB_LOGIN, guardGithubTargets } from '@/lib/github/guard';
 import { brokerableGithubToken } from '@/lib/github/token';
 import { mayCarryPat } from '@/lib/github-proxy/host';
 import logger from '@/lib/logger';
@@ -157,7 +158,10 @@ function restTarget({
   // POST /orgs/{org}/repos. The new repo's name is in the JSON body.
   const created = write ? newRepoName(body) : undefined;
   if (first === 'user' && second === 'repos' && created) {
-    return { creates: [created], repos: [created], understood: true, write };
+    // Created under kyto's own account; the body carries only the bare name,
+    // which the guard would otherwise read as an unknown third-party repo.
+    const repo = `${GITHUB_LOGIN}/${created.split('/').at(-1)}`.toLowerCase();
+    return { creates: [repo], repos: [repo], understood: true, write };
   }
   if (first === 'orgs' && second && third === 'repos' && created) {
     const repo = `${second}/${created.split('/').at(-1)}`;
@@ -195,13 +199,51 @@ const GRAPHQL_REPOSITORY =
 // (`repositoryId`, `pullRequestId`, `subjectId`, …). Opaque by design, so the
 // only way to learn which repo one belongs to is to ask GitHub — see resolveNodes.
 const NODE_ID = /^[A-Za-z0-9+/_=-]{8,}$/;
-const nodeRepoCache = new Map<string, string | null>();
+// The same, recognised by SHAPE rather than by the key it sits under: modern
+// ids (`PR_kwDOAbc…`, `R_kgDO…`) and legacy base64 ones (`MDExOlB1bGxSZXF1ZXN0…`,
+// which decode to `011:PullRequest123`). Needed because an id can sit under any
+// key (`labelIds`, `nodeIds`) or inline in the query text.
+const MODERN_NODE_ID = /^[A-Z][A-Za-z]{0,7}_k[A-Za-z][A-Za-z0-9_-]{6,}$/;
+const LEGACY_NODE_ID = /^\d{2,3}:[A-Za-z]+\d/;
+
+export function looksLikeNodeId(value: string): boolean {
+  if (MODERN_NODE_ID.test(value)) {
+    return true;
+  }
+  if (!/^[A-Za-z0-9+/]{12,}={0,2}$/.test(value)) {
+    return false;
+  }
+  return LEGACY_NODE_ID.test(Buffer.from(value, 'base64').toString('latin1'));
+}
+
+// Node types a mutation may name WITHOUT a repo — the people it assigns or
+// requests a review from. Any other id that resolves to no repo refuses the
+// write: the guard can't check what it can't place.
+const ACTOR_TYPES = new Set([
+  'Bot',
+  'Mannequin',
+  'Organization',
+  'Team',
+  'User',
+]);
+
+interface NodeInfo {
+  repo?: string;
+  type?: string;
+}
+const nodeCache = new Map<string, NodeInfo>();
 const NODE_CACHE_MAX = 500;
 
 /** Every plausible node id anywhere in a mutation's variables. */
 function collectNodeIds(value: unknown, into: Set<string>, key = ''): void {
   if (typeof value === 'string') {
-    if (/id$/i.test(key) && NODE_ID.test(value)) {
+    // A git object id (`expectedHeadOid`) and the caller's own correlation id
+    // end in "id" too, but are not nodes — resolving them would refuse a merge.
+    const notANode = /oid$/i.test(key) || key === 'clientMutationId';
+    if (
+      !notANode &&
+      ((/ids?$/i.test(key) && NODE_ID.test(value)) || looksLikeNodeId(value))
+    ) {
       into.add(value);
     }
     return;
@@ -219,6 +261,25 @@ function collectNodeIds(value: unknown, into: Set<string>, key = ''): void {
   }
 }
 
+/** `owner/name` strings under a `…nameWithOwner` key (createCommitOnBranch). */
+function collectNamesWithOwner(
+  value: unknown,
+  into: Set<string>,
+  key = ''
+): void {
+  if (typeof value === 'string') {
+    if (/nameWithOwner$/i.test(key)) {
+      into.add(value);
+    }
+    return;
+  }
+  if (value && typeof value === 'object') {
+    for (const [childKey, child] of Object.entries(value)) {
+      collectNamesWithOwner(child, into, childKey);
+    }
+  }
+}
+
 const NODE_QUERY = `query($ids:[ID!]!){nodes(ids:$ids){__typename
 ... on Repository{nameWithOwner}
 ... on PullRequest{repository{nameWithOwner}}
@@ -228,7 +289,30 @@ const NODE_QUERY = `query($ids:[ID!]!){nodes(ids:$ids){__typename
 ... on Release{repository{nameWithOwner}}
 ... on Label{repository{nameWithOwner}}
 ... on Milestone{repository{nameWithOwner}}
-... on IssueComment{repository{nameWithOwner}}}}`;
+... on IssueComment{repository{nameWithOwner}}
+... on PullRequestReview{repository{nameWithOwner}}
+... on PullRequestReviewComment{repository{nameWithOwner}}
+... on Commit{repository{nameWithOwner}}}}`;
+
+const nodesResponseSchema = z.object({
+  data: z
+    .object({
+      nodes: z
+        .array(
+          z
+            .object({
+              __typename: z.string().optional(),
+              nameWithOwner: z.string().optional(),
+              repository: z
+                .object({ nameWithOwner: z.string().optional() })
+                .nullish(),
+            })
+            .nullable()
+        )
+        .optional(),
+    })
+    .nullish(),
+});
 
 /**
  * Ask GitHub which repo each node id belongs to.
@@ -238,30 +322,27 @@ const NODE_QUERY = `query($ids:[ID!]!){nodes(ids:$ids){__typename
  * the repo — so without this every PR, merge and review kyto opens would be
  * refused as "does not name a repository". Resolved with kyto's own PAT (the
  * same credential the request would use anyway) and cached, since a node id
- * never changes what it points at.
+ * never changes what it points at. A failed lookup is not cached.
  */
-async function resolveNodes(ids: string[]): Promise<string[]> {
-  const unknown = ids.filter((id) => !nodeRepoCache.has(id));
+async function resolveNodes(ids: string[]): Promise<Map<string, NodeInfo>> {
+  const unknown = ids.filter((id) => !nodeCache.has(id));
   if (unknown.length > 0) {
     const token = await brokerableGithubToken();
-    const resolved = token ? await askNodes(unknown, token) : new Map();
-    if (nodeRepoCache.size + unknown.length > NODE_CACHE_MAX) {
-      nodeRepoCache.clear();
+    const resolved = token ? await askNodes(unknown, token) : undefined;
+    if (nodeCache.size + unknown.length > NODE_CACHE_MAX) {
+      nodeCache.clear();
     }
-    for (const id of unknown) {
-      nodeRepoCache.set(id, resolved.get(id) ?? null);
+    for (const [id, info] of resolved ?? []) {
+      nodeCache.set(id, info);
     }
   }
-  return ids
-    .map((id) => nodeRepoCache.get(id))
-    .filter((repo): repo is string => Boolean(repo));
+  return new Map(ids.map((id) => [id, nodeCache.get(id) ?? {}]));
 }
 
 async function askNodes(
   ids: string[],
   token: string
-): Promise<Map<string, string>> {
-  const found = new Map<string, string>();
+): Promise<Map<string, NodeInfo> | undefined> {
   try {
     const response = await fetch('https://api.github.com/graphql', {
       body: JSON.stringify({ query: NODE_QUERY, variables: { ids } }),
@@ -272,47 +353,49 @@ async function askNodes(
       method: 'POST',
       signal: AbortSignal.timeout(15_000),
     });
-    const parsed = (await response.json()) as {
-      data?: {
-        nodes?: ({
-          nameWithOwner?: string;
-          repository?: { nameWithOwner?: string };
-        } | null)[];
-      };
-    };
+    const parsed = nodesResponseSchema.parse(await response.json());
     const nodes = parsed.data?.nodes ?? [];
+    const found = new Map<string, NodeInfo>();
     for (const [index, id] of ids.entries()) {
       const node = nodes[index];
-      const repo = node?.nameWithOwner ?? node?.repository?.nameWithOwner;
-      if (repo) {
-        found.set(id, repo);
-      }
+      found.set(id, {
+        repo: (
+          node?.nameWithOwner ?? node?.repository?.nameWithOwner
+        )?.toLowerCase(),
+        type: node?.__typename,
+      });
     }
+    return found;
   } catch (error) {
-    // An unresolvable id leaves the mutation with no target, which the caller
-    // treats as "not understood" and REFUSES. A GitHub outage therefore blocks
-    // writes rather than waving them through.
+    // An unresolvable id leaves the mutation with a target the guard can't
+    // place, which the caller treats as "not understood" and REFUSES. A GitHub
+    // outage therefore blocks writes rather than waving them through.
     logger.warn({ err: error }, '[github-proxy] node id lookup failed');
+    return;
   }
-  return found;
 }
 
-async function graphqlTarget(
+const REPO_PART = /^[\w.-]+$/;
+const QUERY_STRING_LITERAL = /"((?:[^"\\]|\\.)*)"/g;
+const QUERY_NAME_WITH_OWNER = /nameWithOwner\s*:\s*"([^"]*)"/gi;
+
+export async function graphqlTarget(
   body: string | undefined
 ): Promise<Omit<Target, 'upstream'>> {
+  const refused = { creates: [], repos: [], understood: false, write: true };
   let query = '';
   let variables: Record<string, unknown> = {};
   try {
-    const parsed = JSON.parse(body ?? '{}') as {
-      query?: unknown;
-      variables?: unknown;
-    };
-    query = typeof parsed.query === 'string' ? parsed.query : '';
-    if (parsed.variables && typeof parsed.variables === 'object') {
-      variables = parsed.variables as Record<string, unknown>;
-    }
+    const parsed = z
+      .object({
+        query: z.string().optional(),
+        variables: z.record(z.string(), z.unknown()).nullish(),
+      })
+      .parse(JSON.parse(body ?? '{}'));
+    query = parsed.query ?? '';
+    variables = parsed.variables ?? {};
   } catch {
-    return { creates: [], repos: [], understood: false, write: true };
+    return refused;
   }
   const write = /(^|\W)mutation(\W|$)/.test(query);
   if (!write) {
@@ -321,19 +404,60 @@ async function graphqlTarget(
   const repos = new Set<string>();
   for (const match of query.matchAll(GRAPHQL_REPOSITORY)) {
     if (match[1] && match[2]) {
-      repos.add(`${match[1]}/${match[2]}`);
+      repos.add(`${match[1]}/${match[2]}`.toLowerCase());
     }
   }
-  const owner = variables.owner ?? variables.repositoryOwner;
-  const name = variables.name ?? variables.repo ?? variables.repositoryName;
+  // `{owner, name}` variables count only when the query actually USES them —
+  // otherwise they are a decoy: name an allowed repo in the variables, aim the
+  // mutation at another one by id, and the guard checked the wrong repo.
+  const ownerKey = ['owner', 'repositoryOwner'].find((key) =>
+    query.includes(`$${key}`)
+  );
+  const nameKey = ['name', 'repo', 'repositoryName'].find((key) =>
+    query.includes(`$${key}`)
+  );
+  const owner = ownerKey ? variables[ownerKey] : undefined;
+  const name = nameKey ? variables[nameKey] : undefined;
   if (typeof owner === 'string' && typeof name === 'string') {
-    repos.add(`${owner}/${name}`);
+    repos.add(`${owner}/${name}`.toLowerCase());
+  }
+  const named = new Set<string>();
+  collectNamesWithOwner(variables, named);
+  for (const match of query.matchAll(QUERY_NAME_WITH_OWNER)) {
+    named.add(match[1] ?? '');
+  }
+  for (const repo of named) {
+    repos.add(repo.toLowerCase());
+  }
+  // A repo part that isn't a plain name (`a/../../x`) is spliced into URLs
+  // later (collaborator checks), so it refuses the write outright.
+  if (
+    [...repos].some((repo) => {
+      const parts = repo.split('/');
+      return parts.length !== 2 || !parts.every((part) => REPO_PART.test(part));
+    })
+  ) {
+    return refused;
   }
   const nodeIds = new Set<string>();
   collectNodeIds(variables, nodeIds);
+  for (const match of query.matchAll(QUERY_STRING_LITERAL)) {
+    const literal = match[1] ?? '';
+    if (looksLikeNodeId(literal)) {
+      nodeIds.add(literal);
+    }
+  }
   if (nodeIds.size > 0) {
-    for (const repo of await resolveNodes([...nodeIds])) {
-      repos.add(repo);
+    for (const [id, info] of await resolveNodes([...nodeIds])) {
+      if (info.repo) {
+        repos.add(info.repo);
+      } else if (!(info.type && ACTOR_TYPES.has(info.type))) {
+        logger.info(
+          { id, type: info.type },
+          '[github-proxy] unplaceable node id'
+        );
+        return refused;
+      }
     }
   }
   return {
@@ -544,7 +668,20 @@ export async function handleGithubProxy(
       return refusal(guard.reason, 403);
     }
     const response = await forward({ body: raw, request, target });
-    if (response.status >= 200 && response.status < 300) {
+    // GraphQL answers 200 even when the mutation failed, so a body carrying
+    // `errors` claims nothing — else a failing mutation naming a repo kyto
+    // hasn't created yet would squat it for whoever sent it.
+    const graphqlFailed =
+      pathname === GRAPHQL_PATH &&
+      (await response
+        .clone()
+        .json()
+        .then(
+          (json: unknown) =>
+            typeof json === 'object' && json !== null && 'errors' in json,
+          () => true
+        ));
+    if (response.status >= 200 && response.status < 300 && !graphqlFailed) {
       // Only a write that actually SUCCEEDED claims a repo, same as the shell
       // path. A git push is the exception worth knowing about: smart HTTP
       // answers 200 and reports a rejected push inside the packet stream, so a

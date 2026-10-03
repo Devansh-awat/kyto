@@ -361,15 +361,18 @@ You may only edit a reminder the person you are talking to created, or one they 
       // under the creator's identity and permissions, on a timer, forever. An
       // editor can re-time it, retitle it and cap it; changing its kind, its
       // command or its script URL stays with the creator (and the bot owner).
+      // For an 'agent' reminder the TEXT is the instruction it runs, so it is
+      // the creator's too.
       const isCreator = existing.userId === message.author.userId || isOwner;
       const changesWhatItDoes =
         (kind !== undefined && kind !== existing.kind) ||
         command !== undefined ||
-        url !== undefined;
+        url !== undefined ||
+        (text !== undefined && (kind ?? existing.kind) === 'agent');
       if (changesWhatItDoes && !isCreator) {
         return {
           error:
-            "Refused: you're an editor on this reminder, so you can change its schedule, text and run cap — but not what it runs. It fires with the permissions of whoever created it, so only they (or the bot owner) can change its kind, command or script URL.",
+            "Refused: you're an editor on this reminder, so you can change its schedule, text and run cap — but not what it runs. It fires with the permissions of whoever created it, so only they (or the bot owner) can change its kind, command, script URL, or an agent reminder's instructions.",
           success: false,
         };
       }
@@ -396,12 +399,16 @@ You may only edit a reminder the person you are talking to created, or one they 
         schedule = built.schedule;
       } else if (
         existing.recurrence === 'interval' &&
-        intervalSeconds !== undefined
+        (intervalSeconds !== undefined || nextKind !== existing.kind)
       ) {
-        // Retuning just the interval of an interval reminder, keeping its kind's
-        // floor honest (e.g. an 'agent' reminder can't be dropped to 60s).
+        // Retuning the interval, or the kind, of an interval reminder keeps the
+        // kind's floor honest (e.g. a 60s 'message' reminder can't be switched
+        // to 'agent' and go on running a model every minute).
         const built = buildSchedule(
-          { intervalSeconds, recurrence: 'interval' },
+          {
+            intervalSeconds: intervalSeconds ?? existing.intervalSeconds ?? 0,
+            recurrence: 'interval',
+          },
           nextKind
         );
         if (!built.ok) {
