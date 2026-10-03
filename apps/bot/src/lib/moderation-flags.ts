@@ -4,6 +4,10 @@ import { z } from 'zod';
 // "violence" — so a tool result only counts for sexual content, the one
 // category that is a ban whatever brought it in.
 const TOOL_RESULT_CATEGORIES = /^sexual/;
+// Off everywhere (owner's call, 2026-10-03): in its first day every ping was
+// one of these on banter — "kick em" (from a channel) read as violence, "noob
+// bot" as harassment. The /threatening and /graphic sub-categories go too.
+const IGNORED_CATEGORIES = /^(violence|harassment)/;
 
 export const responseSchema = z.object({
   results: z.array(
@@ -45,10 +49,12 @@ export function flaggedItems({
       continue;
     }
     const categories = Object.entries(result.categories)
-      .filter(([category, hit]) =>
-        item.source === 'tool result'
-          ? hit && TOOL_RESULT_CATEGORIES.test(category)
-          : hit
+      .filter(
+        ([category, hit]) =>
+          hit &&
+          !IGNORED_CATEGORIES.test(category) &&
+          (item.source !== 'tool result' ||
+            TOOL_RESULT_CATEGORIES.test(category))
       )
       .map(([category]) => category);
     if (categories.length > 0) {
