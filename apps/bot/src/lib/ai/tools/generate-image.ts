@@ -6,27 +6,22 @@ import { env } from '@/env';
 import { errorMessage } from '@/lib/utils/error';
 import type { GeneratedImage } from '@/types/tools/generate-image';
 
-// Image generation goes straight to HackClub's OpenAI-compatible
-// `/images/generations` endpoint (model google/gemini-3.1-flash-image), which
-// is verified working and billed to HACKCLUB_API_KEY. We call it directly with
-// fetch rather than through the AI SDK's `generateImage` + OpenRouter provider,
-// whose image path did not actually reach this endpoint (the "image gen not
-// working" bug).
+// Images come from HackClub's CHAT completions endpoint with the image modality
+// requested, called directly with fetch (the AI SDK's `generateImage` path never
+// reached the proxy). Not `/images/generations`: since 2026-10-03 it answers
+// "Unknown model: google/gemini-3.1-flash-image" though `/models` still lists
+// it and chat completions serves it, which broke every generation.
 //
 // This is deliberately the SERVICE image provider even on a BYOK turn: a user's
 // stored key is a chat-completions credential (we never asked them for an
 // image-capable one, and most aren't), so routing images at it would just fail.
 // Image generation therefore always spends the service budget, regardless of
 // whose key is answering the rest of the turn.
-const IMAGES_URL = 'https://ai.hackclub.com/proxy/v1/images/generations';
 const IMAGE_MODEL = 'google/gemini-3.1-flash-image';
 
-// EDITING an existing image goes somewhere else entirely. The OpenAI-shaped
-// `/images/edits` route 404s on this proxy (verified 2026-08-05), but the same
-// model accepts an image on CHAT completions and answers with one, provided the
-// request asks for the image modality — the reply then carries the result in
+// Editing is the same call with the input images attached (`/images/edits`
+// 404s on this proxy). The reply carries the result in
 // `message.images[].image_url.url` as a data URI rather than in `content`.
-// That is the path every "make this X" / "add Y to this picture" request takes.
 const CHAT_URL = 'https://ai.hackclub.com/proxy/v1/chat/completions';
 // Beyond this, a request is more likely to time out than to succeed, and each
 // image is inlined as base64.
@@ -81,11 +76,11 @@ async function saveToSandbox({
 }
 
 /**
- * Edit existing image(s): send them to the image model on chat completions and
- * pull the returned image back out. Returns the raw bytes of every image the
+ * One chat-completions call to the image model: generates from `prompt` alone,
+ * or edits when `images` are attached. Returns the raw bytes of every image the
  * model produced.
  */
-async function editImages({
+async function requestImages({
   images,
   prompt,
 }: {
@@ -123,7 +118,7 @@ async function editImages({
     const body = await response.text().catch(() => '');
     return {
       bytes: [],
-      error: `Image editing failed (${response.status}): ${body.slice(0, 300)}`,
+      error: `Image ${images.length > 0 ? 'editing' : 'generation'} failed (${response.status}): ${body.slice(0, 300)}`,
     };
   }
   const payload = (await response.json()) as {
@@ -188,7 +183,7 @@ async function runEdit({
     }
     inputs.push({ bytes, mediaType: detectMediaType(bytes) });
   }
-  const edited = await editImages({ images: inputs, prompt });
+  const edited = await requestImages({ images: inputs, prompt });
   if (edited.error) {
     return { error: edited.error, success: false };
   }
@@ -271,45 +266,23 @@ export function generateImageTool({
             upload,
           });
         }
-        const response = await fetch(IMAGES_URL, {
-          body: JSON.stringify({ model: IMAGE_MODEL, n, prompt }),
-          headers: {
-            Authorization: `Bearer ${env.HACKCLUB_API_KEY}`,
-            'Content-Type': 'application/json',
-          },
-          method: 'POST',
-        });
-        if (!response.ok) {
-          const body = await response.text().catch(() => '');
+        // Chat completions has no `n`; one call per image, in parallel.
+        const results = await Promise.all(
+          Array.from({ length: n }, () => requestImages({ images: [], prompt }))
+        );
+        const generated = results.flatMap((result) => result.bytes);
+        if (generated.length === 0) {
           return {
-            error: `Image generation failed (${response.status}): ${body.slice(0, 300)}`,
+            error:
+              results.find((result) => result.error)?.error ??
+              'Image generation returned no images.',
             success: false,
           };
         }
-        const payload = (await response.json()) as {
-          data?: { b64_json?: string; url?: string }[];
-        };
-        const entries = payload.data ?? [];
-        if (entries.length === 0) {
-          return {
-            error: 'Image generation returned no images.',
-            success: false,
-          };
-        }
-        const total = entries.length;
+        const total = generated.length;
         const paths: string[] = [];
         let uploaded = 0;
-        for (const [index, entry] of entries.entries()) {
-          let bytes: Uint8Array | undefined;
-          if (entry.b64_json) {
-            bytes = Uint8Array.from(Buffer.from(entry.b64_json, 'base64'));
-          } else if (entry.url) {
-            const img = await fetch(entry.url);
-            bytes = new Uint8Array(await img.arrayBuffer());
-          }
-          if (!bytes) {
-            continue;
-          }
+        for (const [index, bytes] of generated.entries()) {
           const mediaType = detectMediaType(bytes);
           const saved = await saveToSandbox({
             bytes,
