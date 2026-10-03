@@ -155,6 +155,37 @@ const CODE_TOOLS = new Set([
   'writeFile',
 ]);
 
+// Tools that post or otherwise act visibly in Slack — withheld on `!secret`.
+const PUBLIC_POSTING_TOOLS = [
+  'askQuestion',
+  'bookmarkLink',
+  'canvasDelete',
+  'canvasWrite',
+  'checkSubagent',
+  'codeChannel',
+  'createChannel',
+  'editAsUser',
+  'embed',
+  'focusMode',
+  'generateImage',
+  'joinThread',
+  'leaveThread',
+  'mermaid',
+  'pinMessage',
+  'poll',
+  'postMessage',
+  'react',
+  'removeEmbed',
+  'runSubagent',
+  'sendAsUser',
+  'setChannelTopic',
+  'submitEmoji',
+  'textToSpeech',
+  'unpinMessage',
+  'unreact',
+  'uploadFile',
+];
+
 /**
  * Build the turn's toolset. Core tools are always visible; uncommon tools
  * (browser, email, rare Slack ops) and the user's MCP tools are DEFERRED —
@@ -707,6 +738,17 @@ export async function buildTools({
   }
 
   // Anything this thread already loaded stays loaded (see lib/ai/loaded-tools).
+  // A `!secret` turn answers in ONE ephemeral to the asker. Every tool below
+  // puts something visible in the channel (a post, an image, a reaction, a pin,
+  // a subagent's plan message, a new channel), so on a secret turn it would
+  // announce — or simply publish — what was asked in private.
+  if (secret) {
+    for (const name of PUBLIC_POSTING_TOOLS) {
+      delete core[name];
+      delete deferred[name];
+    }
+  }
+
   // Filtered through THIS turn's `deferred`, which is built for the person
   // speaking now — so a tool only registered for the owner, or an MCP tool from
   // someone else's server, can never be seeded onto a different user's turn
