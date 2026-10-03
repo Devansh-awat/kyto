@@ -28,9 +28,9 @@ describe('graphqlTarget', () => {
 
   test('a repository literal in the mutation names its target', async () => {
     const target = await graphqlTarget(
-      body('mutation { x: repository(owner: "Octo", name: "hello") { id } }')
+      body('mutation { x: repository(owner: "Acme", name: "hello") { id } }')
     );
-    expect(target.repos).toEqual(['octo/hello']);
+    expect(target.repos).toEqual(['acme/hello']);
     expect(target.understood).toBe(true);
   });
 
@@ -46,10 +46,10 @@ describe('graphqlTarget', () => {
     const target = await graphqlTarget(
       body(
         'mutation($owner: String!, $name: String!) { x: repository(owner: $owner, name: $name) { id } }',
-        { name: 'hello', owner: 'octo' }
+        { name: 'hello', owner: 'acme' }
       )
     );
-    expect(target.repos).toEqual(['octo/hello']);
+    expect(target.repos).toEqual(['acme/hello']);
   });
 
   test('a repo name with a path in it refuses the write', async () => {
@@ -153,6 +153,7 @@ describe('looksLikeNodeId', () => {
     expect(looksLikeNodeId('PR_kwDOAbCdEf4ZyXwV')).toBe(true);
     expect(looksLikeNodeId('R_kgDOH1a2b3')).toBe(true);
     // base64 of "010:Repository12345"
+    // cspell:disable-next-line
     expect(looksLikeNodeId('MDEwOlJlcG9zaXRvcnkxMjM0NQ==')).toBe(true);
   });
 

@@ -91,7 +91,7 @@ export async function fetchUrlText(url: string): Promise<{
     );
   }
   // publicFetch, not fetch: this runs on kyto's host, so a URL (or a redirect)
-  // pointing at the metadata endpoint or a neighbouring container would be
+  // pointing at the metadata endpoint or another container would be
   // read and printed back.
   const response = await publicFetch(url, {
     headers: { 'User-Agent': 'kyto-slack-bot' },

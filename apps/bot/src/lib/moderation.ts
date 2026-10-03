@@ -44,21 +44,17 @@ export async function moderateTurn({
   if (!(owner && env.HACKCLUB_API_KEY) || authorUserId === owner) {
     return;
   }
+  const instructionHash = (text: string): string =>
+    createHash('sha256').update(text).digest('hex');
   const inputs = items
-    .filter((item) => {
-      if (!item.text.trim()) {
-        return false;
-      }
-      if (item.source !== 'custom instructions') {
-        return true;
-      }
-      const hash = createHash('sha256').update(item.text).digest('hex');
-      if (checkedInstructions.has(hash)) {
-        return false;
-      }
-      checkedInstructions.add(hash);
-      return true;
-    })
+    .filter(
+      (item) =>
+        item.text.trim() &&
+        !(
+          item.source === 'custom instructions' &&
+          checkedInstructions.has(instructionHash(item.text))
+        )
+    )
     .slice(0, MAX_INPUTS)
     .map((item) => ({ ...item, text: item.text.slice(0, MAX_INPUT_CHARS) }));
   if (inputs.length === 0) {
@@ -82,6 +78,17 @@ export async function moderateTurn({
       return;
     }
     const parsed = responseSchema.parse(await response.json());
+    // Marked checked only once a check actually came back: marked up front, a
+    // failed request (or one cut by MAX_INPUTS) meant those instructions were
+    // never checked at all.
+    for (const item of items) {
+      if (
+        item.source === 'custom instructions' &&
+        inputs.some((input) => input.source === item.source)
+      ) {
+        checkedInstructions.add(instructionHash(item.text));
+      }
+    }
     const flags = flaggedItems({ items: inputs, results: parsed.results });
     if (flags.length === 0) {
       return;

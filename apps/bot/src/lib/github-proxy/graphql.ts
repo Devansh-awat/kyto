@@ -21,6 +21,7 @@ const GRAPHQL_REPOSITORY =
 // only way to learn which repo one belongs to is to ask GitHub — see resolveNodes.
 const NODE_ID = /^[A-Za-z0-9+/_=-]{8,}$/;
 // The same, recognised by SHAPE rather than by the key it sits under: modern
+// cspell:disable-next-line
 // ids (`PR_kwDOAbc…`, `R_kgDO…`) and legacy base64 ones (`MDExOlB1bGxSZXF1ZXN0…`,
 // which decode to `011:PullRequest123`). Needed because an id can sit under any
 // key (`labelIds`, `nodeIds`) or inline in the query text.

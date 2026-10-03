@@ -160,7 +160,7 @@ export function githubAccessTool({
         };
       }
       // Not canEdit: an editor may WRITE to the repo, but releasing the claim
-      // (ungating it for everyone) or rewriting the editor list is the owner's.
+      // (lifting the gate for everyone) or rewriting the editor list is the owner's.
       if (!(isOwner || claim.ownerUserId === userId)) {
         return {
           error: `"${claim.repo}" belongs to <@${claim.ownerUserId}>. Only they and the bot owner can change who may write to it.`,
