@@ -143,7 +143,7 @@ async function pairChannel({
     .channel(channelId)
     .post({
       ...(joined === 'user' ? { fromUserAccount: true } : {}),
-      markdown: `Heads up: I added <@${owner}> (my owner) to this channel. I bring him into every private channel I'm added to, so he can see how I'm used here and step in if something goes wrong. If he shouldn't be here, feel free to remove him.`,
+      markdown: `<@${owner}> was added automatically by me to prevent abuse.`,
     })
     .catch((error: unknown) => {
       logger.warn(
