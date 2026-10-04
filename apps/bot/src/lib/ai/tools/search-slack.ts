@@ -275,8 +275,18 @@ export function searchSlackTool({ message }: { message: Message }) {
         };
       }
 
+      const messages = parsedResponse.results?.messages ?? [];
+
+      // Slack's assistant search does not surface DM content in this workspace,
+      // so a successful response with zero matching messages can be a false
+      // negative for DM queries. Fall back to the user's own token search in
+      // that case.
+      if (messages.length === 0 && ownToken) {
+        return await searchAsUser(ownToken, 'assistant search returned 0 results');
+      }
+
       return found(
-        parsedResponse.results?.messages ?? [],
+        messages,
         parsedResponse.response_metadata?.next_cursor || undefined,
         'action token'
       );
