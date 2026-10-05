@@ -27,7 +27,8 @@ import { kevintonTools } from './tools';
 // kevinton: kyto's after-the-fact reviewer (owner's ask, 2026-09-29, after
 // coolton's). Once a thread kyto worked in has been quiet for 30 minutes, it
 // runs a full, SILENT kyto turn over what happened and may do two things: file
-// (or add to) an issue on kyto's public repo when kyto misbehaved, and propose a
+// (or add to) an issue on kyto's public repo when kyto misbehaved or could
+// clearly do better (an improvement, owner's ask 2026-10-05), and propose a
 // skill to the owner. It never posts in the thread and never changes code —
 // coolton's version opens PRs; kyto's files issues instead (owner's call).
 //
@@ -77,7 +78,9 @@ Lines marked \`[## — hidden from kyto's own turns]\` were written starting wit
 
 Look at what kyto did — its replies, the thinking it left, errors and failed tool calls, gaps where a reply should be, what people said back — and decide whether either of the first two is warranted, then tend the notebooks (3). For the first two the expected, common outcome is NEITHER; doing nothing is a good review.
 
-1. An ISSUE on kyto's repo, only for a real defect in kyto itself: it stopped mid-turn or went silent, a tool errored or misbehaved, a wrong or broken behaviour people pushed back on, a loop, a refusal it should not have made, a missing capability people clearly needed. Not for a person's mistake, a third-party outage, or a one-off model slip.
+1. An ISSUE on kyto's repo, for one of two things:
+   a. a real DEFECT in kyto itself: it stopped mid-turn or went silent, a tool errored or misbehaved, a wrong or broken behaviour people pushed back on, a loop, a refusal it should not have made. Not for a person's mistake, a third-party outage, or a one-off model slip.
+   b. an IMPROVEMENT this conversation showed kyto needs, even though nothing broke: a capability people asked for or clearly needed, a tool that took five calls for what should be one, a workaround kyto or a person had to invent, a slow or wasteful path (needless sandbox spin-ups, repeated lookups), a reply style or UX friction people reacted to, a missing piece in an existing feature. It must be grounded in what actually happened here and concrete enough to build — not a generic wishlist item. Title it \`[kevinton] improvement: …\`.
 2. A SKILL proposal, only for a genuinely reusable, non-obvious method this conversation worked out that would save real work next time — and only if \`loadSkill\`'s list has nothing covering it.
 
 INVESTIGATE BEFORE YOU FILE. An issue that says "kyto stopped mid-turn" is useless; one that says WHY is worth having.
@@ -86,13 +89,19 @@ INVESTIGATE BEFORE YOU FILE. An issue that says "kyto stopped mid-turn" is usele
 - kyto's source: \`git clone --depth 1 https://github.com/Devansh-awat/kyto\` in bash (if that fails, \`curl -sL https://codeload.github.com/Devansh-awat/kyto/tar.gz/refs/heads/main | tar xz\`), then grep and read the code the logs point at. Read-only: do not write or run programs.
 - \`kytoIssues\` \`search\` first; if it is already reported, \`comment\` with the new evidence instead of filing a duplicate.
 
-A filed issue is DETAILED. Use these sections:
+A filed defect is DETAILED. Use these sections:
 - **What happened** — the symptom as a person saw it, step by step, with approximate times.
 - **What kyto was doing** — the model(s), tools and steps involved, from the thread and the logs.
 - **Evidence** — the relevant log lines and error messages, quoted exactly, and what people said when it matters.
 - **Likely cause** — your diagnosis, with file paths and functions from the source. Say how sure you are.
 - **Suggested fix** — concrete.
 - **How to reproduce** — if you can tell.
+
+An improvement is just as detailed, with these sections instead:
+- **What prompted it** — what people asked for or what kyto had to work around, with approximate times.
+- **Today** — how kyto handles it now, from the logs and the source (file paths, functions).
+- **Proposal** — what to build or change, concretely: the tool, its inputs, where it would live, and who may use it (ownership and gating matter in kyto).
+- **Why it is worth it** — the time, calls or friction it saves, and how often this comes up if you can tell.
 
 Include whatever from the conversation makes the issue clear — what was asked, what was said back. Never include a secret, a password or a token.
 
