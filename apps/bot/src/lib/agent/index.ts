@@ -2050,7 +2050,7 @@ function failedAttemptsLog(attempts: AttemptFailure[]) {
 
 // What the fallback note calls the usual model. Named in words rather than by
 // slug because the note is for people, not for the journal.
-const PRIMARY_LABEL = 'glm 5.3 flash on hack club ai';
+const PRIMARY_LABEL = 'gpt-6 luna on hack club ai';
 
 /**
  * The footer under a reply (lib/feedback/footer). Best-effort — a failure here

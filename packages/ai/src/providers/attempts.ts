@@ -38,15 +38,21 @@ export interface ModelAttempt {
 }
 
 /**
- * The primary model for main queries: GLM 5.3 Flash via the Hack Club
- * OpenRouter-compatible gateway. Owner's call, 2026-08-26 (PR #8); reinstated
- * 2026-09-04 after a one-day detour through TokenBom (a P2P quota marketplace,
- * fully removed — see MODELS.md) — the owner does not trust that provider and
- * asked for GLM back.
+ * The primary model for main queries: GPT-6 Luna via the Hack Club gateway.
+ * Owner's call, 2026-10-05 ("luna is faster now, so use luna as default"):
+ * through the proxy on a cold ~32k-token prompt it wrote ~2x faster than GLM
+ * 5.3 Flash (110-130 vs 44-79 tok/s; a 600-word answer in 8-11s vs 20-21s),
+ * costs less per token, and is served by OpenAI directly, so an OpenRouter
+ * spending-limit 429 (which took GLM down that same afternoon) doesn't reach
+ * it. GLM was primary 2026-08-26 → 2026-10-05 because it was smarter; it is
+ * now the first fallback rung.
  */
-export const PRIMARY_MODEL = 'z-ai/glm-5.3-flash';
+export const PRIMARY_MODEL = 'openai/gpt-6-luna';
 
-/** The previous primary remains the first proven, low-cost fallback rung. */
+/** The primary before luna — smart but slow — and now the first fallback. */
+const GLM_FLASH_MODEL = 'z-ai/glm-5.3-flash';
+
+/** The primary before GLM, now the second fallback rung: proven and cheap. */
 const FORMER_PRIMARY_MODEL = 'deepseek/deepseek-v4-flash-0731';
 
 // Cap output tokens on HackClub requests. OpenRouter enforces the daily spend
@@ -131,7 +137,7 @@ const mebboAttempts: ModelAttempt[] = env.MEBBO_API_KEY
 
 // Models that cannot accept image input. DeepSeek V4 Flash is served by
 // Cloudflare, which is text-only: an image turn otherwise 404s before fallback.
-// GLM 5.3 Flash is vision-capable, so it is intentionally not in this set.
+// GPT-6 Luna and GLM 5.3 Flash are vision-capable, so neither is in this set.
 const TEXT_ONLY_MODELS = new Set<string>([FORMER_PRIMARY_MODEL]);
 
 /** True unless the model's endpoint is known to reject image input. */
@@ -161,8 +167,8 @@ export const PRIMARY_ATTEMPT: ModelAttempt = catalogAttempt(PRIMARY_MODEL);
  * itself says the task is beyond it (owner's call, 2026-08-05 — "model self
  * escalate whenever needed … anyone can escalate it").
  *
- * These are DEAR. kimi-k3 is $3/M in and $15/M out against the low-cost GLM
- * Flash primary (and ~20x/50x the HackClub rungs behind it) — and the whole
+ * These are DEAR. kimi-k3 is $3/M in and $15/M out against the low-cost Luna
+ * primary (and ~20x/50x the HackClub rungs behind it) — and the whole
  * HackClub tier shares one $3/day cap, so a single long escalated turn can eat
  * most of a day's budget. That is why escalation is capped per turn AND per day
  * (see the upgradeModel tool), and why the ladder is ordered
@@ -178,7 +184,7 @@ export const UPGRADE_ATTEMPTS: ModelAttempt[] = [
 
 // The models a subagent runs on: **the same model the main turn runs on**
 // (owner's call, 2026-08-21 — "subagent use same deepseek v4 flash"), i.e.
-// PRIMARY_ATTEMPT itself, so subagents use the same GLM Flash model as the
+// PRIMARY_ATTEMPT itself, so subagents use the same model as the
 // parent and follow future primary changes automatically. A
 // subagent walks this list on failure OR on an empty report — a single pinned
 // model made a "herd" of subagents mostly report nothing back.
@@ -243,8 +249,12 @@ export const compactionAttempt: ModelAttempt | undefined =
 // provider keys rate-limited or in cooldown"). Re-add rungs here only after
 // verifying a real completion succeeds.
 export const LEADERBOARD_FALLBACK: ModelAttempt[] = [
-  // The former primary (2026-08-01 → 2026-08-21), now the first fallback after
-  // GLM Flash. It is proven tools-capable and remains inexpensive.
+  // GLM 5.3 Flash, the primary 2026-08-26 → 2026-10-05: smarter than Luna but
+  // half its speed, and the same price class. Served through OpenRouter, so it
+  // shares a failure mode the Luna primary doesn't (the top-up-wait 429).
+  catalogAttempt(GLM_FLASH_MODEL),
+  // DeepSeek V4 Flash, the primary 2026-08-01 → 2026-08-21. It is proven
+  // tools-capable and remains inexpensive.
   catalogAttempt(FORMER_PRIMARY_MODEL),
   // Qwen3.7 Plus ($0.32/M in, $1.28/M out, 1M ctx) — primary until deepseek
   // v4-flash was promoted over it (2026-08-01), demoted one place again by the
