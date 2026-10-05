@@ -234,7 +234,7 @@ export async function* renderStream({
 
   try {
     for await (const part of stream) {
-      timer.observe(part.type);
+      timer.observe(part);
       if (LOG_FULLSTREAM) {
         logger.info(
           {

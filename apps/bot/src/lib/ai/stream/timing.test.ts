@@ -33,7 +33,38 @@ describe('createStreamTimer', () => {
       modelMs: 10_000,
       steps: 2,
       toolMs: 3000,
+      tools: [],
       totalMs: 13_000,
+      ttftMs: 4000,
+    });
+  });
+
+  test('names the slowest tools and measures generation speed', () => {
+    const c = clock();
+    const timer = createStreamTimer(c.now);
+    timer.observe('start-step');
+    c.set(500);
+    timer.observe({ toolCallId: 'a', toolName: 'bash', type: 'tool-call' });
+    timer.observe({ toolCallId: 'b', toolName: 'opencode', type: 'tool-call' });
+    c.set(1500);
+    timer.observe({ toolCallId: 'a', type: 'tool-result' });
+    c.set(9500);
+    timer.observe({ toolCallId: 'b', type: 'tool-result' });
+    timer.observe({ type: 'finish-step', usage: { outputTokens: 30 } });
+    timer.observe('start-step');
+    c.set(10_000);
+    timer.observe('text-delta');
+    c.set(12_000);
+    timer.observe('text-delta');
+    timer.observe({ type: 'finish-step', usage: { outputTokens: 100 } });
+    expect(timer.summary()).toMatchObject({
+      // Step one's output came in one burst; step two wrote 100 in 2s.
+      outputTokensPerSecond: 50,
+      tools: [
+        { ms: 9000, name: 'opencode' },
+        { ms: 1000, name: 'bash' },
+      ],
+      ttftMs: 500,
     });
   });
 

@@ -253,7 +253,9 @@ export class LazySandbox {
     this.creating ??= (async () => {
       const started = Date.now();
       const resumed = await this.reconnect();
+      const reconnectMs = Date.now() - started;
       const sandbox = resumed ?? (await this.create());
+      const readyMs = Date.now() - started;
       await this.bootstrap(sandbox);
       this.sandbox = sandbox;
       if (this.persistent && this.sessionId) {
@@ -261,7 +263,12 @@ export class LazySandbox {
       }
       this.logger.info(
         {
+          // E2B's share (resume or create) apart from our own bootstrap, so a
+          // slow first tool call says which one was slow.
+          bootstrapMs: Date.now() - started - readyMs,
+          createMs: resumed ? undefined : readyMs - reconnectMs,
           ms: Date.now() - started,
+          reconnectMs,
           resumed: Boolean(resumed),
           sandboxId: sandbox.sandboxId,
         },
@@ -418,11 +425,16 @@ export class LazySandbox {
     if (this.persistent) {
       // `pause()` resolves false when it was ALREADY paused — still persisted,
       // still resumable. Only a thrown error means we failed to snapshot it.
+      const pauseStarted = Date.now();
       const failure = await sandbox
         .pause()
         .then(() => undefined)
         .catch((error: unknown) => error);
       if (!failure) {
+        this.logger.info(
+          { ms: Date.now() - pauseStarted, sandboxId: sandbox.sandboxId },
+          '[sandbox] paused'
+        );
         return;
       }
       this.logger.warn(

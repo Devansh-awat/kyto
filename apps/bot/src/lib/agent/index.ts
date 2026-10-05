@@ -153,6 +153,7 @@ const MAX_TRUNCATION_RETRIES = 2;
 // many at most, and how much of each the prompt quotes (the full text is in
 // the thread history above it).
 const MAX_CARRIED_UNANSWERED = 3;
+const SLOWEST_TOOLS_LOGGED = 5;
 const UNANSWERED_PREVIEW_LENGTH = 300;
 
 // How long a single attempt may go with NO sign of progress before it's aborted
@@ -451,6 +452,18 @@ async function executeTurn(
   // What the turn read and wrote, for the moderation check once it is over.
   const moderationTools: ModerationItem[] = [];
   let moderationReply = '';
+  // Where the whole turn's time went, summed over its attempts, for the
+  // turn's last log line — what kevinton reads to say why a turn was slow.
+  const turnTiming: {
+    attempts: number;
+    modelMs: number;
+    outputTokensPerSecond?: number;
+    setupMs?: number;
+    slowestTools: { ms: number; name: string }[];
+    toolMs: number;
+    ttftMs?: number;
+  } = { attempts: 0, modelMs: 0, slowestTools: [], toolMs: 0 };
+  const timingLog = () => ({ ...turnTiming, totalMs: Date.now() - turnStart });
   // The answering attempt's prompt-token split, logged on `turn complete`. Kept
   // separate from usageFooter: the footer is a user-facing opt-out, this is
   // operational (is the 1h cache actually being hit?) and always recorded.
@@ -566,13 +579,17 @@ async function executeTurn(
         outputTokens: turnUsage?.outputTokens,
         steps: handledSteps,
         threadId,
+        timing: timingLog(),
       },
       '[agent] turn complete'
     );
   } catch (error) {
     const reason = abortReasonOf(controller.signal);
     if (reason) {
-      logger.info({ reason, threadId }, '[agent] turn interrupted');
+      logger.info(
+        { reason, threadId, timing: timingLog() },
+        '[agent] turn interrupted'
+      );
       // What it had already written still goes out, as on a failure.
       await reply?.flush({ thread }).catch(() => undefined);
       await cleanup();
@@ -587,6 +604,7 @@ async function executeTurn(
           stage: errorStage,
           status: errorStatus(error),
           threadId,
+          timing: timingLog(),
         },
         '[agent] turn failed'
       );
@@ -1047,6 +1065,7 @@ async function executeTurn(
           fromUserAccount: asUserAccount,
           threadId,
         });
+        turnTiming.setupMs ??= Date.now() - turnStart;
         logger.info(
           {
             attempt: attemptLog(currentAttempt),
@@ -1172,6 +1191,23 @@ async function executeTurn(
           onSkip: () => {
             // A skip is a deliberate, successful "no reply".
             skipped = true;
+          },
+          onTally: ({ timing }) => {
+            if (!timing) {
+              return;
+            }
+            turnTiming.attempts += 1;
+            turnTiming.modelMs += timing.modelMs;
+            turnTiming.toolMs += timing.toolMs;
+            turnTiming.ttftMs ??= timing.ttftMs;
+            turnTiming.outputTokensPerSecond =
+              timing.outputTokensPerSecond ?? turnTiming.outputTokensPerSecond;
+            turnTiming.slowestTools = [
+              ...turnTiming.slowestTools,
+              ...timing.tools,
+            ]
+              .sort((a, b) => b.ms - a.ms)
+              .slice(0, SLOWEST_TOOLS_LOGGED);
           },
           onTextDelta: (text) => {
             producedText = true;

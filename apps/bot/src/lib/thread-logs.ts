@@ -39,6 +39,11 @@ export function startThreadLogs(): void {
   setInterval(prune, PRUNE_MS);
 }
 
+const TIMING_LINE =
+  /\[agent\] turn (?:complete|interrupted|failed)|\[stream\] attempt stream ended|\[sandbox\] (?:materialized|paused)/;
+const MAX_TIMING_LINES = 40;
+const MAX_TIMING_LINE_CHARS = 2000;
+
 /**
  * A thread's captured log, oldest first, as one string. Past `maxChars` the
  * OLDEST lines are dropped — the end of a turn is where it went wrong.
@@ -51,10 +56,22 @@ export async function threadLogText({
   maxChars: number;
   since?: Date;
   threadId: string;
-}): Promise<{ text: string; truncated: boolean }> {
+}): Promise<{ text: string; timing: string[]; truncated: boolean }> {
   const rows = await readThreadLogs({ threadId, ...(since ? { since } : {}) });
   const text = rows.map((row) => row.lines).join('\n');
+  // Each turn's time breakdown, picked out BEFORE the cut: in a long thread
+  // the oldest turns' lines are the first to go, and with them any answer to
+  // "where did that slow turn's time go".
+  const timing = text
+    .split('\n')
+    .filter((line) => TIMING_LINE.test(line))
+    .slice(-MAX_TIMING_LINES)
+    .map((line) => line.slice(0, MAX_TIMING_LINE_CHARS));
   return text.length > maxChars
-    ? { text: `…(older lines cut)\n${text.slice(-maxChars)}`, truncated: true }
-    : { text, truncated: false };
+    ? {
+        text: `…(older lines cut)\n${text.slice(-maxChars)}`,
+        timing,
+        truncated: true,
+      }
+    : { text, timing, truncated: false };
 }

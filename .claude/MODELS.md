@@ -63,7 +63,9 @@
 
 ## Turn logging
 
-Every failure mode above is readable from `journalctl -u kyto.service`. Lifecycle lines in order: `[agent] turn started` → `routed turn` → `attempt started` → `[stream] attempt stream ended` (the `StreamTally`: textChars, toolCalls, finishReasons, errors) → `attempt handled the turn` / `attempt failed, falling back` → `turn complete` / `turn failed` (durationMs + `failedAttempts` = the whole walk). `streamAttempt`'s `onError` must stay — without it the SDK dumps a raw unattributed stack. `errorStatus()`/`deepErrorText()` dig the status/body out of the wrapped `AI_RetryError`/`APICallError` chain.
+Every failure mode above is readable from the container's logs (`docker logs`, Coolify; `kyto.service` is masked) and, per thread, from `thread_logs`. Lifecycle lines in order: `[agent] turn started` → `routed turn` → `attempt started` → `[stream] attempt stream ended` (the `StreamTally`: textChars, toolCalls, finishReasons, errors) → `attempt handled the turn` / `attempt failed, falling back` → `turn complete` / `turn failed` (durationMs + `failedAttempts` = the whole walk). `streamAttempt`'s `onError` must stay — without it the SDK dumps a raw unattributed stack. `errorStatus()`/`deepErrorText()` dig the status/body out of the wrapped `AI_RetryError`/`APICallError` chain.
+
+**Where the time went** (owner's ask 2026-10-05, read by kevinton): each attempt's `timing` (`stream/timing.ts`, tested) — `ttftMs`, `firstOutputMs` per step, `modelMs` vs `toolMs` (parallel calls once), `outputTokensPerSecond` (a step's first model output to its LAST, so tool time inside a step doesn't count against the model), the 8 slowest `tools` (an unfinished one marked). The turn's last line (`turn complete`/`interrupted`/`failed`) sums them as `timing` with `setupMs` (before the first attempt). E2B: `[sandbox] materialized` splits `reconnectMs`/`createMs`/`bootstrapMs`; `[sandbox] paused` its `ms`. `threadLogText` picks these lines out before truncation as `timing`.
 
 ## Sign in with ChatGPT (OAuth) — the account side
 

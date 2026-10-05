@@ -249,7 +249,7 @@ export function kevintonTools({
       all: z.boolean().optional(),
     }),
     execute: async ({ all }) => {
-      const { text, truncated } = await threadLogText({
+      const { text, timing, truncated } = await threadLogText({
         maxChars: MAX_LOG_CHARS,
         threadId,
         ...(reviewedAt && !all ? { since: reviewedAt } : {}),
@@ -259,6 +259,9 @@ export function kevintonTools({
           text ||
           'No lines captured for this thread (it predates the capture, or they were pruned after a week).',
         ...(truncated ? { note: 'The oldest lines were cut to fit.' } : {}),
+        // Every turn's and attempt's time breakdown, even when the lines
+        // around them were cut.
+        timing,
       };
     },
   });
