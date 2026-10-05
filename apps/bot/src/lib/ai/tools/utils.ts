@@ -16,7 +16,7 @@ const DM_CHANNEL_ID = /^D[A-Z0-9]+$/i;
 const GROUP_CHANNEL_ID = /^(G[A-Z0-9]+|mpdm-)/i;
 
 const UNREACHABLE_CONVERSATION =
-  'That is a DM or private conversation. Kyto is not a member of it and CANNOT read it — this is a hard Slack limit, not a permission you can request, and no other tool will get at it either. Do not retry with a different tool. Ask the person to paste the text, forward the message into a channel kyto is in, or say what it said.';
+  "That is a DM or private conversation kyto's bot is not in, so this tool can't read it. readConversationHistory can — it reads such a conversation with the asking person's OWN connected Slack account, if they are in it (it links them to connect one otherwise). Don't try other tools; failing that, ask them to paste the text.";
 
 export async function assertReadableChannel(
   chatChannelId: string,

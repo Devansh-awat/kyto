@@ -1,7 +1,10 @@
+import { WebClient } from '@slack/web-api';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { slack } from '@/lib/chat';
-import { toChatSlackChannelId } from '@/lib/slack/ids';
+import logger from '@/lib/logger';
+import { toChatSlackChannelId, toRawSlackChannelId } from '@/lib/slack/ids';
+import { askerSlackToken, slackAuthorizeUrl } from '@/lib/slack-oauth';
 import { assertReadableChannel, joinChannel } from './utils';
 
 export function readConversationHistoryTool({
@@ -13,7 +16,7 @@ export function readConversationHistoryTool({
 }) {
   return tool({
     description:
-      'Read channel history or thread replies. The current conversation is always readable; another private channel or DM only if the person asking is a member of it.',
+      "Read channel history or thread replies. The current conversation is always readable. Another private channel, DM or group DM — including the person's DMs with other people or apps — is read with THEIR OWN connected Slack account, so it works for any conversation they are in once they have connected one (the error links them to it otherwise).",
     inputSchema: z.object({
       channelId: z.string().optional(),
       threadId: z.string().optional(),
@@ -38,10 +41,35 @@ export function readConversationHistoryTool({
 
       const chatChannelId = toChatSlackChannelId(resolvedChannelId);
 
-      await assertReadableChannel(chatChannelId, {
+      const refusal = await assertReadableChannel(chatChannelId, {
         askerUserId,
         currentThreadId,
-      });
+      }).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      if (refusal) {
+        // kyto's bot can't read it (a DM, or a private channel it isn't in —
+        // or one the asker isn't in). The asker's OWN token can read exactly
+        // the conversations they are in, so asking for one of theirs is the
+        // consent (owner's call 2026-10-05: no click per read).
+        const token = await askerSlackToken(askerUserId);
+        if (!token) {
+          const connect = slackAuthorizeUrl(askerUserId);
+          throw new Error(
+            connect
+              ? `kyto's bot can't read that conversation. If it is one the person is in, they can connect their own Slack account and kyto will read it as them: ${connect}`
+              : String(refusal instanceof Error ? refusal.message : refusal)
+          );
+        }
+        return await readAsAsker({
+          channel: toRawSlackChannelId(chatChannelId),
+          cursor,
+          limit,
+          threadTs: resolvedThreadTs,
+          token,
+        });
+      }
 
       await joinChannel(chatChannelId);
 
@@ -83,4 +111,84 @@ export function readConversationHistoryTool({
       };
     },
   });
+}
+
+const askerMessageSchema = z.looseObject({
+  bot_id: z.string().optional(),
+  edited: z.unknown().optional(),
+  files: z
+    .array(
+      z.looseObject({
+        mimetype: z.string().optional(),
+        name: z.string().optional(),
+      })
+    )
+    .optional(),
+  reply_count: z.number().optional(),
+  text: z.string().optional(),
+  thread_ts: z.string().optional(),
+  ts: z.string(),
+  user: z.string().optional(),
+  username: z.string().optional(),
+});
+const askerHistorySchema = z.looseObject({
+  messages: z.array(askerMessageSchema).default([]),
+  response_metadata: z
+    .looseObject({ next_cursor: z.string().optional() })
+    .optional(),
+});
+
+const MS_PER_SECOND = 1000;
+
+/** A conversation read with the asker's own token: only theirs can be read. */
+async function readAsAsker({
+  channel,
+  cursor,
+  limit,
+  threadTs,
+  token,
+}: {
+  channel: string;
+  cursor?: string;
+  limit: number;
+  threadTs?: string;
+  token: string;
+}) {
+  const client = new WebClient(token);
+  const raw = threadTs
+    ? await client.conversations.replies({
+        channel,
+        cursor,
+        limit,
+        ts: threadTs,
+      })
+    : await client.conversations.history({ channel, cursor, limit });
+  const page = askerHistorySchema.parse(raw);
+  logger.info(
+    { channel, count: page.messages.length, threadTs },
+    "[readConversationHistory] read with the asker's own token"
+  );
+  return {
+    channelId: channel,
+    messages: page.messages.map((message) => ({
+      author: {
+        isBot: Boolean(message.bot_id),
+        userId: message.user,
+        userName: message.username,
+      },
+      dateSent: new Date(Number(message.ts) * MS_PER_SECOND).toISOString(),
+      edited: Boolean(message.edited),
+      files: (message.files ?? []).map(({ mimetype, name }) => ({
+        mimeType: mimetype,
+        name,
+      })),
+      id: message.ts,
+      replyCount: message.reply_count,
+      text: message.text ?? '',
+      threadTs: message.thread_ts,
+    })),
+    nextCursor: page.response_metadata?.next_cursor || undefined,
+    readAs: 'the asker (their own Slack account)',
+    threadTs: threadTs ?? null,
+  };
 }

@@ -308,3 +308,20 @@ export async function deleteMessageAsUser({
     return false;
   }
 }
+
+/**
+ * The asking user's own Slack token, if kyto has one.
+ *
+ * Their per-user OAuth grant first (`search:read`, granted by them, in their
+ * name). The owner also has a token in the environment from before grants
+ * existed; using it FOR HIM is the same principal, so it stays as a fallback —
+ * but it is never used for anyone else, or kyto would be searching one person's
+ * private channels on another person's behalf.
+ */
+export async function askerSlackToken(userId: string): Promise<string | null> {
+  const granted = await userSlackToken(userId).catch(() => null);
+  if (granted) {
+    return granted;
+  }
+  return userId === env.OWNER_USER_ID ? (env.SLACK_USER_TOKEN ?? null) : null;
+}

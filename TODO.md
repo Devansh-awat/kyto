@@ -38,15 +38,13 @@ loses turns against HackClub's 5s header timeout. Worth doing as its own pass �
 flash was picked partly BECAUSE it answers fast, so "pro is smarter" alone does
 not settle it.
 
-**Two things the Slack OAuth grant still unlocks.** Searching as the user
-shipped 2026-08-09 (see below); these two have not:
+**One thing the Slack OAuth grant still unlocks.** Searching as the user
+shipped 2026-08-09 and reading their DMs 2026-10-05 (no click per read, owner's
+call); this has not:
 - **send as the person who asked**, with THEIR confirm click. The machinery
   exists — the confirm-post gate already routes a mirrored post to the person
   being mirrored (`approverUserId`). This would make that real rather than an
   impersonation of them by the owner's token.
-- **reading a private channel or DM needs their approval per use** — the grant
-  is consent to the capability, not to any particular read. Wire it through the
-  same confirm gate.
 
 **Reduce the system prompt.** Asked 2026-07-28 and still not attempted. Measure
 the assembled prompt first; it is paid on every turn of every thread against the

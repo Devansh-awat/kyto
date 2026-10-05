@@ -1,12 +1,11 @@
 import type { WebClient } from '@slack/web-api';
 import { tool } from 'ai';
 import { z } from 'zod';
-import { env } from '@/env';
 import { recallActionToken } from '@/harness/action-tokens';
 import type { Message } from '@/harness/types';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
-import { slackAuthorizeUrl, userSlackToken } from '@/lib/slack-oauth';
+import { askerSlackToken, slackAuthorizeUrl } from '@/lib/slack-oauth';
 import { toLogError } from '@/lib/utils/error';
 
 const actionTokenSchema = z.looseObject({
@@ -175,23 +174,6 @@ const userSearchResponseSchema = z.looseObject({
     .optional(),
 });
 
-/**
- * The searching user's own Slack token, if kyto has one.
- *
- * Their per-user OAuth grant first (`search:read`, granted by them, in their
- * name). The owner also has a token in the environment from before grants
- * existed; using it FOR HIM is the same principal, so it stays as a fallback —
- * but it is never used for anyone else, or kyto would be searching one person's
- * private channels on another person's behalf.
- */
-async function searcherToken(userId: string): Promise<string | null> {
-  const granted = await userSlackToken(userId).catch(() => null);
-  if (granted) {
-    return granted;
-  }
-  return userId === env.OWNER_USER_ID ? (env.SLACK_USER_TOKEN ?? null) : null;
-}
-
 export function searchSlackTool({ message }: { message: Message }) {
   return tool({
     description:
@@ -294,7 +276,7 @@ export function searchSlackTool({ message }: { message: Message }) {
 
       // 1. The asker's own token: exactly their view, their DMs included
       //    (`search:read` covers DMs; a bot token never can).
-      const ownToken = await searcherToken(userId);
+      const ownToken = await askerSlackToken(userId);
       if (ownToken && (!prefix || prefix === CURSOR_PREFIX.asker)) {
         const result = await searchMessages({
           client: slack.webClient,
