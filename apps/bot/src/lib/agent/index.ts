@@ -704,6 +704,39 @@ async function executeTurn(
     message: Message;
     thread: ThreadHandle;
   }): AsyncGenerator<string | StreamChunk> {
+    // Set per attempt (the watchdog is armed inside the loop below), but the
+    // toolset is built ONCE up front — so the tools get a stable indirection
+    // that always reaches the currently running attempt's watchdog.
+    let extendDeadline: ((extraMs: number) => () => void) | undefined;
+    // The model's own "this is beyond me" signal. `upgradeModel` fills `pending`
+    // and its call ENDS the attempt (a stop condition, like skip), so the weaker
+    // model never carries on after asking to be replaced.
+    const escalation: Escalation = {};
+    // Built once: the toolset does not depend on the chosen model. Its keys let
+    // renderStream hide hallucinated calls to non-existent tools; activeTools
+    // drives deferred-tool visibility via prepareStep. Started BEFORE the
+    // prompt and the Jev checks, which it needs neither of: connecting a
+    // person's MCP servers on a cold listing cache was ~2s of dead time in
+    // front of the first model call.
+    const pendingTools = buildTools({
+      asUserAccount,
+      bot,
+      escalation,
+      extendAttemptDeadline: (extraMs) =>
+        extendDeadline?.(extraMs) ??
+        (() => {
+          // No attempt is running, so there is no hold to release.
+        }),
+      getSandboxContext: () => sandboxContext,
+      guardCodeTool: codingMonitor.guardTool,
+      message: turnMessage,
+      secret,
+      thread: turnThread,
+    });
+    // A turn that dies before awaiting the tools must still close them, and a
+    // failed build must not surface as an unhandled rejection meanwhile.
+    pendingTools.catch(() => undefined);
+    closeTools = async () => (await pendingTools).close();
     let messageText = await buildPrompt(turnMessage, {
       codeChannel: await isCodeChannel(
         slack.channelIdFromThreadId(turnThread.id)
@@ -840,17 +873,6 @@ async function executeTurn(
       ((hackclubBudgetExhausted || hackclubUnavailable) &&
         candidate.provider === HACKCLUB_PROVIDER);
     let attempt: ModelAttempt | undefined;
-    // Set per attempt (the watchdog is armed inside the loop below), but the
-    // toolset is built ONCE up front — so the tools get a stable indirection
-    // that always reaches the currently running attempt's watchdog.
-    let extendDeadline: ((extraMs: number) => () => void) | undefined;
-    // Built once: the toolset does not depend on the chosen model. Its keys let
-    // renderStream hide hallucinated calls to non-existent tools; activeTools
-    // drives deferred-tool visibility via prepareStep.
-    // The model's own "this is beyond me" signal. `upgradeModel` fills `pending`
-    // and its call ENDS the attempt (a stop condition, like skip), so the weaker
-    // model never carries on after asking to be replaced.
-    const escalation: Escalation = {};
     // An earlier turn in this thread escalated, so this one starts there too
     // (see claimStickyUpgrade for the two bounds). `used` is set with it: the
     // turn is already on the strongest rung kyto has, and letting it ask for
@@ -867,22 +889,7 @@ async function executeTurn(
     let nextAttemptLabel: 'fallback' | 'upgraded' | undefined = stickyUpgrade
       ? 'upgraded'
       : undefined;
-    const built = await buildTools({
-      asUserAccount,
-      bot,
-      escalation,
-      extendAttemptDeadline: (extraMs) =>
-        extendDeadline?.(extraMs) ??
-        (() => {
-          // No attempt is running, so there is no hold to release.
-        }),
-      getSandboxContext: () => sandboxContext,
-      guardCodeTool: codingMonitor.guardTool,
-      message: turnMessage,
-      secret,
-      thread: turnThread,
-    });
-    closeTools = built.close;
+    const built = await pendingTools;
     built.preload(preloadNames);
     const knownTools = new Set(Object.keys(built.tools));
 
