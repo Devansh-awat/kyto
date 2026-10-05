@@ -561,6 +561,8 @@ async function executeTurn(
     const reason = abortReasonOf(controller.signal);
     if (reason) {
       logger.info({ reason, threadId }, '[agent] turn interrupted');
+      // What it had already written still goes out, as on a failure.
+      await reply?.flush({ thread }).catch(() => undefined);
       await cleanup();
     } else {
       logger.error(
@@ -1298,6 +1300,14 @@ async function executeTurn(
         // silent mid-task. Raise the timeout so it continues on the next model.
         if (attemptAbort.signal.reason instanceof AttemptTimeoutError) {
           throw attemptAbort.signal.reason;
+        }
+
+        // Nor does the TURN's abort (`!stop`, a message interrupting it, a
+        // redeploy's SIGTERM). Whatever status line had streamed then made the
+        // attempt "handled": the turn logged complete, with a footer, while a
+        // `wait` it had called was still pending (issues #25, #31).
+        if (controller.signal.aborted) {
+          throw controller.signal.reason;
         }
 
         if (attemptStreamError && attemptFinishReason !== 'stop') {
