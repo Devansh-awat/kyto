@@ -158,7 +158,7 @@ const MAX_TRUNCATION_RETRIES = 2;
 // the thread history above it).
 const MAX_CARRIED_UNANSWERED = 3;
 const SLOWEST_TOOLS_LOGGED = 5;
-const MAX_TTFTS_LOGGED = 50;
+const MAX_FIRST_TOKENS_LOGGED = 50;
 const UNANSWERED_PREVIEW_LENGTH = 300;
 
 // How long a single attempt may go with NO sign of progress before it's aborted
@@ -478,7 +478,7 @@ async function executeTurn(
     turnTiming.modelMs += timing.modelMs;
     turnTiming.toolMs += timing.toolMs;
     turnTiming.ttftMs = [...turnTiming.ttftMs, ...timing.firstOutputMs].slice(
-      -MAX_TTFTS_LOGGED
+      -MAX_FIRST_TOKENS_LOGGED
     );
     turnTiming.outputTokensPerSecond =
       timing.outputTokensPerSecond ?? turnTiming.outputTokensPerSecond;
