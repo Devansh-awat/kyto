@@ -25,7 +25,9 @@ const POLL_INTERVAL_MS = 30_000;
 const inFlight = new Set<string>();
 
 /** What this reminder posts on this fire, by kind. */
-async function buildReminderMessage(reminder: Reminder): Promise<string> {
+async function buildReminderMessage(
+  reminder: Reminder
+): Promise<string | null> {
   if (reminder.kind === 'script') {
     if (!reminder.url) {
       throw new Error("Script reminder is missing a 'url'.");
@@ -76,7 +78,12 @@ function jobHeader(reminder: Reminder): string {
 async function fireReminder(bot: Chat, reminder: Reminder): Promise<void> {
   let markdown: string;
   try {
-    markdown = await buildReminderMessage(reminder);
+    const built = await buildReminderMessage(reminder);
+    // An agent job that already posted its report where this would land.
+    if (built === null) {
+      return;
+    }
+    markdown = built;
   } catch (error) {
     // A failed run still posts, so a broken command/script/job is visible to
     // its owner rather than silently doing nothing on every interval.

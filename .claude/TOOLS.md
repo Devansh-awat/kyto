@@ -112,7 +112,7 @@ If a captcha DOES appear, the tool/prompt tell the model to snapshot the page an
 - `message` (default, 60s): posts `text` verbatim.
 - `script` (60s): fetches `url` each fire and posts its content (`fetchUrlText`).
 - `bash` (5 min; `lib/reminders/bash.ts`): runs `command`, posts stdout/stderr, **in the persistent sandbox of the thread it was created in** — so it can run a script kyto wrote earlier. A row without `thread_id` falls back to `runOnce` (throwaway sandbox, empty every fire).
-- `agent` (1 hour; `lib/reminders/agent.ts`): runs a **headless kyto** (same loop, full toolset, nothing streamed) with `text` as instructions and posts the final reply. Pinned to the cheap subagent model. Reuses the thread's sandbox. `searchSlack` does NOT work here (its action token needs a live interaction).
+- `agent` (1 hour; `lib/reminders/agent.ts`): runs a **headless kyto** (same loop, full toolset, nothing streamed) with `text` as instructions and posts the final reply — UNLESS the job itself already `postMessage`d into the conversation the reminder lands in (a job told to "report to #kyto"), which used to give two posts there. Pinned to the cheap subagent model. Reuses the thread's sandbox. `searchSlack` does NOT work here (its action token needs a live interaction).
 
 Tools: `scheduleRecurringReminder`, `listReminders`, `pauseReminder`, `resumeReminder`, `cancelReminder`, `editReminder` (only the fields passed are touched; a new schedule takes effect from now; a bare `intervalSeconds` is re-floored against the kind). An **App Home "Reminders"** section lists each reminder a user may act on with Pause/Resume/Delete.
 

@@ -7,6 +7,7 @@ import {
 import type { Reminder } from '@repo/db/queries';
 import { LazySandbox } from '@repo/sandbox';
 import type { ToolSet } from 'ai';
+import { z } from 'zod';
 import { env } from '@/env';
 import type { ThreadHandle } from '@/harness/thread';
 import type { Message } from '@/harness/types';
@@ -58,14 +59,25 @@ function syntheticMessage(reminder: Reminder, threadId: string): Message {
   };
 }
 
+// A job told to "report to #kyto" posts its report there itself, and the
+// scheduler then posted the job's closing summary ("Reported to #kyto: …")
+// into the same channel — the owner's daily repo digest arrived as two posts.
+const postResultSchema = z.looseObject({ success: z.boolean().optional() });
+const postInputSchema = z.looseObject({ id: z.string() });
+const CONVERSATION_ID = /[CDG][A-Z0-9]{6,}/;
+
 /**
- * Run an agent reminder and return the text it decided to post.
+ * Run an agent reminder and return the text it decided to post — or null when
+ * the job already posted into the conversation the reminder lands in, so a
+ * second message there would only repeat it.
  *
  * It reuses the persistent sandbox of the thread it was created in (holding
  * that thread's lock), so it can read files kyto wrote when the reminder was
  * set up. Without a `threadId` it gets its own throwaway sandbox.
  */
-export async function runReminderAgent(reminder: Reminder): Promise<string> {
+export async function runReminderAgent(
+  reminder: Reminder
+): Promise<string | null> {
   const attempt = subagentAttempt;
   if (!attempt) {
     throw new Error(
@@ -124,7 +136,7 @@ async function synthesizeReport({
 async function runAgent(
   reminder: Reminder,
   attempt: NonNullable<typeof subagentAttempt>
-): Promise<string> {
+): Promise<string | null> {
   // Where the job's tools act, and where an agent reminder without a channel
   // posts: the thread it was created in, else the user's DM.
   const thread: ThreadHandle = reminder.threadId
@@ -184,14 +196,35 @@ async function runAgent(
       tools: built.tools,
     });
 
+    // Where the reminder's own message would land.
+    const destination = (reminder.channelId ?? thread.id).match(
+      CONVERSATION_ID
+    )?.[0];
     let text = '';
     let toolCalls = 0;
+    let postedToDestination = false;
     for await (const part of result.fullStream) {
       if (part.type === 'text-delta') {
         text += part.text;
       } else if (part.type === 'tool-call') {
         toolCalls += 1;
+      } else if (
+        part.type === 'tool-result' &&
+        part.toolName === 'postMessage' &&
+        postResultSchema.safeParse(part.output).data?.success !== false
+      ) {
+        const target = postInputSchema
+          .safeParse(part.input)
+          .data?.id.match(CONVERSATION_ID)?.[0];
+        postedToDestination ||= Boolean(destination && target === destination);
       }
+    }
+    if (postedToDestination) {
+      logger.info(
+        { reminderId: reminder.id },
+        '[reminders] the job posted its own report where the reminder lands; not posting a second'
+      );
+      return null;
     }
     const reply = text.trim();
     if (reply) {
