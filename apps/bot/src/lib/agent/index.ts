@@ -149,6 +149,11 @@ const MAX_CONTINUATIONS = 3;
 // nothing about the model, so it must not cost a fallback rung — but a provider
 // that truncates every single time has to be routed away from eventually.
 const MAX_TRUNCATION_RETRIES = 2;
+// An interrupted, unanswered @mention carried into the follow-up turn: how
+// many at most, and how much of each the prompt quotes (the full text is in
+// the thread history above it).
+const MAX_CARRIED_UNANSWERED = 3;
+const UNANSWERED_PREVIEW_LENGTH = 300;
 
 // How long a single attempt may go with NO sign of progress before it's aborted
 // (see the STALL watchdog below — it's re-armed on every streamed text delta,
@@ -254,6 +259,11 @@ export function runTurn(input: {
    */
   secret?: boolean;
   thread: ThreadHandle;
+  /**
+   * Messages addressed to kyto whose turns were interrupted before any reply,
+   * carried into the follow-up so they are answered, not lost.
+   */
+  unanswered?: Message[];
 }): Promise<void> {
   // One slot per kyto: a thread pinging both the app and the user account
   // runs both turns, instead of the second interrupting the first and taking
@@ -306,12 +316,14 @@ async function executeTurn(
     resumed = false,
     secret = false,
     thread,
+    unanswered = [],
   }: {
     asUserAccount?: boolean;
     message: Message;
     resumed?: boolean;
     secret?: boolean;
     thread: ThreadHandle;
+    unanswered?: Message[];
   },
   controller: AbortController
 ): Promise<void> {
@@ -625,7 +637,17 @@ async function executeTurn(
         ? queuedInput(activeTurn)
         : undefined;
     if (resume) {
-      runTurn(resume).catch((error: unknown) => {
+      // The follow-up answers the message that interrupted this turn. One that
+      // was addressed to kyto and got nothing — not a word, not a skip — is
+      // only history to it, and in a busy thread an @mention was dropped for
+      // good that way (issue #27). Name it, so the follow-up answers both.
+      const addressed =
+        !(secret || answeredBy || moderationReply.trim()) &&
+        (message.isMention || slack.isDM(threadId));
+      const carried = [...unanswered, ...(addressed ? [message] : [])]
+        .filter(({ id }) => id !== resume.message.id)
+        .slice(-MAX_CARRIED_UNANSWERED);
+      runTurn({ ...resume, unanswered: carried }).catch((error: unknown) => {
         logger.error(
           { err: error, threadId },
           '[agent] failed to run interrupted follow-up turn'
@@ -656,6 +678,13 @@ async function executeTurn(
     // The same message, again, after a restart cut the first try short. What
     // was already posted is in the thread above; what was already DONE (a post,
     // a file, a reminder) may not be obvious from it.
+    if (unanswered.length > 0) {
+      const lines = unanswered.map(
+        ({ author, text }) =>
+          `- ${author.fullName ?? author.userName}: ${clamp(text, UNANSWERED_PREVIEW_LENGTH)}`
+      );
+      messageText = `${messageText}\n\n<unanswered_earlier>These earlier messages in the thread were addressed to you, and a newer message interrupted you before you replied to them:\n${lines.join('\n')}\nAnswer them in this reply too, unless the thread has already settled them.</unanswered_earlier>`;
+    }
     if (resumed) {
       messageText = `${messageText}\n\n<resumed_after_restart>kyto restarted while answering this message and is picking it back up. Anything you already posted is in the thread above — continue from there instead of starting over, and check before repeating anything with a side effect (a post, a DM, a reminder, a file), since it may already have happened.</resumed_after_restart>`;
     }
@@ -1486,7 +1515,11 @@ async function executeTurn(
         // fire a side effect a second time).
         if (
           !(handled || attemptToolActivity) &&
-          truncatedStream &&
+          // No finish part AT ALL is the same drop one step earlier: Hack
+          // Club's GLM answered ~25ms empty streams like that, and each one
+          // spent a fallback rung (issue #27).
+          (truncatedStream ||
+            (attemptFinishReason === undefined && !attemptStreamError)) &&
           truncationRetries < MAX_TRUNCATION_RETRIES
         ) {
           truncationRetries += 1;
