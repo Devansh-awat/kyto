@@ -13,7 +13,9 @@
 // never mutate the array mid-turn.
 //
 // In memory on purpose: a restart costs one extra loadTools call in whichever
-// threads were live, which is not worth a table.
+// threads were live, which is not worth a table. loadTools' summary says so —
+// it once promised "the rest of this thread" and the model then called a
+// dropped tool without loading it (issue #23).
 
 // Long enough to cover a working session, short enough that a thread nobody
 // touches again stops holding schemas.
@@ -48,6 +50,9 @@ export function recallLoadedTools(threadId: string): string[] {
     store.delete(threadId);
     return [];
   }
+  // A recall is a use: a thread still being worked in keeps its tools past
+  // the TTL, which used to run from the last loadTools call alone.
+  entry.at = Date.now();
   return [...entry.names];
 }
 

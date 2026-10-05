@@ -845,7 +845,7 @@ export async function buildTools({
       return Promise.resolve({
         loaded,
         summary: loaded.length
-          ? `Loaded: ${loaded.join(', ')}. They stay available for the rest of this thread — you don't have to load them again on a later message here.`
+          ? `Loaded: ${loaded.join(', ')}. They usually stay available on later messages in this thread, but a restart drops them — if one comes back unavailable, load it again.`
           : 'No matching tools.',
         unknown,
       });
