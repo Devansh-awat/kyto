@@ -1,6 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { env } from '@/env';
+import { recallActionToken } from '@/harness/action-tokens';
 import type { Message } from '@/harness/types';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
@@ -79,6 +80,9 @@ const slackSearchResponseSchema = z.looseObject({
     })
     .optional(),
 });
+
+// A cursor from `search.messages` (below), told apart from the assistant API's.
+const USER_CURSOR_PREFIX = 'user:';
 
 // `search.messages` on a USER token — the second way in, and the one that does
 // not expire mid-turn. Shaped to the same fields as the assistant path so the
@@ -168,10 +172,15 @@ export function searchSlackTool({ message }: { message: Message }) {
     execute: async ({ cursor, query }) => {
       const userId = message.author.userId;
       const parsedRaw = actionTokenSchema.safeParse(message.raw);
-      const actionToken = parsedRaw.success
-        ? (parsedRaw.data.action_token ??
-          parsedRaw.data.assistant_thread?.action_token)
-        : undefined;
+      const actionToken =
+        (parsedRaw.success
+          ? (parsedRaw.data.action_token ??
+            parsedRaw.data.assistant_thread?.action_token)
+          : undefined) ??
+        recallActionToken({
+          channel: slack.channelIdFromThreadId(message.threadId),
+          ts: message.id,
+        });
 
       const found = (
         messages: unknown[],
@@ -195,13 +204,24 @@ export function searchSlackTool({ message }: { message: Message }) {
       // it decides what to do when the assistant token is missing or stale.
       const ownToken = await searcherToken(userId);
 
-      const searchAsUser = async (token: string, why: string) => {
+      // The two APIs page with their own cursors, and one handed to the other
+      // is invalid_cursor at best. The user search's are tagged, so the next
+      // page goes back to the API that issued it.
+      const userCursor = cursor?.startsWith(USER_CURSOR_PREFIX)
+        ? cursor.slice(USER_CURSOR_PREFIX.length)
+        : undefined;
+      if (userCursor && ownToken) {
+        return await searchAsUser(ownToken, 'next page of a user search');
+      }
+      const assistantCursor = userCursor ? undefined : cursor;
+
+      async function searchAsUser(token: string, why: string) {
         const parsed = userSearchResponseSchema.parse(
           await slack.webClient.apiCall('search.messages', {
             count: 10,
             // `*` opts into cursor pagination; without it Slack answers with
             // page numbers and never returns a next_cursor.
-            cursor: cursor ?? '*',
+            cursor: userCursor ?? '*',
             query,
             token,
           })
@@ -221,10 +241,12 @@ export function searchSlackTool({ message }: { message: Message }) {
         logger.info({ query, why }, '[searchSlack] searched as the user');
         return found(
           parsed.messages?.matches ?? [],
-          parsed.response_metadata?.next_cursor || undefined,
+          parsed.response_metadata?.next_cursor
+            ? `${USER_CURSOR_PREFIX}${parsed.response_metadata.next_cursor}`
+            : undefined,
           'user token'
         );
-      };
+      }
 
       if (!actionToken) {
         if (ownToken) {
@@ -247,7 +269,7 @@ export function searchSlackTool({ message }: { message: Message }) {
         await slack.webClient.apiCall('assistant.search.context', {
           action_token: actionToken,
           content_types: ['messages'],
-          cursor,
+          cursor: assistantCursor,
           include_context_messages: true,
           limit: 10,
           query,
@@ -280,9 +302,13 @@ export function searchSlackTool({ message }: { message: Message }) {
       // Slack's assistant search does not surface DM content in this workspace,
       // so a successful response with zero matching messages can be a false
       // negative for DM queries. Fall back to the user's own token search in
-      // that case.
-      if (messages.length === 0 && ownToken) {
-        return await searchAsUser(ownToken, 'assistant search returned 0 results');
+      // that case — on the FIRST page only: an empty later page is just the
+      // end of the results.
+      if (messages.length === 0 && !assistantCursor && ownToken) {
+        return await searchAsUser(
+          ownToken,
+          'assistant search returned 0 results'
+        );
       }
 
       return found(
