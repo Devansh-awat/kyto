@@ -195,7 +195,7 @@ async function searcherToken(userId: string): Promise<string | null> {
 export function searchSlackTool({ message }: { message: Message }) {
   return tool({
     description:
-      "Search Slack messages for past conversations, decisions, links, or context outside the current thread — including a DM's own earlier history, since a fresh DM thread otherwise starts with no prior context by design. If the person connected their own Slack account it searches as them — every channel they can see, their DMs included. Otherwise it searches as kyto's own Slack account and keeps only hits from channels the person is in (never anyone's DMs).",
+      "Search Slack messages for past conversations, decisions, links, or context outside the current thread — including a DM's own earlier history, since a fresh DM thread otherwise starts with no prior context by design. If the person connected their own Slack account it searches as them — every channel they can see, their DMs included. Otherwise, when they @mentioned kyto (or DMed it), Slack's search token for that message covers what they can see, DMs included — it expires ~2 minutes into the turn. Failing both, it searches as kyto's own Slack account and keeps only hits from channels the person is in (never anyone's DMs).",
     inputSchema: z.object({
       cursor: z
         .string()
@@ -311,7 +311,56 @@ export function searchSlackTool({ message }: { message: Message }) {
         return found(result.matches, result.next, 'asker token');
       }
 
-      // 2. kyto's user account. It sees every public channel and the private
+      // 2. Slack's per-mention assistant token: the ASKER's view, searched
+      //    by the app — its private/group-DM/DM scopes are granted, but Slack
+      //    searches public channels only unless `channel_types` says
+      //    otherwise, and kyto never said, which is why DM content came back
+      //    empty (PR #32). Gone ~2 minutes into the turn.
+      if (actionToken && !prefix) {
+        const parsedResponse = slackSearchResponseSchema.safeParse(
+          await slack.webClient
+            .apiCall('assistant.search.context', {
+              action_token: actionToken,
+              channel_types: [
+                'public_channel',
+                'private_channel',
+                'mpim',
+                'im',
+              ],
+              content_types: ['messages'],
+              cursor: pageCursor,
+              include_context_messages: true,
+              limit: 10,
+              query,
+            })
+            .catch((error: unknown) => ({
+              error: toLogError(error).err.message,
+              ok: false,
+            }))
+        );
+        const response = parsedResponse.success
+          ? parsedResponse.data
+          : undefined;
+        const messages = response?.results?.messages ?? [];
+        // An empty FIRST page falls through to kyto's account too: cheap, and
+        // the assistant search has missed what plain search finds.
+        if (response?.ok && (messages.length > 0 || pageCursor)) {
+          return found(
+            messages,
+            response.response_metadata?.next_cursor || undefined,
+            'action token'
+          );
+        }
+        if (pageCursor) {
+          return failed(response?.error ?? 'unknown');
+        }
+        logger.warn(
+          { error: response?.ok ? 'no results' : response?.error, query },
+          "[searchSlack] assistant search gave nothing; trying kyto's account"
+        );
+      }
+
+      // 3. kyto's user account. It sees every public channel and the private
       //    channels and DMs IT is in — so only hits from conversations the
       //    ASKER is in are kept (owner's call, 2026-10-05), or anyone could
       //    search a private channel, or kyto's DMs with other people, through
@@ -342,44 +391,18 @@ export function searchSlackTool({ message }: { message: Message }) {
             "[searchSlack] search as kyto's account failed"
           );
         }
-        if (prefix) {
-          return failed('the next page could not be fetched');
-        }
+        return failed("kyto's account search failed");
       }
 
-      // 3. Slack's per-mention assistant token — public channels only (its
-      //    private/DM scopes are user-token-only) and gone ~2 minutes in.
-      if (!actionToken) {
-        const connect = slackAuthorizeUrl(userId);
-        return {
-          error: connect
-            ? `Slack search is unavailable right now. The person can connect their own Slack account, which also lets kyto search their DMs: ${connect}`
-            : 'Slack search is unavailable right now.',
-          success: false,
-          summary:
-            "Could not search Slack: kyto's account search failed and this turn carried no assistant search token.",
-        };
-      }
-      const parsedResponse = slackSearchResponseSchema.parse(
-        await slack.webClient.apiCall('assistant.search.context', {
-          action_token: actionToken,
-          content_types: ['messages'],
-          cursor: prefix ? undefined : pageCursor,
-          include_context_messages: true,
-          limit: 10,
-          query,
-        })
-      );
-      if (!parsedResponse.ok) {
-        const error = parsedResponse.error ?? 'unknown';
-        logger.warn({ error, query }, '[searchSlack] search failed');
-        return failed(error);
-      }
-      return found(
-        parsedResponse.results?.messages ?? [],
-        parsedResponse.response_metadata?.next_cursor || undefined,
-        'action token'
-      );
+      const connect = slackAuthorizeUrl(userId);
+      return {
+        error: connect
+          ? `Slack search is unavailable right now. The person can connect their own Slack account, which also lets kyto search their DMs: ${connect}`
+          : 'Slack search is unavailable right now.',
+        success: false,
+        summary:
+          "Could not search Slack: no assistant search token this turn, and kyto's user account is not configured.",
+      };
     },
   });
 }
