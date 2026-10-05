@@ -2,6 +2,7 @@ import type { Logger } from '@repo/logging/logger';
 import { SocketModeClient } from '@slack/socket-mode';
 import { LogLevel } from '@slack/web-api';
 import { z } from 'zod';
+import { rememberActionToken } from './action-tokens';
 import type { RawSlackMessage, SlackHarness } from './harness';
 import { MemoryKV } from './kv';
 import { ThreadHandle } from './thread';
@@ -329,6 +330,17 @@ export class KytoBot {
     }
     switch (event.type) {
       case 'message':
+        if (
+          typeof event.action_token === 'string' &&
+          typeof event.channel === 'string' &&
+          typeof event.ts === 'string'
+        ) {
+          rememberActionToken({
+            channel: event.channel,
+            token: event.action_token,
+            ts: event.ts,
+          });
+        }
         await this.dispatchMessage(event as RawSlackMessage);
         return;
       case 'app_home_opened':
