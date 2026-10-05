@@ -49,9 +49,9 @@ const MAX_SUBAGENT_DEPTH = 1;
 const depthStore = new AsyncLocalStorage<number>();
 
 // A BACKGROUND subagent almost always outlives the turn that started it — that
-// is the point of backgrounding it — and `jobs` below lives in the turn's tool
-// closure. So kyto would say "launched 5, I'll let you know", the turn would end,
-// and kyto itself would never learn any of it happened. Nobody could ask it to
+// is the point of backgrounding it. Without a wake, kyto would say "launched 5,
+// I'll let you know", the turn would end, and kyto itself would never learn any
+// of it happened. Nobody could ask it to
 // act on what its own subagents found — and now that a subagent posts nothing of
 // its own, the findings would reach nobody at all.
 //
@@ -70,9 +70,7 @@ type SubagentResult =
   | { report: string; success: true }
   | { error: string; success: false };
 
-// A background subagent, tracked in-turn so `checkSubagent` can collect it later
-// (same lifetime model as the bash background-process trio: the handle map lives
-// for this turn's tool closure only).
+// A background subagent, tracked so `checkSubagent` can collect it later.
 interface SubagentJob {
   // Set once checkSubagent has handed this job's finished report back to the
   // model IN the live turn. wakeThread checks it right before posting, so a
@@ -86,6 +84,28 @@ interface SubagentJob {
   result?: SubagentResult;
   startedAt: number;
   status: 'running' | 'done' | 'failed';
+}
+
+// Per THREAD, not per turn. Any message in the thread mid-turn (a steer, an
+// interrupt), a resume or the report's own wake runs a fresh runTurn with fresh
+// tools, and a per-turn map made "sub-2" come back as an unknown id while the
+// job was still running — its report was lost (issue #29). The counter is
+// per-thread too, so a later turn's first job doesn't reuse "sub-1". In memory:
+// a restart still loses them, as it does the jobs themselves.
+const JOB_TTL_MS = 60 * 60 * 1000;
+const threadJobs = new Map<
+  string,
+  { counter: number; jobs: Map<string, SubagentJob> }
+>();
+
+function forgetLater({ id, threadId }: { id: string; threadId: string }) {
+  setTimeout(() => {
+    const registry = threadJobs.get(threadId);
+    registry?.jobs.delete(id);
+    if (registry?.jobs.size === 0) {
+      threadJobs.delete(threadId);
+    }
+  }, JOB_TTL_MS).unref();
 }
 
 export function runSubagentTool({
@@ -110,10 +130,18 @@ export function runSubagentTool({
   /** The parent answers as kyto's user account; so does the report's wake. */
   asUserAccount?: boolean;
 }) {
-  // Background subagents started this turn, keyed by id (sub-1, sub-2, …). Shared
-  // between runSubagent (which registers) and checkSubagent (which collects).
-  const jobs = new Map<string, SubagentJob>();
-  let counter = 0;
+  // Background subagents started in this thread, keyed by id (sub-1, sub-2, …).
+  // Shared between runSubagent (which registers) and checkSubagent (which
+  // collects). Looked up per call: the map may be dropped and recreated while
+  // this turn's closure is alive.
+  const registryFor = () => {
+    let registry = threadJobs.get(thread.id);
+    if (!registry) {
+      registry = { counter: 0, jobs: new Map() };
+      threadJobs.set(thread.id, registry);
+    }
+    return registry;
+  };
 
   const runSubagent = tool({
     description:
@@ -365,8 +393,9 @@ export function runSubagentTool({
       if (background) {
         // Register the job so checkSubagent can collect it later, and keep its
         // status current as it resolves. Then hand control back to the parent.
-        counter += 1;
-        const id = `sub-${counter}`;
+        const registry = registryFor();
+        registry.counter += 1;
+        const id = `sub-${registry.counter}`;
         const record: SubagentJob = {
           id,
           name,
@@ -374,7 +403,7 @@ export function runSubagentTool({
           startedAt: Date.now(),
           status: 'running',
         };
-        jobs.set(id, record);
+        registry.jobs.set(id, record);
         // A turn started BY a wake doesn't get to schedule another one, or five
         // subagents reporting back could each spawn a turn that spawns more.
         const mayWake = !message.id.startsWith(WAKE_MESSAGE_PREFIX);
@@ -382,6 +411,7 @@ export function runSubagentTool({
           (result) => {
             record.status = result.success ? 'done' : 'failed';
             record.result = result;
+            forgetLater({ id, threadId: thread.id });
             if (mayWake) {
               wakeThread({ asUserAccount, job: record, message, thread }).catch(
                 () => undefined
@@ -391,6 +421,7 @@ export function runSubagentTool({
           (error: unknown) => {
             record.status = 'failed';
             record.result = { error: errorMessage(error), success: false };
+            forgetLater({ id, threadId: thread.id });
             logger.error(
               { err: error, thread: thread.id },
               '[subagent] background run failed'
@@ -416,7 +447,7 @@ export function runSubagentTool({
 
   const checkSubagent = tool({
     description:
-      "Check on background subagents you started with runSubagent (background:true). With no id, lists every background subagent this turn and its status. With an id, returns that subagent's status and — once finished — its full report. Set wait:true to block until it finishes before returning (use this to collect a background subagent's result before you answer).",
+      "Check on background subagents you started with runSubagent (background:true). With no id, lists every background subagent in this thread and its status. With an id, returns that subagent's status and — once finished — its full report. Set wait:true to block until it finishes before returning (use this to collect a background subagent's result before you answer).",
     inputSchema: z.object({
       id: z
         .string()
@@ -432,6 +463,7 @@ export function runSubagentTool({
         ),
     }),
     execute: async ({ id, wait }) => {
+      const { jobs } = registryFor();
       if (!id) {
         return {
           jobs: [...jobs.values()].map((job) => ({
@@ -446,7 +478,7 @@ export function runSubagentTool({
       const job = jobs.get(id);
       if (!job) {
         return {
-          error: `Unknown background subagent id: ${id}`,
+          error: `Unknown background subagent id: ${id}. Ids last until an hour after the job finishes or kyto restarts; a finished report also comes back as its own turn in this thread.`,
           success: false,
         };
       }

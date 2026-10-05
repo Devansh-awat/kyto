@@ -95,6 +95,7 @@ If a captcha DOES appear, the tool/prompt tell the model to snapshot the page an
 
 `tools/subagent.ts` — a headless copy of kyto: **shares the parent turn's sandbox** (`getSandboxContext` from `toolset.ts`), the full toolset, driven by the same `streamAttempt` loop, returning its final text as a report. Deferred; registered only when a subagent model exists.
 - **Nesting is ONE level** (`MAX_SUBAGENT_DEPTH = 1`).
+- **Background job ids are per THREAD** (module-level map, per-thread counter, a finished job kept an hour): a steer, resume or wake runs a fresh `runTurn`, and a per-turn map turned a still-running `sub-2` into "Unknown id" (issue #29). In memory — a restart loses them, as it does the jobs.
 - **It must NOT create or destroy the sandbox** — the parent owns the lifecycle. The subagent's `finally` only closes per-turn tool/MCP connections.
 - **Model roster + report fallback** (`subagentAttempts`, `providers/attempts.ts`): the owner's Gemini models first (`gemini-3.1-flash-lite` leads), then a single HackClub rung as the floor so the tool still works with no Gemini key. The subagent **walks this list** on an error OR an empty report (one pinned cheap model made a "herd" of subagents report nothing). If a model ran tools but wrote no prose, `synthesizeReport` re-asks THAT model once with **tools off**.
 - **Report to parent**: the foreground path returns `{report, success:true}` as the tool RESULT.
