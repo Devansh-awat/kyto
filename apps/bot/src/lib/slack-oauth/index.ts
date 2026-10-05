@@ -243,7 +243,7 @@ async function exchange(code: string): Promise<{
  * Never log the return value, never put it in a prompt, and never pass it into
  * a sandbox. It is a person's own Slack access, not kyto's.
  */
-export async function userSlackToken(userId: string): Promise<string | null> {
+async function userSlackToken(userId: string): Promise<string | null> {
   if (!slackOauthConfigured()) {
     return null;
   }
