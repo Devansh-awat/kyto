@@ -1,3 +1,4 @@
+import type { WebClient } from '@slack/web-api';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { env } from '@/env';
@@ -6,6 +7,7 @@ import type { Message } from '@/harness/types';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
 import { slackAuthorizeUrl, userSlackToken } from '@/lib/slack-oauth';
+import { toLogError } from '@/lib/utils/error';
 
 const actionTokenSchema = z.looseObject({
   action_token: z.string().min(1).optional(),
@@ -81,8 +83,43 @@ const slackSearchResponseSchema = z.looseObject({
     .optional(),
 });
 
-// A cursor from `search.messages` (below), told apart from the assistant API's.
-const USER_CURSOR_PREFIX = 'user:';
+// Which way in issued a page cursor (the assistant API's carry no tag).
+const CURSOR_PREFIX = { account: 'account:', asker: 'user:' } as const;
+// Room for the account's hits that the asker-membership filter drops.
+const SEARCH_PAGE_SIZE = 20;
+
+const MEMBERSHIP_TTL_MS = 5 * 60 * 1000;
+const CHANNELS_PAGE = 1000;
+const askerChannelCache = new Map<string, { at: number; ids: Set<string> }>();
+
+/**
+ * Every channel `userId` is in that the app can see: all their public ones,
+ * and private ones the app shares with them. Cached 5 minutes.
+ */
+async function channelsOf(userId: string): Promise<Set<string>> {
+  const cached = askerChannelCache.get(userId);
+  if (cached && Date.now() - cached.at < MEMBERSHIP_TTL_MS) {
+    return new Set(cached.ids);
+  }
+  const ids = new Set<string>();
+  let cursor: string | undefined;
+  do {
+    const page = await slack.webClient.users.conversations({
+      cursor,
+      limit: CHANNELS_PAGE,
+      types: 'public_channel,private_channel,mpim',
+      user: userId,
+    });
+    for (const channel of page.channels ?? []) {
+      if (channel.id) {
+        ids.add(channel.id);
+      }
+    }
+    cursor = page.response_metadata?.next_cursor || undefined;
+  } while (cursor);
+  askerChannelCache.set(userId, { at: Date.now(), ids });
+  return new Set(ids);
+}
 
 // `search.messages` on a USER token — the second way in, and the one that does
 // not expire mid-turn. Shaped to the same fields as the assistant path so the
@@ -126,6 +163,10 @@ const userSearchResponseSchema = z.looseObject({
             }))
         )
         .optional(),
+      pagination: z
+        .looseObject({ next_cursor: z.string().optional() })
+        .optional(),
+      paging: z.looseObject({ next_cursor: z.string().optional() }).optional(),
     })
     .optional(),
   ok: z.boolean(),
@@ -154,7 +195,7 @@ async function searcherToken(userId: string): Promise<string | null> {
 export function searchSlackTool({ message }: { message: Message }) {
   return tool({
     description:
-      "Search Slack messages for past conversations, decisions, links, or context outside the current thread — including a DM's own earlier history, since a fresh DM thread otherwise starts with no prior context by design. Runs with the requesting user's own Slack access, so it reaches private channels and DMs that user is in, not just public channels. Supports normal Slack search modifiers in the query: from:@user, from:me, to:@user, in:#channel, in:@user (DM), on:YYYY-MM-DD, before:YYYY-MM-DD, after:YYYY-MM-DD, during:month-or-YYYY-MM, has:link, has:star, has:pin, has::emoji_name: (reaction), is:thread, is:dm, is:external, filename:name, ext:filetype. Prefers Slack's assistant search token, which expires ~2 minutes into the turn, and falls back to the user's own connected Slack account when it has gone stale — so a late search still works if they have connected one, and is worth retrying once.",
+      "Search Slack messages for past conversations, decisions, links, or context outside the current thread — including a DM's own earlier history, since a fresh DM thread otherwise starts with no prior context by design. If the person connected their own Slack account it searches as them — every channel they can see, their DMs included. Otherwise it searches as kyto's own Slack account and keeps only hits from channels the person is in (never anyone's DMs).",
     inputSchema: z.object({
       cursor: z
         .string()
@@ -171,16 +212,14 @@ export function searchSlackTool({ message }: { message: Message }) {
     }),
     execute: async ({ cursor, query }) => {
       const userId = message.author.userId;
+      const currentChannel = slack.channelIdFromThreadId(message.threadId);
       const parsedRaw = actionTokenSchema.safeParse(message.raw);
       const actionToken =
         (parsedRaw.success
           ? (parsedRaw.data.action_token ??
             parsedRaw.data.assistant_thread?.action_token)
           : undefined) ??
-        recallActionToken({
-          channel: slack.channelIdFromThreadId(message.threadId),
-          ts: message.id,
-        });
+        recallActionToken({ channel: currentChannel, ts: message.id });
 
       const found = (
         messages: unknown[],
@@ -199,120 +238,145 @@ export function searchSlackTool({ message }: { message: Message }) {
           summary: `Slack search found ${messages.length} message${messages.length === 1 ? '' : 's'} for "${query}".`,
         };
       };
+      const failed = (error: string) => ({
+        error: `Slack search failed: ${error}`,
+        success: false,
+        summary: `Slack search failed for "${query}": ${error}`,
+      });
 
-      // The user's own token, which does not expire. Resolved up front because
-      // it decides what to do when the assistant token is missing or stale.
-      const ownToken = await searcherToken(userId);
+      // Each API pages with its own cursor, and one handed to another is
+      // invalid_cursor at best, so a cursor names the way in that issued it.
+      const prefix = Object.values(CURSOR_PREFIX).find((tag) =>
+        cursor?.startsWith(tag)
+      );
+      const pageCursor = prefix ? cursor?.slice(prefix.length) : cursor;
 
-      // The two APIs page with their own cursors, and one handed to the other
-      // is invalid_cursor at best. The user search's are tagged, so the next
-      // page goes back to the API that issued it.
-      const userCursor = cursor?.startsWith(USER_CURSOR_PREFIX)
-        ? cursor.slice(USER_CURSOR_PREFIX.length)
-        : undefined;
-      if (userCursor && ownToken) {
-        return await searchAsUser(ownToken, 'next page of a user search');
-      }
-      const assistantCursor = userCursor ? undefined : cursor;
-
-      async function searchAsUser(token: string, why: string) {
+      // `search.messages`, as the asker (their token) or as kyto's account.
+      const searchMessages = async ({
+        client,
+        keep,
+        tag,
+        token,
+      }: {
+        client: WebClient;
+        keep?: (channelId: string | undefined) => boolean;
+        tag: string;
+        token?: string;
+      }) => {
         const parsed = userSearchResponseSchema.parse(
-          await slack.webClient.apiCall('search.messages', {
-            count: 10,
+          await client.apiCall('search.messages', {
+            count: SEARCH_PAGE_SIZE,
             // `*` opts into cursor pagination; without it Slack answers with
             // page numbers and never returns a next_cursor.
-            cursor: userCursor ?? '*',
+            cursor: (prefix === tag && pageCursor) || '*',
             query,
-            token,
+            ...(token ? { token } : {}),
           })
         );
         if (!parsed.ok) {
-          const error = parsed.error ?? 'unknown';
-          logger.warn(
-            { error, query, why },
-            '[searchSlack] user search failed'
-          );
-          return {
-            error: `Slack search failed: ${error}`,
-            success: false,
-            summary: `Slack search failed for "${query}": ${error}`,
-          };
+          return { error: parsed.error ?? 'unknown', ok: false as const };
         }
-        logger.info({ query, why }, '[searchSlack] searched as the user');
-        return found(
-          parsed.messages?.matches ?? [],
-          parsed.response_metadata?.next_cursor
-            ? `${USER_CURSOR_PREFIX}${parsed.response_metadata.next_cursor}`
-            : undefined,
-          'user token'
-        );
+        const matches = parsed.messages?.matches ?? [];
+        // Slack puts this cursor under `messages`, not `response_metadata`
+        // — read from the wrong place, a user search never had a page 2.
+        const next =
+          parsed.messages?.paging?.next_cursor ??
+          parsed.messages?.pagination?.next_cursor ??
+          parsed.response_metadata?.next_cursor;
+        return {
+          ok: true as const,
+          matches: keep
+            ? matches.filter(({ channelId }) => keep(channelId))
+            : matches,
+          next: next ? `${tag}${next}` : undefined,
+        };
+      };
+
+      // 1. The asker's own token: exactly their view, their DMs included
+      //    (`search:read` covers DMs; a bot token never can).
+      const ownToken = await searcherToken(userId);
+      if (ownToken && (!prefix || prefix === CURSOR_PREFIX.asker)) {
+        const result = await searchMessages({
+          client: slack.webClient,
+          tag: CURSOR_PREFIX.asker,
+          token: ownToken,
+        });
+        if (!result.ok) {
+          logger.warn(
+            { error: result.error, query },
+            '[searchSlack] search as the asker failed'
+          );
+          return failed(result.error);
+        }
+        return found(result.matches, result.next, 'asker token');
       }
 
-      if (!actionToken) {
-        if (ownToken) {
-          return await searchAsUser(ownToken, 'no action token in this turn');
+      // 2. kyto's user account. It sees every public channel and the private
+      //    channels and DMs IT is in — so only hits from conversations the
+      //    ASKER is in are kept (owner's call, 2026-10-05), or anyone could
+      //    search a private channel, or kyto's DMs with other people, through
+      //    it. Fails closed: a membership lookup that errors keeps nothing.
+      if (
+        slack.userAccountId &&
+        (!prefix || prefix === CURSOR_PREFIX.account)
+      ) {
+        try {
+          const askerChannels = await channelsOf(userId);
+          askerChannels.add(currentChannel);
+          const result = await searchMessages({
+            client: slack.requireUserAccountClient(),
+            keep: (channelId) =>
+              channelId !== undefined && askerChannels.has(channelId),
+            tag: CURSOR_PREFIX.account,
+          });
+          if (result.ok) {
+            return found(result.matches, result.next, "kyto's account");
+          }
+          logger.warn(
+            { error: result.error, query },
+            "[searchSlack] search as kyto's account failed"
+          );
+        } catch (error) {
+          logger.warn(
+            { ...toLogError(error), query },
+            "[searchSlack] search as kyto's account failed"
+          );
         }
-        // Neither way in. The action token only arrives when kyto is mentioned;
-        // the grant is the durable fix, so offer it rather than just refusing.
+        if (prefix) {
+          return failed('the next page could not be fetched');
+        }
+      }
+
+      // 3. Slack's per-mention assistant token — public channels only (its
+      //    private/DM scopes are user-token-only) and gone ~2 minutes in.
+      if (!actionToken) {
         const connect = slackAuthorizeUrl(userId);
         return {
           error: connect
-            ? `Slack search needs either an explicit @kyto mention (Slack only issues its short-lived search token then) or the user's own connected Slack account. They can connect one here: ${connect}`
-            : 'Slack search requires the user to explicitly ping/mention Kyto so Slack provides an assistant search token.',
+            ? `Slack search is unavailable right now. The person can connect their own Slack account, which also lets kyto search their DMs: ${connect}`
+            : 'Slack search is unavailable right now.',
           success: false,
           summary:
-            'Could not search Slack: this turn carried no assistant search token and this user has not connected their Slack account.',
+            "Could not search Slack: kyto's account search failed and this turn carried no assistant search token.",
         };
       }
-
       const parsedResponse = slackSearchResponseSchema.parse(
         await slack.webClient.apiCall('assistant.search.context', {
           action_token: actionToken,
           content_types: ['messages'],
-          cursor: assistantCursor,
+          cursor: prefix ? undefined : pageCursor,
           include_context_messages: true,
           limit: 10,
           query,
         })
       );
-
       if (!parsedResponse.ok) {
         const error = parsedResponse.error ?? 'unknown';
         logger.warn({ error, query }, '[searchSlack] search failed');
-        // The assistant action token expires ~2 minutes into a turn, so any
-        // search after a few tool calls used to fail outright with
-        // `invalid_action_token`. The user's own token has no such deadline —
-        // retry on it rather than telling them to ask again.
-        if (ownToken) {
-          return await searchAsUser(ownToken, error);
-        }
-        const connect = slackAuthorizeUrl(userId);
-        return {
-          error:
-            error === 'invalid_action_token' && connect
-              ? `Slack search failed: the assistant search token for this turn expired (it only lasts ~2 minutes). Connecting a Slack account removes that deadline: ${connect}`
-              : `Slack search failed: ${error}`,
-          success: false,
-          summary: `Slack search failed for "${query}": ${error}`,
-        };
+        return failed(error);
       }
-
-      const messages = parsedResponse.results?.messages ?? [];
-
-      // Slack's assistant search does not surface DM content in this workspace,
-      // so a successful response with zero matching messages can be a false
-      // negative for DM queries. Fall back to the user's own token search in
-      // that case — on the FIRST page only: an empty later page is just the
-      // end of the results.
-      if (messages.length === 0 && !assistantCursor && ownToken) {
-        return await searchAsUser(
-          ownToken,
-          'assistant search returned 0 results'
-        );
-      }
-
       return found(
-        messages,
+        parsedResponse.results?.messages ?? [],
         parsedResponse.response_metadata?.next_cursor || undefined,
         'action token'
       );
