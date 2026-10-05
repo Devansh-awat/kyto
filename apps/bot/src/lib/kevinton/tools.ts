@@ -244,24 +244,31 @@ export function kevintonTools({
 
   const threadLogs = tool({
     description:
-      'Every log line kyto emitted while working on THIS thread — agent lifecycle, model attempts and failures, tool calls and errors, sandbox — kept across restarts for a week. Start any investigation here. `all: true` includes lines from before your last review.',
+      "Every log line kyto emitted while working on THIS thread — agent lifecycle, model attempts and failures, tool calls and errors, sandbox — kept across restarts for a week. Start any investigation here. `all: true` includes lines from before your last review. `timing: true` returns ONLY the lines that say where each turn's time went (per turn and per attempt, plus E2B), even ones the full log would cut — ask for it when a turn was slow.",
     inputSchema: z.object({
       all: z.boolean().optional(),
+      timing: z.boolean().optional(),
     }),
-    execute: async ({ all }) => {
+    execute: async ({ all, timing: timingOnly }) => {
       const { text, timing, truncated } = await threadLogText({
         maxChars: MAX_LOG_CHARS,
         threadId,
         ...(reviewedAt && !all ? { since: reviewedAt } : {}),
       });
+      // Only on request: most reviews have no slow turn, and every line here
+      // is paid for again on each later step of the review.
+      if (timingOnly) {
+        return {
+          timing: timing.length
+            ? timing.join('\n')
+            : 'No timing lines captured for this thread.',
+        };
+      }
       return {
         logs:
           text ||
           'No lines captured for this thread (it predates the capture, or they were pruned after a week).',
         ...(truncated ? { note: 'The oldest lines were cut to fit.' } : {}),
-        // Every turn's and attempt's time breakdown, even when the lines
-        // around them were cut.
-        timing,
       };
     },
   });

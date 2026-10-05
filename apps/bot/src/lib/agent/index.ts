@@ -65,7 +65,11 @@ import {
 import { startThinking } from '@/lib/agent/utils';
 import { promptWithAttachments, seedAttachments } from '@/lib/ai/attachments';
 import { requestHints } from '@/lib/ai/hints';
-import { renderStream, type StreamError } from '@/lib/ai/stream';
+import {
+  renderStream,
+  type StreamError,
+  type StreamTally,
+} from '@/lib/ai/stream';
 import { createCardBudget } from '@/lib/ai/stream/cards';
 import { pickPreloadTools } from '@/lib/ai/tool-preload';
 import {
@@ -154,6 +158,7 @@ const MAX_TRUNCATION_RETRIES = 2;
 // the thread history above it).
 const MAX_CARRIED_UNANSWERED = 3;
 const SLOWEST_TOOLS_LOGGED = 5;
+const MAX_TTFTS_LOGGED = 50;
 const UNANSWERED_PREVIEW_LENGTH = 300;
 
 // How long a single attempt may go with NO sign of progress before it's aborted
@@ -455,14 +460,32 @@ async function executeTurn(
   // Where the whole turn's time went, summed over its attempts, for the
   // turn's last log line — what kevinton reads to say why a turn was slow.
   const turnTiming: {
-    attempts: number;
+    /** Model streams: attempts plus any nudge or continuation call. */
+    modelCalls: number;
     modelMs: number;
     outputTokensPerSecond?: number;
     setupMs?: number;
     slowestTools: { ms: number; name: string }[];
     toolMs: number;
-    ttftMs?: number;
-  } = { attempts: 0, modelMs: 0, slowestTools: [], toolMs: 0 };
+    /** Time to first token of EVERY model request in the turn, in order. */
+    ttftMs: number[];
+  } = { modelCalls: 0, modelMs: 0, slowestTools: [], toolMs: 0, ttftMs: [] };
+  const recordTiming = ({ timing }: StreamTally): void => {
+    if (!timing) {
+      return;
+    }
+    turnTiming.modelCalls += 1;
+    turnTiming.modelMs += timing.modelMs;
+    turnTiming.toolMs += timing.toolMs;
+    turnTiming.ttftMs = [...turnTiming.ttftMs, ...timing.firstOutputMs].slice(
+      -MAX_TTFTS_LOGGED
+    );
+    turnTiming.outputTokensPerSecond =
+      timing.outputTokensPerSecond ?? turnTiming.outputTokensPerSecond;
+    turnTiming.slowestTools = [...turnTiming.slowestTools, ...timing.tools]
+      .sort((a, b) => b.ms - a.ms)
+      .slice(0, SLOWEST_TOOLS_LOGGED);
+  };
   const timingLog = () => ({ ...turnTiming, totalMs: Date.now() - turnStart });
   // The answering attempt's prompt-token split, logged on `turn complete`. Kept
   // separate from usageFooter: the footer is a user-facing opt-out, this is
@@ -1192,23 +1215,7 @@ async function executeTurn(
             // A skip is a deliberate, successful "no reply".
             skipped = true;
           },
-          onTally: ({ timing }) => {
-            if (!timing) {
-              return;
-            }
-            turnTiming.attempts += 1;
-            turnTiming.modelMs += timing.modelMs;
-            turnTiming.toolMs += timing.toolMs;
-            turnTiming.ttftMs ??= timing.ttftMs;
-            turnTiming.outputTokensPerSecond =
-              timing.outputTokensPerSecond ?? turnTiming.outputTokensPerSecond;
-            turnTiming.slowestTools = [
-              ...turnTiming.slowestTools,
-              ...timing.tools,
-            ]
-              .sort((a, b) => b.ms - a.ms)
-              .slice(0, SLOWEST_TOOLS_LOGGED);
-          },
+          onTally: recordTiming,
           onTextDelta: (text) => {
             producedText = true;
             attemptText = true;
@@ -1461,6 +1468,7 @@ async function executeTurn(
         // cascade that re-ran the work and often died with no reply at all.
         if (!(attemptText || skipped) && attemptToolActivity) {
           yield* synthesizeFinalAnswer({
+            onTally: recordTiming,
             activeTools: built.activeTools,
             attempt: currentAttempt,
             knownTools,
@@ -1499,6 +1507,7 @@ async function executeTurn(
           for (let round = 0; round < MAX_CONTINUATIONS; round += 1) {
             let continuationFinish: string | undefined;
             yield* continueTruncatedReply({
+              onTally: recordTiming,
               activeTools: built.activeTools,
               attempt: currentAttempt,
               knownTools,
@@ -2101,6 +2110,7 @@ async function* synthesizeFinalAnswer({
   activeTools,
   attempt,
   knownTools,
+  onTally,
   onText,
   results,
   secret,
@@ -2112,6 +2122,7 @@ async function* synthesizeFinalAnswer({
   activeTools: () => string[];
   attempt: ModelAttempt;
   knownTools: Set<string>;
+  onTally: (tally: StreamTally) => void;
   onText: (text: string) => void;
   results: GatheredResult[];
   secret: boolean;
@@ -2147,6 +2158,7 @@ async function* synthesizeFinalAnswer({
       dropToolComplaints: true,
       emitText: true,
       knownTools,
+      onTally,
       onTextDelta: onText,
       stream: result.fullStream,
     });
@@ -2176,6 +2188,7 @@ async function* continueTruncatedReply({
   attempt,
   knownTools,
   onFinish,
+  onTally,
   onText,
   secret,
   signal,
@@ -2188,6 +2201,7 @@ async function* continueTruncatedReply({
   attempt: ModelAttempt;
   knownTools: Set<string>;
   onFinish: (reason: string) => void;
+  onTally: (tally: StreamTally) => void;
   onText: (text: string) => void;
   secret: boolean;
   signal: AbortSignal;
@@ -2219,6 +2233,7 @@ async function* continueTruncatedReply({
       emitText: true,
       knownTools,
       onFinish,
+      onTally,
       onTextDelta: onText,
       stream: result.fullStream,
     });
