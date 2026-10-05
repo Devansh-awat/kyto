@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import {
   healMarkdown,
   neutralizeBroadcast,
@@ -24,12 +25,17 @@ const IDLE_MS = 1500;
 const FENCE_REOPEN_PADDING = 3;
 const TABLE_SEPARATOR = /^\|?[\s:|-]*-{2,}[\s:|-]*$/;
 
+// A PRIVATE channel the app isn't in answers `channel_not_found`, not
+// `not_in_channel` — the reply to a ping of the user account there was lost
+// the same way (issue #13).
+const OUTSIDE_CHANNEL = new Set(['channel_not_found', 'not_in_channel']);
+const slackErrorSchema = z.looseObject({
+  data: z.looseObject({ error: z.string().optional() }).optional(),
+});
+
 function isNotInChannel(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    'data' in error &&
-    (error.data as { error?: unknown } | undefined)?.error === 'not_in_channel'
-  );
+  const code = slackErrorSchema.safeParse(error).data?.data?.error;
+  return code !== undefined && OUTSIDE_CHANNEL.has(code);
 }
 
 export function createReply({
@@ -110,7 +116,7 @@ export function createReply({
     } catch (error) {
       logger.error(
         { channel, err: error, threadId },
-        '[agent] reply refused (not_in_channel) and joining did not help; trying the user account'
+        '[agent] reply refused (not in the channel) and joining did not help; trying the user account'
       );
     }
     if (!slack.userAccountId) {
