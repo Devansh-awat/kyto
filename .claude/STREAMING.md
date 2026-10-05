@@ -138,7 +138,11 @@ opens must close** (`stream/reasoning-tracker.ts`, tested).
 **Long turns rotate the stream card** (`harness.stream`, `STREAM_ROTATE_MS` =
 4.5 min): Slack drops appends after ~5 min on a single `chatStream`, so
 `stream()` stops it and opens a fresh plan message before the limit. The
-rotation lands naturally on chunk arrival.
+rotation runs on a DEADLINE (raced against the next chunk), not on chunk
+arrival: a 10-min opencode call sends nothing, so the stream used to expire
+under its in-flight card and render "Something went wrong" (issue #30). A
+`message_not_in_streaming_state` on a card append opens a new message instead of
+latching text-only for the rest of the turn.
 
 ## Skips
 

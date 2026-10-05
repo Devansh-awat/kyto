@@ -46,6 +46,7 @@ const TYPING_PULSE_MS = 3000;
 // message) a little before the limit — a new card is exactly the desired outcome
 // here. Task cards from the old stream are finalized as-is when it stops.
 const STREAM_ROTATE_MS = 4.5 * 60 * 1000;
+const STREAM_EXPIRED = 'message_not_in_streaming_state';
 
 // Recursively pull readable text out of a Slack rich-text node (table cells are
 // rich_text blocks). Collects `text`, link labels/urls, and recurses into
@@ -707,6 +708,23 @@ export class SlackHarness {
         });
         currentHasContent = true;
       } catch (error) {
+        // An EXPIRED stream is not a rejected chunk: latching text-only here
+        // dropped every later card of the turn, and the card left mid-flight
+        // in the dead message rendered as "Something went wrong" (issue #30).
+        if (String(error).includes(STREAM_EXPIRED)) {
+          this.logger.warn(
+            { err: error },
+            '[harness] stream expired; continuing in a new message'
+          );
+          // The caller still forgets its open cards — their ids don't exist in
+          // the new message — but what it would settle them with has nowhere
+          // to go.
+          options.onRotate?.();
+          streamer = startStreamer();
+          streamStartedAt = Date.now();
+          currentHasContent = false;
+          return;
+        }
         structuredSupported = false;
         this.logger.warn(
           { err: error },
@@ -740,8 +758,37 @@ export class SlackHarness {
       streamStartedAt = Date.now();
       currentHasContent = false;
     };
+    const iterator = chunks[Symbol.asyncIterator]();
+    // Unset while a chunk is being handled, so the producer is never run ahead
+    // of the appends (its card budget and onRotate must see them in order).
+    let pending: Promise<IteratorResult<string | StreamChunk>> | undefined;
     try {
-      for await (const chunk of chunks) {
+      while (true) {
+        pending ??= iterator.next();
+        // Rotate on a deadline, not only when the next chunk arrives: a tool
+        // that runs longer than the stream lives (opencode, a long `wait`)
+        // sends nothing meanwhile, so the stream used to expire under its
+        // in-flight card and the card's result landed in a dead message.
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const next = await Promise.race([
+          pending,
+          new Promise<'rotate'>((resolve) => {
+            timer = setTimeout(
+              () => resolve('rotate'),
+              Math.max(0, STREAM_ROTATE_MS - (Date.now() - streamStartedAt))
+            );
+          }),
+        ]);
+        clearTimeout(timer);
+        if (next === 'rotate') {
+          await rotateIfStale();
+          continue;
+        }
+        pending = undefined;
+        if (next.done) {
+          break;
+        }
+        const chunk = next.value;
         await rotateIfStale();
         if (typeof chunk === 'string' || chunk.type === 'markdown_text') {
           const text = typeof chunk === 'string' ? chunk : chunk.text;
@@ -753,6 +800,12 @@ export class SlackHarness {
         }
         await appendChunk(chunk);
       }
+    } catch (error) {
+      // What for-await did on a throw: let the producer run its finally.
+      if (!pending) {
+        await iterator.return?.().catch(() => undefined);
+      }
+      throw error;
     } finally {
       await stopStreamer();
     }
