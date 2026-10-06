@@ -139,8 +139,8 @@ const MAX_SCAN_BYTES = 16_384;
  * Stream one model attempt: the whole multi-step agentic loop on a single
  * OpenAI-compatible endpoint. The per-instance `fetch` (no global patching —
  * the old interceptor died with Pi) tunes the request:
- *  - HackClub requests get `reasoning: { effort: 'medium' }` (the old Pi
- *    thinking level) — max_tokens comes from maxOutputTokens below, which
+ *  - HackClub requests get a `reasoning` effort (REASONING_EFFORT, 'medium'
+ *    unless listed) — max_tokens comes from maxOutputTokens below, which
  *    defuses the proxy's pessimistic daily-spend projection;
  *  - every request gets 1-hour prompt-cache breakpoints (see addCacheControl);
  * and captures the resolved model slug into `holder` from a response clone.
@@ -590,6 +590,15 @@ function tunedFetch({
 // gone), kept because the failure mode is invisible without it.
 const REQUIRED_TOP_P: Record<string, number> = {};
 
+// Reasoning effort per model on Hack Club; anything unlisted gets 'medium'
+// (the old Pi thinking level). Luna on 'low' reaches its first output ~2s
+// sooner per model call than on 'medium' (1.3-2.0s vs 2.3-4.4s through the
+// proxy, 2026-10-05) — a tool-heavy turn makes 5-10 calls, and speed is why
+// it is the primary (issue #36).
+const REASONING_EFFORT: Record<string, string> = {
+  'openai/gpt-6-luna': 'low',
+};
+
 // OpenRouter's upstream precision labels kyto accepts — see tuneBody.
 const ALLOWED_QUANTIZATIONS = ['fp8', 'fp16', 'bf16', 'fp32', 'unknown'];
 
@@ -662,7 +671,9 @@ function tuneBody(
       attempt.provider === HACKCLUB_PROVIDER &&
       payload.reasoning === undefined
     ) {
-      payload.reasoning = { effort: 'medium' };
+      payload.reasoning = {
+        effort: REASONING_EFFORT[attempt.model] ?? 'medium',
+      };
       changed = true;
     }
     // One routing hint shared by EVERY thread (coolton's design, 2026-09-29):
