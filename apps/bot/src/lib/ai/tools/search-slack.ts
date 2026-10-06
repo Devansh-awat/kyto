@@ -166,6 +166,7 @@ const userSearchResponseSchema = z.looseObject({
         .looseObject({ next_cursor: z.string().optional() })
         .optional(),
       paging: z.looseObject({ next_cursor: z.string().optional() }).optional(),
+      total: z.number().optional(),
     })
     .optional(),
   ok: z.boolean(),
@@ -177,7 +178,7 @@ const userSearchResponseSchema = z.looseObject({
 export function searchSlackTool({ message }: { message: Message }) {
   return tool({
     description:
-      "Search Slack messages for past conversations, decisions, links, or context outside the current thread — including a DM's own earlier history, since a fresh DM thread otherwise starts with no prior context by design. If the person connected their own Slack account it searches as them — every channel they can see, their DMs included. Otherwise, when they @mentioned kyto (or DMed it), Slack's search token for that message covers what they can see, DMs included — it expires ~2 minutes into the turn. Failing both, it searches as kyto's own Slack account and keeps only hits from channels the person is in (never anyone's DMs).",
+      "Search Slack messages for past conversations, decisions, links, or context outside the current thread — including a DM's own earlier history, since a fresh DM thread otherwise starts with no prior context by design. If the person connected their own Slack account it searches as them — every channel they can see, their DMs included. Otherwise, when they @mentioned kyto (or DMed it), Slack's search token for that message covers what they can see, DMs included — it expires ~2 minutes into the turn. Failing both, it searches as kyto's own Slack account and keeps only hits from channels the person is in (never anyone's DMs). For \"how many messages…\" questions use `totalMatches` when the result has it — Slack's own count for the whole query — instead of paging and counting; without it, say the number is only what search returned. To mean one person use `from:<@USERID>` with their id (getUser): a bare name like `from:twa` also matches everyone else whose name contains it.",
     inputSchema: z.object({
       cursor: z
         .string()
@@ -203,13 +204,19 @@ export function searchSlackTool({ message }: { message: Message }) {
           : undefined) ??
         recallActionToken({ channel: currentChannel, ts: message.id });
 
-      const found = (
-        messages: unknown[],
-        nextCursor: string | undefined,
-        via: string
-      ) => {
+      const found = ({
+        messages,
+        nextCursor,
+        totalMatches,
+        via,
+      }: {
+        messages: unknown[];
+        nextCursor: string | undefined;
+        totalMatches?: number;
+        via: string;
+      }) => {
         logger.debug(
-          { count: messages.length, query, via },
+          { count: messages.length, query, totalMatches, via },
           '[searchSlack] complete'
         );
         return {
@@ -217,7 +224,8 @@ export function searchSlackTool({ message }: { message: Message }) {
           nextCursor,
           resultCount: messages.length,
           success: true,
-          summary: `Slack search found ${messages.length} message${messages.length === 1 ? '' : 's'} for "${query}".`,
+          summary: `Slack search found ${messages.length} message${messages.length === 1 ? '' : 's'} on this page for "${query}".${totalMatches === undefined ? '' : ` Slack counts ${totalMatches} matches for the whole query — that is the answer to "how many", no paging needed.`}`,
+          ...(totalMatches === undefined ? {} : { totalMatches }),
         };
       };
       const failed = (error: string) => ({
@@ -267,6 +275,9 @@ export function searchSlackTool({ message }: { message: Message }) {
           parsed.response_metadata?.next_cursor;
         return {
           ok: true as const,
+          // Slack's count for the whole query. Only meaningful unfiltered:
+          // past `keep` it would count channels the asker isn't in.
+          total: keep ? undefined : parsed.messages?.total,
           matches: keep
             ? matches.filter(({ channelId }) => keep(channelId))
             : matches,
@@ -290,7 +301,12 @@ export function searchSlackTool({ message }: { message: Message }) {
           );
           return failed(result.error);
         }
-        return found(result.matches, result.next, 'asker token');
+        return found({
+          messages: result.matches,
+          nextCursor: result.next,
+          totalMatches: result.total,
+          via: 'asker token',
+        });
       }
 
       // 2. Slack's per-mention assistant token: the ASKER's view, searched
@@ -327,11 +343,11 @@ export function searchSlackTool({ message }: { message: Message }) {
         // An empty FIRST page falls through to kyto's account too: cheap, and
         // the assistant search has missed what plain search finds.
         if (response?.ok && (messages.length > 0 || pageCursor)) {
-          return found(
+          return found({
             messages,
-            response.response_metadata?.next_cursor || undefined,
-            'action token'
-          );
+            nextCursor: response.response_metadata?.next_cursor || undefined,
+            via: 'action token',
+          });
         }
         if (pageCursor) {
           return failed(response?.error ?? 'unknown');
@@ -361,7 +377,11 @@ export function searchSlackTool({ message }: { message: Message }) {
             tag: CURSOR_PREFIX.account,
           });
           if (result.ok) {
-            return found(result.matches, result.next, "kyto's account");
+            return found({
+              messages: result.matches,
+              nextCursor: result.next,
+              via: "kyto's account",
+            });
           }
           logger.warn(
             { error: result.error, query },
