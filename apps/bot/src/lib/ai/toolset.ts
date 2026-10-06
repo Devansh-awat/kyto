@@ -316,19 +316,8 @@ export async function buildTools({
     }),
     joinThread: joinThreadTool({ thread }),
     leaveThread: leaveThreadTool({ thread }),
-    focusMode: focusModeTool({ thread }),
-    canvasRead: canvasReadTool(),
-    canvasWrite: canvasWriteTool({ thread }),
-    canvasList: canvasListTool({ thread }),
     getPermalink: getPermalinkTool({ thread }),
     fetchUrl: fetchUrlTool(),
-    deploySite: deploySiteTool({
-      getSandboxContext,
-      isOwner,
-      userId: authorUserId,
-    }),
-    listSites: listSitesTool(),
-    removeSite: removeSiteTool({ isOwner, userId: authorUserId }),
     // Keyed off the constant: the stop condition that makes a skip terminal
     // matches on this exact name (see streamAttempt).
     [SKIP_TOOL_NAME]: skipTool({ threadId: thread.id }),
@@ -359,13 +348,6 @@ export async function buildTools({
       askerUserId: authorUserId,
       currentThreadId: thread.id,
     }),
-    scheduleReminder: scheduleReminderTool({ message }),
-    scheduleRecurringReminder: scheduleRecurringReminderTool({ message }),
-    listReminders: listRemindersTool({ message }),
-    editReminder: editReminderTool({ message }),
-    cancelReminder: cancelReminderTool({ message }),
-    pauseReminder: pauseReminderTool({ message }),
-    resumeReminder: resumeReminderTool({ message }),
     searchSlack: searchSlackTool({ message }),
     searchWeb: searchWebTool({ apiKey: env.EXA_API_KEY }),
     summarizeThread: summarizeThreadTool({
@@ -374,17 +356,6 @@ export async function buildTools({
       threadId: thread.id,
     }),
     loadSkill: loadSkillTool({ skills: await listSkills() }),
-    generateImage: generateImageTool({
-      getSandboxContext,
-      upload: async ({ bytes, mediaType, index, total }) => {
-        const filename = `kyto-image-${index + 1}.${mediaType.split('/').at(1) ?? 'png'}`;
-        await thread.post({
-          files: [{ data: bytes, filename }],
-          markdown:
-            total > 1 ? `Generated image ${index + 1}` : 'Generated image',
-        });
-      },
-    }),
     uploadFile: uploadFileTool({
       upload: async ({ filename, path, title }) => {
         const sandboxContext = getSandboxContext();
@@ -428,6 +399,86 @@ export async function buildTools({
 
   // Deferred: registered but hidden until loadTools names them.
   const deferred: Record<string, { summary: string; tool: Tool }> = {
+    // Deferred 2026-10-06 (issue #36): each was called in ≤1% of 390 turns but
+    // its schema rode along in every prompt — with the rest of these, ~15k of
+    // the ~50k characters of always-on tool schema. Jev preloads them when a
+    // turn is about them (lib/ai/tool-preload).
+    focusMode: {
+      summary:
+        'restrict who you answer in this thread to chosen users (or clear it)',
+      tool: focusModeTool({ thread }),
+    },
+    canvasRead: {
+      summary: 'read a Slack canvas',
+      tool: canvasReadTool(),
+    },
+    canvasWrite: {
+      summary: 'create or edit a Slack canvas',
+      tool: canvasWriteTool({ thread }),
+    },
+    canvasList: {
+      summary: 'list the canvases in this channel',
+      tool: canvasListTool({ thread }),
+    },
+    deploySite: {
+      summary: 'publish a static website (from the sandbox) at a public URL',
+      tool: deploySiteTool({
+        getSandboxContext,
+        isOwner,
+        userId: authorUserId,
+      }),
+    },
+    listSites: {
+      summary: 'list published websites',
+      tool: listSitesTool(),
+    },
+    removeSite: {
+      summary: 'take down a published website',
+      tool: removeSiteTool({ isOwner, userId: authorUserId }),
+    },
+    scheduleReminder: {
+      summary: 'one-time DM reminder after N seconds',
+      tool: scheduleReminderTool({ message }),
+    },
+    scheduleRecurringReminder: {
+      summary:
+        'repeating reminder/task (interval, daily, weekly): a message, url fetch, bash command or headless agent',
+      tool: scheduleRecurringReminderTool({ message }),
+    },
+    listReminders: {
+      summary: 'list the reminders this user may act on',
+      tool: listRemindersTool({ message }),
+    },
+    editReminder: {
+      summary: 'change a reminder',
+      tool: editReminderTool({ message }),
+    },
+    cancelReminder: {
+      summary: 'cancel a reminder',
+      tool: cancelReminderTool({ message }),
+    },
+    pauseReminder: {
+      summary: 'pause a reminder',
+      tool: pauseReminderTool({ message }),
+    },
+    resumeReminder: {
+      summary: 'resume a paused reminder',
+      tool: resumeReminderTool({ message }),
+    },
+    generateImage: {
+      summary: 'generate AI image(s) from a prompt and post them to the thread',
+      tool: generateImageTool({
+        getSandboxContext,
+        upload: async ({ bytes, mediaType, index, total }) => {
+          const filename = `kyto-image-${index + 1}.${mediaType.split('/').at(1) ?? 'png'}`;
+          await thread.post({
+            files: [{ data: bytes, filename }],
+            markdown:
+              total > 1 ? `Generated image ${index + 1}` : 'Generated image',
+          });
+        },
+      }),
+    },
     findChannels: {
       summary: 'find channels by name, private ones included (names only)',
       tool: findChannelsTool(),

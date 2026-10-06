@@ -32,6 +32,11 @@ const GROUPS = {
       'Will the assistant need to open and interact with a website in a real browser — clicking, filling forms, logging in, screenshots, or a page that needs JavaScript?',
     tools: ['browser'],
   },
+  canvases: {
+    question:
+      'Will the assistant need to read, create, edit or list a Slack canvas?',
+    tools: ['canvasRead', 'canvasWrite', 'canvasList'],
+  },
   channelAdmin: {
     question:
       'Will the assistant need to create a Slack channel, set a channel topic, add a bookmark, or pin or unpin a message?',
@@ -73,6 +78,10 @@ const GROUPS = {
       'Will the assistant need to use GitHub — look at repositories, issues or pull requests, or change who may write to a repo?',
     tools: ['gh', 'githubAccess'],
   },
+  images: {
+    question: 'Does this ask to generate or create an AI image or picture?',
+    tools: ['generateImage'],
+  },
   libraryDocs: {
     question:
       'Is this about how to use a specific programming library, framework, SDK or API, where current documentation would help?',
@@ -82,6 +91,24 @@ const GROUPS = {
     question:
       'Will the assistant need to run a poll, or ask specific people a multiple-choice question and wait for their answer?',
     tools: ['poll', 'askQuestion'],
+  },
+  reminders: {
+    question:
+      'Is this about a reminder or a scheduled or repeating task \u2014 setting one, or listing, changing, pausing, resuming or cancelling one?',
+    tools: [
+      'scheduleReminder',
+      'scheduleRecurringReminder',
+      'listReminders',
+      'editReminder',
+      'cancelReminder',
+      'pauseReminder',
+      'resumeReminder',
+    ],
+  },
+  sites: {
+    question:
+      'Will the assistant need to publish a website at a public URL, or list or take down one it published?',
+    tools: ['deploySite', 'listSites', 'removeSite'],
   },
   slackReference: {
     question:
