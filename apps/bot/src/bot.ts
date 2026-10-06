@@ -270,6 +270,13 @@ async function answerMention({
   if (shouldIgnore(message)) {
     return;
   }
+  // One message pinging BOTH kytos gets ONE answer, from the account: it hears
+  // every channel (handed over by the app's connection, or on its own websocket
+  // where the app isn't), while the app may not be in the channel at all. Two
+  // answers meant two turns and two near-identical replies (issue #36).
+  if (!asUserAccount && pingsAccount(message)) {
+    return;
+  }
   const fromBot = message.author.isBot === true;
   if (
     fromBot &&
