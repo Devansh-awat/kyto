@@ -667,7 +667,8 @@ export async function buildTools({
     ...(env.EMOJI_REQUEST_CHANNEL || emojiUploadConfigured()
       ? {
           submitEmoji: {
-            summary: 'add a new custom emoji to the workspace',
+            summary:
+              'upload an image or gif as a new custom emoji in the workspace',
             tool: submitEmojiTool({
               getSandboxContext,
               requestedBy: authorUserId,
@@ -692,7 +693,7 @@ export async function buildTools({
       ? {
           slackBrowser: {
             summary:
-              "a browser logged in to Slack as kyto's user account: workflows, other apps' buttons (owner only)",
+              "a browser logged in to Slack as kyto's user account: workflows, other apps' buttons (owner only) — last resort, never for what another tool here does (custom emoji: submitEmoji)",
             tool: slackBrowser.tool,
           },
         }
