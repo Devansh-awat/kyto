@@ -29,13 +29,19 @@ Report back:
 - End with a clear, self-contained report of what you found or did, including any URLs, ids, or results the parent will need. Assume the parent has NO access to your work beyond this report.
 </subagent>`;
 
+// Two system messages, like systemPrompt: the static half (with the caller's
+// fixed `note`) is identical across every review, subagent or job of the same
+// kind, so it is one shared cache entry; the context half names the thread.
 export function subagentSystemPrompt({
   hints,
+  note = '',
 }: {
   hints: RequestHints;
-}): string {
-  return [subagentCore, sandboxPrompt, contextPrompt(hints)]
-    .filter(Boolean)
-    .join('\n\n')
-    .trim();
+  /** A fixed role note (Kevinton's, a recurring job's). Never per-run text. */
+  note?: string;
+}): string[] {
+  return [
+    `${[subagentCore, sandboxPrompt].join('\n\n').trim()}${note}`,
+    contextPrompt(hints).trim(),
+  ];
 }

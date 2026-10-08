@@ -112,7 +112,7 @@ async function synthesizeReport({
       attempt,
       holder: {},
       prompt: `${reminder.text}\n\n${REPORT_NUDGE}`,
-      system: `${subagentSystemPrompt({ hints })}${RECURRING_JOB_NOTE}`,
+      system: subagentSystemPrompt({ hints, note: RECURRING_JOB_NOTE }),
       tools: built.tools,
     });
     let text = '';
@@ -192,7 +192,7 @@ async function runAgent(
       attempt,
       holder: {},
       prompt: reminder.text,
-      system: `${subagentSystemPrompt({ hints })}${RECURRING_JOB_NOTE}`,
+      system: subagentSystemPrompt({ hints, note: RECURRING_JOB_NOTE }),
       tools: built.tools,
     });
 

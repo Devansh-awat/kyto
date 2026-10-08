@@ -633,7 +633,7 @@ async function synthesizeReport({
   abortSignal?: AbortSignal;
   activeTools: () => string[];
   attempt: ModelAttempt;
-  system: string;
+  system: string[];
   task: string;
   tools: ToolSet;
 }): Promise<string> {

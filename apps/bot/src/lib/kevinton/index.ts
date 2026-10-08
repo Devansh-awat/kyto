@@ -281,7 +281,7 @@ async function review({
           prompt: prompt.tail,
           // Nobody waits on a review: half price, slower is fine.
           serviceTier: 'flex',
-          system: `${subagentSystemPrompt({ hints })}${KEVINTON_NOTE}`,
+          system: subagentSystemPrompt({ hints, note: KEVINTON_NOTE }),
           tools,
         });
         let text = '';
@@ -296,13 +296,32 @@ async function review({
         if (failed && !text) {
           throw failed;
         }
+        const [usage, steps] = await Promise.all([
+          Promise.resolve(result.usage).catch(() => undefined),
+          Promise.resolve(result.steps).catch(() => []),
+        ]);
+        let costUsd: number | undefined;
+        for (const step of steps) {
+          const cost = step.usage.raw?.cost;
+          if (typeof cost === 'number') {
+            costUsd = (costUsd ?? 0) + cost;
+          }
+        }
         logger.info(
           {
+            // Same fields as `[agent] turn complete`, so a review's cache and
+            // bill read the same way as a turn's.
+            cache: {
+              input: usage?.inputTokens,
+              read: usage?.inputTokenDetails?.cacheReadTokens ?? 0,
+            },
+            costUsd,
             filed: own.filed,
             notebook: own.notebookEdits,
             model: attempt.model,
             outcome: text.trim().slice(0, 300),
             proposed: own.proposed,
+            steps: steps.length,
             threadId,
           },
           '[kevinton] reviewed a thread'
