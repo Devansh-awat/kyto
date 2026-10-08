@@ -83,6 +83,19 @@ export interface SandboxStore {
 // failed. Only the LAST holder pauses.
 const holders = new Map<string, number>();
 
+// E2B stops a sandbox that has run for an hour without a pause (Hobby tier),
+// and pausing and resuming resets that clock. A 64-minute turn lost its
+// sandbox and every file in it that way (2026-10-03, #26), because kyto only
+// paused at turn end. Past this, the next command first pauses and resumes it
+// (owner's number: 50 minutes, 2026-10-08).
+const MAX_CONTINUOUS_RUN_MS = 50 * 60 * 1000;
+// Per sandbox id, not per instance: both kytos in a thread share one sandbox,
+// and the clock is the sandbox's.
+const runningSince = new Map<string, number>();
+// Commands in flight per sandbox id. A pause under one ends its stream just
+// as E2B's own stop did, so it waits until none are running.
+const inFlight = new Map<string, number>();
+
 export class LazySandbox {
   readonly workDir = config.workdir;
 
@@ -256,6 +269,10 @@ export class LazySandbox {
       const reconnectMs = Date.now() - started;
       const sandbox = resumed ?? (await this.create());
       const readyMs = Date.now() - started;
+      // Already running for another holder: its clock keeps counting.
+      if (!(resumed && runningSince.has(sandbox.sandboxId))) {
+        runningSince.set(sandbox.sandboxId, Date.now());
+      }
       await this.bootstrap(sandbox);
       this.sandbox = sandbox;
       if (this.persistent && this.sessionId) {
@@ -297,6 +314,34 @@ export class LazySandbox {
     abortSignal?.throwIfAborted();
     let sandbox = await this.ensure();
     let recreated = false;
+    const since = runningSince.get(sandbox.sandboxId);
+    if (
+      since !== undefined &&
+      Date.now() - since > MAX_CONTINUOUS_RUN_MS &&
+      !inFlight.get(sandbox.sandboxId)
+    ) {
+      // `connect` below resumes it; the processes and files carry over.
+      const pauseStarted = Date.now();
+      await sandbox
+        .pause()
+        .then(() => {
+          runningSince.set(sandbox.sandboxId, Date.now());
+          this.logger.info(
+            {
+              ms: Date.now() - pauseStarted,
+              ranMinutes: Math.round((pauseStarted - since) / 60_000),
+              sandboxId: sandbox.sandboxId,
+            },
+            "[sandbox] paused and resumed to reset E2B's hour limit"
+          );
+        })
+        .catch((error: unknown) => {
+          this.logger.warn(
+            { err: errorText(error), sandboxId: sandbox.sandboxId },
+            '[sandbox] refresh pause failed'
+          );
+        });
+    }
     try {
       // `connect`, not `setTimeout`: it also resumes a sandbox that
       // auto-paused while this turn sat idle past the timeout.
@@ -349,6 +394,8 @@ export class LazySandbox {
       this.aborting.add(stopping);
     };
     abortSignal?.addEventListener('abort', stop, { once: true });
+    const runningId = sandbox.sandboxId;
+    inFlight.set(runningId, (inFlight.get(runningId) ?? 0) + 1);
     try {
       const result = await sandbox.commands.run(command, {
         cwd: workingDirectory ?? this.workDir,
@@ -372,6 +419,12 @@ export class LazySandbox {
       throw error;
     } finally {
       abortSignal?.removeEventListener('abort', stop);
+      const left = (inFlight.get(runningId) ?? 1) - 1;
+      if (left > 0) {
+        inFlight.set(runningId, left);
+      } else {
+        inFlight.delete(runningId);
+      }
     }
   }
 
@@ -457,6 +510,7 @@ export class LazySandbox {
         .then(() => undefined)
         .catch((error: unknown) => error);
       if (!failure) {
+        runningSince.delete(sandbox.sandboxId);
         this.logger.info(
           { ms: Date.now() - pauseStarted, sandboxId: sandbox.sandboxId },
           '[sandbox] paused'
@@ -472,6 +526,7 @@ export class LazySandbox {
         await this.store?.clear(this.sessionId).catch(() => undefined);
       }
     }
+    runningSince.delete(sandbox.sandboxId);
     await sandbox.kill().catch((error: unknown) => {
       this.logger.warn(
         { err: errorText(error), sandboxId: sandbox.sandboxId },
