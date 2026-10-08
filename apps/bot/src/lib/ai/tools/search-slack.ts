@@ -200,7 +200,6 @@ export function searchSlackTool({ message }: { message: Message }) {
     inputSchema: z.object({
       cursor: z
         .string()
-        .min(1)
         .optional()
         .describe(
           'nextCursor from the previous searchSlack result, copied verbatim. Omit it for page 1; never make one up.'
@@ -257,7 +256,7 @@ export function searchSlackTool({ message }: { message: Message }) {
           nextCursor,
           resultCount: messages.length,
           success: true,
-          summary: `Slack search found ${messages.length} message${messages.length === 1 ? '' : 's'} on this page for "${query}".${totalMatches === undefined ? '' : ` Slack counts ${totalMatches} matches for the whole query — that is the answer to "how many", no paging needed.`}`,
+          summary: `Slack search found ${messages.length} message${messages.length === 1 ? '' : 's'} on this page for "${query}".${ignoredCursor && cursor?.trim() ? ` "${cursor}" is not a cursor, so this is page 1 — page on with nextCursor, verbatim.` : ''}${totalMatches === undefined ? '' : ` Slack counts ${totalMatches} matches for the whole query — that is the answer to "how many", no paging needed.`}`,
           ...(totalMatches === undefined ? {} : { totalMatches }),
         };
       };
@@ -272,14 +271,17 @@ export function searchSlackTool({ message }: { message: Message }) {
       const prefix = Object.values(CURSOR_PREFIX).find((tag) =>
         cursor?.startsWith(tag)
       );
-      const pageCursor = prefix ? cursor?.slice(prefix.length) : cursor;
-      // Slack's cursors are long opaque strings; a model that invents "1" or
-      // "2" to page got a bare invalid_cursor and gave up.
-      if (cursor && !prefix && cursor.length < MIN_SLACK_CURSOR_CHARS) {
-        return failed(
-          `"${cursor}" is not a cursor. Omit cursor for page 1, or pass nextCursor from the previous result verbatim.`
-        );
-      }
+      // gpt-6-luna fills in EVERY optional field, so on page 1 it sends "0",
+      // "1", ":" or " " — 97 of 98 searches in its first week carried one, and
+      // refusing them (or passing them to Slack as invalid_cursor) left kyto
+      // with no search at all. Slack's cursors are long opaque strings, so a
+      // short untagged one is a placeholder: search page 1 and say so.
+      const ignoredCursor =
+        cursor !== undefined &&
+        !prefix &&
+        cursor.trim().length < MIN_SLACK_CURSOR_CHARS;
+      const realCursor = ignoredCursor ? undefined : cursor;
+      const pageCursor = prefix ? realCursor?.slice(prefix.length) : realCursor;
 
       // `search.messages`, as the asker (their token) or as kyto's account.
       const searchMessages = async ({
