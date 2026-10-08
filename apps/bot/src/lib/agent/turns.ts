@@ -49,8 +49,23 @@ export function stopTurn({ threadId }: { threadId: string }): boolean {
   return stopped;
 }
 
-export function stopAllTurns(): void {
+const SETTLE_POLL_MS = 100;
+
+/**
+ * Abort every turn, then wait (bounded) for them to leave the map. Exiting
+ * straight after the abort cut off their `finally` blocks: sandboxes were left
+ * running at E2B instead of paused, and partial replies never flushed.
+ */
+export async function stopAllTurns({
+  settleMs,
+}: {
+  settleMs: number;
+}): Promise<void> {
   for (const turn of turns.values()) {
     turn.controller.abort(new TurnAbort('shutdown'));
+  }
+  const deadline = Date.now() + settleMs;
+  while (turns.size > 0 && Date.now() < deadline) {
+    await Bun.sleep(SETTLE_POLL_MS);
   }
 }

@@ -83,7 +83,19 @@ const subscriptionCache = new Map<
   { at: number; state: ThreadState | null }
 >();
 
+const SUBSCRIPTION_CACHE_MAX = 5000;
+
 function cacheSubscription(threadId: string, state: ThreadState | null): void {
+  // One entry per thread ever seen; sweep the expired ones instead of growing
+  // for the life of the process.
+  if (subscriptionCache.size >= SUBSCRIPTION_CACHE_MAX) {
+    const now = Date.now();
+    for (const [id, entry] of subscriptionCache) {
+      if (now - entry.at >= SUBSCRIPTION_CACHE_TTL_MS) {
+        subscriptionCache.delete(id);
+      }
+    }
+  }
   subscriptionCache.set(threadId, { at: Date.now(), state });
 }
 
@@ -292,13 +304,18 @@ export class ThreadHandle {
     if (cached && Date.now() - cached.at < SUBSCRIPTION_CACHE_TTL_MS) {
       return cached.state;
     }
-    const row = await getThreadSubscription(this.id).catch((error: unknown) => {
+    let row: Awaited<ReturnType<typeof getThreadSubscription>>;
+    try {
+      row = await getThreadSubscription(this.id);
+    } catch (error) {
       this.logger.warn(
         { err: error, threadId: this.id },
         '[harness] thread state read failed'
       );
-      return null;
-    });
+      // Not cached: a cached null made one Postgres blip read as "unsubscribed"
+      // for the whole TTL, and every followed thread went silent.
+      return cached?.state ?? null;
+    }
     const state = row
       ? {
           focusUserIds: row.focusUserIds ?? null,

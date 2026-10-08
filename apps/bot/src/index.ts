@@ -22,6 +22,8 @@ import { flushThreadLogs, startThreadLogs } from '@/lib/thread-logs';
 import { flushWhiteboards } from '@/lib/whiteboard/room';
 
 let shuttingDown = false;
+// Docker's default stop grace is 10s before SIGKILL; leave room for the rest.
+const TURN_SETTLE_MS = 5000;
 
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) {
@@ -30,9 +32,11 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   // BEFORE the turns are stopped: stopping them would otherwise read as a
   // normal ending and forget them. The next instance resumes them.
-  await markShuttingDown();
-  stopAllTurns();
+  await markShuttingDown().catch((error: unknown) => {
+    logger.error({ err: error }, '[bot] failed to mark turns for resume');
+  });
   logger.info({ signal }, '[bot] shutting down');
+  await stopAllTurns({ settleMs: TURN_SETTLE_MS });
   // Kyto restarts after every change; without this the last few seconds of
   // everyone's drawing (the save debounce) would go with it.
   await flushWhiteboards().catch((error: unknown) => {
@@ -68,6 +72,17 @@ setRedactionAlert(({ context, fresh, labels }) => {
       logger.warn({ err: error }, '[redact] could not alert the owner');
     });
 });
+
+// Before booting: deploys come in bursts, so a SIGTERM often lands mid-boot,
+// and Bun's default handler exited without marking anything for resume.
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.once(signal, () => {
+    shutdown(signal).catch((error: unknown) => {
+      logger.error({ err: error }, '[bot] shutdown failed');
+      process.exit(1);
+    });
+  });
+}
 
 try {
   // BEFORE connecting: events start arriving the moment the socket is up, and
@@ -107,13 +122,4 @@ try {
 } catch (error) {
   logger.error({ err: error }, '[bot] failed to start');
   process.exit(1);
-}
-
-for (const signal of ['SIGINT', 'SIGTERM']) {
-  process.once(signal, () => {
-    shutdown(signal).catch((error: unknown) => {
-      logger.error({ err: error }, '[bot] shutdown failed');
-      process.exit(1);
-    });
-  });
 }

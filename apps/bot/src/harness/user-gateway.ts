@@ -167,6 +167,10 @@ export class UserAccountGateway {
           body: new URLSearchParams({ token: this.token, ...fields }),
           headers: { Cookie: this.cookie },
           method: 'POST',
+          // Unbounded, a stalled call left `open()` holding a promise that
+          // never settled: no reconnect ever ran and the account stopped
+          // listening until a restart.
+          signal: AbortSignal.timeout(CONNECT_TIMEOUT_MS),
         })
       ).json();
     try {
