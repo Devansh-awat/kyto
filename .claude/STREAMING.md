@@ -44,6 +44,10 @@ per-message reset is what fixes the bug below; the DEFAULT is unlimited.
   returns a `complete` for every card still mid-flight — a card id only exists
   inside the `chatStream` it was appended to, so one left `in_progress` can never
   be updated again and a collapsed plan renders it as broken.
+  At a split, the card that CAUSED it (already claimed, not yet appended) is
+  `carry`ed into the next message's budget instead — closing it sent a
+  `complete` for a row the old message never had and dropped its result from
+  the new one: "Something went wrong" rows on turns that succeeded (#28).
 - Two overflow rows, never one: a shared counter mixed hidden tool calls with
   hidden thinking blocks, which read as kyto narrating step counts.
 

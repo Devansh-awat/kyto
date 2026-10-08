@@ -1992,7 +1992,12 @@ async function executeTurn(
             // This message is done and the next card belongs to the one after
             // it. Settle up first, or a card mid-flight stays spinning in a
             // message nothing can update again.
-            yield* cards.endMessage();
+            yield* cards.endMessage({
+              carry:
+                typeof value !== 'string' && value.type === 'task_update'
+                  ? value.id
+                  : undefined,
+            });
             return;
           }
           yield value as StreamChunk;

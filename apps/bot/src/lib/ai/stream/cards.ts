@@ -157,10 +157,20 @@ export function createCardBudget({
      * every card left mid-flight, then a finished overflow row for each kind
      * that hid anything. The caller must append these BEFORE the underlying
      * `chatStream` is stopped.
+     *
+     * `carry` is a card already claimed but not yet rendered — the one whose
+     * arrival split the message. It belongs to the NEXT message: closing it
+     * here sent a `complete` for a row the old message never had, and left it
+     * untracked in the new one, so its result was dropped and Slack showed
+     * "Something went wrong" on a turn that succeeded (#28).
      */
-    endMessage(): TaskCard[] {
+    endMessage({ carry }: { carry?: string } = {}): TaskCard[] {
       const chunks: TaskCard[] = [];
+      const carried = carry ? open.get(carry) : undefined;
       for (const [id, card] of open) {
+        if (id === carry) {
+          continue;
+        }
         chunks.push({
           id,
           status: 'complete',
@@ -177,6 +187,11 @@ export function createCardBudget({
       open = new Map();
       claimed = noneYet();
       hidden = noneYet();
+      if (carry && carried) {
+        claimed[carried.kind] += 1;
+        shown.add(carry);
+        open.set(carry, carried);
+      }
       return chunks;
     },
   };

@@ -154,4 +154,19 @@ describe('the default budget', () => {
     expect(cards.hiddenCount('tool')).toBe(0);
     expect(cards.hiddenCount('reasoning')).toBe(0);
   });
+
+  test('a carried card moves to the next message instead of closing', () => {
+    // The card that splits a message was already claimed; closing it sent a
+    // `complete` into a message that never had it, and dropped it from the
+    // next one, so Slack showed "Something went wrong" (#28).
+    const cards = budget();
+    cards.show({ id: 'old', kind: 'tool', title: 'old' });
+    cards.show({ id: 'new', kind: 'tool', title: 'new' });
+    const closed = cards.endMessage({ carry: 'new' });
+    expect(closed.map((chunk) => chunk.id)).toEqual(['old']);
+    expect(cards.isVisible('new')).toBe(true);
+    expect(cards.isVisible('old')).toBe(false);
+    cards.finish('new');
+    expect(cards.endMessage()).toEqual([]);
+  });
 });
