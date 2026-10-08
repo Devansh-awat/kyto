@@ -47,7 +47,13 @@ const SLACK_PROXY_PREFIX = '/_slackapi/';
 // each, and a token that expired mid-turn turned `slack` into a silent 401.
 const PROXY_TOKEN_TTL_MS = 60 * 60 * 1000;
 
+// Slack calls one turn's sandbox may make. A script paging every channel's
+// history in a loop would otherwise run the app into Slack's rate limits, which
+// are shared with every other turn and with kyto's own replies.
+const SLACK_CALL_BUDGET = 300;
+
 interface ProxyToken {
+  calls: number;
   /** The turn's own channel: always readable. */
   channelId?: string;
   expiry: number;
@@ -69,6 +75,7 @@ export function registerProxyToken({
 }): string {
   const secret = randomBytes(24).toString('base64url');
   tokens.set(secret, {
+    calls: 0,
     channelId,
     expiry: Date.now() + PROXY_TOKEN_TTL_MS,
     userId,
@@ -190,6 +197,16 @@ export async function handleSlackProxy(
   }
   if (!READ_ONLY_METHODS.has(method)) {
     return json({ error: `method_not_allowed: ${method}`, ok: false }, 403);
+  }
+  token.calls += 1;
+  if (token.calls > SLACK_CALL_BUDGET) {
+    return json(
+      {
+        error: `turn_budget_exceeded: this turn already made ${SLACK_CALL_BUDGET} Slack calls. Narrow the query (in:#channel, a date range, fewer pages) instead of reading more.`,
+        ok: false,
+      },
+      429
+    );
   }
   let args: Record<string, unknown> = {};
   const rawBody = await request.text().catch(() => '');

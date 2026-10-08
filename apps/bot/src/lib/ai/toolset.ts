@@ -149,6 +149,21 @@ export interface BuiltTools {
 // would only block it. The five shells are all here:
 // `slackScript` is free-form bash despite its name. Scheduling is here because a
 // `bash`/`agent` reminder is code that runs on a timer.
+// Tools that each make one or more Slack Web API calls. A turn looping over
+// them (every channel's history, one user at a time) spends the app's rate
+// limit, which every other turn and kyto's own replies share. The sandbox's
+// `slack` command has its own budget in lib/slack-proxy.
+const SLACK_READ_TOOLS = new Set([
+  'getChannelInfo',
+  'getPermalink',
+  'getUser',
+  'listThreads',
+  'readConversationHistory',
+  'searchSlack',
+  'summarizeThread',
+]);
+const SLACK_TOOL_BUDGET = 120;
+
 const CODE_TOOLS = new Set([
   'bash',
   'codeMode',
@@ -840,6 +855,7 @@ export async function buildTools({
   // into `core`; a core tool that never appears in `coreUsed` should be
   // deferred.
   const usage = new Map<string, number>();
+  let slackCalls = 0;
   const loadedNames = new Set<string>();
   const preloadedNames = new Set<string>();
   let loadToolsCalls = 0;
@@ -853,6 +869,15 @@ export async function buildTools({
       ...entry,
       execute: async (input: never, options: never) => {
         usage.set(name, (usage.get(name) ?? 0) + 1);
+        if (SLACK_READ_TOOLS.has(name)) {
+          slackCalls += 1;
+          if (slackCalls > SLACK_TOOL_BUDGET) {
+            return {
+              error: `Not run: this turn already made ${SLACK_TOOL_BUDGET} Slack lookups. Narrow down (a specific channel, a date range, one search with modifiers) and answer from what you have.`,
+              success: false,
+            };
+          }
+        }
         const refusal = await guard?.({ input, toolName: name });
         if (refusal) {
           return { error: refusal, success: false };
