@@ -497,6 +497,10 @@ async function executeTurn(
         costUsd?: number;
         inputTokens?: number;
         outputTokens?: number;
+        /** [input, cache read] per step: a step that reads far less than the
+         * previous step's input is where the cache broke; one that reads it
+         * all but is still mostly input just received a big tool result. */
+        perStep?: [number, number][];
       }
     | undefined;
 
@@ -599,6 +603,7 @@ async function executeTurn(
         // Absent entirely = the provider reported no cache detail.
         cache: cacheLog(turnUsage),
         costUsd: turnUsage?.costUsd,
+        perStep: turnUsage?.perStep,
         durationMs: Date.now() - turnStart,
         failedAttempts: failedAttemptsLog(attempts),
         outputTokens: turnUsage?.outputTokens,
@@ -1670,6 +1675,10 @@ async function executeTurn(
             cacheWriteTokens: usage?.inputTokenDetails?.cacheWriteTokens,
             costUsd,
             inputTokens: usage?.inputTokens,
+            perStep: steps.map((step) => [
+              step.usage.inputTokens ?? 0,
+              step.usage.inputTokenDetails.cacheReadTokens ?? 0,
+            ]),
             outputTokens: usage?.outputTokens ?? usage?.totalTokens,
           };
         }
