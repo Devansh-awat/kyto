@@ -281,31 +281,51 @@ async function answerMention({
   if (!fromBot) {
     noteHumanMessage(thread.id);
   }
-  // Focus mode: in a focused thread, ignore mentions from non-focused users so
-  // they can't hijack kyto away from the people it was told to attend to.
-  if (!isFocusAllowed(await thread.state, message.author.userId)) {
+  // The event is already acked, so Slack won't redeliver it: a throw in these
+  // gates (a Postgres blip reading the ban or opt-in) used to leave the person
+  // with no reply and no sign anything went wrong.
+  try {
+    // Focus mode: in a focused thread, ignore mentions from non-focused users so
+    // they can't hijack kyto away from the people it was told to attend to.
+    if (!isFocusAllowed(await thread.state, message.author.userId)) {
+      return;
+    }
+    if (await refuseBanned(thread, message)) {
+      return;
+    }
+    // A bot cannot click "i accept", so the opt-in gate is a person's; a bot is
+    // still subject to bans, and to the loop guard above.
+    if (!(fromBot || (await isUserAllowed(message.author.userId)))) {
+      await offerOptInAs({ asUserAccount, message, thread });
+      return;
+    }
+    // Mentioned anywhere in a thread — its top or halfway down — stay for the
+    // replies, as whichever kyto was pinged: the last one pinged takes the
+    // thread over, so it never gets an answer from both. Not for a bot —
+    // joining would have kyto answering a thread nobody human asked it into.
+    // Not for `!secret` either: subscribing makes the thread's later replies
+    // kyto's to answer, and a private question shouldn't leave that trail.
+    if (!fromBot && secretQuestion(message) === null) {
+      await thread.setState({
+        respondAs: asUserAccount ? 'user' : 'app',
+        respondOnThreadMessages: true,
+      });
+    }
+  } catch (error) {
+    logger.error(
+      { ...toLogError(error), threadId: thread.id },
+      '[bot] message gates failed before the turn'
+    );
+    if (!fromBot && secretQuestion(message) === null) {
+      await thread
+        .postEphemeral(
+          message.author,
+          'Something went wrong on my side before I could start on that. Try again in a moment.',
+          { fallbackToDM: false }
+        )
+        .catch(() => undefined);
+    }
     return;
-  }
-  if (await refuseBanned(thread, message)) {
-    return;
-  }
-  // A bot cannot click "i accept", so the opt-in gate is a person's; a bot is
-  // still subject to bans, and to the loop guard above.
-  if (!(fromBot || (await isUserAllowed(message.author.userId)))) {
-    await offerOptInAs({ asUserAccount, message, thread });
-    return;
-  }
-  // Mentioned anywhere in a thread — its top or halfway down — stay for the
-  // replies, as whichever kyto was pinged: the last one pinged takes the
-  // thread over, so it never gets an answer from both. Not for a bot —
-  // joining would have kyto answering a thread nobody human asked it into.
-  // Not for `!secret` either: subscribing makes the thread's later replies
-  // kyto's to answer, and a private question shouldn't leave that trail.
-  if (!fromBot && secretQuestion(message) === null) {
-    await thread.setState({
-      respondAs: asUserAccount ? 'user' : 'app',
-      respondOnThreadMessages: true,
-    });
   }
   await runCommandOrTurn({ asUserAccount, message, thread });
 }
