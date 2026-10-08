@@ -184,10 +184,11 @@ async function runWithAutoBackground({
       stdout: await clipStream(result.stdout, context, 'stdout'),
     };
   }
+  background.watchManaged(started.id);
   return {
     backgrounded: true,
     id: started.id,
-    note: `This command was still running after 60s, so it was moved to the background (handle "${started.id}") to keep the turn responsive — it is STILL RUNNING. Poll it with getProcessOutput("${started.id}") and stop it with killProcess("${started.id}"). Don't just re-run it. If you need its result before replying, keep working on other things and check back, or use the wait tool.`,
+    note: `This command was still running after 60s, so it was moved to the background (handle "${started.id}") to keep the turn responsive — it is STILL RUNNING. Check it with the \`process\` tool (action \`output\`, id "${started.id}") and stop it with action \`kill\`. Don't just re-run it. If you need its result before replying, keep working on other things and check back, or use the wait tool. If your turn ends first, you'll be woken with its result when it finishes (or told after 30 minutes if it's still going).`,
     running: true,
     stderr: await clipStream(result.stderr, context, 'stderr'),
     stdout: await clipStream(result.stdout, context, 'stdout'),

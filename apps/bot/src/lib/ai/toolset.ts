@@ -299,6 +299,11 @@ export async function buildTools({
   const background = backgroundProcessTools({
     getSandboxContext,
     github: { isOwner, threadId: thread.id, userId: authorUserId },
+    // Nobody to wake for an unattended run, and a `!secret` turn's wake would
+    // answer in public what was asked in private.
+    ...(unattended || secret
+      ? {}
+      : { wake: { asUserAccount, message, thread } }),
   });
 
   const core: ToolSet = {

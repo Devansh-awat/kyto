@@ -2,8 +2,11 @@ import type { SandboxContext } from '@repo/ai';
 import { mayHaveFetchedRepo } from '@repo/sandbox';
 import { tool } from 'ai';
 import { z } from 'zod';
+import type { ThreadHandle } from '@/harness/thread';
+import type { Message } from '@/harness/types';
 import { parseGithubCommand } from '@/lib/github/command';
 import { guardGithubCommand } from '@/lib/github/guard';
+import logger from '@/lib/logger';
 import { disarmFetchedRepos } from '@/lib/sandbox/git-safety';
 import { clipOutput, fullOutputPath } from '@/lib/sandbox/output-clip';
 import { errorMessage } from '@/lib/utils/error';
@@ -83,10 +86,41 @@ function shSingleQuote(value: string): string {
 }
 
 interface BackgroundProcess {
+  /** Set once the model has seen it finished, so no wake repeats it. */
+  collected?: boolean;
+  command: string;
   errPath: string;
   exitPath: string;
   outPath: string;
   pid: string;
+  /** A host-side watcher is polling it (see startWatching). */
+  watching?: boolean;
+}
+
+// Per THREAD, not per turn: a job outlives the turn that started it, and the
+// next turn (a wake, or someone asking "is it done?") got "Unknown process id"
+// for a job that was still running. In memory: a restart loses them, as it
+// loses the sandbox's own process.
+const threadProcesses = new Map<
+  string,
+  { counter: number; processes: Map<string, BackgroundProcess> }
+>();
+
+// How long a job may keep the sandbox awake after its turn ended, before kyto
+// is told time's up (owner's call 2026-10-08: 30 min, then kyto decides).
+const WATCH_AFTER_TURN_MS = 30 * 60 * 1000;
+const WATCH_POLL_MS = 20 * 1000;
+// A wake turn that starts or re-checks a job may be woken again, but not
+// forever: a model re-arming every half hour would run all day.
+const MAX_WAKE_CHAIN = 3;
+const WAKE_ID = /^process-report-(\d+)-/;
+const WAKE_QUIET_MAX_MS = 15 * 60 * 1000;
+const OUTPUT_TAIL_CHARS = 3000;
+
+export interface ProcessWake {
+  asUserAccount: boolean;
+  message: Message;
+  thread: ThreadHandle;
 }
 
 export interface ManagedResult {
@@ -103,8 +137,14 @@ const POLL_STEPS_MS = [250, 500, 1000, 2000];
 export function backgroundProcessTools({
   getSandboxContext,
   github,
+  wake,
 }: {
   getSandboxContext: () => SandboxContext;
+  /**
+   * Who to wake when a job finishes after its turn (or runs 30 minutes past
+   * it). Absent for unattended runs (a reminder, Kevinton): nobody to tell.
+   */
+  wake?: ProcessWake;
   /**
    * The principal this turn acts for, so a backgrounded command is gated on
    * repo ownership like any other shell. Omitted only where there is no
@@ -113,25 +153,38 @@ export function backgroundProcessTools({
    */
   github?: { isOwner: boolean; threadId: string; userId: string };
 }) {
-  const processes = new Map<string, BackgroundProcess>();
+  const registry = (() => {
+    const fresh = () => ({
+      counter: 0,
+      processes: new Map<string, BackgroundProcess>(),
+    });
+    const key = wake?.thread.id;
+    if (!key) {
+      return fresh();
+    }
+    const existing = threadProcesses.get(key) ?? fresh();
+    threadProcesses.set(key, existing);
+    return existing;
+  })();
+  const processes = registry.processes;
   // Commands still to be checked for a repo they may have fetched; a detached
   // command finishes out of band, so the disarm happens when a poll first sees
   // it done rather than at start time.
   const pendingDisarm = new Map<string, string>();
-  let counter = 0;
 
   async function startManaged(
     command: string,
     workingDirectory?: string
   ): Promise<{ id: string } | { error: string }> {
     const context = getSandboxContext();
-    counter += 1;
-    const id = `bg-${counter}`;
-    // The counter restarts every turn but the sandbox (and its workdir) is the
-    // thread's, so `bg-1` of a later turn found the old `bg-1`'s exit file and
-    // reported "finished" with the previous result. The files get a nonce.
+    registry.counter += 1;
+    const id = `bg-${registry.counter}`;
+    // The sandbox (and its workdir) is the thread's and outlives a restart's
+    // in-memory counter, so `bg-1` after a restart found the old `bg-1`'s exit
+    // file and reported "finished" with its result. The files get a nonce.
     const base = `${context.sessionWorkDir}/.kyto-bg-${id}-${crypto.randomUUID().slice(0, 8)}`;
     const proc: BackgroundProcess = {
+      command,
       errPath: `${base}.err`,
       exitPath: `${base}.exit`,
       outPath: `${base}.out`,
@@ -175,8 +228,10 @@ export function backgroundProcessTools({
     await disarmFetchedRepos({ command, context: getSandboxContext() });
   }
 
-  async function readManaged(id: string): Promise<ManagedResult | null> {
-    const context = getSandboxContext();
+  async function readManaged(
+    id: string,
+    context: SandboxContext = getSandboxContext()
+  ): Promise<ManagedResult | null> {
     const proc = processes.get(id);
     if (!proc) {
       return null;
@@ -205,6 +260,101 @@ export function backgroundProcessTools({
     };
   }
 
+  /**
+   * Keep an eye on a job once its turn is over: when it finishes, wake the
+   * thread with the result; 30 minutes after the turn, wake it to say time's
+   * up. Polling resumes the sandbox, which is what keeps the job RUNNING — a
+   * paused sandbox freezes it (and the late-release in LazySandbox pauses it
+   * again a couple of minutes after the polling stops).
+   */
+  function watchManaged(id: string): void {
+    const proc = processes.get(id);
+    if (!(wake && proc) || proc.watching || proc.collected) {
+      return;
+    }
+    const depth = Number(wake.message.id.match(WAKE_ID)?.[1] ?? 0);
+    if (depth >= MAX_WAKE_CHAIN) {
+      return;
+    }
+    proc.watching = true;
+    const context = getSandboxContext();
+    watch({ context, depth, id, proc, wake })
+      .catch((error: unknown) => {
+        logger.warn(
+          { err: errorMessage(error), id, threadId: wake.thread.id },
+          '[background] watcher failed'
+        );
+      })
+      .finally(() => {
+        proc.watching = false;
+      });
+  }
+
+  async function watch({
+    context,
+    depth,
+    id,
+    proc,
+    wake,
+  }: {
+    context: SandboxContext;
+    depth: number;
+    id: string;
+    proc: BackgroundProcess;
+    wake: ProcessWake;
+  }): Promise<void> {
+    const { getTurn, USER_ACCOUNT_TURN_SUFFIX } = await import(
+      '@/lib/agent/turns'
+    );
+    const slot = wake.asUserAccount
+      ? `${wake.thread.id}${USER_ACCOUNT_TURN_SUFFIX}`
+      : wake.thread.id;
+    // While the turn that started it runs, it checks the job itself — and two
+    // commands at once on one sandbox session are not safe (readManaged).
+    const launchingTurn = getTurn({ threadId: slot });
+    let deadline: number | undefined;
+    while (true) {
+      await Bun.sleep(WATCH_POLL_MS);
+      if (processes.get(id) !== proc || proc.collected) {
+        return;
+      }
+      if (launchingTurn && getTurn({ threadId: slot }) === launchingTurn) {
+        continue;
+      }
+      deadline ??= Date.now() + WATCH_AFTER_TURN_MS;
+      const result = await readManaged(id, context);
+      if (!result) {
+        return;
+      }
+      if (!result.finished && Date.now() < deadline) {
+        continue;
+      }
+      // A turn running now (someone asked, or another wake) goes first; it may
+      // read the job itself, which makes this wake redundant.
+      const quietBy = Date.now() + WAKE_QUIET_MAX_MS;
+      while (getTurn({ threadId: slot }) && Date.now() < quietBy) {
+        await Bun.sleep(WATCH_POLL_MS);
+      }
+      if (proc.collected || getTurn({ threadId: slot })) {
+        return;
+      }
+      if (result.finished) {
+        proc.collected = true;
+      }
+      const { runTurn } = await import('@/lib/agent');
+      logger.info(
+        { finished: result.finished, id, threadId: wake.thread.id },
+        '[background] waking the thread about a background job'
+      );
+      await runTurn({
+        asUserAccount: wake.asUserAccount,
+        message: processReport({ depth, id, proc, result, wake }),
+        thread: wake.thread,
+      });
+      return;
+    }
+  }
+
   async function waitManaged(
     id: string,
     timeoutMs: number,
@@ -221,6 +371,10 @@ export function backgroundProcessTools({
       }
       last = result;
       if (result.finished) {
+        const proc = processes.get(id);
+        if (proc) {
+          proc.collected = true;
+        }
         return result;
       }
       const wait = POLL_STEPS_MS[Math.min(step, POLL_STEPS_MS.length - 1)];
@@ -250,10 +404,11 @@ export function backgroundProcessTools({
         if ('error' in started) {
           return { error: started.error, success: false };
         }
+        watchManaged(started.id);
         return {
           id: started.id,
           success: true,
-          summary: `Started background process ${started.id}.`,
+          summary: `Started background process ${started.id}. If your turn ends before it does, you'll be woken with its result when it finishes (or told after 30 minutes if it's still going).`,
         };
       } catch (error) {
         return { error: errorMessage(error), success: false };
@@ -274,6 +429,15 @@ export function backgroundProcessTools({
           return { error: `Unknown process id: ${id}`, success: false };
         }
         await disarmIfFinished(id, result);
+        const proc = processes.get(id);
+        if (proc && result.finished) {
+          proc.collected = true;
+        }
+        // Still running when checked (often right after a "time's up" wake):
+        // keep watching it for another 30 minutes past this turn.
+        if (!result.finished) {
+          watchManaged(id);
+        }
         const context = getSandboxContext();
         return {
           exitCode: result.exitCode,
@@ -321,7 +485,47 @@ export function backgroundProcessTools({
     runBackgroundProcess,
     startManaged,
     waitManaged,
+    watchManaged,
   };
 }
 
 export type BackgroundProcessTools = ReturnType<typeof backgroundProcessTools>;
+
+/**
+ * The synthetic message a background job's wake runs on. Authored by whoever
+ * started the job, so the turn is gated exactly as their own message would be.
+ */
+function processReport({
+  depth,
+  id,
+  proc,
+  result,
+  wake,
+}: {
+  depth: number;
+  id: string;
+  proc: BackgroundProcess;
+  result: ManagedResult;
+  wake: ProcessWake;
+}): Message {
+  const command =
+    proc.command.length > 200 ? `${proc.command.slice(0, 200)}…` : proc.command;
+  const tail = (text: string) =>
+    text.length > OUTPUT_TAIL_CHARS
+      ? `…${text.slice(-OUTPUT_TAIL_CHARS)}`
+      : text;
+  const output = `stdout (end):\n\`\`\`\n${tail(result.stdout) || '(empty)'}\n\`\`\`\nstderr (end):\n\`\`\`\n${tail(result.stderr) || '(empty)'}\n\`\`\`\nFull output files in the sandbox: ${proc.outPath} and ${proc.errPath}.`;
+  const body = result.finished
+    ? `the background command ${id} you started earlier in this thread (\`${command}\`) has FINISHED with exit code ${result.exitCode ?? 'unknown'}.\n\n${output}\n\nCarry on with the task it was part of if there is more to do, or tell the thread what matters from it.`
+    : `the background command ${id} you started earlier in this thread (\`${command}\`) is STILL RUNNING 30 minutes after your turn ended — time's up for keeping the sandbox awake for it. Once the sandbox pauses it freezes, and it resumes the next time this thread uses the sandbox.\n\n${output}\n\nDecide: if it is worth waiting for, check it with the \`process\` tool (action \`output\`, id "${id}"), which keeps watching it for another 30 minutes; if it is stuck or no longer needed, kill it (action \`kill\`). Say briefly where it stands.`;
+  return {
+    attachments: [],
+    author: wake.message.author,
+    id: `process-report-${depth + 1}-${id}-${Date.now()}`,
+    isMention: false,
+    metadata: { dateSent: new Date() },
+    raw: {},
+    text: `[Automatic note, not written by a person: ${body} Don't explain that you were woken up. If nothing needs saying, call the skip TOOL — do not write the word "skip" as your reply.]`,
+    threadId: wake.thread.id,
+  };
+}
