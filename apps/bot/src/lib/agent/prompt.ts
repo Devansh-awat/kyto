@@ -93,7 +93,10 @@ async function renderMessage(message: Message): Promise<string> {
   const text = slackText
     ? mrkdwnToMarkdown(await annotateMentions(slackText))
     : message.text;
-  return `@${authorLabel(message)} (${message.author.userId}): ${text}`;
+  const pronouns = message.author.pronouns
+    ? `, ${message.author.pronouns}`
+    : '';
+  return `@${authorLabel(message)} (${message.author.userId}${pronouns}): ${text}`;
 }
 
 export async function buildPrompt(

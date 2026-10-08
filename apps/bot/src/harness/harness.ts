@@ -412,6 +412,9 @@ export class SlackHarness {
         fullName: user?.profile?.real_name || user?.real_name || undefined,
         isBot: user?.is_bot,
         isMe: userId === this.botUserId || userId === this.userAccountId,
+        // Slack carries pronouns on the profile when the user has set them.
+        // Rendered inline wherever the user is named, so kyto never guesses.
+        pronouns: user?.profile?.pronouns || undefined,
         userId,
         // Slack's own order: display name, else real name. `name` is the
         // handle — a bot's is often `june2` while it shows as "June".

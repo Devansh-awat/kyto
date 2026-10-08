@@ -6,6 +6,8 @@ export interface Author {
   fullName?: string;
   isBot?: boolean;
   isMe?: boolean;
+  /** The user's Slack profile pronouns field, when they've set one. */
+  pronouns?: string;
   userId: string;
   userName: string;
 }

@@ -8,6 +8,9 @@ const BOT_NAME = 'kyto';
 
 export async function annotateMentions(text: string): Promise<string> {
   const mentionNames = new Map<string, string>();
+  // Slack profile pronouns per mentioned id, rendered inline so a ping tells
+  // kyto how to refer to the person without a separate lookup.
+  const mentionPronouns = new Map<string, string>();
   const missingIds = new Set<string>();
   const botUserId = slack.botUserId;
 
@@ -38,6 +41,9 @@ export async function annotateMentions(text: string): Promise<string> {
     [...missingIds].map(async (userId) => {
       const user = await bot.getUser(userId).catch(() => undefined);
       mentionNames.set(userId, user?.userName ?? userId);
+      if (user?.pronouns) {
+        mentionPronouns.set(userId, user.pronouns);
+      }
     })
   );
 
@@ -46,6 +52,8 @@ export async function annotateMentions(text: string): Promise<string> {
   }
   return text.replace(mentionPattern, (token, userId: string) => {
     const name = mentionNames.get(userId);
-    return name ? `@${name} (${userId})` : token;
+    const pronouns = mentionPronouns.get(userId);
+    const suffix = pronouns ? `${userId}, ${pronouns}` : userId;
+    return name ? `@${name} (${suffix})` : token;
   });
 }
