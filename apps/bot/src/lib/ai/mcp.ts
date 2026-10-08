@@ -46,6 +46,10 @@ const AUTH_FAILURE = /\b(401|403)\b/;
 const HAS_AUTH_SCHEME = /^[A-Za-z][\w-]*\s+\S/;
 const MAX_FAILURE_MESSAGE = 200;
 
+// Providers reject a tool name past 64 characters.
+const MAX_TOOL_NAME_LENGTH = 64;
+const objectSchema = z.looseObject({ type: z.literal('object') });
+
 const toolListSchema = z.object({
   tools: z.array(
     z.looseObject({
@@ -142,7 +146,15 @@ class McpConnection {
   private async rpc(
     method: string,
     params: unknown,
-    { notification = false, timeoutMs = CALL_TIMEOUT_MS } = {}
+    {
+      abortSignal,
+      notification = false,
+      timeoutMs = CALL_TIMEOUT_MS,
+    }: {
+      abortSignal?: AbortSignal;
+      notification?: boolean;
+      timeoutMs?: number;
+    } = {}
   ): Promise<unknown> {
     const id = notification ? undefined : this.nextId++;
     // Re-checked at CONNECT time, not only when the entry was saved: a hostname
@@ -170,7 +182,11 @@ class McpConnection {
       },
       method: 'POST',
       redirect: 'manual',
-      signal: AbortSignal.timeout(timeoutMs),
+      // The turn's own signal too: a stopped turn kept the call running for up
+      // to the full minute.
+      signal: abortSignal
+        ? AbortSignal.any([abortSignal, AbortSignal.timeout(timeoutMs)])
+        : AbortSignal.timeout(timeoutMs),
     });
     const session = response.headers.get('mcp-session-id');
     if (session) {
@@ -211,7 +227,12 @@ class McpConnection {
         { timeoutMs: CONNECT_TIMEOUT_MS }
       );
       await this.rpc('notifications/initialized', {}, { notification: true });
-    })();
+    })().catch((error: unknown) => {
+      // Not cached: one transient failure used to fail every later call on
+      // this connection for the rest of the turn.
+      this.initialized = undefined;
+      throw error;
+    });
     return this.initialized;
   }
 
@@ -238,10 +259,22 @@ class McpConnection {
     return tools;
   }
 
-  async callTool(name: string, args: unknown): Promise<string> {
+  async callTool({
+    abortSignal,
+    args,
+    name,
+  }: {
+    abortSignal?: AbortSignal;
+    args: unknown;
+    name: string;
+  }): Promise<string> {
     await this.ensureInitialized();
     const result = callResultSchema.parse(
-      await this.rpc('tools/call', { arguments: args ?? {}, name })
+      await this.rpc(
+        'tools/call',
+        { arguments: args ?? {}, name },
+        { abortSignal }
+      )
     );
     const text = (result.content ?? [])
       .map((part) => (part.type === 'text' ? (part.text ?? '') : ''))
@@ -426,6 +459,17 @@ export async function buildMcpTools({
             /[^\w-]/g,
             '_'
           );
+          // A server's tool list is untrusted input, and loaded tools are
+          // remembered per thread: one name past the providers' 64-char limit
+          // failed every request of every later turn in that thread. Sanitizing
+          // can also fold two names together (`a.b`, `a_b`); first one wins.
+          if (toolName.length > MAX_TOOL_NAME_LENGTH || tools[toolName]) {
+            logger.warn(
+              { server: namespace, tool: info.name },
+              '[mcp] tool skipped: name too long or colliding'
+            );
+            continue;
+          }
           gates[toolName] = {
             category,
             ownerUserId: server.userId,
@@ -440,10 +484,10 @@ export async function buildMcpTools({
               info.description ??
               `Tool ${info.name} on the ${namespace} MCP server.`,
             inputSchema: jsonSchema(
-              (info.inputSchema ?? {
+              objectSchema.safeParse(info.inputSchema).data ?? {
                 properties: {},
                 type: 'object',
-              }) as never
+              }
             ),
             execute: async (
               args: unknown,
@@ -468,7 +512,11 @@ export async function buildMcpTools({
                   return decision.detail;
                 }
               }
-              const text = await connection.callTool(info.name, args);
+              const text = await connection.callTool({
+                abortSignal: options?.abortSignal,
+                args,
+                name: info.name,
+              });
               if (server.id !== AGENTMAIL_BUILTIN_ID) {
                 return text;
               }
