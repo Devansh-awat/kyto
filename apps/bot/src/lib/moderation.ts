@@ -22,6 +22,10 @@ const MAX_INPUTS = 32;
 // per text is enough.
 const checkedInstructions = new Set<string>();
 
+const ALERT_COOLDOWN_MS = 30 * 60 * 1000;
+// Per thread + author: which categories the owner was already pinged about.
+const recentAlerts = new Map<string, { at: number; categories: Set<string> }>();
+
 /**
  * Check one finished turn and, if anything is flagged, add the owner to the
  * channel and ping him in the thread (a `!secret` turn: in his DM, no content). It never blocks, deletes
@@ -97,6 +101,28 @@ export async function moderateTurn({
       { authorUserId, flags, threadId: thread.id },
       '[moderation] turn flagged'
     );
+    // The same person repeating the same ask got the owner pinged on every
+    // repeat (issue #53). Within the window only a NEW category pings again.
+    const alertKey = `${thread.id}:${authorUserId}`;
+    const now = Date.now();
+    for (const [key, entry] of recentAlerts) {
+      if (now - entry.at > ALERT_COOLDOWN_MS) {
+        recentAlerts.delete(key);
+      }
+    }
+    const previous = recentAlerts.get(alertKey);
+    const categories = flags.flatMap((flag) => flag.categories);
+    if (previous && categories.every((name) => previous.categories.has(name))) {
+      logger.info(
+        { authorUserId, threadId: thread.id },
+        '[moderation] repeat flag; owner already alerted'
+      );
+      return;
+    }
+    recentAlerts.set(alertKey, {
+      at: now,
+      categories: new Set([...(previous?.categories ?? []), ...categories]),
+    });
     // Into the channel first, even one he left (owner's call, 2026-10-03): he
     // can't act on a flag in a channel he can't see, and a private channel's
     // ping doesn't notify a non-member. A DM or group DM can't take him.
