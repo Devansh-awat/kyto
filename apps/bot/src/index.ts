@@ -13,6 +13,7 @@ import { buildAllowlist } from '@/lib/allowed-users';
 import { slack, userBot } from '@/lib/chat';
 import { startKevinton } from '@/lib/kevinton';
 import logger from '@/lib/logger';
+import { startMemoryCuration } from '@/lib/memory-curation';
 import { redactSecrets, setRedactionAlert } from '@/lib/redact';
 import { startReminderScheduler } from '@/lib/reminders/scheduler';
 import { startSandboxReaper } from '@/lib/sandbox/store';
@@ -102,6 +103,7 @@ try {
   // Reap thread reasoning older than the retention window.
   startThinkingReaper();
   startKevinton();
+  startMemoryCuration();
   startChannelPairing();
   startThreadLogs();
   // Same window, same reason, for compacted thread history.

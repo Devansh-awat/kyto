@@ -2,6 +2,7 @@ import {
   createMemory,
   deleteMemory,
   getMemory,
+  listMemoryCurations,
   updateMemory,
 } from '@repo/db/queries';
 import { tool } from 'ai';
@@ -276,6 +277,94 @@ export function deleteMemoryTool(actor: MemoryActor) {
         };
       } catch (error) {
         return { deleted: false, error: errorMessage(error) };
+      }
+    },
+  });
+}
+
+// How far back a curated-away memory can be restored from.
+const RESTORE_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
+
+/**
+ * Undo the periodic curation (lib/memory-curation) for one memory: bring back
+ * one it merged away or removed, or put a merged memory's own text back the
+ * way it was. Only the person's OWN curation log is searched, so nobody can
+ * restore someone else's notes.
+ */
+export function restoreMemoryTool(actor: MemoryActor) {
+  return tool({
+    description:
+      "Restore a memory that the weekly tidy-up merged into another or removed as stale (it keeps the full text for 90 days). Pass the memory's title as it was. Restoring the memory something was merged INTO puts its pre-merge text back.",
+    inputSchema: z.object({
+      title: z
+        .string()
+        .min(1)
+        .describe('Title of the merged-away or removed memory.'),
+    }),
+    execute: async ({ title }) => {
+      const wanted = title.trim().toLowerCase();
+      try {
+        const passes = await listMemoryCurations({
+          author: actor.authorUserId,
+          since: new Date(Date.now() - RESTORE_WINDOW_MS),
+        });
+        for (const pass of passes) {
+          for (const change of pass.changes) {
+            const removed = change.removed.find(
+              (memory) => memory.title.toLowerCase() === wanted
+            );
+            if (removed) {
+              const created =
+                (await createMemory({
+                  body: removed.body,
+                  createdBy: actor.authorUserId,
+                  summary: removed.summary,
+                  title: removed.title,
+                })) ??
+                (await createMemory({
+                  body: removed.body,
+                  createdBy: actor.authorUserId,
+                  summary: removed.summary,
+                  title: `${removed.title} (restored)`.slice(0, TITLE_MAX),
+                }));
+              return created
+                ? {
+                    restored: true,
+                    summary: `Restored "${created.title}".`,
+                  }
+                : { restored: false, summary: 'Could not restore it.' };
+            }
+            const kept = change.keptBefore;
+            if (kept && kept.title.toLowerCase() === wanted) {
+              const row = await getMemory({
+                scope: actorScope(actor),
+                title: kept.title,
+                userId: actor.authorUserId,
+              });
+              if (!row || row.createdBy !== actor.authorUserId) {
+                return {
+                  restored: false,
+                  summary: `"${kept.title}" no longer exists as your own memory, so its pre-merge text can't be put back.`,
+                };
+              }
+              await updateMemory({
+                body: kept.body,
+                id: row.id,
+                summary: kept.summary,
+              });
+              return {
+                restored: true,
+                summary: `Put "${kept.title}" back the way it was before it was merged. The memories merged into it can be restored by their own titles.`,
+              };
+            }
+          }
+        }
+        return {
+          restored: false,
+          summary: `Nothing titled "${title.trim()}" was merged or removed by a tidy-up in the last 90 days.`,
+        };
+      } catch (error) {
+        return { error: errorMessage(error), restored: false };
       }
     },
   });

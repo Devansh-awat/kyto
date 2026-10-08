@@ -137,10 +137,11 @@ export const TOOL_FAMILIES = {
       delete: 'deleteMemory',
       edit: 'editMemory',
       fetch: 'fetchMemory',
+      restore: 'restoreMemory',
       save: 'saveMemory',
     },
     description: 'Your long-term memories (facts, preferences, decisions).',
-    summary: 'long-term memories: save, fetch, edit, delete',
+    summary: 'long-term memories: save, fetch, edit, delete, restore',
   },
   pins: {
     actions: { pin: 'pinMessage', unpin: 'unpinMessage' },

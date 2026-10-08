@@ -66,6 +66,8 @@ ALTER TABLE coding_warnings ADD COLUMN IF NOT EXISTS count integer NOT NULL DEFA
 ALTER TYPE reminder_recurrence ADD VALUE IF NOT EXISTS 'cron'; -- 2026-10-08
 ALTER TABLE reminders ADD COLUMN IF NOT EXISTS cron_expression text; -- 2026-10-08
 ALTER TABLE reminders ADD COLUMN IF NOT EXISTS timezone text; -- 2026-10-08
+CREATE TABLE IF NOT EXISTS memory_curations (id serial PRIMARY KEY, author text NOT NULL, ran_at timestamptz NOT NULL DEFAULT now(), changes jsonb NOT NULL); -- 2026-10-08
+CREATE INDEX IF NOT EXISTS memory_curations_author_idx ON memory_curations (author); -- 2026-10-08
 ```
 
 The anti-coding gate's ledger: the last catch and how many in a row (each

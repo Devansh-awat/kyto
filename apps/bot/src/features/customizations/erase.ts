@@ -2,6 +2,7 @@ import {
   clearThreadSandbox,
   clearUserCustomization,
   deleteChatgptAccount,
+  deleteMemoryCurationsByAuthor,
   deleteNotebook,
   deletePrivateMemoriesByAuthor,
   deleteSlackGrant,
@@ -119,6 +120,14 @@ export async function eraseUserData({
     .filter((memory) => isPromoted(memory))
     .map((memory) => memory.title);
 
+  // The curation log keeps the full text of merged and removed memories (so
+  // they can be restored); erasing the memories without it would leave them.
+  await deleteMemoryCurationsByAuthor(userId).catch((error: unknown) => {
+    logger.error(
+      { err: errorMessage(error), userId },
+      '[erase] failed to delete the memory curation log'
+    );
+  });
   const memoryCount = await deletePrivateMemoriesByAuthor(userId).catch(
     (error: unknown) => {
       logger.error(

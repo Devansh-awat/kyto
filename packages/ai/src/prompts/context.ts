@@ -86,7 +86,23 @@ function memoriesBlock(hints: RequestHints): string {
         : `- ${memory.title}`;
     })
     .join('\n');
-  const rendered = list || '- (none saved yet)';
+  const curation = hints.memoryCuration;
+  const tidied =
+    curation && curation.merged.length + curation.removed.length > 0
+      ? `\n(This week's automatic tidy-up of this person's memories ${[
+          curation.merged.length > 0
+            ? `merged ${curation.merged.map((title) => `"${title}"`).join(', ')} into others`
+            : '',
+          curation.removed.length > 0
+            ? `removed ${curation.removed.map((title) => `"${title}"`).join(', ')} as stale`
+            : '',
+        ]
+          .filter(Boolean)
+          .join(
+            ' and '
+          )}. If they ask about one, or one turns out to be needed, the \`memory\` tool's \`restore\` action brings it back by title.)`
+      : '';
+  const rendered = `${list || '- (none saved yet)'}${tidied}`;
   return `\n\n<memories>\nDurable notes visible on this turn: the ones this person saved, plus the ones the bot owner promoted — to global, or into this channel or its channel group. These are just the TITLES — if one looks relevant, read its full content with the \`memory\` tool (action \`fetch\`, by title), update it (action \`edit\`) or remove it (action \`delete\`).
 
 SAVE ONE OFTEN. Do not wait to be asked, and do not save only after something enormous. If this turn produced anything a later thread would otherwise have to work out again — a command that finally worked, a config value, someone's preference, the shape of a codebase, why an approach failed, a decision and its reason — call the \`memory\` tool (action \`save\`) before you finish, quietly, without announcing it. The failure mode to avoid is not saving too much; it is arriving at the same answer for the third time. A memory starts private to this person, and the owner promotes it from the dashboard if it should reach a channel or the whole workspace. If a memory on this list is already close, edit it instead of saving a second one.

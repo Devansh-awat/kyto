@@ -23,6 +23,12 @@ export interface RequestHints {
     scopeId?: string | null;
     scopeKind?: string | null;
   }[];
+  /**
+   * What the weekly tidy-up (lib/memory-curation) changed in this person's
+   * memories in the last week, so kyto can say so and offer to restore one —
+   * kyto never DMs anyone about it unasked.
+   */
+  memoryCuration?: { merged: string[]; removed: string[] };
   ownerUserId?: string;
   threadId: string;
   workspace?: string;

@@ -77,6 +77,7 @@ import {
   deleteMemoryTool,
   editMemoryTool,
   fetchMemoryTool,
+  restoreMemoryTool,
   saveMemoryTool,
 } from './tools/memory';
 import { mermaidTool } from './tools/mermaid';
@@ -362,6 +363,7 @@ export async function buildTools({
     fetchMemory: fetchMemoryTool(memoryActor),
     editMemory: editMemoryTool(memoryActor),
     deleteMemory: deleteMemoryTool(memoryActor),
+    restoreMemory: restoreMemoryTool(memoryActor),
     listThreads: listThreadsTool({
       askerUserId: authorUserId,
       currentThreadId: thread.id,
