@@ -13,6 +13,7 @@ export const reminderRecurrence = pgEnum('reminder_recurrence', [
   'interval',
   'daily',
   'weekly',
+  'cron',
 ]);
 
 export type ReminderRecurrence = (typeof reminderRecurrence.enumValues)[number];
@@ -68,6 +69,9 @@ export const reminders = pgTable(
     timeOfDayMinutes: integer('time_of_day_minutes'),
     // 'weekly': 0 (Sunday) through 6 (Saturday), UTC.
     weekday: integer('weekday'),
+    // 'cron': a five-field cron expression, read in `timezone` (IANA name).
+    cronExpression: text('cron_expression'),
+    timezone: text('timezone'),
     nextRunAt: timestamp('next_run_at', { withTimezone: true }).notNull(),
     active: boolean('active').notNull().default(true),
     createdAt: timestamp('created_at', { withTimezone: true })

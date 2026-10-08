@@ -6,46 +6,11 @@ import {
   type ReminderKind,
   reminders,
 } from '../schema';
+import { computeNextRun, type ReminderSchedule } from './reminder-schedule';
 
 export type { Reminder, ReminderKind, ReminderRecurrence } from '../schema';
 
 const MINUTES_PER_DAY = 24 * 60;
-const DAYS_PER_WEEK = 7;
-const MS_PER_SECOND = 1000;
-
-export type ReminderSchedule =
-  | { recurrence: 'interval'; intervalSeconds: number }
-  | { recurrence: 'daily'; timeOfDayMinutes: number }
-  | { recurrence: 'weekly'; timeOfDayMinutes: number; weekday: number };
-
-/** Compute the next fire time for a schedule, strictly after `from`. */
-export function computeNextRun(schedule: ReminderSchedule, from: Date): Date {
-  if (schedule.recurrence === 'interval') {
-    return new Date(from.getTime() + schedule.intervalSeconds * MS_PER_SECOND);
-  }
-
-  const next = new Date(from);
-  next.setUTCHours(0, 0, 0, 0);
-  next.setUTCMinutes(schedule.timeOfDayMinutes);
-
-  if (schedule.recurrence === 'daily') {
-    if (next <= from) {
-      next.setUTCDate(next.getUTCDate() + 1);
-    }
-    return next;
-  }
-
-  // weekly
-  let dayDelta =
-    (schedule.weekday - next.getUTCDay() + DAYS_PER_WEEK) % DAYS_PER_WEEK;
-  next.setUTCDate(next.getUTCDate() + dayDelta);
-  if (next <= from) {
-    dayDelta = DAYS_PER_WEEK;
-    next.setUTCDate(next.getUTCDate() + dayDelta);
-  }
-  return next;
-}
-
 export async function createReminder(input: {
   userId: string;
   text: string;
@@ -69,14 +34,8 @@ export async function createReminder(input: {
     command: input.command ?? null,
     url: input.url ?? null,
     threadId: input.threadId ?? null,
-    recurrence: input.schedule.recurrence,
     nextRunAt,
-    ...(input.schedule.recurrence === 'interval'
-      ? { intervalSeconds: input.schedule.intervalSeconds }
-      : { timeOfDayMinutes: input.schedule.timeOfDayMinutes }),
-    ...(input.schedule.recurrence === 'weekly'
-      ? { weekday: input.schedule.weekday }
-      : {}),
+    ...scheduleColumns(input.schedule),
   };
   const [row] = await db.insert(reminders).values(values).returning();
   if (!row) {
@@ -155,12 +114,7 @@ export async function updateReminder(input: {
   const { id, schedule, ...rest } = input;
   const patch: Partial<NewReminder> = { ...rest };
   if (schedule) {
-    patch.recurrence = schedule.recurrence;
-    patch.intervalSeconds =
-      schedule.recurrence === 'interval' ? schedule.intervalSeconds : null;
-    patch.timeOfDayMinutes =
-      schedule.recurrence === 'interval' ? null : schedule.timeOfDayMinutes;
-    patch.weekday = schedule.recurrence === 'weekly' ? schedule.weekday : null;
+    Object.assign(patch, scheduleColumns(schedule));
     // A new schedule takes effect from now, not from the old next-run instant.
     patch.nextRunAt = computeNextRun(schedule, new Date());
   }
@@ -254,19 +208,25 @@ export async function getDueReminders(now: Date): Promise<Reminder[]> {
  */
 export async function advanceReminder(reminder: Reminder): Promise<boolean> {
   const runCount = (reminder.runCount ?? 0) + 1;
-  const capReached = reminder.maxRuns !== null && runCount >= reminder.maxRuns;
   const now = new Date();
   const base = reminder.nextRunAt > now ? reminder.nextRunAt : now;
+  // A cron expression with no future fire (a fixed past date) ends the
+  // reminder; a throw here would leave it due and retried every poll forever.
+  let nextRunAt: Date | undefined;
+  try {
+    nextRunAt = computeNextRun(scheduleOf(reminder), base);
+  } catch {
+    nextRunAt = undefined;
+  }
+  const capReached =
+    nextRunAt === undefined ||
+    (reminder.maxRuns !== null && runCount >= reminder.maxRuns);
   // Conditional on the row still being the one that was read: this is the
   // CLAIM. Two instances overlap during a deploy and both see the same due row;
   // only the one whose update lands may fire it.
   const claimed = await db
     .update(reminders)
-    .set(
-      capReached
-        ? { active: false, runCount }
-        : { nextRunAt: computeNextRun(scheduleOf(reminder), base), runCount }
-    )
+    .set(capReached ? { active: false, runCount } : { nextRunAt, runCount })
     .where(
       and(
         eq(reminders.id, reminder.id),
@@ -278,7 +238,31 @@ export async function advanceReminder(reminder: Reminder): Promise<boolean> {
   return claimed.length > 0;
 }
 
+/** Every schedule column, the ones this recurrence doesn't use set to null. */
+function scheduleColumns(schedule: ReminderSchedule) {
+  return {
+    cronExpression:
+      schedule.recurrence === 'cron' ? schedule.cronExpression : null,
+    intervalSeconds:
+      schedule.recurrence === 'interval' ? schedule.intervalSeconds : null,
+    recurrence: schedule.recurrence,
+    timeOfDayMinutes:
+      schedule.recurrence === 'daily' || schedule.recurrence === 'weekly'
+        ? schedule.timeOfDayMinutes
+        : null,
+    timezone: schedule.recurrence === 'cron' ? schedule.timezone : null,
+    weekday: schedule.recurrence === 'weekly' ? schedule.weekday : null,
+  };
+}
+
 function scheduleOf(reminder: Reminder): ReminderSchedule {
+  if (reminder.recurrence === 'cron') {
+    return {
+      cronExpression: reminder.cronExpression ?? '0 0 * * *',
+      recurrence: 'cron',
+      timezone: reminder.timezone ?? 'UTC',
+    };
+  }
   if (reminder.recurrence === 'interval') {
     return {
       recurrence: 'interval',

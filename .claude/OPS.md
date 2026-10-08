@@ -63,6 +63,9 @@ CREATE TABLE IF NOT EXISTS coding_warnings (
   warned_at timestamptz NOT NULL
 );
 ALTER TABLE coding_warnings ADD COLUMN IF NOT EXISTS count integer NOT NULL DEFAULT 1; -- 2026-09-29
+ALTER TYPE reminder_recurrence ADD VALUE IF NOT EXISTS 'cron'; -- 2026-10-08
+ALTER TABLE reminders ADD COLUMN IF NOT EXISTS cron_expression text; -- 2026-10-08
+ALTER TABLE reminders ADD COLUMN IF NOT EXISTS timezone text; -- 2026-10-08
 ```
 
 The anti-coding gate's ledger: the last catch and how many in a row (each

@@ -16,6 +16,7 @@ export * from './memories';
 export * from './model-credentials';
 export * from './notebooks';
 export * from './opt-ins';
+export * from './reminder-schedule';
 export * from './reminders';
 export * from './sandbox';
 export * from './sites';

@@ -1,5 +1,6 @@
 import {
   cancelReminder as cancelReminderRow,
+  computeNextRun,
   createReminder,
   getReminder,
   isReminderEditableBy,
@@ -62,6 +63,9 @@ function formatTimeOfDay(minutes: number): string {
 }
 
 function describeSchedule(row: Reminder): string {
+  if (row.recurrence === 'cron') {
+    return `cron "${row.cronExpression}" (${row.timezone ?? 'UTC'})`;
+  }
   if (row.recurrence === 'interval') {
     return `every ${row.intervalSeconds}s`;
   }
@@ -72,10 +76,14 @@ function describeSchedule(row: Reminder): string {
   return `weekly on ${WEEKDAY_NAMES[row.weekday ?? 0]} at ${time}`;
 }
 
+type Recurrence = 'interval' | 'daily' | 'weekly' | 'cron';
+
 interface ScheduleArgs {
+  cron?: string;
   intervalSeconds?: number;
-  recurrence?: 'interval' | 'daily' | 'weekly';
+  recurrence?: Recurrence;
   timeOfDayMinutes?: number;
+  timezone?: string;
   weekday?: number;
 }
 
@@ -84,10 +92,40 @@ type ScheduleResult =
   | { ok: false; error: string };
 
 function buildSchedule(
-  args: ScheduleArgs & { recurrence: 'interval' | 'daily' | 'weekly' },
+  args: ScheduleArgs & { recurrence: Recurrence },
   kind: ReminderKind
 ): ScheduleResult {
   const { recurrence, intervalSeconds, timeOfDayMinutes, weekday } = args;
+  if (recurrence === 'cron') {
+    if (!args.cron) {
+      return { error: "recurrence 'cron' requires cron.", ok: false };
+    }
+    const schedule: ReminderSchedule = {
+      cronExpression: args.cron.trim(),
+      recurrence: 'cron',
+      timezone: args.timezone ?? 'UTC',
+    };
+    // The kind's floor holds for cron too: the gap between its next two fires
+    // (a `* * * * *` agent job would otherwise run a model every minute).
+    try {
+      const first = computeNextRun(schedule, new Date());
+      const second = computeNextRun(schedule, first);
+      const gapSeconds = (second.getTime() - first.getTime()) / 1000;
+      const floor = MIN_INTERVAL_SECONDS_BY_KIND[kind];
+      if (gapSeconds < floor) {
+        return {
+          error: `kind '${kind}' can fire at most every ${floor} seconds; this cron fires ${gapSeconds}s apart.`,
+          ok: false,
+        };
+      }
+    } catch (error) {
+      return {
+        error: `Invalid cron schedule: ${errorMessage(error)}`,
+        ok: false,
+      };
+    }
+    return { ok: true, schedule };
+  }
   if (recurrence === 'interval') {
     if (intervalSeconds === undefined) {
       return {
@@ -128,6 +166,22 @@ function buildSchedule(
 }
 
 const scheduleFields = {
+  cron: z
+    .string()
+    .min(9)
+    .max(100)
+    .optional()
+    .describe(
+      "Required when recurrence is 'cron'. Five fields: minute hour day-of-month month day-of-week, e.g. '0 9 * * 1-5' = 9:00 on weekdays, '30 17 1 * *' = 17:30 on the 1st."
+    ),
+  timezone: z
+    .string()
+    .min(1)
+    .max(64)
+    .optional()
+    .describe(
+      "For 'cron': the IANA timezone the expression is read in, e.g. 'Asia/Kolkata', 'America/New_York'. Defaults to UTC — use the asker's timezone when you know it."
+    ),
   intervalSeconds: z
     .number()
     .int()
@@ -209,9 +263,9 @@ Only the person who asked for it can change it later, unless they name other peo
         .optional()
         .describe('Optional: stop after firing this many times.'),
       recurrence: z
-        .enum(['interval', 'daily', 'weekly'])
+        .enum(['interval', 'daily', 'weekly', 'cron'])
         .describe(
-          "'interval' repeats every N seconds; 'daily' fires once a day at a UTC time; 'weekly' fires once a week on a UTC weekday+time."
+          "'interval' repeats every N seconds; 'daily' fires once a day at a UTC time; 'weekly' fires once a week on a UTC weekday+time; 'cron' follows a cron expression in a timezone (anything else: weekdays only, the 1st of the month, twice a day)."
         ),
       ...scheduleFields,
     }),
@@ -224,8 +278,10 @@ Only the person who asked for it can change it later, unless they name other peo
       editors,
       maxRuns,
       recurrence,
+      cron,
       intervalSeconds,
       timeOfDayMinutes,
+      timezone,
       weekday,
     }) => {
       if (kind === 'bash' && !command) {
@@ -240,7 +296,14 @@ Only the person who asked for it can change it later, unless they name other peo
         return { error: parsedEditors.error, success: false };
       }
       const built = buildSchedule(
-        { intervalSeconds, recurrence, timeOfDayMinutes, weekday },
+        {
+          cron,
+          intervalSeconds,
+          recurrence,
+          timeOfDayMinutes,
+          timezone,
+          weekday,
+        },
         kind
       );
       if (!built.ok) {
@@ -326,7 +389,7 @@ You may only edit a reminder the person you are talking to created, or one they 
         .optional()
         .describe('Stop after firing this many times in total.'),
       recurrence: z
-        .enum(['interval', 'daily', 'weekly'])
+        .enum(['interval', 'daily', 'weekly', 'cron'])
         .optional()
         .describe(
           'Change the schedule. Pass the fields the new recurrence needs.'
@@ -343,8 +406,10 @@ You may only edit a reminder the person you are talking to created, or one they 
       editors,
       maxRuns,
       recurrence,
+      cron,
       intervalSeconds,
       timeOfDayMinutes,
+      timezone,
       weekday,
     }) => {
       const existing = await getReminder(id);
@@ -390,7 +455,14 @@ You may only edit a reminder the person you are talking to created, or one they 
       let schedule: ReminderSchedule | undefined;
       if (recurrence) {
         const built = buildSchedule(
-          { intervalSeconds, recurrence, timeOfDayMinutes, weekday },
+          {
+            cron,
+            intervalSeconds,
+            recurrence,
+            timeOfDayMinutes,
+            timezone,
+            weekday,
+          },
           nextKind
         );
         if (!built.ok) {
@@ -408,6 +480,20 @@ You may only edit a reminder the person you are talking to created, or one they 
           {
             intervalSeconds: intervalSeconds ?? existing.intervalSeconds ?? 0,
             recurrence: 'interval',
+          },
+          nextKind
+        );
+        if (!built.ok) {
+          return { error: built.error, success: false };
+        }
+        schedule = built.schedule;
+      } else if (existing.recurrence === 'cron' && nextKind !== existing.kind) {
+        // Same floor check for a cron reminder whose kind changes.
+        const built = buildSchedule(
+          {
+            cron: existing.cronExpression ?? undefined,
+            recurrence: 'cron',
+            timezone: existing.timezone ?? undefined,
           },
           nextKind
         );

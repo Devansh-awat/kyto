@@ -45,6 +45,9 @@ const IDENTITY_LABELS: Record<IdentityType, string> = {
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 function describeReminderSchedule(reminder: Reminder): string {
+  if (reminder.recurrence === 'cron') {
+    return `cron ${reminder.cronExpression} (${reminder.timezone ?? 'UTC'})`;
+  }
   if (reminder.recurrence === 'interval') {
     return `every ${reminder.intervalSeconds}s`;
   }
