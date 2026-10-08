@@ -30,7 +30,8 @@ export function mermaidTool({ thread }: { thread: Thread }) {
             .toString('base64')
             .replaceAll('+', '-')
             .replaceAll('/', '_')
-            .replace(/=+$/, '')}?type=png`
+            .replace(/=+$/, '')}?type=png`,
+          { signal: AbortSignal.timeout(30_000) }
         );
         if (!response.ok) {
           throw new Error(

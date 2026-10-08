@@ -326,6 +326,7 @@ export async function replaceMcpPrompt(
   const threadTs = payload?.container?.thread_ts;
   try {
     await fetch(responseUrl, {
+      signal: AbortSignal.timeout(10_000),
       body: JSON.stringify({
         replace_original: true,
         text,

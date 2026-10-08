@@ -389,6 +389,7 @@ export function canvasReadTool() {
         }
         const response = await fetch(info.file.url_private_download, {
           headers: { Authorization: `Bearer ${env.SLACK_BOT_TOKEN}` },
+          signal: AbortSignal.timeout(30_000),
         });
         if (!response.ok) {
           return {

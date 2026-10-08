@@ -52,6 +52,7 @@ async function openOwnerDm(
   userId: string
 ): Promise<{ channelId: string } | { error: string }> {
   const response = await fetch('https://slack.com/api/conversations.open', {
+    signal: AbortSignal.timeout(15_000),
     body: JSON.stringify({ users: userId }),
     headers: {
       Authorization: `Bearer ${userToken}`,
@@ -102,6 +103,7 @@ export async function executeSendAsUser({
     return { error: 'No target channel or user to send to.', success: false };
   }
   const response = await fetch('https://slack.com/api/chat.postMessage', {
+    signal: AbortSignal.timeout(15_000),
     body: JSON.stringify({
       channel,
       text,
@@ -158,6 +160,7 @@ export async function executeEditAsUser({
     return { error: gate.error, success: false };
   }
   const response = await fetch('https://slack.com/api/chat.update', {
+    signal: AbortSignal.timeout(15_000),
     body: JSON.stringify({
       channel: targetChannel,
       text,

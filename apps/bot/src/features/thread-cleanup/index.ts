@@ -72,6 +72,7 @@ async function tell({
 }): Promise<void> {
   if (responseUrl) {
     await fetch(responseUrl, {
+      signal: AbortSignal.timeout(10_000),
       body: JSON.stringify({ response_type: 'ephemeral', text }),
       headers: { 'Content-Type': 'application/json' },
       method: 'POST',

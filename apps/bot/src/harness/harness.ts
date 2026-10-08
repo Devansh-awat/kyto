@@ -361,7 +361,12 @@ export class SlackHarness {
     url: string;
   }): Promise<Uint8Array | null> {
     try {
-      const response = await fetch(url, { headers });
+      const response = await fetch(url, {
+        headers,
+        // Unbounded, a stalled file host stalled the whole turn before the
+        // model was ever called.
+        signal: AbortSignal.timeout(30_000),
+      });
       // A token that can't see the file is answered 200 with an HTML page.
       if (
         !response.ok ||

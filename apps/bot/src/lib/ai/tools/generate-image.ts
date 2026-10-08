@@ -88,6 +88,7 @@ async function requestImages({
   prompt: string;
 }): Promise<{ bytes: Uint8Array[]; error?: string }> {
   const response = await fetch(CHAT_URL, {
+    signal: AbortSignal.timeout(120_000),
     body: JSON.stringify({
       messages: [
         {

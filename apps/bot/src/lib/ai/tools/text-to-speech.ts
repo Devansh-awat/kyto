@@ -55,6 +55,7 @@ async function speakViaReplicate(
   apiKey: string
 ): Promise<Buffer> {
   const response = await fetch(REPLICATE_PREDICTIONS_URL, {
+    signal: AbortSignal.timeout(120_000),
     body: JSON.stringify({ input: { text } }),
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -74,7 +75,9 @@ async function speakViaReplicate(
   if (!payload?.output) {
     throw new Error(`Replicate TTS returned no audio: ${payload?.error ?? ''}`);
   }
-  const audio = await fetch(payload.output);
+  const audio = await fetch(payload.output, {
+    signal: AbortSignal.timeout(60_000),
+  });
   if (!audio.ok) {
     throw new Error(`Failed to download generated audio (${audio.status}).`);
   }
@@ -87,6 +90,7 @@ async function speakViaGemini(
   apiKey: string
 ): Promise<Buffer> {
   const response = await fetch(GEMINI_INTERACTIONS_URL, {
+    signal: AbortSignal.timeout(120_000),
     body: JSON.stringify({
       generation_config: { speech_config: [{ voice }] },
       input: text,

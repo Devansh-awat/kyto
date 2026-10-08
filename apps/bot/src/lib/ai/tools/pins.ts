@@ -97,6 +97,7 @@ async function callPins({
   const userToken = actor.ownerToken;
   if (userToken) {
     const response = await fetch(`https://slack.com/api/${method}`, {
+      signal: AbortSignal.timeout(15_000),
       body: JSON.stringify({ channel: channelId, timestamp }),
       headers: {
         Authorization: `Bearer ${userToken}`,
