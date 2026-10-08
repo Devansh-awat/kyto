@@ -14,11 +14,11 @@ import {
   visionAttempt,
 } from '@repo/ai';
 import { LazySandbox } from '@repo/sandbox';
-import type { ToolSet } from 'ai';
 import { env } from '@/env';
 import { restoreAnnotatedMentions } from '@/harness/markdown';
 import type { ThreadHandle } from '@/harness/thread';
 import type { Message, StreamChunk } from '@/harness/types';
+import { createAttemptRouter } from '@/lib/agent/attempt-router';
 import {
   type GatheredResult,
   renderCarryover,
@@ -40,13 +40,16 @@ import {
 } from '@/lib/agent/fallback-cache';
 import { trackTurn } from '@/lib/agent/inflight';
 import { buildPrompt } from '@/lib/agent/prompt';
+import {
+  continueTruncatedReply,
+  synthesizeFinalAnswer,
+} from '@/lib/agent/recovery';
 import { createReply } from '@/lib/agent/reply';
+import { postReplyFooter } from '@/lib/agent/reply-footer';
 import {
   attemptKey,
-  buildFallbackQueue as buildQueue,
   condemnsHackclub,
   isPromptConstructionError,
-  selectNextAttempt,
 } from '@/lib/agent/routing';
 import { createSegmenter, isVisibleText } from '@/lib/agent/segmentation';
 import { isBareSkipText } from '@/lib/agent/skip-text';
@@ -92,7 +95,6 @@ import {
   DegenerateOutputError,
   StreamInterruptedError,
 } from '@/lib/errors';
-import { buildReplyFooter } from '@/lib/feedback/footer';
 import { scheduleKevinton } from '@/lib/kevinton';
 import logger, { threadLogContext } from '@/lib/logger';
 import { moderateTurn } from '@/lib/moderation';
@@ -119,29 +121,6 @@ import type { AttemptFailure } from '@/types/attempts';
 // "Rate limit exceeded" 429 is transient, and matching it wrote the whole tier
 // off for 30 minutes for everyone (fallback-cache).
 const SPEND_LIMIT_PATTERN = /spending limit|insufficient credits|daily limit/i;
-
-// How many non-budget HackClub PROXY failures in a turn before we treat HackClub
-// as down and skip its remaining rungs. ONE is enough: every HackClub rung shares
-// one proxy and one budget, so a rung that fails for a non-model reason (5xx,
-// connection error, rate limit) means the next rung fails identically. Trying a
-// second one only bought another "Thinking · fallback" card before the same
-// verdict. The owner's own Gemini key is a genuinely separate quota, so jump.
-//
-// Only a failure the PROXY reported counts (`errorStatus` found an HTTP status).
-// This matters because the PRIMARY is itself a HackClub call: the model-level
-// faults kyto raises on its own — an empty response, tools-but-no-reply, a
-// degenerate loop — carry no status, and they say nothing about the proxy. If
-// they counted, one bad completion from the primary would write off every
-// remaining HackClub rung for that turn and drop the user straight onto Gemini.
-//
-// A GATEWAY status is excluded for the same reason (`isGatewayStatus`). Measured
-// 2026-07-27: the proxy 504s per REQUEST, not per model and not tier-wide — a
-// probe caught opus-4.8 504 while kimi-k2.7 and glm-5.2 answered fine seconds
-// either side. So a 504 that survived the retries in gateway-retry.ts says
-// "we lost that request", not "the proxy is down", and condemning the tier on
-// one of them is how a single dropped request used to skip every HackClub rung
-// and land a live thread on gemini-3.1-flash-lite.
-const HACKCLUB_OUTAGE_THRESHOLD = 1;
 
 // How many times a reply that hit MAX_OUTPUT_TOKENS mid-sentence may be resumed
 // before kyto stops and posts what it has. Three rounds is ~24k tokens of reply,
@@ -861,51 +840,12 @@ async function executeTurn(
     // instead of re-running the same tools.
     const gatheredResults: GatheredResult[] = [];
     const gatheredKeys = new Set<string>();
-    // The user's own paid attempts (a linked ChatGPT account and/or BYOK keys),
-    // consumed in order. routing.ownFirst decides whether these run before or
-    // after kyto's shared service chain.
-    const ownQueue = [...routing.own];
-    // The service query runs on PRIMARY_ATTEMPT (a pinned model on HackClub).
-    // On failure we walk the fallback queue built by buildFallbackQueue. Models
-    // already tried are skipped via failedKeys.
-    const failedKeys = new Set<string>();
-    let triedPrimary = false;
-    let fallbackQueue: ModelAttempt[] | undefined;
-    // Set when a HackClub call returns the daily-spend-limit 429. The whole
-    // HackClub budget is shared, so once one call 429s every HackClub rung
-    // would too — the fallback queue then goes straight to the owner's Gemini
-    // key (separate quota) instead of burning attempts.
-    let hackclubBudgetExhausted = false;
-    let spendLimitMessage: string | undefined;
-    // Set when HackClub itself looks DOWN (repeated non-budget failures, e.g.
-    // 5xx/connection errors), as opposed to just over budget. Every HackClub
-    // rung would fail the same way, so once tripped we skip the rest of the
-    // HackClub leaderboard and go straight to Gemini instead of burning a dozen
-    // doomed attempts (the "lots of Thinking · fallback" bug).
-    let hackclubFailures = 0;
-    let hackclubUnavailable = false;
     // How many times the CURRENT attempt has been re-run in place because its
     // stream was cut off mid-flight (see truncatedStream below). A dropped
     // connection says nothing about the model, so it must not cost a fallback
     // rung — but a provider that truncates every time has to be routed away from
     // eventually, hence the cap.
     let truncationRetries = 0;
-    // Start past whatever earlier turns found dead (lib/agent/fallback-cache): a
-    // spent Hack Club cap or a vanished model fails every turn the same way, and
-    // re-discovering it cost each new message a doomed request and a fallback
-    // card.
-    const cached = cachedDeadness();
-    for (const key of cached.rungs) {
-      failedKeys.add(key);
-    }
-    if (cached.providers.includes(HACKCLUB_PROVIDER)) {
-      hackclubBudgetExhausted = true;
-    }
-    const skipShared = (candidate: ModelAttempt): boolean =>
-      failedKeys.has(attemptKey(candidate)) ||
-      ((hackclubBudgetExhausted || hackclubUnavailable) &&
-        candidate.provider === HACKCLUB_PROVIDER);
-    let attempt: ModelAttempt | undefined;
     // An earlier turn in this thread escalated, so this one starts there too
     // (see claimStickyUpgrade for the two bounds). `used` is set with it: the
     // turn is already on the strongest rung kyto has, and letting it ask for
@@ -926,70 +866,27 @@ async function executeTurn(
     built.preload(preload.tools);
     const knownTools = new Set(Object.keys(built.tools));
 
-    // The next of the user's OWN attempts (ChatGPT account / BYOK keys), or
-    // undefined when they're spent.
-    const nextOwnAttempt = (): ModelAttempt | undefined => ownQueue.shift();
-    // The next SHARED service attempt: PRIMARY_ATTEMPT first, then the fallback
-    // queue in tier order, skipping already-failed keys and any tier written off
-    // mid-walk. Undefined when the whole shared chain is exhausted. The queue
-    // order and the skip rule live in lib/agent/routing, where they have tests —
-    // this is where the worst regression in the project's history came from.
-    const nextSharedAttempt = (): ModelAttempt | undefined => {
-      if (!triedPrimary) {
-        triedPrimary = true;
-        // A thread that escalated leads with the strong rung; if it fails, the
-        // walk carries on from the primary exactly as it always did.
-        const first = stickyUpgrade ?? PRIMARY_ATTEMPT;
-        if (!skipShared(first)) {
-          return first;
-        }
-      }
-      if (stickyUpgrade && !skipShared(PRIMARY_ATTEMPT)) {
-        return PRIMARY_ATTEMPT;
-      }
-      fallbackQueue ??= buildQueue(LEADERBOARD_FALLBACK);
-      return selectNextAttempt({
-        failedKeys,
-        queue: fallbackQueue,
-        skipHackclub: hackclubBudgetExhausted || hackclubUnavailable,
-      });
-    };
-    const routeNextAttempt = () => {
-      // A custom-key user's turn caught doing coding-agent work: their own
-      // attempts only, in either order, so it never lands on Hack Club AI.
-      if (codingMonitor.ownModelsOnly) {
-        attempt = nextOwnAttempt();
-        return;
-      }
-      if (routing.ownFirst) {
-        // Own attempts first; the shared chain only after them, and only if the
-        // user opted into it (otherwise the turn stops — see ByokExhaustedError).
-        const own = nextOwnAttempt();
-        if (own) {
-          attempt = own;
-          return;
-        }
-        if (routing.own.length > 0 && !routing.serviceFallback) {
-          attempt = undefined;
-          return;
-        }
-        attempt = nextSharedAttempt();
-        return;
-      }
-      // Shared-first: kyto's models lead, and the user's own attempts are the
-      // final fallback once the shared chain is exhausted.
-      const shared = nextSharedAttempt();
-      attempt = shared ?? nextOwnAttempt();
-    };
-    routeNextAttempt();
+    // Which model runs next and what failed so far (lib/agent/attempt-router).
+    // It starts past whatever earlier turns found dead (lib/agent/fallback-
+    // cache): a spent Hack Club cap or a vanished model fails every turn the
+    // same way, and re-discovering it cost each message a doomed request.
+    const cached = cachedDeadness();
+    const router = createAttemptRouter({
+      cached,
+      fallback: LEADERBOARD_FALLBACK,
+      hackclubProvider: HACKCLUB_PROVIDER,
+      ownModelsOnly: () => codingMonitor.ownModelsOnly,
+      primary: PRIMARY_ATTEMPT,
+      routing,
+      stickyUpgrade,
+    });
+    let attempt = router.next();
     // The cache must never be what leaves a turn with nothing to try: if every
     // rung is remembered dead, forget it all and walk from the top as before.
     if (!attempt && (cached.rungs.length > 0 || cached.providers.length > 0)) {
       clearFallbackCache();
-      failedKeys.clear();
-      hackclubBudgetExhausted = false;
-      triedPrimary = false;
-      routeNextAttempt();
+      router.resetCachedDeadness();
+      attempt = router.next();
     }
     logger.info(
       {
@@ -1307,8 +1204,7 @@ async function executeTurn(
               currentAttempt.provider === HACKCLUB_PROVIDER &&
               SPEND_LIMIT_PATTERN.test(info.message)
             ) {
-              hackclubBudgetExhausted = true;
-              spendLimitMessage = info.message;
+              router.markSpendLimit(info.message);
             }
           },
           stream: result.fullStream,
@@ -1462,7 +1358,7 @@ async function executeTurn(
           escalation.pending = undefined;
           escalation.used = true;
           const target = UPGRADE_ATTEMPTS.find(
-            (candidate) => !failedKeys.has(attemptKey(candidate))
+            (candidate) => !router.hasFailed(candidate)
           );
           if (target) {
             const done = completeModelTask();
@@ -1487,7 +1383,7 @@ async function executeTurn(
               attempt: currentAttempt,
               error: new Error(`Escalated to a stronger model: ${reason}`),
             });
-            failedKeys.add(attemptKey(currentAttempt));
+            router.markFailed(currentAttempt);
             attempt = target;
             continue;
           }
@@ -1722,7 +1618,7 @@ async function executeTurn(
           }
         }
         attempts.push({ attempt: currentAttempt, error });
-        failedKeys.add(attemptKey(currentAttempt));
+        router.markFailed(currentAttempt);
         // The prompt kyto BUILT is malformed — the SDK refused it before any
         // request went out, so every remaining rung would fail identically and
         // instantly. Stop the walk here rather than spending the shared daily
@@ -1760,8 +1656,7 @@ async function executeTurn(
         // walking the rest of it one doomed rung at a time.
         if (currentAttempt.provider === HACKCLUB_PROVIDER) {
           if (SPEND_LIMIT_PATTERN.test(thrownErrorText(error))) {
-            hackclubBudgetExhausted = true;
-            spendLimitMessage ??= thrownErrorText(error);
+            router.markSpendLimit(thrownErrorText(error));
           } else if (condemnsHackclub(errorStatus(error))) {
             // A non-budget HackClub failure that the PROXY reported (it has an
             // HTTP status) and that isn't a per-request gateway drop. Enough of
@@ -1769,11 +1664,8 @@ async function executeTurn(
             // off HackClub entirely. A model-level fault kyto raised itself
             // (empty response, degenerate loop) has no status, and a 504 is a
             // lost request rather than a dead tier — neither may condemn it.
-            // See HACKCLUB_OUTAGE_THRESHOLD.
-            hackclubFailures += 1;
-            if (hackclubFailures >= HACKCLUB_OUTAGE_THRESHOLD) {
-              hackclubUnavailable = true;
-            }
+            // See HACKCLUB_OUTAGE_THRESHOLD in lib/agent/attempt-router.
+            router.markHackclubFailure();
           }
         }
         // Remember a failure that will repeat on the next turn too. Only kyto's
@@ -1781,12 +1673,12 @@ async function executeTurn(
         // already tracks it.
         if (!routing.own.includes(currentAttempt)) {
           if (
-            hackclubBudgetExhausted &&
+            router.budgetExhausted &&
             currentAttempt.provider === HACKCLUB_PROVIDER
           ) {
             markTierDead({
               provider: HACKCLUB_PROVIDER,
-              reason: (spendLimitMessage ?? 'spend limit').slice(0, 200),
+              reason: (router.spendLimitMessage ?? 'spend limit').slice(0, 200),
             });
           } else if (
             isHardFailure({ spendLimit: false, status: errorStatus(error) })
@@ -1797,7 +1689,7 @@ async function executeTurn(
             });
           }
         }
-        routeNextAttempt();
+        attempt = router.next();
         const retryAttempt = attempt;
         // A turn that already streamed reply text normally must NOT fall back —
         // the next model would restate the answer and the user would read it
@@ -1836,8 +1728,10 @@ async function executeTurn(
           ) {
             throw new ByokExhaustedError(errorMessage(error), { cause: error });
           }
-          if (hackclubBudgetExhausted) {
-            throw new BudgetExhaustedError(spendLimitMessage, { cause: error });
+          if (router.budgetExhausted) {
+            throw new BudgetExhaustedError(router.spendLimitMessage, {
+              cause: error,
+            });
           }
           throw error;
         }
@@ -2126,254 +2020,4 @@ function failedAttemptsLog(attempts: AttemptFailure[]) {
     provider: failed.attempt.provider,
     status: errorStatus(failed.error),
   }));
-}
-
-// What the fallback note calls the usual model. Named in words rather than by
-// slug because the note is for people, not for the journal.
-const PRIMARY_LABEL = 'gpt-6 luna on hack club ai';
-
-/**
- * The footer under a reply (lib/feedback/footer). Best-effort — a failure here
- * never affects the answer.
- *
- * The weaker-model note is for an answer that came from anywhere other than the
- * primary on kyto's own chain: not for a person's own key (their choice, their
- * model) and not for an upgrade (a step UP, which the Thinking card already says).
- */
-async function postReplyFooter({
-  answeredBy,
-  durationMs,
-  isOwnAttempt,
-  showFooter,
-  thread,
-}: {
-  answeredBy: ModelAttempt;
-  durationMs: number;
-  isOwnAttempt: boolean;
-  showFooter: boolean;
-  thread: ThreadHandle;
-}): Promise<void> {
-  const key = attemptKey(answeredBy);
-  const outage = await hackclubOutage();
-  const steppedDown =
-    !isOwnAttempt &&
-    key !== attemptKey(PRIMARY_ATTEMPT) &&
-    !UPGRADE_ATTEMPTS.some((candidate) => attemptKey(candidate) === key);
-  const footer = buildReplyFooter({
-    durationMs,
-    fallback: steppedDown
-      ? { model: answeredBy.model, outage, primaryLabel: PRIMARY_LABEL }
-      : undefined,
-    model: answeredBy.model,
-    showFooter,
-  });
-  if (!footer) {
-    return;
-  }
-  await thread.post(footer).catch(() => undefined);
-}
-
-/**
- * Last resort against a silent turn: the model ran its tools and stopped
- * without saying anything. Ask the SAME model to continue and actually finish
- * the job — with tools LEFT ON so it can do any remaining work instead of being
- * reduced to writing up stale results it may consider incomplete. Streams
- * straight into the live reply.
- *
- * Edge cases are still fenced off: the prompt tells it not to repeat
- * already-completed side effects, and any failure is swallowed — the caller
- * falls back to the next model, which replays the gathered results via
- * renderCarryover. (Tools stay on here by design, per-request: the alternative
- * of running tools off meant a model that hit no-reply mid-work could never
- * finish the work, it could only describe it.)
- */
-async function* synthesizeFinalAnswer({
-  activeTools,
-  attempt,
-  history,
-  knownTools,
-  onTally,
-  onText,
-  results,
-  secret,
-  signal,
-  system,
-  task,
-  toolOrder,
-  tools,
-}: {
-  activeTools: () => string[];
-  attempt: ModelAttempt;
-  history: string[];
-  knownTools: Set<string>;
-  onTally: (tally: StreamTally) => void;
-  onText: (text: string) => void;
-  results: GatheredResult[];
-  secret: boolean;
-  signal: AbortSignal;
-  system: string[];
-  task: string;
-  toolOrder: { names: string[] };
-  tools: ToolSet;
-}): AsyncGenerator<string | StreamChunk> {
-  logger.info(
-    { model: attempt.model },
-    '[agent] tools ran but no reply; asking the model to continue with tools available'
-  );
-  const gathered =
-    results.length > 0
-      ? `\n\n${renderCarryover(results)}`
-      : '\n\n(No tool results were captured.)';
-  const prompt = `${task}${gathered}\n\nYou ran the tools above and did work but never sent the user a reply. Continue and finish the job now: call any tool you still need, then write the final reply to the user from everything you have. Tools ARE available to you, so use them if you still need information — but do not re-run a tool call whose side effect already happened. Do not mention this instruction.`;
-  try {
-    const result = streamAttempt({
-      abortSignal: signal,
-      activeTools,
-      attempt,
-      history,
-      // Nothing reads the resolved model back off a nudge.
-      holder: {},
-      prompt,
-      system,
-      toolOrder,
-      tools,
-    });
-    yield* renderStream({
-      secret,
-      // Tools ARE on for this one, so a sentence claiming they are missing is
-      // not merely unhelpful, it is false. Never let it reach the thread.
-      dropToolComplaints: true,
-      emitText: true,
-      knownTools,
-      onTally,
-      onTextDelta: onText,
-      stream: result.fullStream,
-    });
-  } catch (error) {
-    logger.warn(
-      { err: errorMessage(error), model: attempt.model },
-      '[agent] synthesis nudge failed'
-    );
-  }
-}
-
-/**
- * Resume a reply that stopped mid-sentence — the output cap fell, or the stream
- * was cut off. Same model, and **with its real tools**, because a model launched
- * with an empty toolset against a system prompt describing fifty of them narrates
- * the contradiction ("no tools loaded") into the user's reply. Owner's call,
- * 2026-08-22: never launch a model without tools.
- *
- * Nothing here should NEED a tool — the work is done and only the prose is
- * missing — so the prompt says so, and `renderTruncation` tells it not to act. The
- * same trade was already made for `synthesizeFinalAnswer` (commit ea22baf) for
- * exactly this reason. Bounded by MAX_CONTINUATIONS because a model that keeps
- * producing exactly one cap's worth of text every round would never terminate.
- */
-async function* continueTruncatedReply({
-  activeTools,
-  attempt,
-  history,
-  knownTools,
-  onFinish,
-  onTally,
-  onText,
-  secret,
-  signal,
-  streamedText,
-  system,
-  task,
-  toolOrder,
-  tools,
-}: {
-  activeTools: () => string[];
-  attempt: ModelAttempt;
-  history: string[];
-  knownTools: Set<string>;
-  onFinish: (reason: string) => void;
-  onTally: (tally: StreamTally) => void;
-  onText: (text: string) => void;
-  secret: boolean;
-  signal: AbortSignal;
-  streamedText: string;
-  system: string[];
-  task: string;
-  toolOrder: { names: string[] };
-  tools: ToolSet;
-}): AsyncGenerator<string | StreamChunk> {
-  logger.info(
-    { model: attempt.model },
-    '[agent] reply stopped mid-sentence; continuing it'
-  );
-  const prompt = `${task}\n\n${renderTruncation(streamedText)}`;
-  try {
-    const result = streamAttempt({
-      abortSignal: signal,
-      activeTools,
-      attempt,
-      history,
-      holder: {},
-      prompt,
-      system,
-      toolOrder,
-      tools,
-    });
-    yield* renderStream({
-      secret,
-      // Prose-only call: a sentence about missing tools cannot be a legitimate
-      // answer here, so it never reaches the thread even if the model writes one.
-      dropToolComplaints: true,
-      emitText: true,
-      knownTools,
-      onFinish,
-      onTally,
-      onTextDelta: onText,
-      stream: result.fullStream,
-    });
-  } catch (error) {
-    logger.warn(
-      { err: errorMessage(error), model: attempt.model },
-      '[agent] truncated-reply continuation failed'
-    );
-  }
-}
-
-/** The tail the model must resume from, kept short — it only needs the seam. */
-const TRUNCATION_TAIL_CHARS = 2000;
-
-/**
- * What the continuation is told instead of "you have no tools".
- *
- * The old wording announced an empty toolset ("every tool has been switched off
- * deliberately… do not mention tools at all") while the system prompt right above
- * it described fifty tools and told the model to call `loadTools`. Weak models
- * resolved that contradiction out loud — the observed turn burned its whole budget
- * on "getFile isn't available… loadTools isn't available either… No tools
- * available? That's strange". Worse, the notice used to end "if something is
- * genuinely missing, say so in one short sentence and stop", which is an outright
- * invitation to write the complaint.
- *
- * The contradiction is gone now: the call carries the REAL toolset (owner's call
- * 2026-08-22, never launch a model without tools), so there is nothing to
- * announce. This says only what the model should DO — write prose, don't act —
- * without mentioning tools at all, because naming the thing you are forbidding is
- * how it ended up in a reply three times.
- *
- * Belt only. The braces are the drop in ai/stream/tool-complaints.ts, since no
- * wording can guarantee a weak model's output.
- */
-const PROSE_ONLY_NOTICE =
-  'This message is prose only: everything that needed doing is already done, so do NOT call anything, do NOT start new work, and do NOT describe your setup or environment. Write only the words that finish the reply.';
-
-function renderTruncation(streamedText: string): string {
-  const tail = streamedText.trim().slice(-TRUNCATION_TAIL_CHARS);
-  return [
-    'IMPORTANT: you were cut off. You already did the work, and the user has ALREADY been shown the reply text below, which stops mid-thought:',
-    '',
-    tail,
-    '',
-    PROSE_ONLY_NOTICE,
-    '',
-    'Write ONLY the continuation, starting exactly where that stops. Do not repeat any of it, do not restate the task, do not re-introduce yourself, and do not apologise or mention being cut off. If it broke off mid-sentence, finish that sentence. Keep it short.',
-  ].join('\n');
 }
