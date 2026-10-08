@@ -133,24 +133,38 @@ const GROUPS = {
 
 type GroupId = keyof typeof GROUPS;
 
+// Not a tool group: asked in the same call (so it costs no wait of its own),
+// and a yes makes the turn's first step a tool call (requireToolFirst).
+const RESEARCH_ID = 'research';
+const RESEARCH_QUESTION =
+  'Does answering need facts that should be looked up rather than recalled: about this Slack workspace or Hack Club (its people, channels, bots, events, history, counts), or quiz/exam-style factual questions?';
+// Higher than the preload bar: a wrong yes forces a pointless tool call on a
+// chat turn, a wrong no only leaves the prompt's own rule in charge.
+const RESEARCH_THRESHOLD = 0.7;
+
 const answerSchema = z.object({ noul: z.number().min(0).max(1) });
 const responseSchema = z.object({
   answers: z.record(z.string(), answerSchema),
 });
 
 /**
- * The deferred tool names Jev thinks this turn will need, or [] if it could not
- * say. `conversation` is the prompt the model is about to get.
+ * The deferred tool names Jev thinks this turn will need, and whether the
+ * answer has to be looked up; nothing of either if it could not say.
+ * `conversation` is the prompt the model is about to get.
  */
 export async function pickPreloadTools(
   conversation: string
-): Promise<string[]> {
+): Promise<{ needsResearch: boolean; tools: string[] }> {
+  const none = { needsResearch: false, tools: [] };
   const state = conversation.trim().slice(-MAX_STATE_CHARS);
   if (!state) {
-    return [];
+    return none;
   }
   const questions = Object.fromEntries(
-    Object.entries(GROUPS).map(([id, group]) => [
+    [
+      ...Object.entries(GROUPS),
+      [RESEARCH_ID, { question: RESEARCH_QUESTION }] as const,
+    ].map(([id, group]) => [
       id,
       {
         instructions: `An AI assistant in Slack is about to handle the latest message in this conversation. ${group.question}`,
@@ -173,22 +187,30 @@ export async function pickPreloadTools(
         { status: response.status },
         '[tool-preload] jev refused; preloading nothing'
       );
-      return [];
+      return none;
     }
     const parsed = responseSchema.safeParse(await response.json());
     if (!parsed.success) {
-      return [];
+      return none;
     }
     const picked = (Object.keys(GROUPS) as GroupId[]).filter(
       (id) => (parsed.data.answers[id]?.noul ?? 0) >= PRELOAD_THRESHOLD
     );
-    logger.info({ picked }, '[tool-preload] jev picked tool groups');
-    return picked.flatMap((id) => [...GROUPS[id].tools]);
+    const needsResearch =
+      (parsed.data.answers[RESEARCH_ID]?.noul ?? 0) >= RESEARCH_THRESHOLD;
+    logger.info(
+      { needsResearch, picked },
+      '[tool-preload] jev picked tool groups'
+    );
+    return {
+      needsResearch,
+      tools: picked.flatMap((id) => [...GROUPS[id].tools]),
+    };
   } catch (error) {
     logger.warn(
       toLogError(error),
       '[tool-preload] jev call failed; preloading nothing'
     );
-    return [];
+    return none;
   }
 }

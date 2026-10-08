@@ -797,9 +797,11 @@ async function executeTurn(
     // Two Jev calls at once: is this coding work (then the prompt steers it to
     // OpenCode), and which deferred tools will it need (lib/ai/tool-preload).
     // In parallel, so the preload costs no wait of its own.
-    const [isCodingWork, preloadNames] = await Promise.all([
+    const [isCodingWork, preload] = await Promise.all([
       codingMonitor.checkTurn(),
-      secret ? Promise.resolve([]) : pickPreloadTools(conversation),
+      secret
+        ? Promise.resolve({ needsResearch: false, tools: [] })
+        : pickPreloadTools(conversation),
     ]);
     if (isCodingWork) {
       messageText = `${messageText}\n\n<coding_work>${DELEGATE_NOTE}</coding_work>`;
@@ -920,7 +922,7 @@ async function executeTurn(
       ? 'upgraded'
       : undefined;
     const built = await pendingTools;
-    built.preload(preloadNames);
+    built.preload(preload.tools);
     const knownTools = new Set(Object.keys(built.tools));
 
     // The next of the user's OWN attempts (ChatGPT account / BYOK keys), or
@@ -1164,6 +1166,9 @@ async function executeTurn(
           getFreshImages: built.drainImages,
           history,
           images: modelImages,
+          // The user account's turns too: it was the one that answered an exam
+          // from memory (issue #36).
+          requireToolFirst: preload.needsResearch,
           // An image the SDK's schema would reject is dropped rather than
           // allowed to invalidate the whole prompt. Log it: silently ignoring
           // someone's screenshot is confusing enough to be worth a line.

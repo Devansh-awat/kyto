@@ -158,6 +158,7 @@ export function streamAttempt({
   onError,
   onGatewayRetry,
   prompt,
+  requireToolFirst,
   serviceTier,
   system,
   toolOrder,
@@ -212,6 +213,12 @@ export function streamAttempt({
    */
   onGatewayRetry?: (info: GatewayRetryInfo) => void;
   prompt: string;
+  /**
+   * Make the FIRST step a tool call. For a question that needs looking up: the
+   * prompt alone said "search first" and the model still answered an exam from
+   * memory with zero tool calls. Later steps are free to answer.
+   */
+  requireToolFirst?: boolean;
   /**
    * `flex`: OpenAI's half-price tier, for work nobody is watching live (a
    * Kevinton review, a subagent). Only applied to OpenAI models on Hack Club;
@@ -324,17 +331,21 @@ export function streamAttempt({
         }
       : {}),
     ...(onError ? { onError: ({ error }) => onError(error) } : {}),
-    ...(activeTools || getFreshImages
+    ...(activeTools || getFreshImages || requireToolFirst
       ? {
           // Gate deferred tools per step AND inject any images the model asked to
           // view: the SDK renders images only in a user message, so a screenshot
           // the model loaded mid-turn is appended as a user turn here (the
           // override carries forward, so it stays visible on later steps).
-          prepareStep: ({ messages }) => {
+          prepareStep: ({ messages, stepNumber }) => {
             const result: {
               activeTools?: never[];
               messages?: ModelMessage[];
+              toolChoice?: 'required';
             } = {};
+            if (requireToolFirst && stepNumber === 0) {
+              result.toolChoice = 'required';
+            }
             if (activeTools) {
               result.activeTools = activeTools() as never[] | undefined;
             }
