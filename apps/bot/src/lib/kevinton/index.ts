@@ -9,6 +9,7 @@ import {
   finishKevintonReview,
   getMcpServer,
   noteKevintonActivity,
+  releaseKevintonClaim,
 } from '@repo/db/queries';
 import { LazySandbox } from '@repo/sandbox';
 import { type ToolSet, tool } from 'ai';
@@ -44,10 +45,15 @@ import { kevintonTools } from './tools';
 
 const QUIET_MS = 30 * 60 * 1000;
 const POLL_MS = 60 * 1000;
-// A claim older than this belongs to a review that died with its instance.
-const STALE_CLAIM_MS = 30 * 60 * 1000;
 const REVIEW_TIMEOUT_MS = 15 * 60 * 1000;
 const REVIEWS_PER_POLL = 2;
+// A claim older than this belongs to a review that died with its instance.
+// Claims are taken per POLL and reviewed one after another, so the last one
+// waits behind the others; at exactly their summed timeouts a live claim went
+// stale just as it finished and another instance could review it again.
+const STALE_CLAIM_MS = 2 * REVIEWS_PER_POLL * REVIEW_TIMEOUT_MS;
+const MAX_REVIEW_RETRIES = 2;
+const failedReviews = new Map<string, number>();
 
 // What kevinton may use, from the full toolset: everything that LOOKS, nothing
 // that speaks. Posting, reacting, scheduling, emailing, deploying and every
@@ -208,7 +214,7 @@ async function review({
 }: {
   reviewedAt: Date | null;
   threadId: string;
-}): Promise<void> {
+}): Promise<boolean> {
   const thread = bot.thread(threadId);
   const message = kevintonMessage({ reviewedAt, threadId });
   const proxies = openSandboxProxies({
@@ -326,7 +332,7 @@ async function review({
           },
           '[kevinton] reviewed a thread'
         );
-        return;
+        return true;
       } catch (error) {
         // Nothing was said anywhere, so the next rung can simply try again —
         // unless this one already acted, which a second run would repeat.
@@ -335,7 +341,7 @@ async function review({
           own.proposed.length > 0 ||
           own.notebookEdits.length > 0
         ) {
-          return;
+          return true;
         }
         logger.warn(
           { ...toLogError(error), model: attempt.model, threadId },
@@ -343,6 +349,7 @@ async function review({
         );
       }
     }
+    return false;
   } finally {
     proxies.revoke();
     await close?.().catch(() => undefined);
@@ -363,12 +370,25 @@ async function poll(): Promise<void> {
   for (const row of due) {
     // Marked reviewed up to when it STARTED: a turn during the review pushes
     // lastActivityAt past this, so that turn gets its own review later.
-    await review(row).catch((error: unknown) => {
+    const reviewed = await review(row).catch((error: unknown) => {
       logger.warn(
         { ...toLogError(error), threadId: row.threadId },
         '[kevinton] review failed'
       );
+      return false;
     });
+    // A transient failure (every model down, GitHub 5xx) used to mark the
+    // thread reviewed anyway, so it was never looked at. Leave it due for a
+    // couple more polls; past that it is probably the thread, not the weather.
+    const failures = reviewed ? 0 : (failedReviews.get(row.threadId) ?? 0) + 1;
+    if (failures > 0 && failures <= MAX_REVIEW_RETRIES) {
+      failedReviews.set(row.threadId, failures);
+      await releaseKevintonClaim({ threadId: row.threadId }).catch(
+        () => undefined
+      );
+      continue;
+    }
+    failedReviews.delete(row.threadId);
     await finishKevintonReview({
       reviewedAt: now,
       threadId: row.threadId,

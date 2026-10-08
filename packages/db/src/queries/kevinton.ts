@@ -76,3 +76,15 @@ export async function finishKevintonReview({
     .set({ claimedAt: null, reviewedAt })
     .where(sql`${kevintonReviews.threadId} = ${threadId}`);
 }
+
+/** Give a claim back without marking anything reviewed, so it is due again. */
+export async function releaseKevintonClaim({
+  threadId,
+}: {
+  threadId: string;
+}): Promise<void> {
+  await db
+    .update(kevintonReviews)
+    .set({ claimedAt: null })
+    .where(sql`${kevintonReviews.threadId} = ${threadId}`);
+}
