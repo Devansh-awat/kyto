@@ -89,3 +89,30 @@ export function toChatSlackChannelId(channelId: string): string {
     `${channelId} is not a Slack channel id. Use a value like C123456 or slack:C123456.`
   );
 }
+
+// `https://<workspace>.slack.com/archives/C123/p1777084846201899[?thread_ts=…]`
+const SLACK_PERMALINK =
+  /^https:\/\/[a-z0-9-]+\.slack\.com\/archives\/([CGD][A-Z0-9]+)\/p(\d{10})(\d{6})(?:[/?#]|$)/;
+const SLACK_TS = /^\d{10}\.\d{6}$/;
+
+/**
+ * The channel, message ts and thread of a Slack message permalink, or null.
+ * Models copying these by hand turned `p1777485207073979` into
+ * `1777485207.077397` and swapped one channel for another, and every read came
+ * back `thread_not_found`.
+ */
+export function parseSlackPermalink(
+  url: string
+): { channelId: string; threadTs: string; ts: string } | null {
+  const match = url.trim().match(SLACK_PERMALINK);
+  if (!(match?.[1] && match[2] && match[3])) {
+    return null;
+  }
+  const ts = `${match[2]}.${match[3]}`;
+  const threadTs = new URL(url.trim()).searchParams.get('thread_ts');
+  return {
+    channelId: match[1],
+    threadTs: threadTs && SLACK_TS.test(threadTs) ? threadTs : ts,
+    ts,
+  };
+}

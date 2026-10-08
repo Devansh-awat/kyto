@@ -3,7 +3,11 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
-import { toChatSlackChannelId, toRawSlackChannelId } from '@/lib/slack/ids';
+import {
+  parseSlackPermalink,
+  toChatSlackChannelId,
+  toRawSlackChannelId,
+} from '@/lib/slack/ids';
 import { askerSlackToken, slackAuthorizeUrl } from '@/lib/slack-oauth';
 import { assertReadableChannel, joinChannel } from './utils';
 
@@ -18,6 +22,12 @@ export function readConversationHistoryTool({
     description:
       "Read channel history or thread replies. The current conversation is always readable. Another private channel, DM or group DM — including the person's DMs with other people or apps — is read with THEIR OWN connected Slack account, so it works for any conversation they are in once they have connected one (the error links them to it otherwise).",
     inputSchema: z.object({
+      permalink: z
+        .string()
+        .optional()
+        .describe(
+          'A Slack message link (https://….slack.com/archives/C…/p…), pasted whole. Reads the thread that message is in; channelId and threadTs are then not needed. Prefer this to converting a link by hand.'
+        ),
       channelId: z.string().optional(),
       threadId: z.string().optional(),
       threadTs: z.string().optional(),
@@ -27,14 +37,30 @@ export function readConversationHistoryTool({
         .optional()
         .describe('Slack pagination cursor from a previous response.'),
     }),
-    execute: async ({ channelId, cursor, limit, threadId, threadTs }) => {
-      const decodedThread = threadId
+    execute: async ({
+      channelId,
+      cursor,
+      limit,
+      permalink,
+      threadId,
+      threadTs,
+    }) => {
+      const link = permalink?.trim() ? parseSlackPermalink(permalink) : null;
+      if (permalink?.trim() && !link) {
+        throw new Error(
+          `${permalink} is not a Slack message link (https://<workspace>.slack.com/archives/<CHANNEL>/p<digits>).`
+        );
+      }
+      // gpt-6-luna fills every optional field, so an unused one arrives as "".
+      const decodedThread = threadId?.startsWith('slack:')
         ? slack.decodeThreadId(threadId)
         : undefined;
       const resolvedChannelId =
-        channelId ??
-        (threadId ? slack.channelIdFromThreadId(threadId) : undefined);
-      const resolvedThreadTs = threadTs ?? decodedThread?.threadTs;
+        link?.channelId ||
+        channelId ||
+        (decodedThread ? `slack:${decodedThread.channel}` : undefined);
+      const resolvedThreadTs =
+        link?.threadTs || threadTs || decodedThread?.threadTs || undefined;
       if (!resolvedChannelId) {
         throw new Error('readConversationHistory needs channelId or threadId.');
       }
@@ -73,15 +99,25 @@ export function readConversationHistoryTool({
 
       await joinChannel(chatChannelId);
 
-      const result = resolvedThreadTs
-        ? await slack.fetchMessages(`${chatChannelId}:${resolvedThreadTs}`, {
+      const result = await (resolvedThreadTs
+        ? slack.fetchMessages(`${chatChannelId}:${resolvedThreadTs}`, {
             cursor,
             limit,
           })
-        : await slack.fetchChannelMessages(chatChannelId, {
+        : slack.fetchChannelMessages(chatChannelId, {
             cursor,
             limit,
-          });
+          })
+      ).catch((error: unknown) => {
+        // A bare thread_not_found read as "that thread is gone"; it is almost
+        // always a channel or ts copied wrong from a link.
+        if (String(error).includes('thread_not_found') && !link) {
+          throw new Error(
+            `No message ${resolvedThreadTs} in ${chatChannelId}. If this came from a link, pass the whole link as \`permalink\` instead of copying the channel and ts out of it.`
+          );
+        }
+        throw error;
+      });
 
       return {
         channelId: chatChannelId,

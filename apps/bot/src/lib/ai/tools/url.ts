@@ -114,7 +114,7 @@ export async function fetchUrlText(url: string): Promise<{
   // wall), so callers get pointed at the Slack read tools instead of markup.
   if (isSlackLink(url)) {
     throw new Error(
-      "That's a Slack link, which isn't publicly fetchable. Use Slack tools instead: readConversationHistory for a message/thread (the URL path is /archives/<CHANNEL>/p<TS> — the ts is the digits with a dot before the last 6), or getFile for a file link."
+      "That's a Slack link, which isn't publicly fetchable. Use Slack tools instead: readConversationHistory with the whole link as `permalink` for a message/thread, or getFile for a file link."
     );
   }
   // publicFetch, not fetch: this runs on kyto's host, so a URL (or a redirect)
