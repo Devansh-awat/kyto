@@ -152,12 +152,15 @@ export function streamAttempt({
   holder,
   images,
   getFreshImages,
+  history = [],
   onCachePrefix,
   onDroppedImages,
   onError,
   onGatewayRetry,
   prompt,
+  serviceTier,
   system,
+  toolOrder,
   tools,
 }: {
   abortSignal?: AbortSignal;
@@ -173,6 +176,14 @@ export function streamAttempt({
    * user message so the model actually sees them on the next step.
    */
   getFreshImages?: () => ImageInput[];
+  /**
+   * The replayed thread, ONE entry per message, sent as separate user messages
+   * ahead of `prompt` with a cache breakpoint on the last one (addCacheControl's
+   * H). Joined into the prompt, the history could never be read back from
+   * cache on the next turn — see cache-control.ts. Entries must render
+   * byte-identically from turn to turn.
+   */
+  history?: string[];
   /**
    * Called with any images dropped for being unrepresentable as an SDK file
    * part (see usableImages). Silence here would turn "kyto ignored my
@@ -201,7 +212,20 @@ export function streamAttempt({
    */
   onGatewayRetry?: (info: GatewayRetryInfo) => void;
   prompt: string;
-  system: string;
+  /**
+   * `flex`: OpenAI's half-price tier, for work nobody is watching live (a
+   * Kevinton review, a subagent). Only applied to OpenAI models on Hack Club;
+   * a request the flex tier refuses is re-sent once at the normal tier.
+   */
+  serviceTier?: 'flex';
+  /** One system message, or several in order (see systemPrompt). */
+  system: string | string[];
+  /**
+   * The tool order already sent in this THREAD, so a turn's tools serialize in
+   * the order the last turn's did (see stabilizeToolOrder). Per attempt when
+   * omitted.
+   */
+  toolOrder?: { names: string[] };
   tools: ToolSet;
 }) {
   // "Sign in with ChatGPT" runs on the ChatGPT (Codex) backend, which speaks the
@@ -228,27 +252,37 @@ export function streamAttempt({
         baseURL: attempt.baseURL,
         fetch: tunedFetch({
           attempt,
+          historyMessages: history.length,
           holder,
           onCachePrefix,
           onGatewayRetry,
+          serviceTier,
+          toolOrder,
         }) as unknown as typeof fetch,
         // Extra per-attempt headers. Authorization is set from apiKey.
         ...(attempt.headers ? { headers: attempt.headers } : {}),
         name: attempt.provider,
       }).chatModel(attempt.model);
-  // Attachment images ride in the user turn (put BEFORE the text so the cache
-  // breakpoint still lands on the trailing text block). With none, keep the
-  // plain string prompt so the default path is byte-identical to before.
+  // Attachment images ride in the final user turn (put BEFORE the text so the
+  // cache breakpoint still lands on the trailing text block), after the
+  // replayed history. With neither, keep the plain string prompt.
   const initialImages = usableImages(images ?? [], onDroppedImages);
   const promptInput =
-    initialImages.length > 0
+    initialImages.length > 0 || history.length > 0
       ? {
           messages: [
+            ...history.map((content) => ({
+              content,
+              role: 'user' as const,
+            })),
             {
-              content: [
-                ...initialImages.map(imagePart),
-                { text: prompt, type: 'text' as const },
-              ],
+              content:
+                initialImages.length > 0
+                  ? [
+                      ...initialImages.map(imagePart),
+                      { text: prompt, type: 'text' as const },
+                    ]
+                  : prompt,
               role: 'user' as const,
             },
           ] satisfies ModelMessage[],
@@ -341,7 +375,10 @@ export function streamAttempt({
       hasToolCall(SKIP_TOOL_NAME),
       hasToolCall(UPGRADE_TOOL_NAME),
     ],
-    system,
+    system:
+      typeof system === 'string'
+        ? system
+        : system.map((content) => ({ content, role: 'system' as const })),
     tools,
   });
 }
@@ -493,14 +530,20 @@ const PROMPT_CACHE_KEY = 'kyto';
 
 function tunedFetch({
   attempt,
+  historyMessages,
   holder,
   onCachePrefix,
   onGatewayRetry,
+  serviceTier,
+  toolOrder = { names: [] },
 }: {
   attempt: ModelAttempt;
+  historyMessages: number;
   holder: ResolvedModelHolder;
   onCachePrefix?: (info: PrefixDivergence) => void;
   onGatewayRetry?: (info: GatewayRetryInfo) => void;
+  serviceTier?: 'flex';
+  toolOrder?: { names: string[] };
 }): FetchLike {
   // Gemini 3.x attaches an encrypted `thought_signature` to every function call
   // and REQUIRES it echoed back on the next turn, or it 400s ("Function call is
@@ -514,9 +557,12 @@ function tunedFetch({
   // churn against the one before it. Per-attempt closure, same as the
   // signatures above.
   const cacheProbe: { units: PrefixUnit[] } = { units: [] };
-  // The tool order this attempt has already sent, so a tool loaded mid-turn is
-  // APPENDED rather than slotted into the middle (see stabilizeToolOrder).
-  const toolOrder: { names: string[] } = { names: [] };
+  // Flex is OpenAI's tier, and Hack Club is the only provider here that passes
+  // it through; anywhere else the field is at best ignored.
+  const flex =
+    serviceTier === 'flex' &&
+    attempt.provider === HACKCLUB_PROVIDER &&
+    attempt.model.startsWith('openai/');
   return async (input, init) => {
     const url = requestUrl(input);
     let callInput = input;
@@ -528,7 +574,8 @@ function tunedFetch({
         attempt,
         isGemini ? thoughtSignatures : undefined,
         onCachePrefix ? { onCachePrefix, state: cacheProbe } : undefined,
-        toolOrder
+        toolOrder,
+        { flex, historyMessages }
       );
       if (tuned) {
         const source =
@@ -554,9 +601,22 @@ function tunedFetch({
         };
       }
     }
-    const response = await fetchWithGatewayRetry(callInput, callInit, {
+    let response = await fetchWithGatewayRetry(callInput, callInit, {
       onRetry: onGatewayRetry,
     });
+    // Flex does not fall back to standard capacity on its own — OpenRouter
+    // surfaces the refusal instead. A turn must not walk the fallback ladder
+    // just because the cheap tier was full, so ask once more at the normal one.
+    if (flex && !response.ok && typeof callInit?.body === 'string') {
+      await response.body?.cancel().catch(() => undefined);
+      const payload = JSON.parse(callInit.body) as Record<string, unknown>;
+      payload.service_tier = undefined;
+      response = await fetchWithGatewayRetry(
+        callInput,
+        { ...callInit, body: JSON.stringify(payload) },
+        { onRetry: onGatewayRetry }
+      );
+    }
     if (response.body && !holder.model && url.includes('/chat/completions')) {
       // clone() tees: the original streams to the SDK untouched; we scan the
       // copy in the background for the resolved model slug.
@@ -601,7 +661,11 @@ function tuneBody(
     onCachePrefix: (info: PrefixDivergence) => void;
     state: { units: PrefixUnit[] };
   },
-  toolOrder?: { names: string[] }
+  toolOrder?: { names: string[] },
+  { flex, historyMessages }: { flex: boolean; historyMessages: number } = {
+    flex: false,
+    historyMessages: 0,
+  }
 ): string | null {
   if (raw === undefined) {
     return null;
@@ -684,7 +748,11 @@ function tuneBody(
     // through the HackClub proxy); providers that don't support explicit
     // caching (OpenAI, DeepSeek, GLM, Kimi, …) safely ignore them and auto-cache
     // on their own. Applied to every attempt — harmless where unsupported.
-    if (addCacheControl(payload)) {
+    if (flex && payload.service_tier === undefined) {
+      payload.service_tier = 'flex';
+      changed = true;
+    }
+    if (addCacheControl(payload, { historyMessages })) {
       changed = true;
     }
     return changed ? JSON.stringify(payload) : null;

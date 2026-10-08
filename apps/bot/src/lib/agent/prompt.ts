@@ -121,7 +121,7 @@ export async function buildPrompt(
     ownModelsOnly?: boolean;
     thread?: Thread;
   } = {}
-): Promise<string> {
+): Promise<{ history: string[]; tail: string }> {
   const current = await renderMessage(message);
 
   // What kyto was THINKING on this thread's last few turns. Slack replayed above
@@ -143,7 +143,7 @@ export async function buildPrompt(
       })
     : '';
 
-  let history = '';
+  let history: string[] = [];
   let compacted = '';
   let pulledInLater = false;
   if (thread) {
@@ -258,10 +258,11 @@ export async function buildPrompt(
             : renderMessage(entry)
         )
       );
-      history = [
-        'Conversation so far in this Slack thread (oldest first):',
-        ...rendered,
-      ].join('\n');
+      history = rendered.map((line, index) =>
+        index === 0
+          ? `Conversation so far in this Slack thread (oldest first):\n${line}`
+          : line
+      );
     }
   }
 
@@ -269,9 +270,10 @@ export async function buildPrompt(
   // appended to `history`, because the thinking block now sits BETWEEN them —
   // and a "the latest message is next" line followed by a page of last turn's
   // reasoning reads as if the reasoning were the message.
-  const latest = history
-    ? `The latest message, which you must respond to:\n${current}`
-    : current;
+  const latest =
+    history.length > 0
+      ? `The latest message, which you must respond to:\n${current}`
+      : current;
 
   // The two facts that change on EVERY turn, kept in the volatile tail rather
   // than in the system prompt where they used to be. A per-turn timestamp and a
@@ -311,43 +313,42 @@ export async function buildPrompt(
   ].join('\n');
 
   // ORDER IS LOAD-BEARING, for prompt caching (see addCacheControl in
-  // packages/ai/src/agent.ts — the breakpoint lands on the last user message,
-  // which is this whole string).
+  // packages/ai/src/cache-control.ts).
   //
+  // `history` goes out as one user message PER ENTRY, ahead of the tail, with a
+  // cache breakpoint on its last one. gpt-6-luna only looks a cache up at
+  // message endings, so next turn that same ending is still there and the whole
+  // thread up to it is a cached read. Joined into one message with the tail it
+  // never was: the measured cross-turn read stopped at the system prompt.
   // Cheapest → most volatile, so the cacheable prefix is as long as possible:
   //
   //   user_instructions   changes only when the user edits them
+  //   notebooks           changes when kevinton edits one — ~30 min after a
+  //                       turn, by which time the 30-min cache has lapsed anyway
   //   compacted           changes once per COMPACT_BATCH of overflow
   //   history             append-only until the thread passes MAX_THREAD_MESSAGES
-  //   notebooks           changes whenever kevinton edits one, any thread's review
+  //   --- tail (one message, rewritten every turn) ---
   //   thinking            CHANGES EVERY TURN (last turn's reasoning is appended)
   //   nowLine + current   the clock, the message id, and the new message
   //
-  // The thinking block used to come FIRST. It is up to THINKING_BUDGET_CHARS of
-  // text that is different on every single turn, so putting it at the front
-  // invalidated the cached prefix at byte ~0 and the entire replayed thread was
-  // re-billed at full price every turn — on a $3/day shared cap. Moving it below
-  // the history costs nothing (the model reads the whole prompt either way) and
-  // makes system + instructions + history a stable prefix that actually caches.
+  // The thinking block used to come FIRST, which invalidated the cached prefix
+  // at byte ~0 and re-billed the entire replayed thread every turn.
   //
-  // Do NOT move a volatile block back above `history`.
-  const body = [
-    customizationPrompt
-      ? [
-          '<user_instructions>',
-          customizationPrompt,
-          '</user_instructions>',
-        ].join('\n')
-      : '',
-    compacted,
-    history,
-    notebooks,
-    thinking,
-    nowLine,
-    latest,
-  ]
-    .filter(Boolean)
-    .join('\n\n');
-
-  return body;
+  // Do NOT move a volatile block above the tail, and never render a history
+  // entry differently from one turn to the next.
+  return {
+    history: [
+      customizationPrompt
+        ? [
+            '<user_instructions>',
+            customizationPrompt,
+            '</user_instructions>',
+          ].join('\n')
+        : '',
+      notebooks,
+      compacted,
+      ...history,
+    ].filter(Boolean),
+    tail: [thinking, nowLine, latest].filter(Boolean).join('\n\n'),
+  };
 }

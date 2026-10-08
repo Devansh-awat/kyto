@@ -23,7 +23,16 @@ const TTL_MS = 6 * 60 * 60 * 1000;
 // Bound the map so a busy workspace can't grow it without limit. Oldest first.
 const MAX_THREADS = 500;
 
-const store = new Map<string, { at: number; names: Set<string> }>();
+interface Entry {
+  at: number;
+  names: Set<string>;
+  // The order the thread's tools were last serialized in (stabilizeToolOrder's
+  // state), so the next turn sends them in the same order — a reshuffle
+  // invalidates every cached byte after the tools.
+  order: { names: string[] };
+}
+
+const store = new Map<string, Entry>();
 
 function sweep(): void {
   const cutoff = Date.now() - TTL_MS;
@@ -74,7 +83,27 @@ export function rememberLoadedTools(
     store.delete(threadId);
     store.set(threadId, entry);
   } else {
-    store.set(threadId, { at: Date.now(), names: new Set(incoming) });
+    store.set(threadId, {
+      at: Date.now(),
+      names: new Set(incoming),
+      order: { names: [] },
+    });
   }
   sweep();
+}
+
+/**
+ * The thread's tool-order state, created on first use. The SAME object every
+ * turn, mutated by the request it is passed to.
+ */
+export function threadToolOrder(threadId: string): { names: string[] } {
+  const entry = store.get(threadId);
+  if (entry && entry.at >= Date.now() - TTL_MS) {
+    entry.at = Date.now();
+    return entry.order;
+  }
+  const order = { names: [] };
+  store.set(threadId, { at: Date.now(), names: new Set(), order });
+  sweep();
+  return order;
 }

@@ -276,8 +276,11 @@ async function review({
           abortSignal: AbortSignal.timeout(REVIEW_TIMEOUT_MS),
           activeTools: () => names,
           attempt,
+          history: prompt.history,
           holder: {},
-          prompt,
+          prompt: prompt.tail,
+          // Nobody waits on a review: half price, slower is fine.
+          serviceTier: 'flex',
           system: `${subagentSystemPrompt({ hints })}${KEVINTON_NOTE}`,
           tools,
         });

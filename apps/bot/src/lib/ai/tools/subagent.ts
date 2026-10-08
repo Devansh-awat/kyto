@@ -277,6 +277,8 @@ export function runSubagentTool({
                     getFreshImages: built.drainImages,
                     holder: {},
                     prompt: task,
+                    // Background work, owner's call 2026-10-08: half price.
+                    serviceTier: 'flex',
                     system,
                     tools: built.tools,
                   });
@@ -640,6 +642,7 @@ async function synthesizeReport({
     activeTools,
     attempt,
     holder: {},
+    serviceTier: 'flex',
     prompt: `${task}\n\nYou already did the work above. Write your final report now — the findings, in full. This message is prose only: do not call anything, do not start new work, and do not describe your setup or environment.`,
     system,
     tools,

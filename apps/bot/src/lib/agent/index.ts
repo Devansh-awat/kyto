@@ -494,6 +494,7 @@ async function executeTurn(
     | {
         cacheReadTokens?: number;
         cacheWriteTokens?: number;
+        costUsd?: number;
         inputTokens?: number;
         outputTokens?: number;
       }
@@ -597,6 +598,7 @@ async function executeTurn(
         // moved above the history — see the prompt-order note in CLAUDE.md).
         // Absent entirely = the provider reported no cache detail.
         cache: cacheLog(turnUsage),
+        costUsd: turnUsage?.costUsd,
         durationMs: Date.now() - turnStart,
         failedAttempts: failedAttemptsLog(attempts),
         outputTokens: turnUsage?.outputTokens,
@@ -737,7 +739,7 @@ async function executeTurn(
     // failed build must not surface as an unhandled rejection meanwhile.
     pendingTools.catch(() => undefined);
     closeTools = async () => (await pendingTools).close();
-    let messageText = await buildPrompt(turnMessage, {
+    const { history, tail } = await buildPrompt(turnMessage, {
       codeChannel: await isCodeChannel(
         slack.channelIdFromThreadId(turnThread.id)
       ),
@@ -746,6 +748,9 @@ async function executeTurn(
       ownModelsOnly,
       thread: turnThread,
     });
+    // The per-turn tail; the replayed thread stays in `history` so it can go
+    // out as its own cacheable messages (see buildPrompt).
+    let messageText = tail;
     // Judged against the prompt the model is about to get — the thread, earlier
     // thinking and the new message — because a follow-up like "now do the cf
     // version" is only a coding request in light of what came before it.
@@ -762,13 +767,14 @@ async function executeTurn(
     if (resumed) {
       messageText = `${messageText}\n\n<resumed_after_restart>kyto restarted while answering this message and is picking it back up. Anything you already posted is in the thread above — continue from there instead of starting over, and check before repeating anything with a side effect (a post, a DM, a reminder, a file), since it may already have happened.</resumed_after_restart>`;
     }
-    codingMonitor.setConversation(messageText);
+    const conversation = [...history, messageText].join('\n\n');
+    codingMonitor.setConversation(conversation);
     // Two Jev calls at once: is this coding work (then the prompt steers it to
     // OpenCode), and which deferred tools will it need (lib/ai/tool-preload).
     // In parallel, so the preload costs no wait of its own.
     const [isCodingWork, preloadNames] = await Promise.all([
       codingMonitor.checkTurn(),
-      secret ? Promise.resolve([]) : pickPreloadTools(messageText),
+      secret ? Promise.resolve([]) : pickPreloadTools(conversation),
     ]);
     if (isCodingWork) {
       messageText = `${messageText}\n\n<coding_work>${DELEGATE_NOTE}</coding_work>`;
@@ -1132,6 +1138,7 @@ async function executeTurn(
           // Errors the SDK swallows into the stream would otherwise be dumped
           // raw to stderr by its default console.error handler, unattributed.
           getFreshImages: built.drainImages,
+          history,
           images: modelImages,
           // An image the SDK's schema would reject is dropped rather than
           // allowed to invalidate the whole prompt. Log it: silently ignoring
@@ -1204,6 +1211,7 @@ async function executeTurn(
           },
           prompt: attemptPrompt(isFallback),
           system: systemPrompt({ hints }),
+          toolOrder: built.toolOrder,
           tools: built.tools,
         });
         for await (const chunk of renderStream({
@@ -1489,8 +1497,10 @@ async function executeTurn(
             results: gatheredResults,
             secret,
             signal: AbortSignal.any([controller.signal, attemptAbort.signal]),
+            history,
             system: systemPrompt({ hints }),
             task: messageText,
+            toolOrder: built.toolOrder,
             tools: built.tools,
           });
         }
@@ -1530,8 +1540,10 @@ async function executeTurn(
               secret,
               signal: AbortSignal.any([controller.signal, attemptAbort.signal]),
               streamedText,
+              history,
               system: systemPrompt({ hints }),
               task: messageText,
+              toolOrder: built.toolOrder,
               tools: built.tools,
             });
             // Whatever it just wrote fit, and arrived whole — the reply is
@@ -1639,12 +1651,24 @@ async function executeTurn(
         // HackClub's $3/day affordable, and until this was recorded there was no
         // way to tell a working cache from a silently broken one except the bill.
         {
-          const usage = await Promise.resolve(result.usage).catch(
-            () => undefined
-          );
+          const [usage, steps] = await Promise.all([
+            Promise.resolve(result.usage).catch(() => undefined),
+            Promise.resolve(result.steps).catch(() => []),
+          ]);
+          // What the proxy actually charged (OpenRouter's `usage.cost`, kept in
+          // the raw usage) — the token split alone hides that an uncached
+          // token on gpt-6-luna is a cache WRITE at 1.25x, 12.5x a cached read.
+          let costUsd: number | undefined;
+          for (const step of steps) {
+            const cost = step.usage.raw?.cost;
+            if (typeof cost === 'number') {
+              costUsd = (costUsd ?? 0) + cost;
+            }
+          }
           turnUsage = {
             cacheReadTokens: usage?.inputTokenDetails?.cacheReadTokens,
             cacheWriteTokens: usage?.inputTokenDetails?.cacheWriteTokens,
+            costUsd,
             inputTokens: usage?.inputTokens,
             outputTokens: usage?.outputTokens ?? usage?.totalTokens,
           };
@@ -2116,6 +2140,7 @@ async function postReplyFooter({
 async function* synthesizeFinalAnswer({
   activeTools,
   attempt,
+  history,
   knownTools,
   onTally,
   onText,
@@ -2124,18 +2149,21 @@ async function* synthesizeFinalAnswer({
   signal,
   system,
   task,
+  toolOrder,
   tools,
 }: {
   activeTools: () => string[];
   attempt: ModelAttempt;
+  history: string[];
   knownTools: Set<string>;
   onTally: (tally: StreamTally) => void;
   onText: (text: string) => void;
   results: GatheredResult[];
   secret: boolean;
   signal: AbortSignal;
-  system: string;
+  system: string[];
   task: string;
+  toolOrder: { names: string[] };
   tools: ToolSet;
 }): AsyncGenerator<string | StreamChunk> {
   logger.info(
@@ -2152,10 +2180,12 @@ async function* synthesizeFinalAnswer({
       abortSignal: signal,
       activeTools,
       attempt,
+      history,
       // Nothing reads the resolved model back off a nudge.
       holder: {},
       prompt,
       system,
+      toolOrder,
       tools,
     });
     yield* renderStream({
@@ -2193,6 +2223,7 @@ async function* synthesizeFinalAnswer({
 async function* continueTruncatedReply({
   activeTools,
   attempt,
+  history,
   knownTools,
   onFinish,
   onTally,
@@ -2202,10 +2233,12 @@ async function* continueTruncatedReply({
   streamedText,
   system,
   task,
+  toolOrder,
   tools,
 }: {
   activeTools: () => string[];
   attempt: ModelAttempt;
+  history: string[];
   knownTools: Set<string>;
   onFinish: (reason: string) => void;
   onTally: (tally: StreamTally) => void;
@@ -2213,8 +2246,9 @@ async function* continueTruncatedReply({
   secret: boolean;
   signal: AbortSignal;
   streamedText: string;
-  system: string;
+  system: string[];
   task: string;
+  toolOrder: { names: string[] };
   tools: ToolSet;
 }): AsyncGenerator<string | StreamChunk> {
   logger.info(
@@ -2227,9 +2261,11 @@ async function* continueTruncatedReply({
       abortSignal: signal,
       activeTools,
       attempt,
+      history,
       holder: {},
       prompt,
       system,
+      toolOrder,
       tools,
     });
     yield* renderStream({

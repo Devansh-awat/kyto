@@ -27,7 +27,11 @@ import { requestMcpPermission } from '@/lib/mcp-permissions/request';
 import { redactSecretsDeep } from '@/lib/redact';
 import { listSkills } from '@/lib/skills';
 import { slackBrowserAvailable } from '@/lib/slack-browser';
-import { recallLoadedTools, rememberLoadedTools } from './loaded-tools';
+import {
+  recallLoadedTools,
+  rememberLoadedTools,
+  threadToolOrder,
+} from './loaded-tools';
 import { askQuestionTool } from './tools/ask-question';
 import { backgroundProcessTools } from './tools/background';
 import { browserTool } from './tools/browser';
@@ -132,6 +136,8 @@ export interface BuiltTools {
    * called (lib/ai/tool-preload). Unknown or already-active names are ignored.
    */
   preload: (names: string[]) => void;
+  /** The thread's tool serialization order, kept across turns for the cache. */
+  toolOrder: { names: string[] };
   tools: ToolSet;
 }
 
@@ -809,11 +815,11 @@ export async function buildTools({
     recallLoadedTools(thread.id).filter((name) => deferred[name])
   );
 
-  // Already-active tools are left out of the catalog: they are in the prompt as
-  // real tools, and listing them invites a round trip to "load" what is already
-  // there.
+  // Every deferred tool, active or not. This description is part of the tools
+  // array, the front of the cached prompt: a catalog that dropped whatever the
+  // thread had loaded changed on every load and invalidated the whole cached
+  // thread on the next turn. A redundant load of an active tool is harmless.
   const catalog = Object.entries(deferred)
-    .filter(([name]) => !remembered.has(name))
     .map(([name, entry]) => `- ${name}: ${entry.summary}`)
     .join('\n');
   const active = new Set(Object.keys(core));
@@ -873,7 +879,7 @@ export async function buildTools({
     .join('');
 
   const loadTools = tool({
-    description: `Load additional tools by name before using them (their schemas stay out of the prompt until needed). Available:\n${catalog || '- (none)'}${hiddenNote}`,
+    description: `Load additional tools by name before using them (their schemas stay out of the prompt until needed). A tool you can already call needs no loading. Available:\n${catalog || '- (none)'}${hiddenNote}`,
     inputSchema: z.object({
       tools: z
         .array(z.string())
@@ -950,16 +956,23 @@ export async function buildTools({
       await Promise.all([mcp.close(), slackBrowser?.close()]);
     },
     drainImages: () => pendingImages.splice(0),
-    // Deliberately NOT remembered for the thread (unlike a model's own
-    // loadTools): Jev's guess is about this message, and the next one asks again.
+    // Remembered for the thread like a model's own loadTools. It used to be
+    // per message, so the tools array differed between a thread's turns
+    // whenever Jev's guess did — and a changed tools array throws away every
+    // cached byte after it (measured 2026-10-08: such turns read 0 from cache).
+    // An extra schema the thread keeps is a cached read; a reshuffle is a full
+    // re-write of the thread.
     preload: (names) => {
-      for (const name of names) {
-        if (deferred[name] && !active.has(name)) {
-          active.add(name);
-          preloadedNames.add(name);
-        }
+      const added = names.filter(
+        (name) => deferred[name] !== undefined && !active.has(name)
+      );
+      for (const name of added) {
+        active.add(name);
+        preloadedNames.add(name);
       }
+      rememberLoadedTools(thread.id, added);
     },
+    toolOrder: threadToolOrder(thread.id),
     tools,
   };
 }

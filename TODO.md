@@ -95,20 +95,12 @@ the E2B side: whether the sandbox image's own `gh` speaks the same GHES routing.
 - A `gh` call that fails with "unexpected response" or a 404 on `/api/v3/…`
   means the routing, not the guard.
 
-**DID THE CACHING FIX WORK? (2026-08-05.)** The system prompt carried the current
-time and the answered message's id, and it is sent as ONE string, so breakpoint A
-(system + every tool schema, ~23k tokens) was invalidated on EVERY new turn.
-Both moved to the volatile tail. Separately, `loadTools` growing the tools array
-mid-turn invalidated the same prefix for the rest of that turn; a thread's loaded
-set now survives the turn.
-- `journalctl -u kyto.service | grep 'turn complete'` → `cache: {input, read,
-  write}`. Read HIGH / input LOW across a thread's turns is the win.
-- `journalctl -u kyto.service | grep 'prompt prefix changed'` — the probe
-  (`packages/ai/src/cache-probe.ts`) logs any step whose prompt is not a pure
-  APPEND of the previous step's, naming the unit that diverged.
-- If read is still low on deepseek, the researched next step is OpenRouter's
-  top-level `cache_control` — but don't add it blind, a wrong caching change only
-  shows up on the bill.
+**Did the 2026-10-08 caching fix land?** The `[agent] turn complete` line now
+carries `costUsd` (OpenRouter's real charge) and `cache: {input, read}`. Before:
+luna 76% read by tokens, single-step turns 24%. Expect ~90%+ on the second and
+later turns of a thread inside 30 minutes. If a thread's turns still read only
+~15k, a history entry is rendering differently between turns. Then decide flex
+for LIVE turns: time a real-size turn on flex vs default first.
 
 **How often does `upgradeModel` fire, and does the stickiness cost too much?**
 `journalctl -u kyto.service | grep 'model upgrade requested'`. Since 2026-08-06

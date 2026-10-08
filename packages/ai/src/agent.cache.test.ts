@@ -84,6 +84,43 @@ describe('addCacheControl', () => {
     expect(cached(payload.messages[2] as Message)).toBe(true);
   });
 
+  test('A lands on the FIRST system message: the static prompt every thread shares', () => {
+    const payload = {
+      messages: [
+        { content: 'static prompt', role: 'system' },
+        { content: 'thread context + memories', role: 'system' },
+        { content: 'hi', role: 'user' },
+      ] as Message[],
+    };
+    addCacheControl(payload);
+    expect(cached(payload.messages[0] as Message)).toBe(true);
+    expect(cached(payload.messages[1] as Message)).toBe(false);
+  });
+
+  test('H lands on the last replayed history message, so next turn can read up to it', () => {
+    const payload = {
+      messages: [
+        { content: 'static', role: 'system' },
+        { content: 'context', role: 'system' },
+        { content: 'history 1', role: 'user' },
+        { content: 'history 2', role: 'user' },
+        { content: 'tail', role: 'user' },
+        { content: [{ type: 'tool-call' }], role: 'assistant' },
+        { content: 'result', role: 'tool' },
+      ] as Message[],
+    };
+    addCacheControl(payload, { historyMessages: 2 });
+    const marked = payload.messages.map((m) => cached(m as Message));
+    expect(marked).toEqual([true, false, false, true, false, false, true]);
+  });
+
+  test('no history: only A and B', () => {
+    const payload = toolLoopPayload(1);
+    addCacheControl(payload, { historyMessages: 0 });
+    const marked = payload.messages.map((m) => cached(m as Message));
+    expect(marked).toEqual([true, false, false, true]);
+  });
+
   test('no messages: no throw, no change', () => {
     expect(addCacheControl({})).toBe(false);
   });
