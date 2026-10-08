@@ -36,6 +36,32 @@ async function refuseOutsider(event: ActionEvent): Promise<void> {
     .catch(() => undefined);
 }
 
+// The state rides in the message metadata, and each click used to start from
+// ITS OWN copy of it: two people answering at nearly the same moment, the later
+// chat.update erased the earlier answer and the waiting turn hung until the
+// question timed out. Clicks now share one in-memory state per question.
+const MAX_LIVE_QUESTIONS = 200;
+const liveStates = new Map<string, AskState>();
+
+function liveState(raw: unknown): AskState | undefined {
+  const parsed = parseAskStateFromRaw(raw);
+  if (!parsed) {
+    return;
+  }
+  const live = liveStates.get(parsed.id);
+  if (live) {
+    return live;
+  }
+  if (liveStates.size >= MAX_LIVE_QUESTIONS) {
+    const oldest = liveStates.keys().next().value;
+    if (oldest) {
+      liveStates.delete(oldest);
+    }
+  }
+  liveStates.set(parsed.id, parsed);
+  return parsed;
+}
+
 async function updateAskMessage(
   event: ActionEvent,
   state: AskState
@@ -61,12 +87,13 @@ async function updateAskMessage(
   // Wake the waiting turn only once EVERYONE asked has finished. A question put
   // to three people is not answered by the fastest of them.
   if (isComplete(state)) {
+    liveStates.delete(state.id);
     settleAnswers(state.id, state);
   }
 }
 
 bot.onAction(ASK_OPTION_ACTIONS, async (event) => {
-  const state = parseAskStateFromRaw(event.raw);
+  const state = liveState(event.raw);
   if (!state) {
     return;
   }
@@ -99,7 +126,7 @@ bot.onAction(ASK_OPTION_ACTIONS, async (event) => {
 });
 
 bot.onAction(ASK_SUBMIT_ACTION, async (event) => {
-  const state = parseAskStateFromRaw(event.raw);
+  const state = liveState(event.raw);
   if (!state) {
     return;
   }
@@ -122,7 +149,7 @@ bot.onAction(ASK_SUBMIT_ACTION, async (event) => {
 });
 
 bot.onAction(ASK_OTHER_ACTION, async (event) => {
-  const state = parseAskStateFromRaw(event.raw);
+  const state = liveState(event.raw);
   if (!state) {
     return;
   }
@@ -217,7 +244,7 @@ bot.onModalSubmit(ASK_OTHER_MODAL, async (event) => {
   const raw = {
     message: replies?.messages?.find((reply) => reply.ts === meta.messageId),
   };
-  const state = parseAskStateFromRaw(raw);
+  const state = liveState(raw);
   if (!state) {
     return;
   }
