@@ -53,11 +53,14 @@ async function seedAttachment({
       ? new Uint8Array(await data.arrayBuffer())
       : new Uint8Array(data);
   await sandboxContext.session.writeBinaryFile({ content: bytes, path });
+  const visionType =
+    bytes.byteLength <= MAX_VISION_BYTES &&
+    VISION_MIME.test(attachment.mimeType ?? '')
+      ? sniffImageType(bytes)
+      : undefined;
   return {
-    imageBytes: isVisionImage(attachment.mimeType, bytes.byteLength)
-      ? bytes
-      : undefined,
-    mimeType: attachment.mimeType,
+    imageBytes: visionType ? bytes : undefined,
+    mimeType: visionType ?? attachment.mimeType,
     name: filename,
     path,
     type: attachment.type,
@@ -69,15 +72,27 @@ async function seedAttachment({
 const MAX_VISION_BYTES = 8 * 1024 * 1024;
 const VISION_MIME = /^image\/(png|jpe?g|webp|gif)$/i;
 
-function isVisionImage(
-  mimeType: string | undefined,
-  byteLength: number
-): boolean {
-  return (
-    mimeType !== undefined &&
-    VISION_MIME.test(mimeType) &&
-    byteLength <= MAX_VISION_BYTES
-  );
+/**
+ * The image type the BYTES say, not the name: Slack's mimetype follows the
+ * extension, and a non-image renamed `.png` sent as image/png made the gateway
+ * reject the whole request.
+ */
+export function sniffImageType(bytes: Uint8Array): string | undefined {
+  const ascii = (start: number, end: number) =>
+    String.fromCharCode(...bytes.subarray(start, end));
+  if (bytes[0] === 0x89 && ascii(1, 4) === 'PNG') {
+    return 'image/png';
+  }
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  if (ascii(0, 4) === 'GIF8') {
+    return 'image/gif';
+  }
+  if (ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP') {
+    return 'image/webp';
+  }
+  return;
 }
 
 export function promptWithAttachments({

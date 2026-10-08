@@ -819,11 +819,10 @@ async function executeTurn(
         mediaType: entry.mimeType ?? 'image/png',
         path: entry.name,
       }));
-    // The primary (deepseek-v4-flash) is served by a text-only endpoint that
-    // 404s on image input. Rather than burn a doomed attempt on every screenshot
-    // and fall back, have Gemini DESCRIBE the attached images and feed that text
-    // to the primary — the owner's "use gemini to understand the image and tell
-    // deepseek what it is". The raw bytes are still on disk in the sandbox for a
+    // A text-only primary 404s on image input. Rather than burn a doomed
+    // attempt on every screenshot and fall back, have Gemini DESCRIBE the
+    // attached images and feed that text to the primary (the owner's ask, from
+    // when the primary was deepseek). The raw bytes are still on disk in the sandbox for a
     // tool to read. Only kicks in for a text-only primary with a Gemini key
     // configured; a successful description replaces the raw images so nothing
     // 404s, and a failed one silently falls back to sending the raw images.
