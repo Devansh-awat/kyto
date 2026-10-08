@@ -295,10 +295,36 @@ export class LazySandbox {
     workingDirectory?: string;
   }): Promise<{ exitCode: number; stderr: string; stdout: string }> {
     abortSignal?.throwIfAborted();
-    const sandbox = await this.ensure();
-    // `connect`, not `setTimeout`: it also resumes a sandbox that auto-paused
-    // while this turn sat idle past the timeout.
-    await sandbox.connect({ timeoutMs: commandTimeoutMs() });
+    let sandbox = await this.ensure();
+    let recreated = false;
+    try {
+      // `connect`, not `setTimeout`: it also resumes a sandbox that
+      // auto-paused while this turn sat idle past the timeout.
+      await sandbox.connect({ timeoutMs: commandTimeoutMs() });
+    } catch (error) {
+      // A sandbox E2B killed mid-turn: the held handle answered "sandbox was
+      // not found" to every later command, so a turn lost all its tools
+      // (OpenCode included) until it ended (#26). Start a fresh one instead.
+      if (!isMissingSandboxError(error)) {
+        throw error;
+      }
+      this.logger.warn(
+        { err: errorText(error), sandboxId: sandbox.sandboxId },
+        '[sandbox] sandbox vanished mid-turn; creating a fresh one'
+      );
+      this.sandbox = null;
+      if (this.store && this.sessionId) {
+        // ensure() counts this holder again.
+        holders.set(this.sessionId, (holders.get(this.sessionId) ?? 1) - 1);
+        await this.store.clear(this.sessionId).catch(() => undefined);
+      }
+      sandbox = await this.ensure();
+      recreated = true;
+    }
+    // Said in the output, or the model goes looking for files that are gone.
+    const lostNote = recreated
+      ? '[kyto: the sandbox had been shut down and was recreated, so files from earlier in this thread are gone]\n'
+      : '';
     // Aborting only drops E2B's stream; the command runs on. Sent on the
     // sandbox already held, never through ensure(), which would resume one
     // destroy() had just paused and leave it running.
@@ -333,14 +359,14 @@ export class LazySandbox {
       return {
         exitCode: result.exitCode,
         stderr: result.stderr,
-        stdout: result.stdout,
+        stdout: lostNote + result.stdout,
       };
     } catch (error) {
       if (error instanceof CommandExitError) {
         return {
           exitCode: error.exitCode,
           stderr: error.stderr,
-          stdout: error.stdout,
+          stdout: lostNote + error.stdout,
         };
       }
       throw error;

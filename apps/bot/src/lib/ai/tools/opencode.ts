@@ -44,6 +44,10 @@ const BUSY_EXIT = 75;
 const SETUP_FAILED_EXIT = 76;
 const KILLED_EXIT = 137;
 
+// OpenCode's log line when its config refused a permission (e.g. a path
+// outside its directory): "permission requested: external_directory (…);
+// auto-rejecting".
+const PERMISSION_REJECTED = /permission requested: .*auto-rejecting/;
 // Colour codes OpenCode writes even when it is not on a terminal.
 // biome-ignore lint/suspicious/noControlCharactersInRegex: that is what they are
 const ANSI = /\u001b\[[0-9;]*[A-Za-z]/g;
@@ -95,8 +99,12 @@ export function opencodeTool({
       { abortSignal }
     ) => {
       const context = getSandboxContext();
-      const workDir = nodePath.normalize(
-        nodePath.join(context.sessionWorkDir, directory ?? '.')
+      // resolve, not join: an absolute "/home/user" was joined into
+      // "/home/user/home/user", and OpenCode then refused to touch the files
+      // the brief named because they were outside its directory.
+      const workDir = nodePath.resolve(
+        context.sessionWorkDir,
+        directory ?? '.'
       );
       if (
         workDir !== context.sessionWorkDir &&
@@ -140,7 +148,7 @@ export function opencodeTool({
             `exec 9>'${LOCK_PATH}'`,
             'if ! flock -n 9; then',
             `  read -r started _ shell group 2>/dev/null < '${STATE_PATH}' || started=''`,
-            `  if [ -z "$started" ] || [ $(( $(date +%s) - started )) -lt ${STALE_SECONDS} ]; then exit ${BUSY_EXIT}; fi`,
+            `  if [ -z "$started" ] || [ $(( $(date +%s) - started )) -lt ${STALE_SECONDS} ]; then echo "held_for=$(( $(date +%s) - \${started:-$(date +%s)} ))"; exit ${BUSY_EXIT}; fi`,
             '  kill -KILL -- "$shell" 2>/dev/null; [ -n "$group" ] && kill -KILL -- "-$group" 2>/dev/null',
             `  flock -w 10 9 || exit ${BUSY_EXIT}`,
             'fi',
@@ -172,9 +180,12 @@ export function opencodeTool({
 
       const output = (result.stdout + result.stderr).replace(ANSI, '').trim();
       if (result.exitCode === BUSY_EXIT) {
+        // Without the age a turn polled with `wait` for 25 minutes behind a
+        // run an earlier turn had started (#24).
+        const heldFor = Number(/held_for=(\d+)/.exec(output)?.[1] ?? 0);
+        const clearsIn = Math.max(0, STALE_SECONDS - heldFor);
         return {
-          error:
-            'OpenCode is already running in this sandbox. Wait for that run to finish, then call again — one run at a time (put several projects in one brief, or call once per project, one after another).',
+          error: `OpenCode is already running in this sandbox (started ${Math.round(heldFor / 60)} min ago, probably by an earlier turn); a run is cleared automatically after ${STALE_SECONDS / 60} min, so in ~${Math.ceil(clearsIn / 60)} min at most. Do NOT poll it with wait: tell the person it's busy and when it frees up, or do other work. One run at a time (put several projects in one brief, or call once per project, one after another).`,
           success: false,
         };
       }
@@ -189,7 +200,12 @@ export function opencodeTool({
         [KILLED_EXIT]:
           'OpenCode was killed, most likely out of memory (the sandbox has 1 GB). Its work so far is in the directory; call again with continue: true, and stop any dev servers left running first.',
       };
-      const note = notes[result.exitCode];
+      // OpenCode exits 0 after refusing a permission, so the run looked like
+      // a success that had silently done nothing.
+      const rejected = PERMISSION_REJECTED.test(output);
+      const note = rejected
+        ? 'OpenCode refused to touch something outside its working directory, so that part was NOT done. Call again with `directory` set to where the files are (a path inside the workspace), or with paths relative to it.'
+        : notes[result.exitCode];
       return {
         directory: workDir,
         exitCode: result.exitCode,
@@ -198,7 +214,7 @@ export function opencodeTool({
           output.length > OUTPUT_MAX
             ? `…${output.slice(-OUTPUT_MAX)}`
             : output || '(no output)',
-        success: result.exitCode === 0,
+        success: result.exitCode === 0 && !rejected,
         ...(note ? { note } : {}),
       };
     },
