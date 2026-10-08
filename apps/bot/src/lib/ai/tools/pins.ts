@@ -4,6 +4,7 @@ import { env } from '@/env';
 import type { ThreadHandle as Thread } from '@/harness/thread';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
+import { creditChange } from '@/lib/slack/change-notice';
 import { errorMessage } from '@/lib/utils/error';
 
 const okSchema = z.looseObject({
@@ -202,6 +203,14 @@ export function pinMessageTool({
         });
         if (!result.ok) {
           return { error: `Pin failed: ${result.error}`, success: false };
+        }
+        // A pin as the owner is already his name on it.
+        if (actor.as !== 'owner') {
+          await creditChange({
+            channel: channel.channelId,
+            requesterId: authorUserId,
+            subtype: 'pinned_item',
+          });
         }
         return {
           success: true,

@@ -562,7 +562,7 @@ export async function buildTools({
     },
     setChannelTopic: {
       summary: 'set a channel topic',
-      tool: setChannelTopicTool({ isOwner, thread }),
+      tool: setChannelTopicTool({ authorUserId, isOwner, thread }),
     },
     bookmarkLink: {
       summary: 'add a bookmark to a channel',

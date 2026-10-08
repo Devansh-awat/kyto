@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { ThreadHandle as Thread } from '@/harness/thread';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
+import { creditChange } from '@/lib/slack/change-notice';
 import { errorMessage } from '@/lib/utils/error';
 
 const createChannelSchema = z.looseObject({
@@ -84,9 +85,11 @@ async function applyChannelField({
 }
 
 export function setChannelTopicTool({
+  authorUserId,
   isOwner,
   thread,
 }: {
+  authorUserId: string;
   isOwner: boolean;
   thread: Thread;
 }) {
@@ -152,6 +155,11 @@ export function setChannelTopicTool({
             return { error: `Failed to set topic: ${error}`, success: false };
           }
           applied.push('topic');
+          await creditChange({
+            channel: targetChannel,
+            requesterId: authorUserId,
+            subtype: 'channel_topic',
+          });
         }
         if (purpose) {
           const error = await applyChannelField({
@@ -163,6 +171,11 @@ export function setChannelTopicTool({
             return { error: `Failed to set purpose: ${error}`, success: false };
           }
           applied.push('purpose');
+          await creditChange({
+            channel: targetChannel,
+            requesterId: authorUserId,
+            subtype: 'channel_purpose',
+          });
         }
 
         return {
