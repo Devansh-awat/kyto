@@ -146,7 +146,23 @@ function restTarget({
 }): Omit<Target, 'upstream'> {
   const write = !READ_METHODS.has(method);
   const segments = rest.split('?')[0]?.split('/') ?? [];
-  const [first, second, third] = segments;
+  const [first, second, third, fourth] = segments;
+  // Forking (`POST /repos/{owner}/{repo}/forks`) creates a copy under kyto's
+  // OWN account, not a change to the upstream repo, so it needs no ownership or
+  // trust — the owner asked that forking never hit the approval gate. Only when
+  // the fork is NOT redirected into some other org (the `organization` body
+  // field); that case stays a normal third-party write.
+  if (
+    write &&
+    first === 'repos' &&
+    second &&
+    third &&
+    fourth === 'forks' &&
+    !(body && /"organization"\s*:/.test(body))
+  ) {
+    const repo = `${GITHUB_LOGIN}/${third}`.toLowerCase();
+    return { creates: [repo], repos: [repo], understood: true, write };
+  }
   if (first === 'repos' && second && third) {
     return {
       creates: [],
