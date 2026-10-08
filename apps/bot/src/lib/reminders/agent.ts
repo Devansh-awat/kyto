@@ -62,6 +62,10 @@ function syntheticMessage(reminder: Reminder, threadId: string): Message {
 // A job told to "report to #kyto" posts its report there itself, and the
 // scheduler then posted the job's closing summary ("Reported to #kyto: …")
 // into the same channel — the owner's daily repo digest arrived as two posts.
+// A stalled stream used to hang the run forever: the reminder stayed in-flight
+// (never fired again until a restart) and held the thread's sandbox lock.
+const RUN_TIMEOUT_MS = 15 * 60 * 1000;
+const REPORT_TIMEOUT_MS = 3 * 60 * 1000;
 const postResultSchema = z.looseObject({ success: z.boolean().optional() });
 const postInputSchema = z.looseObject({ id: z.string() });
 const CONVERSATION_ID = /[CDG][A-Z0-9]{6,}/;
@@ -108,6 +112,7 @@ async function synthesizeReport({
 }): Promise<string | undefined> {
   try {
     const result = streamAttempt({
+      abortSignal: AbortSignal.timeout(REPORT_TIMEOUT_MS),
       activeTools: built.activeTools,
       attempt,
       holder: {},
@@ -188,6 +193,7 @@ async function runAgent(
     close = built.close;
 
     const result = streamAttempt({
+      abortSignal: AbortSignal.timeout(RUN_TIMEOUT_MS),
       activeTools: built.activeTools,
       attempt,
       holder: {},

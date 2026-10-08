@@ -5,7 +5,7 @@ import {
 } from '@repo/db/queries';
 import type { KytoBot as Chat } from '@/harness/bot';
 import { fetchUrlText } from '@/lib/ai/tools/url';
-import { resolveIdentity } from '@/lib/identity';
+import { type ResolvedIdentity, resolveIdentity } from '@/lib/identity';
 import logger from '@/lib/logger';
 import { runReminderAgent } from '@/lib/reminders/agent';
 import { runReminderBash } from '@/lib/reminders/bash';
@@ -23,6 +23,8 @@ const POLL_INTERVAL_MS = 30_000;
 // run a whole tool loop). Every 30s poll in that window would see the same row
 // still due and start it again. So a reminder already in flight is skipped.
 const inFlight = new Set<string>();
+
+const POST_RETRY_DELAYS_MS = [0, 2000, 8000];
 
 /** What this reminder posts on this fire, by kind. */
 async function buildReminderMessage(
@@ -98,23 +100,55 @@ async function fireReminder(bot: Chat, reminder: Reminder): Promise<void> {
     markdown = `Reminder: ${reminder.text}\n\n_(Couldn't complete this run: ${errorMessage(error)})_`;
   }
 
-  try {
-    const identity = await resolveIdentity('reminder');
-    // A channel target posts into that channel; otherwise DM the user.
-    const target = reminder.channelId
-      ? bot.channel(reminder.channelId)
-      : await bot.openDM(reminder.userId);
-    const mention = reminder.channelId ? `<@${reminder.userId}> ` : '';
-    await target.post({
-      iconEmoji: identity.iconEmoji,
-      iconUrl: identity.iconUrl,
-      markdown: `${mention}${jobHeader(reminder)}${markdown}`,
-    });
-  } catch (error) {
-    logger.warn(
-      { err: errorMessage(error), reminderId: reminder.id },
-      '[reminders] failed to post reminder'
-    );
+  const identity = await resolveIdentity('reminder').catch(
+    (): ResolvedIdentity => ({})
+  );
+  const body = `${reminder.channelId ? `<@${reminder.userId}> ` : ''}${jobHeader(reminder)}${markdown}`;
+  // The row was already advanced (claimed) before this fire, so a post that
+  // fails here is never retried by the scheduler: a one-shot reminder would be
+  // gone for good. Retry a transient Slack failure in place.
+  let lastError: unknown;
+  for (const [attempt, delayMs] of POST_RETRY_DELAYS_MS.entries()) {
+    if (delayMs > 0) {
+      await Bun.sleep(delayMs);
+    }
+    try {
+      // A channel target posts into that channel; otherwise DM the user.
+      const target = reminder.channelId
+        ? bot.channel(reminder.channelId)
+        : await bot.openDM(reminder.userId);
+      await target.post({
+        iconEmoji: identity.iconEmoji,
+        iconUrl: identity.iconUrl,
+        markdown: body,
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+      logger.warn(
+        { attempt, err: errorMessage(error), reminderId: reminder.id },
+        '[reminders] failed to post reminder'
+      );
+    }
+  }
+  logger.error(
+    { err: errorMessage(lastError), reminderId: reminder.id },
+    '[reminders] reminder undeliverable'
+  );
+  // A channel post can fail for good (kyto was removed, the channel was
+  // archived); tell the creator instead of losing the reminder silently.
+  if (reminder.channelId) {
+    try {
+      const dm = await bot.openDM(reminder.userId);
+      await dm.post({
+        markdown: `I couldn't post your reminder in <#${reminder.channelId}> (${errorMessage(lastError)}), so here it is:\n\n${jobHeader(reminder)}${markdown}`,
+      });
+    } catch (error) {
+      logger.error(
+        { err: errorMessage(error), reminderId: reminder.id },
+        '[reminders] reminder fallback DM failed'
+      );
+    }
   }
 }
 
