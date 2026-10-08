@@ -27,13 +27,14 @@ const TITLE_PREFIX = '[kevinton] ';
 // kyto-agent can open issues on the repo but not label them (no triage
 // access), so the prefix is what marks them — and what the daily count finds.
 const MAX_ISSUES_PER_REVIEW = 2;
-const MAX_ISSUES_PER_DAY = 8;
+const MAX_ISSUES_PER_DAY = 20;
 const MAX_SKILLS_PER_REVIEW = 1;
 
 const issueSchema = z.looseObject({
   html_url: z.string(),
   number: z.number(),
   state: z.string(),
+  state_reason: z.string().nullish(),
   title: z.string(),
 });
 const searchSchema = z.looseObject({
@@ -43,16 +44,17 @@ const searchSchema = z.looseObject({
 
 async function github(
   path: string,
-  init: { body?: unknown; method?: string } = {}
+  init: { body?: unknown; method?: string; token?: string } = {}
 ): Promise<unknown> {
-  if (!env.GH_TOKEN) {
+  const token = init.token ?? env.GH_TOKEN;
+  if (!token) {
     throw new Error('GH_TOKEN is not set, so kevinton cannot reach GitHub.');
   }
   const response = await fetch(`https://api.github.com${path}`, {
     ...(init.body ? { body: JSON.stringify(init.body) } : {}),
     headers: {
       Accept: 'application/vnd.github+json',
-      Authorization: `Bearer ${env.GH_TOKEN}`,
+      Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
     method: init.method ?? 'GET',
@@ -92,21 +94,21 @@ export function kevintonTools({
   const proposed: string[] = [];
 
   const kytoIssues = tool({
-    description: `Kyto's public GitHub issues (${REPO}). \`search\` first, always — a problem that already has an OPEN issue gets a \`comment\` with the new evidence, never a duplicate. A CLOSED one can't be reopened (kyto-agent has no write access) and a comment there goes unseen, so a recurrence gets a new \`file\` whose body starts "Recurrence of #N" with what is new since the fix. \`file\` opens a new one. Never include a secret, password or token. At most ${MAX_ISSUES_PER_REVIEW} new issues or comments per review.`,
+    description: `Kyto's public GitHub issues (${REPO}). \`search\` first, always — a problem that already has an OPEN issue gets a \`comment\` with the new evidence, never a duplicate. A CLOSED one is never commented on (nobody sees it): if it was closed as fixed and the problem is back, \`reopen\` it with the new evidence as the body — what still fails and why the fix didn't cover it. One closed as not planned was the owner's decision: leave it. \`file\` opens a new one. Never include a secret, password or token. At most ${MAX_ISSUES_PER_REVIEW} new issues or comments per review.`,
     inputSchema: z.object({
-      action: z.enum(['search', 'file', 'comment']),
+      action: z.enum(['search', 'file', 'comment', 'reopen']),
       body: z
         .string()
         .max(8000)
         .optional()
         .describe(
-          'file/comment: what kyto did, what went wrong, the evidence (errors, tool names, code paths), and a suggested fix.'
+          'file/comment/reopen: what kyto did, what went wrong, the evidence (errors, tool names, code paths), and a suggested fix.'
         ),
       number: z
         .number()
         .int()
         .optional()
-        .describe('comment: the issue number.'),
+        .describe('comment/reopen: the issue number.'),
       query: z.string().max(200).optional().describe('search: keywords.'),
       title: z.string().max(120).optional().describe('file: a short title.'),
     }),
@@ -140,28 +142,71 @@ export function kevintonTools({
         }
         const footer =
           "\n\n---\n_Filed by kevinton, kyto's after-the-fact reviewer, from a conversation it reviewed. Conversation details are deliberately left out._";
-        if (action === 'comment') {
+        if (action === 'comment' || action === 'reopen') {
           if (!number) {
-            return { error: 'comment needs the issue number.', success: false };
+            return {
+              error: `${action} needs the issue number.`,
+              success: false,
+            };
           }
-          // kyto-agent only has read access, so it can't reopen an issue the
-          // owner closed, and a comment on a closed issue is never seen.
           const target = issueSchema.parse(
             await github(`/repos/${REPO}/issues/${number}`)
           );
-          if (target.state === 'closed') {
+          if (action === 'comment' && target.state === 'closed') {
+            // A comment on a closed issue is never seen.
             return {
-              error: `#${number} is closed and can't be reopened. File a NEW issue instead: body starts "Recurrence of #${number} (closed as fixed)", then what still fails and why the fix didn't cover it.`,
+              error: `#${number} is closed — a comment there goes unseen. If it was fixed and is back, use \`reopen\` with this evidence.`,
               success: false,
             };
+          }
+          if (action === 'reopen') {
+            if (target.state !== 'closed') {
+              return {
+                error: `#${number} is already open — \`comment\` instead.`,
+                success: false,
+              };
+            }
+            if (target.state_reason === 'not_planned') {
+              return {
+                error: `#${number} was closed as not planned — the owner's decision. Leave it.`,
+                success: false,
+              };
+            }
+            // kyto-agent only has read access; without the owner's token a
+            // recurrence becomes a new issue pointing at the old one.
+            if (!env.KEVINTON_REOPEN_TOKEN) {
+              return {
+                error: `Reopening isn't set up. File a NEW issue instead: body starts "Recurrence of #${number} (closed as fixed)", then what still fails and why the fix didn't cover it.`,
+                success: false,
+              };
+            }
+            await github(`/repos/${REPO}/issues/${number}`, {
+              body: { state: 'open' },
+              method: 'PATCH',
+              token: env.KEVINTON_REOPEN_TOKEN,
+            });
+            logger.info(
+              { issue: number, threadId },
+              '[kevinton] reopened an issue'
+            );
           }
           await github(`/repos/${REPO}/issues/${number}/comments`, {
             body: { body: publicText(body) + footer },
             method: 'POST',
           });
           issuesThisReview += 1;
-          filed.push(`comment on #${number}`);
-          return { success: true, summary: `Commented on #${number}.` };
+          filed.push(
+            action === 'reopen'
+              ? `reopened #${number}`
+              : `comment on #${number}`
+          );
+          return {
+            success: true,
+            summary:
+              action === 'reopen'
+                ? `Reopened #${number} with the new evidence.`
+                : `Commented on #${number}.`,
+          };
         }
         if (!title) {
           return { error: 'file needs a title.', success: false };

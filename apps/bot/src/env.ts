@@ -97,6 +97,10 @@ export const env = createEnv({
     // to tell the model that PRs/issues authored by it are kyto's own work, and
     // to decide which repos the ownership gate auto-claims.
     GH_LOGIN: z.string().min(1).default('kyto-agent'),
+    // The OWNER's GitHub token, used for one call only: kevinton reopening a
+    // kyto issue closed as fixed that came back. kyto-agent has read access,
+    // and a personal-account repo has no issues-only (Triage) role to give it.
+    KEVINTON_REOPEN_TOKEN: z.string().min(1).optional(),
     // Replicate access via HackClub's proxy — a SEPARATE key from
     // HACKCLUB_API_KEY (Replicate is gated per-key there). Preferred TTS
     // backend; falls back to Gemini TTS when unset.
