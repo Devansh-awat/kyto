@@ -127,6 +127,7 @@ The scheduler fires due reminders **concurrently** and guards **overlapping fire
 `assistant.search.context` runs with the **requesting user's** own Slack access, so it reaches private channels/DMs that user is in — but only with granted scopes (`search:read.public`/`.files`/`.users`/`.private`/`.im`/`.mpim`; the last three were missing once, silently limiting every search to public channels).
 - **Cost**: returns `limit: 10` matches with `include_context_messages: true`; those context messages dominate input tokens and ride along in every subsequent step (a turn can balloon to 100k–270k tokens). We trim each match to the **2 nearest before + 2 after**. Drop `limit` or trim further if cost climbs.
 - **Modifiers**: the `query` supports Slack's full search-bar set, combinable — `from:`, `to:`, `in:` (`#channel` or `@user`), `on:`/`before:`/`after:`/`during:`, `has:link`/`star`/`pin`/`:emoji:`, `is:thread`/`dm`/`external`, `filename:`, `ext:`. In the tool description + core prompt so the model narrows queries.
+- **Hit text is capped** (`searchSlack`): 800 chars per hit, 300 per context message, marked with how to read the rest (`readConversationHistory`, threadTs = messageTs). A page of 20 full hits over long messages was ~10k tokens a call, each written once at 1.25x (owner's call 2026-10-08).
 - **Action-token urgency**: the `action_token` expires ~2 min after the turn starts, so the core prompt tells the model to run all `searchSlack` calls early.
 
 ## Slack read-only scripting (host-side proxy)

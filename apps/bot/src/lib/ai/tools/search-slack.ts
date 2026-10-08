@@ -15,6 +15,20 @@ const actionTokenSchema = z.looseObject({
     .optional(),
 });
 
+// Per-hit text caps. A search page is 20 hits of FULL messages, and a tool
+// result is written to the prompt cache once at 1.25x: seven searches over a
+// thread of long answers came to ~66k tokens in one step (2026-10-07). The
+// start of a hit is what says whether it is the right one; the rest is a read
+// away (owner's call 2026-10-08).
+const HIT_TEXT_CHARS = 800;
+const CONTEXT_TEXT_CHARS = 300;
+
+function capText(text: string, max: number): string {
+  return text.length > max
+    ? `${text.slice(0, max)}… [+${text.length - max} chars; full text: readConversationHistory with this channelId and threadTs = messageTs]`
+    : text;
+}
+
 const contextMessageSchema = z
   .looseObject({
     text: z.string().optional(),
@@ -22,7 +36,7 @@ const contextMessageSchema = z
     user_id: z.string().optional(),
   })
   .transform((message) => ({
-    text: message.text ?? '',
+    text: capText(message.text ?? '', CONTEXT_TEXT_CHARS),
     ts: message.ts,
     userId: message.user_id,
   }));
@@ -60,7 +74,7 @@ const slackSearchResponseSchema = z.looseObject({
               authorUserId: message.author_user_id,
               channelId: message.channel_id,
               channelName: message.channel_name,
-              content: message.content ?? '',
+              content: capText(message.content ?? '', HIT_TEXT_CHARS),
               // Keep only the 2 context messages nearest the match on each side
               // (Slack returns ~5/5). Context is the dominant prompt-size driver
               // across agentic steps, so trimming it here slashes input-token
@@ -155,7 +169,7 @@ const userSearchResponseSchema = z.looseObject({
               // channel public on the strength of a search hit.
               channelIsPrivate: match.channel?.is_private,
               channelName: match.channel?.name,
-              content: match.text ?? '',
+              content: capText(match.text ?? '', HIT_TEXT_CHARS),
               messageTs: match.ts,
               permalink: match.permalink,
               teamId: match.team,
@@ -178,7 +192,7 @@ const userSearchResponseSchema = z.looseObject({
 export function searchSlackTool({ message }: { message: Message }) {
   return tool({
     description:
-      "Search Slack messages for past conversations, decisions, links, or context outside the current thread — including a DM's own earlier history, since a fresh DM thread otherwise starts with no prior context by design. If the person connected their own Slack account it searches as them — every channel they can see, their DMs included. Otherwise, when they @mentioned kyto (or DMed it), Slack's search token for that message covers what they can see, DMs included — it expires ~2 minutes into the turn. Failing both, it searches as kyto's own Slack account and keeps only hits from channels the person is in (never anyone's DMs). For \"how many messages…\" questions use `totalMatches` when the result has it — Slack's own count for the whole query — instead of paging and counting; without it, say the number is only what search returned. To mean one person use `from:<@USERID>` with their id (getUser): a bare name like `from:twa` also matches everyone else whose name contains it.",
+      "Search Slack messages for past conversations, decisions, links, or context outside the current thread — including a DM's own earlier history, since a fresh DM thread otherwise starts with no prior context by design. If the person connected their own Slack account it searches as them — every channel they can see, their DMs included. Otherwise, when they @mentioned kyto (or DMed it), Slack's search token for that message covers what they can see, DMs included — it expires ~2 minutes into the turn. Failing both, it searches as kyto's own Slack account and keeps only hits from channels the person is in (never anyone's DMs). For \"how many messages…\" questions use `totalMatches` when the result has it — Slack's own count for the whole query — instead of paging and counting; without it, say the number is only what search returned. Each hit's text is cut at 800 characters (context messages at 300), marked where cut; read the whole message with readConversationHistory when the cut part matters. To mean one person use `from:<@USERID>` with their id (getUser): a bare name like `from:twa` also matches everyone else whose name contains it.",
     inputSchema: z.object({
       cursor: z
         .string()
