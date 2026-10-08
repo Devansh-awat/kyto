@@ -20,6 +20,7 @@ import type { Message } from '@/harness/types';
 import { buildMcpTools } from '@/lib/ai/mcp';
 import { withBuiltinMcpServers } from '@/lib/ai/mcp-builtin';
 import { resolveTurnMcpServers } from '@/lib/ai/mcp-scope';
+import { FAMILY_OF, mergeTools, TOOL_FAMILIES } from '@/lib/ai/merge-tools';
 import { slack } from '@/lib/chat';
 import { emojiUploadConfigured } from '@/lib/emoji-upload';
 import logger from '@/lib/logger';
@@ -317,8 +318,6 @@ export async function buildTools({
     readFile: readFileTool({ getSandboxContext }),
     writeFile: writeFileTool({ getSandboxContext }),
     editFile: editFileTool({ getSandboxContext }),
-    deleteFile: deleteFileTool({ getSandboxContext }),
-    fileStat: fileStatTool({ getSandboxContext }),
     wait: waitTool({ extendAttemptDeadline, getSandboxContext }),
     react: reactTool({ bot }),
     unreact: unreactTool({ bot }),
@@ -372,11 +371,6 @@ export async function buildTools({
     }),
     searchSlack: searchSlackTool({ message }),
     searchWeb: searchWebTool({ apiKey: env.EXA_API_KEY }),
-    summarizeThread: summarizeThreadTool({
-      askerUserId: authorUserId,
-      bot,
-      threadId: thread.id,
-    }),
     loadSkill: loadSkillTool({ skills: await listSkills() }),
     uploadFile: uploadFileTool({
       upload: async ({ filename, path, title }) => {
@@ -421,6 +415,23 @@ export async function buildTools({
 
   // Deferred: registered but hidden until loadTools names them.
   const deferred: Record<string, { summary: string; tool: Tool }> = {
+    // Deferred 2026-10-08: none of the three was called once in 436 turns.
+    deleteFile: {
+      summary: 'delete a file in the sandbox',
+      tool: deleteFileTool({ getSandboxContext }),
+    },
+    fileStat: {
+      summary: 'size / type / mtime of a sandbox file',
+      tool: fileStatTool({ getSandboxContext }),
+    },
+    summarizeThread: {
+      summary: 'summarize a long Slack thread',
+      tool: summarizeThreadTool({
+        askerUserId: authorUserId,
+        bot,
+        threadId: thread.id,
+      }),
+    },
     // Deferred 2026-10-06 (issue #36): each was called in ≤1% of 390 turns but
     // its schema rode along in every prompt — with the rest of these, ~15k of
     // the ~50k characters of always-on tool schema. Jev preloads them when a
@@ -823,27 +834,6 @@ export async function buildTools({
     }
   }
 
-  // Filtered through THIS turn's `deferred`, which is built for the person
-  // speaking now — so a tool only registered for the owner, or an MCP tool from
-  // someone else's server, can never be seeded onto a different user's turn
-  // just because it was loaded earlier in the thread.
-  const remembered = new Set(
-    recallLoadedTools(thread.id).filter((name) => deferred[name])
-  );
-
-  // Every deferred tool, active or not. This description is part of the tools
-  // array, the front of the cached prompt: a catalog that dropped whatever the
-  // thread had loaded changed on every load and invalidated the whole cached
-  // thread on the next turn. A redundant load of an active tool is harmless.
-  const catalog = Object.entries(deferred)
-    .map(([name, entry]) => `- ${name}: ${entry.summary}`)
-    .join('\n');
-  const active = new Set(Object.keys(core));
-  active.add('loadTools');
-  for (const name of remembered) {
-    active.add(name);
-  }
-
   // Deferral is a trade: a deferred tool's schema stays out of the cached
   // prefix, but reaching it costs an extra round trip (loadTools, then the call
   // itself) — and the round trip is billed at full price while the schema would
@@ -903,6 +893,67 @@ export async function buildTools({
     } as T;
   };
 
+  // Wrapped under their ORIGINAL names before the families are merged: usage,
+  // the anti-coding guard, the Slack budget and redaction all key on them.
+  for (const [name, entry] of Object.entries(core)) {
+    core[name] = trackUse(name, entry);
+  }
+  for (const [name, entry] of Object.entries(deferred)) {
+    deferred[name] = { ...entry, tool: trackUse(name, entry.tool) };
+  }
+  // The names the usage summary reports against, from BEFORE the merge.
+  const coreNames = new Set(Object.keys(core));
+  // One tool per family (lib/ai/merge-tools). A family is core if any of its
+  // verbs was; it carries only the verbs this turn actually registered (an
+  // owner-only or `!secret`-withheld one stays out).
+  for (const [family, entry] of Object.entries(TOOL_FAMILIES)) {
+    const actions: Record<string, Tool> = {};
+    let inCore = false;
+    for (const [action, original] of Object.entries(entry.actions)) {
+      const found = core[original] ?? deferred[original]?.tool;
+      if (!found) {
+        continue;
+      }
+      inCore ||= original in core;
+      actions[action] = found;
+      delete core[original];
+      delete deferred[original];
+    }
+    if (Object.keys(actions).length === 0) {
+      continue;
+    }
+    const merged = mergeTools({ actions, description: entry.description });
+    if (inCore) {
+      core[family] = merged;
+    } else {
+      deferred[family] = { summary: entry.summary, tool: merged };
+    }
+  }
+
+  // Filtered through THIS turn's `deferred`, which is built for the person
+  // speaking now — so a tool only registered for the owner, or an MCP tool from
+  // someone else's server, can never be seeded onto a different user's turn
+  // just because it was loaded earlier in the thread.
+  // A name loaded before the families were merged maps to its family.
+  const remembered = new Set(
+    recallLoadedTools(thread.id)
+      .map((name) => FAMILY_OF.get(name) ?? name)
+      .filter((name) => deferred[name])
+  );
+
+  // Every deferred tool, active or not. This description is part of the tools
+  // array, the front of the cached prompt: a catalog that dropped whatever the
+  // thread had loaded changed on every load and invalidated the whole cached
+  // thread on the next turn. A redundant load of an active tool is harmless.
+  const catalog = Object.entries(deferred)
+    .map(([name, entry]) => `- ${name}: ${entry.summary}`)
+    .join('\n');
+  const active = new Set(Object.keys(core));
+  active.add('loadTools');
+  for (const name of remembered) {
+    active.add(name);
+  }
+
   // Tools the user's MCP rules keep hidden. Stated so the model can say the
   // category is switched off instead of confabulating a reason a tool it half
   // remembers is missing — hidden tools are never registered, so it has no other
@@ -947,19 +998,16 @@ export async function buildTools({
   });
 
   const tools: ToolSet = {
-    ...Object.fromEntries(
-      Object.entries(core).map(([name, entry]) => [name, trackUse(name, entry)])
-    ),
+    ...core,
     loadTools,
     ...Object.fromEntries(
-      Object.entries(deferred).map(([name, entry]) => [
-        name,
-        trackUse(name, entry.tool),
-      ])
+      Object.entries(deferred).map(([name, entry]) => [name, entry.tool])
     ),
   };
-
-  const coreNames = new Set(Object.keys(core));
+  // Loaded names are families; usage is counted per original verb.
+  const used = (name: string) =>
+    usage.has(name) ||
+    [...usage.keys()].some((original) => FAMILY_OF.get(original) === name);
 
   return {
     activeTools: () => [...active],
@@ -973,14 +1021,12 @@ export async function buildTools({
           // Loaded and then never called: pure waste — a round trip and a schema
           // paid for nothing. A name that shows up here repeatedly means the
           // catalog description is misleading the model.
-          loadedUnused: [...loadedNames].filter((name) => !usage.has(name)),
-          loadedUsed: [...loadedNames].filter((name) => usage.has(name)),
+          loadedUnused: [...loadedNames].filter((name) => !used(name)),
+          loadedUsed: [...loadedNames].filter((name) => used(name)),
           // Put there by Jev before the turn began. `preloadedUnused` is the
           // number that says whether its threshold is too generous.
           preloaded: [...preloadedNames],
-          preloadedUnused: [...preloadedNames].filter(
-            (name) => !usage.has(name)
-          ),
+          preloadedUnused: [...preloadedNames].filter((name) => !used(name)),
           // Carried in from an earlier turn of this thread rather than loaded
           // here — keeps the deferral measurement honest now that the set
           // survives the turn.
@@ -999,9 +1045,9 @@ export async function buildTools({
     // An extra schema the thread keeps is a cached read; a reshuffle is a full
     // re-write of the thread.
     preload: (names) => {
-      const added = names.filter(
-        (name) => deferred[name] !== undefined && !active.has(name)
-      );
+      const added = names
+        .map((name) => FAMILY_OF.get(name) ?? name)
+        .filter((name) => deferred[name] !== undefined && !active.has(name));
       for (const name of added) {
         active.add(name);
         preloadedNames.add(name);

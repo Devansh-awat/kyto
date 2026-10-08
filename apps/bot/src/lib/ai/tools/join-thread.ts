@@ -5,7 +5,7 @@ import type { ThreadHandle as Thread } from '@/harness/thread';
 export function joinThreadTool({ thread }: { thread: Thread }) {
   return tool({
     description:
-      'Join the current thread: start auto-responding to its messages even without being @mentioned. Use this when asked to follow along, keep participating, or stay engaged in a thread. Use leaveThread to stop.',
+      'Join the current thread: start auto-responding to its messages even without being @mentioned. Use this when asked to follow along, keep participating, or stay engaged in a thread. Use followThread (action leave) to stop.',
     inputSchema: z.object({}),
     execute: async () => {
       await thread.setState({ respondOnThreadMessages: true });

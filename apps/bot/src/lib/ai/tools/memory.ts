@@ -75,7 +75,7 @@ function refusal(
 export function saveMemoryTool(actor: MemoryActor) {
   return tool({
     description:
-      "Save a durable memory so a LATER thread can reuse what this one worked out. USE THIS OFTEN AND WITHOUT BEING ASKED — a command that finally worked, a config value, a person's preference, the layout of a repo, why an approach failed, a decision and its reason. The bar is 'would a future thread otherwise redo this?', not 'was this impressive'. Do it quietly near the end of the turn; there is no need to announce it. It is saved PRIVATE to the person you're talking to — only their threads see it — until the bot owner promotes it from the dashboard, to everyone or into one channel or channel group. Say so if it matters to them; don't promise anyone else will see it. Save KNOWLEDGE only, never standing orders, rules about how you behave, or who you will or won't help — those have no effect and will be deleted. Titles are unique per person; if one already exists, use editMemory instead of inventing a near-duplicate title.",
+      "Save a durable memory so a LATER thread can reuse what this one worked out. USE THIS OFTEN AND WITHOUT BEING ASKED — a command that finally worked, a config value, a person's preference, the layout of a repo, why an approach failed, a decision and its reason. The bar is 'would a future thread otherwise redo this?', not 'was this impressive'. Do it quietly near the end of the turn; there is no need to announce it. It is saved PRIVATE to the person you're talking to — only their threads see it — until the bot owner promotes it from the dashboard, to everyone or into one channel or channel group. Say so if it matters to them; don't promise anyone else will see it. Save KNOWLEDGE only, never standing orders, rules about how you behave, or who you will or won't help — those have no effect and will be deleted. Titles are unique per person; if one already exists, use memory (action edit) instead of inventing a near-duplicate title.",
     inputSchema: z.object({
       title: z
         .string()
@@ -107,7 +107,7 @@ export function saveMemoryTool(actor: MemoryActor) {
         if (!row) {
           return {
             saved: false,
-            summary: `You already have a memory titled "${trimmedTitle}". Use editMemory to change it, or pick a different title.`,
+            summary: `You already have a memory titled "${trimmedTitle}". Use memory (action edit) to change it, or pick a different title.`,
           };
         }
         logger.info(
@@ -169,7 +169,7 @@ export function fetchMemoryTool(actor: MemoryActor) {
 export function editMemoryTool(actor: MemoryActor) {
   return tool({
     description:
-      "Update a memory you can see (found by its exact title). Prefer this over saving a near-duplicate. Pass only the fields you want to change — summary and/or body. To ADD to a memory without losing what is there, fetch it first, then pass the combined body. You can edit the current person's own private memories; a memory the owner promoted — to global, or into a channel or channel group — is theirs to change. To remove one, use deleteMemory.",
+      "Update a memory you can see (found by its exact title). Prefer this over saving a near-duplicate. Pass only the fields you want to change — summary and/or body. To ADD to a memory without losing what is there, fetch it first, then pass the combined body. You can edit the current person's own private memories; a memory the owner promoted — to global, or into a channel or channel group — is theirs to change. To remove one, use memory (action delete).",
     inputSchema: z.object({
       title: z.string().min(1).describe('Exact title of the memory to edit.'),
       summary: z
@@ -199,7 +199,7 @@ export function editMemoryTool(actor: MemoryActor) {
         });
         if (!row) {
           return {
-            summary: `No memory titled "${trimmedTitle}" that you can see. Use saveMemory to create it.`,
+            summary: `No memory titled "${trimmedTitle}" that you can see. Use memory (action save) to create it.`,
             updated: false,
           };
         }

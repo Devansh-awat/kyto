@@ -1,5 +1,7 @@
 # AI tools — per-tool detail
 
+> **Tool families (2026-10-08):** the model sees `memory`, `reminders`, `canvas`, `sites`, `process`, `pins`, `reaction`, `followThread`, `embed`, `email` and `subagent` as single tools with an `action` field (`lib/ai/merge-tools.ts`, `TOOL_FAMILIES` maps each action to the verb named below). The verb names below are still the code's and the logs' names. `deleteFile`, `fileStat` and `summarizeThread` are deferred (unused in 436 turns).
+
 > Split out of `.claude/CLAUDE.md` to keep that file under its 40k budget. **Not
 > loaded automatically** — read this before touching a specific tool, and keep it
 > current the same way (durable *what and why*, no post-mortem narrative). The

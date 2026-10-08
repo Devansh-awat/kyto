@@ -74,7 +74,7 @@ export function bashTool({
 }) {
   return tool({
     description:
-      'Run a bash command in your isolated Linux sandbox (network access, common CLIs, bun/node/python preinstalled). The workspace PERSISTS across turns in this thread — files you write and packages you install are still there next time. A command still running after ~1 minute is automatically moved to the background and you get a handle to poll with getProcessOutput — so for anything you expect to be slow, bound it with `timeout` or start it with runBackgroundProcess yourself rather than relying on the auto-move.',
+      'Run a bash command in your isolated Linux sandbox (network access, common CLIs, bun/node/python preinstalled). The workspace PERSISTS across turns in this thread — files you write and packages you install are still there next time. A command still running after ~1 minute is automatically moved to the background and you get a handle to poll with process (action output) — so for anything you expect to be slow, bound it with `timeout` or start it with process (action start) yourself rather than relying on the auto-move.',
     inputSchema: z.object({
       command: z.string().describe('The bash command to run.'),
       workingDirectory: z

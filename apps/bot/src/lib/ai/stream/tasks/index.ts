@@ -1,3 +1,4 @@
+import { originalToolName } from '@/lib/ai/merge-tools';
 import { clamp } from '@/lib/utils/text';
 import type { TaskRendererEntry } from '@/types/task-renderers';
 import {
@@ -69,13 +70,16 @@ export function renderTask({
   phase: RenderPhase;
   toolName: string;
 }) {
-  const entry = renderers[toolName];
+  // A family call (`reminders` with action `once`) renders as the verb it
+  // stands for, so its card keeps the verb's own title and details.
+  const verb = originalToolName({ input, toolName });
+  const entry = renderers[verb];
   const renderer =
     phase === 'error'
       ? (entry?.error ?? defaultTool.error)
       : (entry?.[phase] ?? defaultTool[phase]);
-  const rendered = renderer({ input, output, toolName });
-  const title = entry?.title ?? rendered.title ?? toolName;
+  const rendered = renderer({ input, output, toolName: verb });
+  const title = entry?.title ?? rendered.title ?? verb;
   if (phase === 'request') {
     return {
       details: clamp(rendered.details, 96),

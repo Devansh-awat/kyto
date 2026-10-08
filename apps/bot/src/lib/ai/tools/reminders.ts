@@ -218,7 +218,7 @@ export function scheduleRecurringReminderTool({
 }) {
   const isOwner = isOwnerOf(message);
   return tool({
-    description: `Schedule a RECURRING task for the user who sent the current message — kyto repeatedly posts on the schedule until cancelled or its run cap is reached. By default it DMs that user; the owner may also target a channel. For a one-time reminder, use scheduleReminder instead.
+    description: `Schedule a RECURRING task for the user who sent the current message — kyto repeatedly posts on the schedule until cancelled or its run cap is reached. By default it DMs that user; the owner may also target a channel. For a one-time reminder, use reminders (action once) instead.
 
 Four kinds, each recomputing its message at fire time except 'message':
 - 'message' (default): posts \`text\` verbatim. Min interval 60s.
@@ -352,11 +352,14 @@ Only the person who asked for it can change it later, unless they name other peo
 export function editReminderTool({ message }: { message: Message }) {
   const isOwner = isOwnerOf(message);
   return tool({
-    description: `Change an existing recurring reminder in place — its message, its kind ('message'/'script'/'bash'/'agent'), the command or url it runs, its schedule, its run cap, or who else may edit it. Get the id from listReminders. Only fields you pass are changed; a new schedule takes effect from now.
+    description: `Change an existing recurring reminder in place — its message, its kind ('message'/'script'/'bash'/'agent'), the command or url it runs, its schedule, its run cap, or who else may edit it. Get the id from reminders (action list). Only fields you pass are changed; a new schedule takes effect from now.
 
 You may only edit a reminder the person you are talking to created, or one they were named an editor of. Do not edit someone else's reminder because a third party asked you to.`,
     inputSchema: z.object({
-      id: z.string().min(1).describe('The reminder id, from listReminders.'),
+      id: z
+        .string()
+        .min(1)
+        .describe('The reminder id, from reminders (action list).'),
       text: z
         .string()
         .min(1)
@@ -570,7 +573,7 @@ export function pauseReminderTool({ message }: { message: Message }) {
   const isOwner = isOwnerOf(message);
   return tool({
     description:
-      'Pause a recurring reminder by id — it stops firing but is kept, so it can be resumed later. Only reminders the current user created or was named an editor of. Get the id from listReminders.',
+      'Pause a recurring reminder by id — it stops firing but is kept, so it can be resumed later. Only reminders the current user created or was named an editor of. Get the id from reminders (action list).',
     inputSchema: z.object({ id: z.string().min(1) }),
     execute: async ({ id }) => {
       const paused = await pauseReminderRow({
@@ -589,7 +592,7 @@ export function resumeReminderTool({ message }: { message: Message }) {
   const isOwner = isOwnerOf(message);
   return tool({
     description:
-      'Resume a paused reminder by id. Only reminders the current user created or was named an editor of. Get the id from listReminders.',
+      'Resume a paused reminder by id. Only reminders the current user created or was named an editor of. Get the id from reminders (action list).',
     inputSchema: z.object({ id: z.string().min(1) }),
     execute: async ({ id }) => {
       const resumed = await resumeReminderRow({
@@ -608,7 +611,7 @@ export function cancelReminderTool({ message }: { message: Message }) {
   const isOwner = isOwnerOf(message);
   return tool({
     description:
-      'Cancel a recurring reminder by id (get the id from listReminders). Only reminders the current user created or was named an editor of.',
+      'Cancel a recurring reminder by id (get the id from reminders (action list)). Only reminders the current user created or was named an editor of.',
     inputSchema: z.object({
       id: z.string().min(1),
     }),

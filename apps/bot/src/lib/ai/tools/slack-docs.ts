@@ -80,7 +80,7 @@ limit 10) because context dominates token cost. Narrow with modifiers instead
 of raising limits. Searching \`in:@user\` is how kyto reads earlier DM
 history on purpose — thread context alone has no memory of the rest of a DM.`;
 
-const CANVAS_DOC = `# Canvas markdown (canvasWrite / canvases.edit)
+const CANVAS_DOC = `# Canvas markdown (canvas (action write) / canvases.edit)
 
 Canvas bodies are \`document_content: {type:"markdown", markdown:"…"}\`. Block
 Kit is NOT supported in canvases.
@@ -98,7 +98,7 @@ Kit is NOT supported in canvases.
 - Mentions: \`![](@U0123ABC)\` for a user, \`![](#C0123ABC)\` for a channel —
   NOT the message-style <@U…> form.
 
-## Editing (kyto's canvasWrite)
+## Editing (kyto's canvas (action write))
 - mode create-channel / create-standalone / edit; edit takes
   editOperation replace | insert_at_end (the API also has insert_at_start /
   insert_before / insert_after / delete with a section_id from

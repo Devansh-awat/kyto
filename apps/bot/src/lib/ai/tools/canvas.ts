@@ -232,7 +232,7 @@ export function canvasWriteTool({ thread }: { thread: Thread }) {
           if (!targetId) {
             return {
               error:
-                'canvasId is required to edit a canvas, and you have not created one this turn. Call canvasList to find the id, then pass it as canvasId.',
+                'canvasId is required to edit a canvas, and you have not created one this turn. Call canvas (action list) to find the id, then pass it as canvasId.',
               success: false,
             };
           }

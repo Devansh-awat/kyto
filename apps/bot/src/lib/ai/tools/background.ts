@@ -109,7 +109,7 @@ export function backgroundProcessTools({
    * The principal this turn acts for, so a backgrounded command is gated on
    * repo ownership like any other shell. Omitted only where there is no
    * principal to check (a reminder job): a command with no `github` is NOT
-   * exempt — see the guard call in `runBackgroundProcess`.
+   * exempt — see the guard call in `process` (action `start`).
    */
   github?: { isOwner: boolean; threadId: string; userId: string };
 }) {
@@ -232,7 +232,7 @@ export function backgroundProcessTools({
 
   const runBackgroundProcess = tool({
     description:
-      'Start a shell command running in the background in the sandbox and return immediately with a handle id, instead of waiting for it to finish. Use getProcessOutput to check on it and killProcess to stop it.',
+      'Start a shell command running in the background in the sandbox and return immediately with a handle id, instead of waiting for it to finish. Use process (action output) to check on it and process (action kill) to stop it.',
     inputSchema: z.object({
       command: z.string().min(1),
     }),
@@ -263,7 +263,7 @@ export function backgroundProcessTools({
 
   const getProcessOutput = tool({
     description:
-      'Read the output so far of a background process (started with runBackgroundProcess, or a bash command that was auto-moved to the background after running over a minute), and whether it is still running. Reports the exit code once finished.',
+      'Read the output so far of a background process (started with process (action start), or a bash command that was auto-moved to the background after running over a minute), and whether it is still running. Reports the exit code once finished.',
     inputSchema: z.object({
       id: z.string().min(1),
     }),
@@ -291,7 +291,7 @@ export function backgroundProcessTools({
 
   const killProcess = tool({
     description:
-      'Kill a background process (started with runBackgroundProcess or auto-moved from bash).',
+      'Kill a background process (started with process (action start) or auto-moved from bash).',
     inputSchema: z.object({
       id: z.string().min(1),
     }),

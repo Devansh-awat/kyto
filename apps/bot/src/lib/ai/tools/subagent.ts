@@ -70,7 +70,7 @@ type SubagentResult =
   | { report: string; success: true }
   | { error: string; success: false };
 
-// A background subagent, tracked so `checkSubagent` can collect it later.
+// A background subagent, tracked so `subagent` (action `check`) can collect it later.
 interface SubagentJob {
   // Set once checkSubagent has handed this job's finished report back to the
   // model IN the live turn. wakeThread checks it right before posting, so a
@@ -145,7 +145,7 @@ export function runSubagentTool({
 
   const runSubagent = tool({
     description:
-      'Delegate a task to a subagent — a headless copy of kyto (shares your sandbox, same tools) that runs on a cheaper pinned model and returns a written report to you. Its run shows up inside your own plan/thinking block as it works; it does NOT post a message of its own, so YOU are the only voice in the thread and its findings only reach the user if you say them. Use it for open-ended investigation or self-contained work that would otherwise clutter your own context. It has NO access to this conversation beyond what you put in the task. By default it runs FOREGROUND (you wait for its report, then use it). Set background:true to fire it off and keep working immediately — you get a job id back instead of the report, and later call checkSubagent with that id to collect it.',
+      'Delegate a task to a subagent — a headless copy of kyto (shares your sandbox, same tools) that runs on a cheaper pinned model and returns a written report to you. Its run shows up inside your own plan/thinking block as it works; it does NOT post a message of its own, so YOU are the only voice in the thread and its findings only reach the user if you say them. Use it for open-ended investigation or self-contained work that would otherwise clutter your own context. It has NO access to this conversation beyond what you put in the task. By default it runs FOREGROUND (you wait for its report, then use it). Set background:true to fire it off and keep working immediately — you get a job id back instead of the report, and later call subagent (action check) with that id to collect it.',
     inputSchema: z.object({
       task: z
         .string()
@@ -163,7 +163,7 @@ export function runSubagentTool({
         .boolean()
         .optional()
         .describe(
-          'If true, spawn the subagent and return IMMEDIATELY without waiting — it runs independently and you get no report back on this call. Use it to run a side-task in parallel while you continue your own work; collect it later with checkSubagent, or let its report come back as a follow-up turn. Default false (wait for and receive the report).'
+          'If true, spawn the subagent and return IMMEDIATELY without waiting — it runs independently and you get no report back on this call. Use it to run a side-task in parallel while you continue your own work; collect it later with subagent (action check), or let its report come back as a follow-up turn. Default false (wait for and receive the report).'
         ),
     }),
     execute: async ({ task, name, background }, { abortSignal }) => {
@@ -439,7 +439,7 @@ export function runSubagentTool({
         return {
           background: true,
           id,
-          note: `Subagent ${jobLabel} started in the background as ${id}. Keep working; when you need its findings call checkSubagent with id "${id}". If your turn ends before it finishes, that's fine — its report comes back to you as a new turn in this thread, so you don't have to wait for it. It does NOT post anything itself, so nothing reaches the user until you say it.`,
+          note: `Subagent ${jobLabel} started in the background as ${id}. Keep working; when you need its findings call subagent (action check) with id "${id}". If your turn ends before it finishes, that's fine — its report comes back to you as a new turn in this thread, so you don't have to wait for it. It does NOT post anything itself, so nothing reaches the user until you say it.`,
           success: true,
         };
       }

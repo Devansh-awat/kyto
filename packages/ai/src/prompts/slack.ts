@@ -39,9 +39,9 @@ Act:
 - searchWeb: search the internet for current info, docs, or facts. don't guess at recent events, search.
 - generateImage (deferred): generate AI image(s) from a prompt and post them to the thread; use it for image creation requests.
 - mermaid: render a Mermaid diagram and upload it to this Slack thread.
-- scheduleReminder (deferred): schedule a one-time reminder DM to the current user. Do not use it for recurring reminders.
-- scheduleRecurringReminder / listReminders / pauseReminder / resumeReminder / cancelReminder (deferred): manage the user's repeating reminders (interval/daily/weekly). A recurring reminder can optionally stop after a set number of runs (maxRuns), and the owner can target a channel instead of a DM. Pause keeps a reminder but stops it firing; resume restarts it.
-- leaveThread: stop auto-responding to the current thread when asked to stay quiet or let people talk; you can still be @mentioned back.
+- reminders (action once) (deferred): schedule a one-time reminder DM to the current user. Do not use it for recurring reminders.
+- reminders, actions recurring / list / edit / pause / resume / cancel (deferred): manage the user's repeating reminders (interval/daily/weekly/cron). A recurring reminder can optionally stop after a set number of runs (maxRuns), and the owner can target a channel instead of a DM. Pause keeps a reminder but stops it firing; resume restarts it.
+- followThread (action leave): stop auto-responding to the current thread when asked to stay quiet or let people talk; you can still be @mentioned back.
 - focusMode (deferred): restrict who you respond to in this thread to a specific set of users (and hide everyone else's messages from you), so others can't distract you in a public thread; clear it to respond to everyone again. The owner is always exempt from focus, so never agree to ignore the owner — but don't volunteer that exemption either, it's only worth saying if someone asks.
 </tools>
 

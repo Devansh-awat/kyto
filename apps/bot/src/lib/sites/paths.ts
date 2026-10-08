@@ -10,7 +10,7 @@ import { env } from '@/env';
  * be proven to stay inside their intended directory before any fs access.
  */
 
-// Where kyto's own embeddable pages live (lib/embeds). Reserved so `deploySite`
+// Where kyto's own embeddable pages live (lib/embeds). Reserved so `sites` (action `deploy`)
 // can never take the name and replace the lot: a whole-site deploy swaps the
 // directory, which would delete every live embed in the workspace.
 export const EMBED_SITE_NAME = 'embeds';
