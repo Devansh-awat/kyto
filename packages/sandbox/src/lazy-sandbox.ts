@@ -92,9 +92,36 @@ const MAX_CONTINUOUS_RUN_MS = 50 * 60 * 1000;
 // Per sandbox id, not per instance: both kytos in a thread share one sandbox,
 // and the clock is the sandbox's.
 const runningSince = new Map<string, number>();
+const LATE_RELEASE_MS = 2 * 60 * 1000;
 // Commands in flight per sandbox id. A pause under one ends its stream just
 // as E2B's own stop did, so it waits until none are running.
 const inFlight = new Map<string, number>();
+
+// Materializations in flight per session. Two LazySandbox instances share a
+// session in a code channel (one per thread, one sandbox per channel); both
+// finding no row used to create TWO sandboxes, the second save overwrote the
+// first, and the first was orphaned at E2B. The second now waits and then
+// reconnects to the one the first created.
+const materializing = new Map<string, Promise<unknown>>();
+
+export async function materializeOnce<T>(
+  sessionId: string | undefined,
+  run: () => Promise<T>
+): Promise<T> {
+  if (!sessionId) {
+    return run();
+  }
+  const previous = materializing.get(sessionId) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(run);
+  materializing.set(sessionId, next);
+  try {
+    return await next;
+  } finally {
+    if (materializing.get(sessionId) === next) {
+      materializing.delete(sessionId);
+    }
+  }
+}
 
 export class LazySandbox {
   readonly workDir = config.workdir;
@@ -107,6 +134,8 @@ export class LazySandbox {
   private readonly store: SandboxStore | undefined;
   private sandbox: Sandbox | null = null;
   private creating: Promise<Sandbox> | null = null;
+  private released = false;
+  private lateReleaseTimer: ReturnType<typeof setTimeout> | undefined;
   // `onAbortCommand`s still running; `destroy()` waits for them, or the pause
   // would freeze the very process they were sent to stop.
   private readonly aborting = new Set<Promise<unknown>>();
@@ -156,10 +185,16 @@ export class LazySandbox {
    * falls through to creating a fresh one.
    */
   private async reconnect(): Promise<Sandbox | null> {
-    if (!(this.store && this.sessionId)) {
+    const { sessionId, store } = this;
+    if (!(store && sessionId)) {
       return null;
     }
-    const sandboxId = await this.store.load(this.sessionId).catch(() => null);
+    // A failed load is NOT "nothing remembered": treating it so created a fresh
+    // sandbox over the row and orphaned the old one with all its files. One
+    // retry, then the error fails the tool call instead.
+    const sandboxId = await store
+      .load(sessionId)
+      .catch(() => store.load(sessionId));
     if (!sandboxId) {
       return null;
     }
@@ -179,7 +214,7 @@ export class LazySandbox {
         { err: errorText(error), sandboxId },
         '[sandbox] remembered sandbox is gone; creating a fresh one'
       );
-      await this.store.clear(this.sessionId).catch(() => undefined);
+      await store.clear(sessionId).catch(() => undefined);
       return null;
     }
   }
@@ -260,14 +295,21 @@ export class LazySandbox {
   }
 
   private ensure(): Promise<Sandbox> {
+    if (this.released) {
+      this.armLateRelease();
+    }
     if (this.sandbox) {
       return Promise.resolve(this.sandbox);
     }
     this.creating ??= (async () => {
       const started = Date.now();
-      const resumed = await this.reconnect();
-      const reconnectMs = Date.now() - started;
-      const sandbox = resumed ?? (await this.create());
+      const { resumed, sandbox } = await materializeOnce(
+        this.sessionId,
+        async () => {
+          const found = await this.reconnect();
+          return { resumed: found, sandbox: found ?? (await this.create()) };
+        }
+      );
       const readyMs = Date.now() - started;
       // Already running for another holder: its clock keeps counting.
       if (!(resumed && runningSince.has(sandbox.sandboxId))) {
@@ -283,9 +325,7 @@ export class LazySandbox {
           // E2B's share (resume or create) apart from our own bootstrap, so a
           // slow first tool call says which one was slow.
           bootstrapMs: Date.now() - started - readyMs,
-          createMs: resumed ? undefined : readyMs - reconnectMs,
           ms: Date.now() - started,
-          reconnectMs,
           resumed: Boolean(resumed),
           sandboxId: sandbox.sandboxId,
         },
@@ -482,7 +522,32 @@ export class LazySandbox {
    * next turn); an ephemeral one is killed outright. A pause that fails falls
    * back to a kill, so a sandbox is never left running and billing.
    */
+  /**
+   * A background subagent keeps using its parent's sandbox after the parent
+   * turn has released it. Each use re-materializes and takes a holder that no
+   * `destroy()` would ever give back, so the sandbox was never paused again.
+   * Uses after release therefore pause it themselves once they go quiet.
+   */
+  private armLateRelease(): void {
+    clearTimeout(this.lateReleaseTimer);
+    this.lateReleaseTimer = setTimeout(() => {
+      const id = this.sandbox?.sandboxId;
+      if (id && (inFlight.get(id) ?? 0) > 0) {
+        this.armLateRelease();
+        return;
+      }
+      this.destroy().catch((error: unknown) => {
+        this.logger.warn(
+          { err: errorText(error) },
+          '[sandbox] late release failed'
+        );
+      });
+    }, LATE_RELEASE_MS);
+  }
+
   async destroy(): Promise<void> {
+    this.released = true;
+    clearTimeout(this.lateReleaseTimer);
     const pending = this.creating;
     if (pending) {
       await pending.catch(() => undefined);

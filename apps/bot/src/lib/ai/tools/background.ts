@@ -127,7 +127,10 @@ export function backgroundProcessTools({
     const context = getSandboxContext();
     counter += 1;
     const id = `bg-${counter}`;
-    const base = `${context.sessionWorkDir}/.kyto-bg-${id}`;
+    // The counter restarts every turn but the sandbox (and its workdir) is the
+    // thread's, so `bg-1` of a later turn found the old `bg-1`'s exit file and
+    // reported "finished" with the previous result. The files get a nonce.
+    const base = `${context.sessionWorkDir}/.kyto-bg-${id}-${crypto.randomUUID().slice(0, 8)}`;
     const proc: BackgroundProcess = {
       errPath: `${base}.err`,
       exitPath: `${base}.exit`,
