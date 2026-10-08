@@ -51,12 +51,15 @@ export function formatDuration(ms: number): string {
  */
 function fallbackNote({
   model,
+  outage,
   primaryLabel,
 }: {
   model: string;
+  outage?: string;
   primaryLabel: string;
 }): string {
-  return `${primaryLabel} couldn't answer this one, so \`${model}\` did. it's a weaker model, so this reply may be worse than usual.`;
+  const why = outage ? ` (${outage.toLowerCase()})` : '';
+  return `${primaryLabel} couldn't answer this one${why}, so \`${model}\` did. it's a weaker model, so this reply may be worse than usual.`;
 }
 
 type FooterBlock =
@@ -93,7 +96,7 @@ export function buildReplyFooter({
 }: {
   durationMs: number;
   /** Set when the answer came from a fallback model. */
-  fallback?: { model: string; primaryLabel: string };
+  fallback?: { model: string; outage?: string; primaryLabel: string };
   /** The model that answered, carried on the buttons for the feedback row. */
   model?: string;
   showFooter: boolean;

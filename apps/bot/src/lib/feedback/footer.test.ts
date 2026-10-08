@@ -67,3 +67,18 @@ describe('buildReplyFooter', () => {
     expect(footer?.fallbackText).toContain('weaker model');
   });
 });
+
+describe('buildReplyFooter fallback reason', () => {
+  test('names the outage when Hack Club AI reported one', () => {
+    const footer = buildReplyFooter({
+      durationMs: 1000,
+      fallback: {
+        model: 'z-ai/glm-5.3-flash',
+        outage: 'Hack Club AI reports it is down',
+        primaryLabel: 'gpt-6 luna on hack club ai',
+      },
+      showFooter: false,
+    });
+    expect(footer?.fallbackText).toContain('(hack club ai reports it is down)');
+  });
+});

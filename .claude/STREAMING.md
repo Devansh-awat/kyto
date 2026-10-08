@@ -23,7 +23,9 @@ stream order; `createReply` posts it (length-splitting, fence/table healing).
   `Thinking` for the first, `Thinking · upgraded` when `upgradeModel` routed the
   turn onto a stronger rung, `Thinking · fallback` for an actual failure. They
   are not the same event and must not read the same — an escalation the model
-  asked for is not kyto recovering from a broken provider.
+  asked for is not kyto recovering from a broken provider. A fallback's title and the footer's weaker-model note also carry Hack Club AI's
+  own outage reason when `ai.hackclub.com/up` reports one (`lib/ai/hackclub-status.ts`,
+  cached 60s, only looked up once an attempt has failed).
 
 ## The visible-card budget is PER PLAN MESSAGE
 

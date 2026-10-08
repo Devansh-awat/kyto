@@ -64,6 +64,7 @@ import {
 } from '@/lib/agent/turns';
 import { startThinking } from '@/lib/agent/utils';
 import { promptWithAttachments, seedAttachments } from '@/lib/ai/attachments';
+import { hackclubOutage } from '@/lib/ai/hackclub-status';
 import { requestHints } from '@/lib/ai/hints';
 import {
   renderStream,
@@ -1035,6 +1036,8 @@ async function executeTurn(
       const modelTaskTitle = labelledThinking({
         isRetry: attempts.length > 0,
         label: attemptLabel,
+        // Only looked up once something failed: the first attempt never waits.
+        outage: attempts.length > 0 ? await hackclubOutage() : undefined,
       });
       // Filled by streamAttempt's fetch with the resolved slug. The guard
       // completes the model task EXACTLY once (post-stream success or catch).
@@ -2097,14 +2100,20 @@ function attemptLog(attempt: ModelAttempt | undefined) {
 function labelledThinking({
   isRetry,
   label,
+  outage,
 }: {
   isRetry: boolean;
   label: 'fallback' | 'upgraded' | undefined;
+  /** Hack Club AI's own reason it is down, said up front on a fallback. */
+  outage: string | undefined;
 }): string {
   if (label === 'upgraded') {
     return 'Thinking · upgraded';
   }
-  return isRetry ? 'Thinking · fallback' : 'Thinking';
+  if (!isRetry) {
+    return 'Thinking';
+  }
+  return outage ? `Thinking · fallback: ${outage}` : 'Thinking · fallback';
 }
 
 // The whole fallback walk on one line: which models were tried, and the real
@@ -2145,6 +2154,7 @@ async function postReplyFooter({
   thread: ThreadHandle;
 }): Promise<void> {
   const key = attemptKey(answeredBy);
+  const outage = await hackclubOutage();
   const steppedDown =
     !isOwnAttempt &&
     key !== attemptKey(PRIMARY_ATTEMPT) &&
@@ -2152,7 +2162,7 @@ async function postReplyFooter({
   const footer = buildReplyFooter({
     durationMs,
     fallback: steppedDown
-      ? { model: answeredBy.model, primaryLabel: PRIMARY_LABEL }
+      ? { model: answeredBy.model, outage, primaryLabel: PRIMARY_LABEL }
       : undefined,
     model: answeredBy.model,
     showFooter,
