@@ -31,14 +31,14 @@ function capText(text: string, max: number): string {
 
 const contextMessageSchema = z
   .looseObject({
-    text: z.string().optional(),
-    ts: z.string().optional(),
-    user_id: z.string().optional(),
+    text: z.string().nullish(),
+    ts: z.string().nullish(),
+    user_id: z.string().nullish(),
   })
   .transform((message) => ({
     text: capText(message.text ?? '', CONTEXT_TEXT_CHARS),
-    ts: message.ts,
-    userId: message.user_id,
+    ts: message.ts ?? undefined,
+    userId: message.user_id ?? undefined,
   }));
 
 const slackSearchResponseSchema = z.looseObject({
@@ -53,11 +53,11 @@ const slackSearchResponseSchema = z.looseObject({
         .array(
           z
             .looseObject({
-              author_name: z.string().optional(),
-              author_user_id: z.string().optional(),
-              channel_id: z.string().optional(),
-              channel_name: z.string().optional(),
-              content: z.string().optional(),
+              author_name: z.string().nullish(),
+              author_user_id: z.string().nullish(),
+              channel_id: z.string().nullish(),
+              channel_name: z.string().nullish(),
+              content: z.string().nullish(),
               context_messages: z
                 .looseObject({
                   after: z.array(contextMessageSchema).optional(),
@@ -65,15 +65,15 @@ const slackSearchResponseSchema = z.looseObject({
                 })
                 .optional(),
               is_author_bot: z.boolean().optional(),
-              message_ts: z.string().optional(),
-              permalink: z.string().optional(),
-              team_id: z.string().optional(),
+              message_ts: z.string().nullish(),
+              permalink: z.string().nullish(),
+              team_id: z.string().nullish(),
             })
             .transform((message) => ({
-              authorName: message.author_name,
-              authorUserId: message.author_user_id,
-              channelId: message.channel_id,
-              channelName: message.channel_name,
+              authorName: message.author_name ?? undefined,
+              authorUserId: message.author_user_id ?? undefined,
+              channelId: message.channel_id ?? undefined,
+              channelName: message.channel_name ?? undefined,
               content: capText(message.content ?? '', HIT_TEXT_CHARS),
               // Keep only the 2 context messages nearest the match on each side
               // (Slack returns ~5/5). Context is the dominant prompt-size driver
@@ -86,9 +86,9 @@ const slackSearchResponseSchema = z.looseObject({
                   }
                 : undefined,
               isAuthorBot: message.is_author_bot,
-              messageTs: message.message_ts,
-              permalink: message.permalink,
-              teamId: message.team_id,
+              messageTs: message.message_ts ?? undefined,
+              permalink: message.permalink ?? undefined,
+              teamId: message.team_id ?? undefined,
             }))
         )
         .optional(),
@@ -96,6 +96,7 @@ const slackSearchResponseSchema = z.looseObject({
     .optional(),
 });
 
+const MIN_SLACK_CURSOR_CHARS = 8;
 // Which way in issued a page cursor (the assistant API's carry no tag).
 const CURSOR_PREFIX = { account: 'account:', asker: 'user:' } as const;
 // Room for the account's hits that the asker-membership filter drops.
@@ -153,16 +154,19 @@ const userSearchResponseSchema = z.looseObject({
                   name: z.string().optional(),
                 })
                 .optional(),
-              permalink: z.string().optional(),
-              team: z.string().optional(),
-              text: z.string().optional(),
-              ts: z.string().optional(),
-              user: z.string().optional(),
-              username: z.string().optional(),
+              // Slack sends `null`, not an absent key, for a hit with no
+              // user (a bot or integration post) — and one such hit threw
+              // away the whole page.
+              permalink: z.string().nullish(),
+              team: z.string().nullish(),
+              text: z.string().nullish(),
+              ts: z.string().nullish(),
+              user: z.string().nullish(),
+              username: z.string().nullish(),
             })
             .transform((match) => ({
-              authorName: match.username,
-              authorUserId: match.user,
+              authorName: match.username ?? undefined,
+              authorUserId: match.user ?? undefined,
               channelId: match.channel?.id,
               // A hit from a channel the SEARCHER is in says nothing about
               // whether anyone else can join it; kyto once called a private
@@ -170,9 +174,9 @@ const userSearchResponseSchema = z.looseObject({
               channelIsPrivate: match.channel?.is_private,
               channelName: match.channel?.name,
               content: capText(match.text ?? '', HIT_TEXT_CHARS),
-              messageTs: match.ts,
-              permalink: match.permalink,
-              teamId: match.team,
+              messageTs: match.ts ?? undefined,
+              permalink: match.permalink ?? undefined,
+              teamId: match.team ?? undefined,
             }))
         )
         .optional(),
@@ -192,13 +196,21 @@ const userSearchResponseSchema = z.looseObject({
 export function searchSlackTool({ message }: { message: Message }) {
   return tool({
     description:
-      "Search Slack messages for past conversations, decisions, links, or context outside the current thread — including a DM's own earlier history, since a fresh DM thread otherwise starts with no prior context by design. If the person connected their own Slack account it searches as them — every channel they can see, their DMs included. Otherwise, when they @mentioned kyto (or DMed it), Slack's search token for that message covers what they can see, DMs included — it expires ~2 minutes into the turn. Failing both, it searches as kyto's own Slack account and keeps only hits from channels the person is in (never anyone's DMs). For \"how many messages…\" questions use `totalMatches` when the result has it — Slack's own count for the whole query — instead of paging and counting; without it, say the number is only what search returned. Each hit's text is cut at 800 characters (context messages at 300), marked where cut; read the whole message with readConversationHistory when the cut part matters. To mean one person use `from:<@USERID>` with their id (getUser): a bare name like `from:twa` also matches everyone else whose name contains it.",
+      "Search Slack messages for past conversations, decisions, links, or context outside the current thread — including a DM's own earlier history, since a fresh DM thread otherwise starts with no prior context by design. If the person connected their own Slack account it searches as them — every channel they can see, their DMs included. Otherwise, when they @mentioned kyto (or DMed it), Slack's search token for that message covers what they can see, DMs included — it expires ~2 minutes into the turn. Failing both, it searches as kyto's own Slack account and keeps only hits from channels the person is in (never anyone's DMs). For \"how many messages…\" questions use `totalMatches` when the result has it — Slack's own count for the whole query — instead of paging and counting; without it, say the number is only what search returned. Each hit's text is cut at 800 characters (context messages at 300), marked where cut; read the whole message with readConversationHistory when the cut part matters. To mean one person use `from:<@USERID>` with their id (getUser): a bare name like `from:twa` also matches everyone else whose name contains it. To find what a channel said about something, search `in:<#CHANNELID> keywords` — Slack filters server-side — rather than paging the channel's whole history.",
     inputSchema: z.object({
       cursor: z
         .string()
         .min(1)
         .optional()
-        .describe('Cursor from a previous Slack search result page.'),
+        .describe(
+          'nextCursor from the previous searchSlack result, copied verbatim. Omit it for page 1; never make one up.'
+        ),
+      order: z
+        .enum(['newest', 'oldest'])
+        .optional()
+        .describe(
+          'Sort by time instead of relevance. "oldest" for first/earliest-N asks ("who posted first", "the first 10 messages"). Keep the same order when paging.'
+        ),
       query: z
         .string()
         .min(1)
@@ -207,16 +219,23 @@ export function searchSlackTool({ message }: { message: Message }) {
           'Search text. Supports Slack modifiers like from:@user, in:#channel, in:@user (DM), has:link, has:star, before:2026-01-01, after:2026-01-01, is:thread, filename:name, ext:filetype.'
         ),
     }),
-    execute: async ({ cursor, query }) => {
+    execute: async ({ cursor, order, query }) => {
       const userId = message.author.userId;
       const currentChannel = slack.channelIdFromThreadId(message.threadId);
       const parsedRaw = actionTokenSchema.safeParse(message.raw);
+      const eventToken = parsedRaw.success
+        ? (parsedRaw.data.action_token ??
+          parsedRaw.data.assistant_thread?.action_token)
+        : undefined;
       const actionToken =
-        (parsedRaw.success
-          ? (parsedRaw.data.action_token ??
-            parsedRaw.data.assistant_thread?.action_token)
-          : undefined) ??
+        eventToken ??
         recallActionToken({ channel: currentChannel, ts: message.id });
+      // #33: the user account's turn has no token of its own and borrows the
+      // app's; this says whether that worked on a double mention.
+      logger.debug(
+        { fromEvent: Boolean(eventToken), hasToken: Boolean(actionToken) },
+        '[searchSlack] action token'
+      );
 
       const found = ({
         messages,
@@ -254,6 +273,13 @@ export function searchSlackTool({ message }: { message: Message }) {
         cursor?.startsWith(tag)
       );
       const pageCursor = prefix ? cursor?.slice(prefix.length) : cursor;
+      // Slack's cursors are long opaque strings; a model that invents "1" or
+      // "2" to page got a bare invalid_cursor and gave up.
+      if (cursor && !prefix && cursor.length < MIN_SLACK_CURSOR_CHARS) {
+        return failed(
+          `"${cursor}" is not a cursor. Omit cursor for page 1, or pass nextCursor from the previous result verbatim.`
+        );
+      }
 
       // `search.messages`, as the asker (their token) or as kyto's account.
       const searchMessages = async ({
@@ -267,16 +293,33 @@ export function searchSlackTool({ message }: { message: Message }) {
         tag: string;
         token?: string;
       }) => {
-        const parsed = userSearchResponseSchema.parse(
+        const response = userSearchResponseSchema.safeParse(
           await client.apiCall('search.messages', {
             count: SEARCH_PAGE_SIZE,
             // `*` opts into cursor pagination; without it Slack answers with
             // page numbers and never returns a next_cursor.
             cursor: (prefix === tag && pageCursor) || '*',
             query,
+            ...(order
+              ? {
+                  sort: 'timestamp',
+                  sort_dir: order === 'oldest' ? 'asc' : 'desc',
+                }
+              : {}),
             ...(token ? { token } : {}),
           })
         );
+        if (!response.success) {
+          logger.warn(
+            { issues: response.error.issues.slice(0, 3), query },
+            '[searchSlack] unexpected search response shape'
+          );
+          return {
+            error: 'unexpected response from Slack',
+            ok: false as const,
+          };
+        }
+        const parsed = response.data;
         if (!parsed.ok) {
           return { error: parsed.error ?? 'unknown', ok: false as const };
         }
@@ -328,7 +371,8 @@ export function searchSlackTool({ message }: { message: Message }) {
       //    searches public channels only unless `channel_types` says
       //    otherwise, and kyto never said, which is why DM content came back
       //    empty (PR #32). Gone ~2 minutes into the turn.
-      if (actionToken && !prefix) {
+      // It has no time sort, so an ordered search goes straight to step 3.
+      if (actionToken && !prefix && !order) {
         const parsedResponse = slackSearchResponseSchema.safeParse(
           await slack.webClient
             .apiCall('assistant.search.context', {
@@ -364,7 +408,11 @@ export function searchSlackTool({ message }: { message: Message }) {
           });
         }
         if (pageCursor) {
-          return failed(response?.error ?? 'unknown');
+          return failed(
+            response?.error === 'invalid_cursor'
+              ? 'that cursor has expired (the search token behind it lasts ~2 minutes). Re-run the query without a cursor to start again at page 1.'
+              : (response?.error ?? 'unknown')
+          );
         }
         logger.warn(
           { error: response?.ok ? 'no results' : response?.error, query },

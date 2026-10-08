@@ -4,6 +4,11 @@ import type { ThreadHandle as Thread } from '@/harness/thread';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
 import { publicFetch } from '@/lib/public-url';
+import {
+  mayReadChannel,
+  PRIVATE_CHANNEL_REFUSAL,
+} from '@/lib/slack/channel-access';
+import { toRawSlackChannelId } from '@/lib/slack/ids';
 import { errorMessage } from '@/lib/utils/error';
 
 const MAX_CONTENT_CHARS = 20_000;
@@ -33,24 +38,46 @@ function channelIdFromThread(thread: Thread): string | undefined {
   return platform === 'slack' ? channelId : undefined;
 }
 
-export function getPermalinkTool({ thread }: { thread: Thread }) {
+export function getPermalinkTool({
+  askerUserId,
+  thread,
+}: {
+  askerUserId: string;
+  thread: Thread;
+}) {
   return tool({
     description:
-      'Get a shareable Slack permalink for a message in the current channel, e.g. to reference it elsewhere.',
+      "Get a shareable Slack permalink for a message, e.g. to reference it elsewhere — in this channel by default, or in any channel the asker can read. If it fails, don't build a link by hand; say you couldn't get one.",
     inputSchema: z.object({
+      channelId: z
+        .string()
+        .optional()
+        .describe(
+          "The message's channel id; omit for the current channel. Needed for a message found elsewhere (e.g. by searchSlack)."
+        ),
       messageTs: z
         .string()
         .min(1)
         .describe('Timestamp (ts) of the message, e.g. 1781599802.270109.'),
     }),
-    execute: async ({ messageTs }) => {
+    execute: async ({ channelId: requested, messageTs }) => {
       try {
-        const channelId = channelIdFromThread(thread);
+        const currentChannelId = channelIdFromThread(thread);
+        const channelId = requested
+          ? toRawSlackChannelId(requested)
+          : currentChannelId;
         if (!channelId) {
           return {
             error: 'Could not resolve a Slack channel for this thread.',
             success: false,
           };
+        }
+        // A permalink confirms a message exists; elsewhere that is a read of
+        // another conversation, so it carries the same membership gate.
+        if (
+          !(await mayReadChannel({ askerUserId, channelId, currentChannelId }))
+        ) {
+          return { error: PRIVATE_CHANNEL_REFUSAL, success: false };
         }
         const result = permalinkSchema.parse(
           await slack.webClient.apiCall('chat.getPermalink', {
