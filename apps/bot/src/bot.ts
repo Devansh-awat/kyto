@@ -34,6 +34,7 @@ import '@/features/assistant';
 import '@/features/confirm-post';
 import '@/features/customizations';
 import '@/features/feedback';
+import '@/features/thread-cleanup';
 import '@/features/mcp-permissions';
 import '@/features/poll';
 

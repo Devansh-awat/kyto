@@ -13,6 +13,7 @@ import type {
   Author,
   MemberJoinedEvent,
   Message,
+  MessageShortcutEvent,
   ModalSubmitEvent,
   ModalSubmitResult,
 } from './types';
@@ -22,6 +23,20 @@ type ThreadMessageHandler = (
   message: Message
 ) => Promise<void>;
 type ActionHandler = (event: ActionEvent) => Promise<void>;
+type MessageShortcutHandler = (event: MessageShortcutEvent) => Promise<void>;
+const messageActionSchema = z.object({
+  callback_id: z.string(),
+  channel: z.object({ id: z.string() }),
+  message: z.object({
+    bot_id: z.string().optional(),
+    thread_ts: z.string().optional(),
+    ts: z.string(),
+    user: z.string().optional(),
+  }),
+  response_url: z.string().optional(),
+  trigger_id: z.string(),
+  user: z.object({ id: z.string(), username: z.string().optional() }),
+});
 /** Returns what to say back, or undefined for the default greeting. */
 type SlashCommandHandler = (command: {
   text: string;
@@ -88,6 +103,7 @@ export class KytoBot {
   private readonly dmHandlers: ThreadMessageHandler[] = [];
   private readonly subscribedHandlers: ThreadMessageHandler[] = [];
   private readonly actionHandlers = new Map<string, ActionHandler>();
+  private readonly shortcutHandlers = new Map<string, MessageShortcutHandler>();
   private slashHandler: SlashCommandHandler | undefined;
   private readonly modalHandlers = new Map<string, ModalSubmitHandler>();
   private readonly appHomeHandlers: ((event: AppHomeEvent) => Promise<void>)[] =
@@ -147,6 +163,10 @@ export class KytoBot {
     for (const id of Array.isArray(actionId) ? actionId : [actionId]) {
       this.actionHandlers.set(id, handler);
     }
+  }
+
+  onMessageShortcut(callbackId: string, handler: MessageShortcutHandler): void {
+    this.shortcutHandlers.set(callbackId, handler);
   }
 
   onModalSubmit(
@@ -493,6 +513,45 @@ export class KytoBot {
         this.slackLogger.error({ err: error }, '[harness] action failed');
       });
     }
+    if (body.type === 'message_action') {
+      this.handleMessageShortcut(body).catch((error: unknown) => {
+        this.slackLogger.error({ err: error }, '[harness] shortcut failed');
+      });
+    }
+  }
+
+  private async handleMessageShortcut(
+    body: Record<string, unknown>
+  ): Promise<void> {
+    const parsed = messageActionSchema.safeParse(body);
+    if (!parsed.success) {
+      this.slackLogger.warn(
+        { issues: parsed.error.issues.slice(0, 3) },
+        '[harness] unreadable message shortcut'
+      );
+      return;
+    }
+    const payload = parsed.data;
+    const handler = this.shortcutHandlers.get(payload.callback_id);
+    if (!handler) {
+      return;
+    }
+    await handler({
+      callbackId: payload.callback_id,
+      channelId: payload.channel.id,
+      message: {
+        botId: payload.message.bot_id,
+        threadTs: payload.message.thread_ts,
+        ts: payload.message.ts,
+        userId: payload.message.user,
+      },
+      responseUrl: payload.response_url,
+      triggerId: payload.trigger_id,
+      user: {
+        userId: payload.user.id,
+        userName: payload.user.username ?? payload.user.id,
+      },
+    });
   }
 
   private async handleBlockActions(

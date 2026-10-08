@@ -114,6 +114,23 @@ export interface ActionEvent {
   value?: string;
 }
 
+/** A message shortcut (the ⋯ menu on a message) was used. */
+export interface MessageShortcutEvent {
+  callbackId: string;
+  channelId: string;
+  /** The message the shortcut was used on, as Slack sent it. */
+  message: {
+    botId?: string;
+    threadTs?: string;
+    ts: string;
+    userId?: string;
+  };
+  /** Where an ephemeral answer to the person who used it goes. */
+  responseUrl?: string;
+  triggerId: string;
+  user: Author;
+}
+
 export type ModalSubmitResult =
   | { action: 'clear' }
   | { action: 'errors'; errors: Record<string, string> }

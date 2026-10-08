@@ -26,7 +26,21 @@
       "agent_description": "Your AI assistant for Slack. Searches the web, writes and runs code, generates images, browses websites, manages reminders and scheduled tasks, and more.",
       "suggested_prompts": []
     },
-    "unfurl_domains": ["kyto.dino.icu"]
+    "unfurl_domains": ["kyto.dino.icu"],
+    "shortcuts": [
+      {
+        "name": "Delete kyto's replies",
+        "type": "message",
+        "callback_id": "delete_kyto_replies",
+        "description": "Owner only: delete every kyto message in this thread and clear its memory of it"
+      },
+      {
+        "name": "Delete message",
+        "type": "message",
+        "callback_id": "delete_message",
+        "description": "Owner only: delete this message and clear kyto's memory of the thread"
+      }
+    ]
   },
   "oauth_config": {
     "scopes": {
