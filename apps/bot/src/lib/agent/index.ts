@@ -454,6 +454,10 @@ async function executeTurn(
   // took, feedback buttons, and a note when a weaker model had to answer.
   // Unset on a skip or a turn that failed, which get no footer.
   let answeredBy: ModelAttempt | undefined;
+  // The turn ended on a deliberate skip, and the plan messages it streamed:
+  // a skip that never said anything takes its plan back (below).
+  let turnSkipped = false;
+  const planMessages: string[] = [];
   // What the turn read and wrote, for the moderation check once it is over.
   const moderationTools: ModerationItem[] = [];
   let moderationReply = '';
@@ -555,6 +559,22 @@ async function executeTurn(
     } else {
       await streamSegmented({ message, thread });
       await reply?.flush({ thread });
+      // A skip that said nothing left only a "Thinking completed" plan behind
+      // (#34). Once kyto has said something, the plan is the record of what it
+      // did around that, so it stays (owner's call, 2026-10-08).
+      if (turnSkipped && !reply?.hasPosted() && planMessages.length > 0) {
+        const { channel } = slack.decodeThreadId(thread.id);
+        for (const ts of planMessages) {
+          await slack.webClient.chat
+            .delete({ channel, ts })
+            .catch((error: unknown) => {
+              logger.warn(
+                { err: error, threadId: thread.id, ts },
+                '[agent] could not remove a skipped turn’s plan'
+              );
+            });
+        }
+      }
     }
     if (
       !(secret || asUserAccount) &&
@@ -1620,6 +1640,7 @@ async function executeTurn(
           },
           '[agent] attempt handled the turn'
         );
+        turnSkipped = skipped;
         // Leave this turn's train of thought behind for the next one. Only the
         // attempt that actually answered gets to: a failed attempt's reasoning
         // died with it, and feeding a spiral back in would only seed another.
@@ -2006,7 +2027,7 @@ async function executeTurn(
         // The stream ended inside this segment; renderStream has already
         // yielded its own closers, so there is nothing left to settle here.
       };
-      await slack.stream(threadId, segment(), {
+      const posted = await slack.stream(threadId, segment(), {
         // A rotation cuts a new plan message just like a split does, but from
         // inside the harness, where the budget is not visible.
         onRotate: () => cards.endMessage(),
@@ -2014,6 +2035,7 @@ async function executeTurn(
         recipientUserId: turnMessage.author.userId,
         taskDisplayMode: 'plan',
       });
+      planMessages.push(...posted);
       // Post any buffered text before the next plan block is created, so the
       // ordering (plan → text → plan) holds.
       await reply?.flush({ thread: turnThread });

@@ -48,6 +48,10 @@ per-message reset is what fixes the bug below; the DEFAULT is unlimited.
   `carry`ed into the next message's budget instead — closing it sent a
   `complete` for a row the old message never had and dropped its result from
   the new one: "Something went wrong" rows on turns that succeeded (#28).
+- **A skip that said nothing deletes its plan messages** (`slack.stream` returns
+  the ts of each it posted; `reply.hasPosted()`): otherwise an unpinged turn
+  that chose not to answer left a lone "Thinking completed" (#34). If any reply
+  text went out this turn, the plan stays (owner's call 2026-10-08).
 - Two overflow rows, never one: a shared counter mixed hidden tool calls with
   hidden thinking blocks, which read as kyto narrating step counts.
 

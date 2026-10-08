@@ -674,7 +674,9 @@ export class SlackHarness {
       iconEmoji?: string;
       iconUrl?: string;
     }
-  ): Promise<void> {
+  ): Promise<string[]> {
+    // The ts of every message this posted, so a caller can take them back.
+    const posted: string[] = [];
     const { channel, threadTs } = this.decodeThreadId(threadId);
     if (!threadTs) {
       throw new Error('Slack streaming requires a thread ts.');
@@ -720,6 +722,9 @@ export class SlackHarness {
           // the new message — but what it would settle them with has nowhere
           // to go.
           options.onRotate?.();
+          if (streamer.ts) {
+            posted.push(streamer.ts);
+          }
           streamer = startStreamer();
           streamStartedAt = Date.now();
           currentHasContent = false;
@@ -735,6 +740,9 @@ export class SlackHarness {
     const stopStreamer = async (): Promise<void> => {
       if (!currentHasContent) {
         return;
+      }
+      if (streamer.ts) {
+        posted.push(streamer.ts);
       }
       await streamer.stop().catch((error: unknown) => {
         this.logger.warn({ err: error }, '[harness] stream stop failed');
@@ -809,5 +817,6 @@ export class SlackHarness {
     } finally {
       await stopStreamer();
     }
+    return posted;
   }
 }

@@ -52,6 +52,7 @@ export function createReply({
 }) {
   let buffer = '';
   let lastPostAt = Date.now();
+  let posted = false;
 
   async function drain({
     force,
@@ -82,6 +83,7 @@ export function createReply({
         // allowBroadcast is false, so this is belt and braces either way.
         await thread.post({ allowBroadcast, ...identity, markdown: chunk });
         lastPostAt = Date.now();
+        posted = true;
       } catch (error) {
         if (fromUserAccount || !isNotInChannel(error)) {
           logger.warn({ err: error, threadId }, '[agent] reply post failed');
@@ -112,6 +114,7 @@ export function createReply({
       await slack.webClient.conversations.join({ channel });
       await thread.post({ allowBroadcast, ...identity, markdown: chunk });
       lastPostAt = Date.now();
+      posted = true;
       return;
     } catch (error) {
       logger.error(
@@ -125,6 +128,7 @@ export function createReply({
     try {
       await thread.post({ fromUserAccount: true, markdown: chunk });
       lastPostAt = Date.now();
+      posted = true;
     } catch (error) {
       logger.error(
         { channel, err: error, threadId },
@@ -226,6 +230,10 @@ export function createReply({
     },
     flush({ thread }: { thread: Thread }): Promise<void> {
       return drain({ force: true, thread });
+    },
+    /** Whether any reply text reached the thread this turn. */
+    hasPosted(): boolean {
+      return posted;
     },
   };
 }
