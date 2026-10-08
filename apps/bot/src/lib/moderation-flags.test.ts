@@ -24,6 +24,24 @@ describe('flaggedItems', () => {
     ]);
   });
 
+  test('bare illicit never counts; illicit/violent does', () => {
+    expect(
+      flaggedItems({
+        items: [
+          { source: 'message', text: 'pirate a movie' },
+          { source: 'message', text: 'build a weapon' },
+        ],
+        results: [
+          { categories: { illicit: true }, flagged: true },
+          {
+            categories: { illicit: true, 'illicit/violent': true },
+            flagged: true,
+          },
+        ],
+      })
+    ).toEqual([{ categories: ['illicit/violent'], source: 'message' }]);
+  });
+
   test('bare violence and harassment never count; their sub-categories do', () => {
     expect(
       flaggedItems({
