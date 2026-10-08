@@ -24,9 +24,10 @@ import { slack } from '@/lib/chat';
 import { emojiUploadConfigured } from '@/lib/emoji-upload';
 import logger from '@/lib/logger';
 import { requestMcpPermission } from '@/lib/mcp-permissions/request';
-import { redactSecretsDeep } from '@/lib/redact';
+import { redactSecrets, redactSecretsDeep } from '@/lib/redact';
 import { listSkills } from '@/lib/skills';
 import { slackBrowserAvailable } from '@/lib/slack-browser';
+import { errorMessage } from '@/lib/utils/error';
 import {
   recallLoadedTools,
   rememberLoadedTools,
@@ -859,10 +860,20 @@ export async function buildTools({
         // What the tool hands back is what the model reads next and what the
         // plan card shows: a secret that surfaces in one is stripped here, once,
         // for every tool including MCP ones (lib/redact).
-        return redactSecretsDeep(
-          await original(input, options),
-          `tool ${name}`
-        );
+        // A thrown error reaches the model as text too (an MCP server's or a
+        // CLI's message can quote a credential), so it is scrubbed the same way.
+        try {
+          return redactSecretsDeep(
+            await original(input, options),
+            `tool ${name}`
+          );
+        } catch (error) {
+          // Rethrown as-is unless a secret was found: an abort must stay an
+          // abort for the loop to recognise it.
+          const message = errorMessage(error);
+          const clean = redactSecrets(message, `tool ${name} error`);
+          throw clean === message ? error : new Error(clean);
+        }
       },
     } as T;
   };
