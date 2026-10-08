@@ -12,6 +12,7 @@ import { toRawSlackChannelId } from '@/lib/slack/ids';
 const MEMBERSHIP_TTL_MS = 5 * 60 * 1000;
 const MEMBERS_PAGE = 1000;
 const verdicts = new Map<string, { at: number; allowed: boolean }>();
+const VERDICT_SWEEP_AT = 2000;
 
 async function isPublicChannel(channel: string): Promise<boolean> {
   const info = await slack.webClient.conversations.info({ channel });
@@ -77,6 +78,14 @@ export async function mayReadChannel({
         (await isMember({ channel, userId: askerUserId ?? '' })));
   } catch {
     return false;
+  }
+  // One entry per channel × asker; expired ones go once the map is large.
+  if (verdicts.size >= VERDICT_SWEEP_AT) {
+    for (const [entryKey, entry] of verdicts) {
+      if (Date.now() - entry.at >= MEMBERSHIP_TTL_MS) {
+        verdicts.delete(entryKey);
+      }
+    }
   }
   verdicts.set(key, { allowed, at: Date.now() });
   return allowed;

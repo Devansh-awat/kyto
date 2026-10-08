@@ -9,6 +9,8 @@ interface Entry {
   value: unknown;
 }
 
+const SWEEP_AT = 5000;
+
 export class MemoryKV {
   private readonly entries = new Map<string, Entry>();
 
@@ -25,6 +27,17 @@ export class MemoryKV {
   }
 
   set(key: string, value: unknown, ttlMs?: number): Promise<void> {
+    // Expired entries were dropped only when read again, and most name lookups
+    // never are. Only EXPIRED ones go: an entry without a TTL (the allowlist)
+    // is state, not cache.
+    if (this.entries.size >= SWEEP_AT) {
+      const now = Date.now();
+      for (const [entryKey, entry] of this.entries) {
+        if (entry.expiresAt !== null && entry.expiresAt <= now) {
+          this.entries.delete(entryKey);
+        }
+      }
+    }
     this.entries.set(key, {
       expiresAt: ttlMs ? Date.now() + ttlMs : null,
       value,

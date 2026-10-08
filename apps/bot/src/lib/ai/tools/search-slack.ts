@@ -131,6 +131,13 @@ async function channelsOf(userId: string): Promise<Set<string>> {
     }
     cursor = page.response_metadata?.next_cursor || undefined;
   } while (cursor);
+  // Expired entries go on write: each holds a whole channel list, and one per
+  // asker ever seen added up over a long uptime.
+  for (const [key, entry] of askerChannelCache) {
+    if (Date.now() - entry.at >= MEMBERSHIP_TTL_MS) {
+      askerChannelCache.delete(key);
+    }
+  }
   askerChannelCache.set(userId, { at: Date.now(), ids });
   return new Set(ids);
 }

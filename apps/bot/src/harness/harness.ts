@@ -29,6 +29,7 @@ interface RawSlackFile {
 }
 
 const USER_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const USER_CACHE_MAX = 20_000;
 const FAILED_USER_RETRY_MS = 60 * 1000;
 
 // Slack's own ceiling on `limit` for the conversations.* read methods. Asking
@@ -430,6 +431,14 @@ export class SlackHarness {
         author,
       });
       return author;
+    }
+    // The account's gateway sees every channel it is in, so over weeks of
+    // uptime this met most of the workspace. Oldest-inserted goes first.
+    if (this.userCache.size >= USER_CACHE_MAX) {
+      const oldest = this.userCache.keys().next().value;
+      if (oldest !== undefined) {
+        this.userCache.delete(oldest);
+      }
     }
     this.userCache.set(userId, { at: Date.now(), author });
     return author;
