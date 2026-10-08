@@ -36,8 +36,10 @@ const STALE_AFTER_MS = 2 * 60 * 1000;
 const RESUME_WINDOW_MS = 30 * 60 * 1000;
 // Clean shutdowns a turn survives. More than one, because deploys land in
 // bursts; bounded, because a turn can itself restart kyto (the Coolify MCP),
-// and resuming that forever would be a restart loop.
-const MAX_RESTART_RESUMES = 3;
+// and resuming that forever would be a restart loop. 3 was too few: five
+// pushes in eight minutes (2026-10-08) restarted kyto four times and dropped
+// an owner's OpenCode turn with "won't pick this up on its own".
+const MAX_RESTART_RESUMES = 8;
 // A new instance keeps looking for a while, because the old one only marks its
 // turns interrupted when IT is told to stop — after this one is already up.
 const POLL_EVERY_MS = 15_000;
