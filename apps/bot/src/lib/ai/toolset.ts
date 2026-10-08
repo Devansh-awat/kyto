@@ -50,6 +50,7 @@ import {
   deploySiteTool,
   listSitesTool,
   removeSiteTool,
+  siteStatsTool,
 } from './tools/deploy-site';
 import {
   checkInboxTool,
@@ -475,6 +476,10 @@ export async function buildTools({
     removeSite: {
       summary: 'take down a published website',
       tool: removeSiteTool({ isOwner, userId: authorUserId }),
+    },
+    siteStats: {
+      summary: 'view counts for a published website',
+      tool: siteStatsTool({ isOwner, userId: authorUserId }),
     },
     scheduleReminder: {
       summary: 'one-time DM reminder after N seconds',

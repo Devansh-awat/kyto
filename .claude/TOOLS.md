@@ -4,6 +4,8 @@
 
 > **Background jobs wake the thread (2026-10-08, owner's call):** `process` start, and a `bash` command auto-moved to the background after 60s, are watched host-side (`watchManaged` in `tools/background.ts`). Handles are PER THREAD (a later turn can read `bg-1`). Once the launching turn ends, a 20s poll keeps the sandbox awake (each poll resumes it; LazySandbox's late release pauses it ~2 min after polling stops). Finished and not yet seen by the model → a wake turn with the exit code and output tail. Still running 30 min after the turn → a "time's up" wake; `process` `output` on a running job re-arms another 30 min. Wakes chain at most 3 deep (`process-report-<n>-` ids); none for unattended runs or `!secret` turns.
 
+> **Site analytics (2026-10-08):** `lib/sites/analytics.ts` counts HTML page GETs per site/day/page (browsers only — bots, unfurlers, curl excluded; `/embeds/` never counted), in memory, flushed to `site_views` every minute and at shutdown. No IPs or visitor ids. `sites` action `stats` (`siteStats`) shows totals, per-day and top pages to the site's creator, editors and owner (`checkSiteAccess`); taking a whole site down deletes its counts.
+
 > Split out of `.claude/CLAUDE.md` to keep that file under its 40k budget. **Not
 > loaded automatically** — read this before touching a specific tool, and keep it
 > current the same way (durable *what and why*, no post-mortem narrative). The

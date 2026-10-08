@@ -179,9 +179,14 @@ export const TOOL_FAMILIES = {
       'reminders and scheduled jobs: one-time, recurring (interval, daily, weekly, cron), list, edit, pause, resume, cancel',
   },
   sites: {
-    actions: { deploy: 'deploySite', list: 'listSites', remove: 'removeSite' },
+    actions: {
+      deploy: 'deploySite',
+      list: 'listSites',
+      remove: 'removeSite',
+      stats: 'siteStats',
+    },
     description: 'Static websites kyto hosts at a public URL.',
-    summary: 'publish, list or take down a static website',
+    summary: 'publish, list or take down a static website, or see its views',
   },
   subagent: {
     actions: { check: 'checkSubagent', run: 'runSubagent' },

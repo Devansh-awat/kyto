@@ -7,6 +7,7 @@ import { handleDashboard } from '@/lib/dashboard';
 import { ensureEmbedAssets, LIVE_EMBED_PREFIX } from '@/lib/embeds';
 import { handleGithubProxy } from '@/lib/github-proxy';
 import logger from '@/lib/logger';
+import { recordSiteView } from '@/lib/sites/analytics';
 import {
   handleSlackViewRequest,
   isSlackViewSocket,
@@ -230,6 +231,11 @@ export async function startSitesServer(): Promise<void> {
         // most of all — keeps it, because a frameable password form is a
         // clickjacking target.
         const framed = pathname.startsWith(`/${EMBED_SITE_NAME}/`);
+        // kyto's own embed pages are not anybody's site.
+        const site = pathname.split('/')[1] ?? '';
+        if (!framed && site) {
+          recordSiteView({ filePath, pathname, request, site });
+        }
         return new Response(Bun.file(filePath), {
           headers: {
             ...(framed ? FRAMEABLE_HEADERS : SECURITY_HEADERS),

@@ -17,6 +17,7 @@ import { startMemoryCuration } from '@/lib/memory-curation';
 import { redactSecrets, setRedactionAlert } from '@/lib/redact';
 import { startReminderScheduler } from '@/lib/reminders/scheduler';
 import { startSandboxReaper } from '@/lib/sandbox/store';
+import { flushSiteViews, startSiteAnalytics } from '@/lib/sites/analytics';
 import { startSitesServer } from '@/lib/sites/server';
 import { ensureChannelIndex } from '@/lib/slack/channel-links';
 import { flushThreadLogs, startThreadLogs } from '@/lib/thread-logs';
@@ -43,6 +44,7 @@ async function shutdown(signal: string): Promise<void> {
   await flushWhiteboards().catch((error: unknown) => {
     logger.error({ err: error }, '[bot] failed to save whiteboards');
   });
+  await flushSiteViews();
   // The stopped turns' last lines — often exactly what shows why they died.
   await flushThreadLogs();
   await bot.shutdown().catch((error: unknown) => {
@@ -97,6 +99,7 @@ try {
     logger.error({ err: error }, '[bot] user-account connection failed');
   });
   await startSitesServer();
+  startSiteAnalytics();
   startReminderScheduler(bot);
   // Paused thread sandboxes keep costing storage; collect the idle ones.
   startSandboxReaper();

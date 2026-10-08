@@ -19,6 +19,7 @@ export * from './notebooks';
 export * from './opt-ins';
 export * from './reminders';
 export * from './sandbox';
+export * from './site-views';
 export * from './sites';
 export * from './skills';
 export * from './slack-grants';

@@ -3,7 +3,9 @@ import type { SandboxContext } from '@repo/ai';
 import {
   claimSite,
   deleteSite,
+  deleteSiteViews,
   getSite,
+  listSiteViews,
   setSiteEditors,
 } from '@repo/db/queries';
 import { tool } from 'ai';
@@ -240,14 +242,86 @@ export function removeSiteTool({
           return { error: access.reason, success: false };
         }
         await removeSite(name, page);
-        // Removing the whole site releases the name; removing one page does not.
+        // Removing the whole site releases the name (and its view counts);
+        // removing one page does not.
         if (!page) {
           await deleteSite(name);
+          await deleteSiteViews(name).catch(() => undefined);
         }
         const target = page ? `page "${name}/${page}"` : `site "${name}"`;
         return { success: true, summary: `Removed ${target}.` };
       } catch (error) {
         logger.warn({ error: errorMessage(error) }, '[removeSite] failed');
+        return { error: errorMessage(error), success: false };
+      }
+    },
+  });
+}
+
+const STATS_DAYS_DEFAULT = 30;
+const STATS_DAYS_MAX = 365;
+const TOP_PAGES = 10;
+
+/**
+ * How many people looked at a hosted site: views per day and the most-viewed
+ * pages (lib/sites/analytics counts HTML page loads from browsers, not bots or
+ * link previews). Same people as editing it: its creator, the editors they
+ * named, and the owner.
+ */
+export function siteStatsTool({
+  isOwner,
+  userId,
+}: {
+  isOwner: boolean;
+  userId: string;
+}) {
+  return tool({
+    description:
+      "View counts for a published site: total, per day, and its most-viewed pages, over the last N days (default 30). Counts page loads from browsers (not bots or link previews); there is no visitor tracking. Only the site's creator, its editors and the bot owner may see them. Counts started on 2026-10-08.",
+    inputSchema: z.object({
+      days: z
+        .number()
+        .int()
+        .min(1)
+        .max(STATS_DAYS_MAX)
+        .optional()
+        .describe('How many days back, default 30.'),
+      name: siteNameSchema,
+    }),
+    execute: async ({ days = STATS_DAYS_DEFAULT, name }) => {
+      try {
+        if (!isValidSiteName(name)) {
+          return { error: 'Invalid site name.', success: false };
+        }
+        const access = await checkSiteAccess({ isOwner, name, userId });
+        if (!access.allowed) {
+          return { error: access.reason, success: false };
+        }
+        const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+          .toISOString()
+          .slice(0, 10);
+        const rows = await listSiteViews({ since, site: name });
+        const byDay = new Map<string, number>();
+        const byPage = new Map<string, number>();
+        for (const row of rows) {
+          byDay.set(row.day, (byDay.get(row.day) ?? 0) + row.views);
+          byPage.set(row.path, (byPage.get(row.path) ?? 0) + row.views);
+        }
+        const total = [...byDay.values()].reduce((sum, n) => sum + n, 0);
+        return {
+          perDay: [...byDay]
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([day, views]) => ({ day, views })),
+          since,
+          success: true,
+          topPages: [...byPage]
+            .sort(([, a], [, b]) => b - a)
+            .slice(0, TOP_PAGES)
+            .map(([path, views]) => ({ path, views })),
+          totalViews: total,
+        };
+      } catch (error) {
+        logger.warn({ error: errorMessage(error) }, '[siteStats] failed');
         return { error: errorMessage(error), success: false };
       }
     },
