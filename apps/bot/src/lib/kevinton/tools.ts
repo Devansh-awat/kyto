@@ -92,7 +92,7 @@ export function kevintonTools({
   const proposed: string[] = [];
 
   const kytoIssues = tool({
-    description: `Kyto's public GitHub issues (${REPO}). \`search\` first, always — a problem that already has an issue gets a \`comment\` with the new evidence, never a duplicate. \`file\` opens a new one. Never include a secret, password or token. At most ${MAX_ISSUES_PER_REVIEW} new issues or comments per review.`,
+    description: `Kyto's public GitHub issues (${REPO}). \`search\` first, always — a problem that already has an OPEN issue gets a \`comment\` with the new evidence, never a duplicate. A CLOSED one can't be reopened (kyto-agent has no write access) and a comment there goes unseen, so a recurrence gets a new \`file\` whose body starts "Recurrence of #N" with what is new since the fix. \`file\` opens a new one. Never include a secret, password or token. At most ${MAX_ISSUES_PER_REVIEW} new issues or comments per review.`,
     inputSchema: z.object({
       action: z.enum(['search', 'file', 'comment']),
       body: z
@@ -144,6 +144,17 @@ export function kevintonTools({
           if (!number) {
             return { error: 'comment needs the issue number.', success: false };
           }
+          // kyto-agent only has read access, so it can't reopen an issue the
+          // owner closed, and a comment on a closed issue is never seen.
+          const target = issueSchema.parse(
+            await github(`/repos/${REPO}/issues/${number}`)
+          );
+          if (target.state === 'closed') {
+            return {
+              error: `#${number} is closed and can't be reopened. File a NEW issue instead: body starts "Recurrence of #${number} (closed as fixed)", then what still fails and why the fix didn't cover it.`,
+              success: false,
+            };
+          }
           await github(`/repos/${REPO}/issues/${number}/comments`, {
             body: { body: publicText(body) + footer },
             method: 'POST',
@@ -171,7 +182,11 @@ export function kevintonTools({
           await github(`/repos/${REPO}/issues`, {
             body: {
               body: publicText(body) + footer,
-              title: TITLE_PREFIX + publicText(title),
+              // The prompt shows titles with the prefix, so the model often
+              // writes it itself; without this they read "[kevinton] [kevinton]".
+              title:
+                TITLE_PREFIX +
+                publicText(title).replace(/^(\s*\[kevinton\]\s*)+/i, ''),
             },
             method: 'POST',
           })
