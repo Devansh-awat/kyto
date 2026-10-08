@@ -7,6 +7,7 @@ import {
   getSite,
   listSiteViews,
   setSiteEditors,
+  topSiteHitIps,
 } from '@repo/db/queries';
 import { tool } from 'ai';
 import { z } from 'zod';
@@ -277,7 +278,7 @@ export function siteStatsTool({
 }) {
   return tool({
     description:
-      "View counts for a published site: total, per day, and its most-viewed pages, over the last N days (default 30). Counts page loads from browsers (not bots or link previews); there is no visitor tracking. Only the site's creator, its editors and the bot owner may see them. Counts started on 2026-10-08.",
+      "View counts for a published site: total, per day, and its most-viewed pages, over the last N days (default 30). Counts page loads from browsers (not bots or link previews); there is no visitor tracking (the owner alone also gets the busiest client IPs, for spotting floods). Only the site's creator, its editors and the bot owner may see them. Counts started on 2026-10-08.",
     inputSchema: z.object({
       days: z
         .number()
@@ -319,6 +320,17 @@ export function siteStatsTool({
             .slice(0, TOP_PAGES)
             .map(([path, views]) => ({ path, views })),
           totalViews: total,
+          // Internal: busiest client IPs (every request, bots included, kept
+          // 14 days) for spotting a flood. The owner's eyes only.
+          ...(isOwner
+            ? {
+                topIps: await topSiteHitIps({
+                  limit: TOP_PAGES,
+                  since,
+                  site: name,
+                }),
+              }
+            : {}),
         };
       } catch (error) {
         logger.warn({ error: errorMessage(error) }, '[siteStats] failed');

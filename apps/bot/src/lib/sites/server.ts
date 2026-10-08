@@ -7,7 +7,7 @@ import { handleDashboard } from '@/lib/dashboard';
 import { ensureEmbedAssets, LIVE_EMBED_PREFIX } from '@/lib/embeds';
 import { handleGithubProxy } from '@/lib/github-proxy';
 import logger from '@/lib/logger';
-import { recordSiteView } from '@/lib/sites/analytics';
+import { recordSiteHit, recordSiteView } from '@/lib/sites/analytics';
 import {
   handleSlackViewRequest,
   isSlackViewSocket,
@@ -170,6 +170,7 @@ export async function startSitesServer(): Promise<void> {
     Bun.serve<WhiteboardSocketData | SlackViewSocketData>({
       fetch: async (request, server) => {
         const { pathname } = new URL(request.url);
+        recordSiteHit({ peer: server.requestIP(request)?.address, request });
 
         // A whiteboard's live sync socket (lib/whiteboard). First, because an
         // upgrade is a GET that must never be answered with a file.
