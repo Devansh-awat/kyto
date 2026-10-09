@@ -460,6 +460,8 @@ async function executeTurn(
   // Agentic steps the winning attempt ran, surfaced in the terminal turn log so
   // a turn that ended near the step ceiling is visible without a Slack transcript.
   let handledSteps: number | undefined;
+  // Which reasoning effort the answering attempt ran at (issue #36 experiment).
+  let handledEffort: string | undefined;
   // Every attempt that failed this turn, so the terminal log line explains the
   // whole fallback walk (which models were tried, and why each one died).
   const attempts: AttemptFailure[] = [];
@@ -642,6 +644,7 @@ async function executeTurn(
         durationMs: Date.now() - turnStart,
         failedAttempts: failedAttemptsLog(attempts),
         outputTokens: turnUsage?.outputTokens,
+        reasoningEffort: handledEffort,
         steps: handledSteps,
         threadId,
         timing: timingLog(),
@@ -1568,9 +1571,11 @@ async function executeTurn(
           );
         }
         handledSteps = holder.calls;
+        handledEffort = holder.reasoningEffort;
         logger.info(
           {
             attempt: attemptLog(currentAttempt),
+            reasoningEffort: holder.reasoningEffort,
             durationMs: Date.now() - attemptStart,
             outcome: skipped ? 'skip' : 'text',
             steps: holder.calls,

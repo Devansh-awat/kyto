@@ -21,6 +21,7 @@ import {
   HACKCLUB_PROVIDER,
   MAX_OUTPUT_TOKENS,
   type ModelAttempt,
+  PRIMARY_MODEL,
 } from './providers/attempts';
 import { CHATGPT_PROVIDER } from './providers/chatgpt';
 import { stabilizeToolOrder } from './tool-order';
@@ -63,6 +64,8 @@ export const UPGRADE_TOOL_NAME = 'upgradeModel';
 export interface ResolvedModelHolder {
   calls?: number;
   model?: string;
+  /** The reasoning effort this attempt was sent with (Hack Club only). */
+  reasoningEffort?: string;
 }
 
 /**
@@ -574,6 +577,17 @@ function tunedFetch({
     serviceTier === 'flex' &&
     attempt.provider === HACKCLUB_PROVIDER &&
     attempt.model.startsWith('openai/');
+  // Luna's effort is an experiment (issue #36, owner's call 2026-10-09): drawn
+  // once per attempt and logged with the turn, so speed and quality can be
+  // compared per effort from thread_logs. Every other Hack Club model: medium.
+  const reasoningEffort =
+    attempt.model === PRIMARY_MODEL
+      ? (LUNA_EFFORTS[Math.floor(Math.random() * LUNA_EFFORTS.length)] ??
+        'medium')
+      : 'medium';
+  if (attempt.provider === HACKCLUB_PROVIDER) {
+    holder.reasoningEffort = reasoningEffort;
+  }
   return async (input, init) => {
     const url = requestUrl(input);
     let callInput = input;
@@ -586,7 +600,7 @@ function tunedFetch({
         isGemini ? thoughtSignatures : undefined,
         onCachePrefix ? { onCachePrefix, state: cacheProbe } : undefined,
         toolOrder,
-        { flex, historyMessages }
+        { flex, historyMessages, reasoningEffort }
       );
       if (tuned) {
         const source =
@@ -664,6 +678,10 @@ const REQUIRED_TOP_P: Record<string, number> = {};
 // OpenRouter's upstream precision labels kyto accepts — see tuneBody.
 const ALLOWED_QUANTIZATIONS = ['fp8', 'fp16', 'bf16', 'fp32', 'unknown'];
 
+// Each accepted by luna through the proxy (2026-10-09); `high` is left out
+// because the experiment is about speed.
+const LUNA_EFFORTS = ['none', 'low', 'medium'];
+
 function tuneBody(
   raw: string | undefined,
   attempt: ModelAttempt,
@@ -673,9 +691,14 @@ function tuneBody(
     state: { units: PrefixUnit[] };
   },
   toolOrder?: { names: string[] },
-  { flex, historyMessages }: { flex: boolean; historyMessages: number } = {
+  {
+    flex,
+    historyMessages,
+    reasoningEffort,
+  }: { flex: boolean; historyMessages: number; reasoningEffort: string } = {
     flex: false,
     historyMessages: 0,
+    reasoningEffort: 'medium',
   }
 ): string | null {
   if (raw === undefined) {
@@ -737,7 +760,7 @@ function tuneBody(
       attempt.provider === HACKCLUB_PROVIDER &&
       payload.reasoning === undefined
     ) {
-      payload.reasoning = { effort: 'medium' };
+      payload.reasoning = { effort: reasoningEffort };
       changed = true;
     }
     // One routing hint shared by EVERY thread (coolton's design, 2026-09-29):
