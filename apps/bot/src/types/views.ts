@@ -44,6 +44,15 @@ interface SlackMultiConversationsElement {
   type: 'multi_conversations_select';
 }
 
+interface SlackConversationsElement {
+  action_id: string;
+  filter?: {
+    exclude_bot_users?: boolean;
+    include?: ('im' | 'mpim' | 'private' | 'public')[];
+  };
+  type: 'conversations_select';
+}
+
 interface SlackMultiSelectElement {
   action_id: string;
   initial_options?: SlackSelectOption[];
@@ -84,6 +93,7 @@ export type SlackBlock =
       block_id: string;
       element:
         | SlackMultiConversationsElement
+        | SlackConversationsElement
         | SlackMultiSelectElement
         | SlackSelectElement
         | SlackTextInputElement;

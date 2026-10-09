@@ -31,6 +31,7 @@ import {
 import '@/features/approvals';
 import '@/features/ask-question';
 import '@/features/assistant';
+import '@/features/channel-instructions';
 import '@/features/confirm-post';
 import '@/features/customizations';
 import '@/features/feedback';

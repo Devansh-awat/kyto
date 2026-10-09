@@ -676,6 +676,7 @@ export class KytoBot {
  * dropped every select in a modal (they arrived as undefined).
  */
 interface ModalStateElement {
+  selected_conversation?: string | null;
   selected_conversations?: string[] | null;
   selected_option?: { value?: string } | null;
   selected_options?: { value?: string }[] | null;
@@ -683,7 +684,12 @@ interface ModalStateElement {
 }
 
 function modalStateValue(element?: ModalStateElement): string | undefined {
-  return element?.value ?? element?.selected_option?.value ?? undefined;
+  return (
+    element?.value ??
+    element?.selected_option?.value ??
+    element?.selected_conversation ??
+    undefined
+  );
 }
 
 /**

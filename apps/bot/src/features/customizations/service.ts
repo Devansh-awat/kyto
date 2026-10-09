@@ -5,6 +5,7 @@ import {
   getSlackGrant,
   getUserCustomization,
   listChannelGroups,
+  listChannelInstructions,
   listMcpServerShares,
   listMcpServers,
   listUserModelCredentials,
@@ -36,6 +37,7 @@ export async function publishHome({
     slackGrant,
     privacy,
     channelGroups,
+    allChannelInstructions,
   ] = await Promise.all([
     getUserCustomization(userId),
     listMcpServers(userId).catch(() => []),
@@ -54,6 +56,7 @@ export async function publishHome({
     // if the counts can't be read, because the erase buttons must never vanish.
     previewUserData(userId).catch(() => undefined),
     listChannelGroups().catch(() => [] as ChannelGroupWithChannels[]),
+    listChannelInstructions().catch(() => []),
   ]);
 
   // Where each of this person's servers is shared, rendered for the row. Read
@@ -81,6 +84,9 @@ export async function publishHome({
     view: buildHomeView({
       byokEnabled,
       channelGroups,
+      channelInstructions: isOwner
+        ? allChannelInstructions
+        : allChannelInstructions.filter((row) => row.setBy === userId),
       chatgptAccount: chatgptAccount ?? null,
       identityProfiles,
       isOwner,

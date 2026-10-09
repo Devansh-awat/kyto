@@ -1,6 +1,7 @@
 import {
   clearThreadSandbox,
   clearUserCustomization,
+  deleteChannelInstructionsSetBy,
   deleteChatgptAccount,
   deleteMemoryCurationsByAuthor,
   deleteNotebook,
@@ -53,6 +54,8 @@ export interface EraseResult {
   /** Titles of promoted memories that only the bot owner can now remove. */
   promotedMemories: string[];
   removed: {
+    /** Channels whose instructions this person last saved, now removed. */
+    channelInstructions: number;
     chatgptAccount: boolean;
     customInstructions: boolean;
     mcpServers: number;
@@ -203,6 +206,7 @@ export async function eraseUserData({
   const settings = includeSettings
     ? await eraseSettings(userId)
     : {
+        channelInstructions: 0,
         chatgptAccount: false,
         customInstructions: false,
         mcpServers: 0,
@@ -287,6 +291,7 @@ async function eraseDmSandboxes({
 }
 
 async function eraseSettings(userId: string): Promise<{
+  channelInstructions: number;
   chatgptAccount: boolean;
   customInstructions: boolean;
   mcpServers: number;
@@ -309,7 +314,12 @@ async function eraseSettings(userId: string): Promise<{
   await deleteChatgptAccount(userId).catch(() => undefined);
   // Their own Slack token (search-as-them, !secret): "everything" includes it.
   await deleteSlackGrant(userId).catch(() => undefined);
+  // What they wrote for a channel goes too; the channel's creator can set it again.
+  const channelInstructions = await deleteChannelInstructionsSetBy(
+    userId
+  ).catch(() => 0);
   return {
+    channelInstructions,
     chatgptAccount: true,
     customInstructions: true,
     mcpServers: servers.length,
@@ -336,7 +346,7 @@ export function summarize(result: EraseResult): string {
   }
   if (removed.customInstructions) {
     lines.push(
-      `• custom instructions, ${removed.mcpServers} MCP ${removed.mcpServers === 1 ? 'server' : 'servers'}, ${removed.modelKeys} model ${removed.modelKeys === 1 ? 'key' : 'keys'} and any linked ChatGPT or Slack account removed`
+      `• custom instructions, instructions you set for ${removed.channelInstructions} ${removed.channelInstructions === 1 ? 'channel' : 'channels'}, ${removed.mcpServers} MCP ${removed.mcpServers === 1 ? 'server' : 'servers'}, ${removed.modelKeys} model ${removed.modelKeys === 1 ? 'key' : 'keys'} and any linked ChatGPT or Slack account removed`
     );
   }
   // Never let this read as a clean sweep when it isn't.

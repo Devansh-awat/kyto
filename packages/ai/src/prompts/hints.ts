@@ -7,6 +7,8 @@ export interface RequestHints {
   /** Channel groups this channel belongs to — what a group-scoped memory or a
    *  shared MCP server is attached to. Ids only; the prompt names the group. */
   channelGroupIds?: string[];
+  /** The channel's standing instructions (App Home), set by its creator or the owner. */
+  channelInstructions?: string;
   customization?: { prompt: string; showUsageFooter?: boolean } | null;
   // kyto's own email address (AgentMail inbox), resolved once and cached — it
   // never changes, so it rides in every prompt without a per-turn lookup.

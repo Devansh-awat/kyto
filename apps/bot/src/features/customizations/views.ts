@@ -1,5 +1,6 @@
 import { BYOK_PROVIDER_IDS, BYOK_PROVIDERS, personas } from '@repo/ai';
 import type {
+  ChannelInstructions,
   ChatgptAccount,
   IdentityProfile,
   ModelMode,
@@ -490,6 +491,7 @@ function slackGrantBlocks(grant: SlackGrant | null): SlackBlock[] {
 export function buildHomeView({
   byokEnabled = false,
   channelGroups = [],
+  channelInstructions = [],
   chatgptAccount = null,
   identityProfiles = [],
   isOwner = false,
@@ -510,6 +512,8 @@ export function buildHomeView({
   byokEnabled?: boolean;
   /** Every channel group in the workspace, with its channels rendered. */
   channelGroups?: RenderedChannelGroup[];
+  /** Channel instructions this person last saved (the owner: all of them). */
+  channelInstructions?: ChannelInstructions[];
   /** What an erase would remove, so the section can be specific about it. */
   privacy?: ErasePreview;
   /** The user's linked ChatGPT account, or null. Rendered under the BYOK gate. */
@@ -741,6 +745,69 @@ export function buildHomeView({
         type: 'actions',
       });
     }
+  }
+
+  // Channel instructions: a channel's standing setup, applied to every turn in
+  // it. Its creator (or the owner) saves them; they apply at once (owner's call).
+  blocks.push(
+    { type: 'divider' },
+    {
+      accessory: {
+        action_id: 'home_set_channel_instructions',
+        text: plainText('Set for a channel'),
+        type: 'button',
+      },
+      text: mrkdwn(
+        "*Channel instructions*\nStanding instructions kyto follows in one channel, for everyone in it — tone, what the channel is for, what to leave alone. Only the channel's creator can set them. Each person's own instructions still win over them."
+      ),
+      type: 'section',
+    }
+  );
+  if (channelInstructions.length === 0) {
+    blocks.push({
+      elements: [mrkdwn('_No channel instructions set by you._')],
+      type: 'context',
+    });
+  }
+  for (const row of channelInstructions) {
+    const shown =
+      row.prompt.length > maxHomePromptLength
+        ? `${row.prompt.slice(0, maxHomePromptLength)}...`
+        : row.prompt;
+    blocks.push(
+      {
+        text: mrkdwn(
+          `<#${row.channelId}> — _set by <@${row.setBy}>_\n${escapeSlackText(shown)}`
+        ),
+        type: 'section',
+      },
+      {
+        elements: [
+          {
+            action_id: 'home_edit_channel_instructions',
+            text: plainText('Edit'),
+            type: 'button',
+            value: row.channelId,
+          },
+          {
+            action_id: 'home_remove_channel_instructions',
+            confirm: {
+              confirm: plainText('Remove'),
+              deny: plainText('Keep'),
+              text: mrkdwn(
+                `kyto stops following these instructions in <#${row.channelId}>.`
+              ),
+              title: plainText('Remove instructions?'),
+            },
+            style: 'danger',
+            text: plainText('Remove'),
+            type: 'button',
+            value: row.channelId,
+          },
+        ],
+        type: 'actions',
+      }
+    );
   }
 
   // Recurring reminders: list + pause/resume/cancel (per user).
@@ -1419,6 +1486,63 @@ export function buildChannelGroupModal({
     ...(group ? { private_metadata: JSON.stringify({ id: group.id }) } : {}),
     submit: plainText('Save'),
     title: plainText(group ? 'Edit channel group' : 'New channel group'),
+    type: 'modal',
+  };
+}
+
+/** Set (no channel yet) or edit (one channel, picked already) its instructions. */
+export function buildChannelInstructionsModal({
+  existing,
+}: {
+  existing?: ChannelInstructions;
+} = {}): SlackModalView {
+  const blocks: SlackBlock[] = [];
+  if (existing) {
+    blocks.push({
+      text: mrkdwn(`Instructions for <#${existing.channelId}>`),
+      type: 'section',
+    });
+  } else {
+    blocks.push({
+      block_id: 'instructions_channel',
+      element: {
+        action_id: 'channel',
+        filter: { exclude_bot_users: true, include: ['public', 'private'] },
+        type: 'conversations_select',
+      },
+      hint: plainText('A channel you created. Saving replaces what it had.'),
+      label: plainText('Channel'),
+      type: 'input',
+    });
+  }
+  blocks.push({
+    block_id: 'instructions_prompt',
+    element: {
+      action_id: 'prompt',
+      ...(existing ? { initial_value: existing.prompt } : {}),
+      max_length: maxPromptLength,
+      multiline: true,
+      placeholder: plainText(
+        'e.g. This is a support channel: answer briefly, link the docs, never post outside the thread.'
+      ),
+      type: 'plain_text_input',
+    },
+    hint: plainText(
+      'Everyone in the channel gets these. Leave empty to remove them.'
+    ),
+    label: plainText('Instructions'),
+    optional: true,
+    type: 'input',
+  });
+  return {
+    blocks,
+    callback_id: 'home_channel_instructions_save',
+    close: plainText('Cancel'),
+    ...(existing
+      ? { private_metadata: JSON.stringify({ channelId: existing.channelId }) }
+      : {}),
+    submit: plainText('Save'),
+    title: plainText('Channel instructions'),
     type: 'modal',
   };
 }

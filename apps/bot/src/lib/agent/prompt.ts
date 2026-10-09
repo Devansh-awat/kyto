@@ -103,6 +103,7 @@ export async function buildPrompt(
   message: Message,
   {
     asUserAccount = false,
+    channelInstructions,
     codeChannel = false,
     customizationPrompt,
     includeHidden = false,
@@ -111,6 +112,8 @@ export async function buildPrompt(
   }: {
     /** Answering as kyto's Slack user account; per turn, so volatile tail. */
     asUserAccount?: boolean;
+    /** The channel's standing instructions; per channel, so the front of history. */
+    channelInstructions?: string;
     /** In a code channel (lib/code-channels). Per channel, so volatile tail. */
     codeChannel?: boolean;
     customizationPrompt?: string;
@@ -341,6 +344,13 @@ export async function buildPrompt(
   // entry differently from one turn to the next.
   return {
     history: [
+      channelInstructions
+        ? [
+            '<channel_instructions>',
+            channelInstructions,
+            '</channel_instructions>',
+          ].join('\n')
+        : '',
       customizationPrompt
         ? [
             '<user_instructions>',

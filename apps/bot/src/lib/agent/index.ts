@@ -787,6 +787,7 @@ async function executeTurn(
         slack.channelIdFromThreadId(turnThread.id)
       ),
       asUserAccount,
+      channelInstructions: hints.channelInstructions,
       customizationPrompt: hints.customization?.prompt,
       ownModelsOnly,
       thread: turnThread,
