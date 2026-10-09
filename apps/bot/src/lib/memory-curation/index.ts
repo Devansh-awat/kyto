@@ -5,6 +5,7 @@ import {
   listAuthorsDueCuration,
   listMemoriesByAuthor,
   type Memory,
+  memoryIdsWithFiles,
   recordMemoryCuration,
   updateMemory,
 } from '@repo/db/queries';
@@ -88,10 +89,14 @@ const snapshot = (memory: Memory) => ({
 });
 
 async function curate(author: string): Promise<void> {
-  // Promoted memories are the owner's custody: never curated here.
-  const memories = (await listMemoriesByAuthor(author)).filter(
+  // Promoted memories are the owner's custody: never curated here. Nor is one
+  // with a folder attached — a merge joins bodies, and the folder of a memory
+  // merged away would go with it (cascade), unrecoverable by `restore`.
+  const owned = (await listMemoriesByAuthor(author)).filter(
     (memory) => !memory.isGlobal && memory.scopeKind === null
   );
+  const withFiles = await memoryIdsWithFiles(owned.map(({ id }) => id));
+  const memories = owned.filter(({ id }) => !withFiles.has(id));
   if (memories.length < MIN_MEMORIES) {
     return;
   }

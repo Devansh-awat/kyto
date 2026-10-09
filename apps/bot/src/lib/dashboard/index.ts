@@ -3,6 +3,7 @@ import {
   deleteMemory,
   getGithubRequest,
   getMemoryById,
+  getMemoryFileIndex,
   grantGithubTrust,
   listAllMemories,
   listChannelGroups,
@@ -297,10 +298,11 @@ export async function handleDashboard(
           status: 404,
         });
       }
-      const names = await resolveUserNames([memory.createdBy]).catch(
-        () => undefined
-      );
-      return html(memoryPage({ csrf: session.csrf, memory, names }));
+      const [names, files] = await Promise.all([
+        resolveUserNames([memory.createdBy]).catch(() => undefined),
+        getMemoryFileIndex(memory.id).catch(() => undefined),
+      ]);
+      return html(memoryPage({ csrf: session.csrf, files, memory, names }));
     }
     return new Response('Not found', { headers: HTML_HEADERS, status: 404 });
   } catch (error) {

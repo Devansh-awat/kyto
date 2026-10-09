@@ -134,14 +134,19 @@ export const TOOL_FAMILIES = {
   },
   memory: {
     actions: {
+      attach: 'attachMemoryFiles',
       delete: 'deleteMemory',
+      detach: 'detachMemoryFiles',
       edit: 'editMemory',
       fetch: 'fetchMemory',
+      files: 'restoreMemoryFiles',
       restore: 'restoreMemory',
       save: 'saveMemory',
     },
-    description: 'Your long-term memories (facts, preferences, decisions).',
-    summary: 'long-term memories: save, fetch, edit, delete, restore',
+    description:
+      'Your long-term memories (facts, preferences, decisions), optionally with a folder of files attached.',
+    summary:
+      'long-term memories: save, fetch, edit, delete, restore; attach / unpack (files) / detach a folder of files',
   },
   pins: {
     actions: { pin: 'pinMessage', unpin: 'unpinMessage' },

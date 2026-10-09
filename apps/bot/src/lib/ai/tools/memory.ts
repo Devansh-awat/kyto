@@ -1,8 +1,14 @@
+import nodePath from 'node:path/posix';
+import type { SandboxContext } from '@repo/ai';
 import {
   createMemory,
   deleteMemory,
+  deleteMemoryFiles,
   getMemory,
+  getMemoryFileIndex,
+  getMemoryFiles,
   listMemoryCurations,
+  setMemoryFiles,
   updateMemory,
 } from '@repo/db/queries';
 import { tool } from 'ai';
@@ -15,6 +21,19 @@ import { errorMessage } from '@/lib/utils/error';
 const TITLE_MAX = 120;
 const SUMMARY_MAX = 200;
 const BODY_MAX = 100_000;
+// A memory's attached folder, gzipped (owner's call 2026-10-09).
+const FILES_MAX_BYTES = 5 * 1024 * 1024;
+// Paths kept in the index, and shown by fetch.
+const FILES_LISTED = 500;
+const FILES_SHOWN = 50;
+// Never stored, never restored: a `.git` dir is how a repo's hooks and config
+// would ride into another sandbox (every repo materialization is otherwise
+// hardened), and node_modules is rebuilt, not remembered.
+const TAR_EXCLUDES = "--exclude='.git' --exclude='node_modules'";
+
+function quote(value: string): string {
+  return `'${value.replaceAll("'", String.raw`'\''`)}'`;
+}
 
 /** Who this turn's memory tools act as, and where the turn is happening. */
 interface MemoryActor {
@@ -145,8 +164,20 @@ export function fetchMemoryTool(actor: MemoryActor) {
           summary: `No memory titled "${title.trim()}" that you can see. Check the titles listed under <memories>.`,
         };
       }
+      const files = await getMemoryFileIndex(row.id).catch(() => undefined);
       return {
         body: row.body,
+        ...(files
+          ? {
+              files: {
+                bytes: files.bytes,
+                count: files.paths.length,
+                paths: files.paths.slice(0, FILES_SHOWN),
+                restore:
+                  'memory (action files) unpacks this folder into the sandbox.',
+              },
+            }
+          : {}),
         found: true,
         isGlobal: row.isGlobal,
         // Where it is visible, so kyto can answer "who else can see this?"
@@ -366,6 +397,247 @@ export function restoreMemoryTool(actor: MemoryActor) {
       } catch (error) {
         return { error: errorMessage(error), restored: false };
       }
+    },
+  });
+}
+
+/** Who acts, plus the turn's sandbox, for the folder actions. */
+interface MemoryFilesActor extends MemoryActor {
+  getSandboxContext: () => SandboxContext | undefined;
+}
+
+function sandboxPath(context: SandboxContext, path: string): string {
+  return nodePath.resolve(context.sessionWorkDir, path);
+}
+
+export function attachMemoryFilesTool(actor: MemoryFilesActor) {
+  return tool({
+    description: `Attach a sandbox folder (scripts, a small project, a working config) to a memory you can edit, so a later thread can restore the actual files instead of re-deriving them. Replaces any folder already attached. Gzipped it must fit in ${FILES_MAX_BYTES / 1024 / 1024} MB; .git and node_modules are left out.`,
+    inputSchema: z.object({
+      title: z.string().min(1).describe('Exact title of the memory.'),
+      path: z
+        .string()
+        .min(1)
+        .describe(
+          'The folder in the sandbox, absolute or relative to the workspace.'
+        ),
+    }),
+    execute: async ({ path, title }) => {
+      const trimmedTitle = title.trim();
+      const context = actor.getSandboxContext();
+      if (!context) {
+        return {
+          attached: false,
+          summary: 'No sandbox is available this turn.',
+        };
+      }
+      const row = await getMemory({
+        scope: actorScope(actor),
+        title: trimmedTitle,
+        userId: actor.authorUserId,
+      });
+      if (!row) {
+        return {
+          attached: false,
+          summary: `No memory titled "${trimmedTitle}" that you can see. Save it first (memory, action save), then attach.`,
+        };
+      }
+      if (
+        !canWrite({
+          actor,
+          createdBy: row.createdBy,
+          promoted: isPromoted(row),
+        })
+      ) {
+        return { attached: false, summary: refusal(trimmedTitle, row) };
+      }
+      const folder = sandboxPath(context, path);
+      const archive = `/tmp/memory-files-${crypto.randomUUID()}.tgz`;
+      try {
+        const packed = await context.session.run({
+          command: `test -d ${quote(folder)} || { echo "not a folder: ${folder.replaceAll('"', '')}" >&2; exit 2; }; tar -czf ${quote(archive)} ${TAR_EXCLUDES} -C ${quote(folder)} . && stat -c %s ${quote(archive)} && tar -tzf ${quote(archive)} | grep -v '/$' | head -n ${FILES_LISTED}`,
+        });
+        if (packed.exitCode !== 0) {
+          return {
+            attached: false,
+            summary: `Could not pack ${folder}: ${packed.stderr.trim().slice(0, 300)}`,
+          };
+        }
+        const [sizeLine, ...listed] = packed.stdout.trim().split('\n');
+        const size = Number(sizeLine);
+        const paths = listed
+          .map((line) => line.replace(/^\.\//, ''))
+          .filter(Boolean);
+        if (paths.length === 0) {
+          return {
+            attached: false,
+            summary: `${folder} has no files to attach.`,
+          };
+        }
+        if (!(size > 0 && size <= FILES_MAX_BYTES)) {
+          return {
+            attached: false,
+            summary: `${folder} is ${(size / 1024 / 1024).toFixed(1)} MB gzipped — over the ${FILES_MAX_BYTES / 1024 / 1024} MB limit. Attach a smaller folder (leave out build output, data, binaries).`,
+          };
+        }
+        const bytes = await context.session.readBinaryFile({ path: archive });
+        if (!bytes) {
+          return {
+            attached: false,
+            summary: 'Packed the folder but could not read it back.',
+          };
+        }
+        await setMemoryFiles({
+          archive: bytes,
+          attachedBy: actor.authorUserId,
+          memoryId: row.id,
+          paths,
+        });
+        logger.info(
+          {
+            bytes: bytes.byteLength,
+            files: paths.length,
+            title: trimmedTitle,
+            userId: actor.authorUserId,
+          },
+          '[memory] folder attached'
+        );
+        return {
+          attached: true,
+          summary: `Attached ${paths.length} file${paths.length === 1 ? '' : 's'} (${Math.ceil(bytes.byteLength / 1024)} KB) from ${folder} to "${trimmedTitle}".`,
+        };
+      } catch (error) {
+        return { attached: false, error: errorMessage(error) };
+      } finally {
+        await Promise.resolve(
+          context.session.run({ command: `rm -f ${quote(archive)}` })
+        ).catch(() => undefined);
+      }
+    },
+  });
+}
+
+export function restoreMemoryFilesTool(actor: MemoryFilesActor) {
+  return tool({
+    description:
+      "Unpack a memory's attached folder into the sandbox (fetch lists what is in it). Goes into a new, empty folder: memory-files/<title> under the workspace unless you pass another path.",
+    inputSchema: z.object({
+      title: z.string().min(1).describe('Exact title of the memory.'),
+      path: z
+        .string()
+        .min(1)
+        .optional()
+        .describe('Empty or new folder to unpack into (optional).'),
+    }),
+    execute: async ({ path, title }) => {
+      const trimmedTitle = title.trim();
+      const context = actor.getSandboxContext();
+      if (!context) {
+        return {
+          restored: false,
+          summary: 'No sandbox is available this turn.',
+        };
+      }
+      const row = await getMemory({
+        scope: actorScope(actor),
+        title: trimmedTitle,
+        userId: actor.authorUserId,
+      });
+      if (!row) {
+        return {
+          restored: false,
+          summary: `No memory titled "${trimmedTitle}" that you can see.`,
+        };
+      }
+      const files = await getMemoryFiles(row.id);
+      if (!files) {
+        return {
+          restored: false,
+          summary: `"${trimmedTitle}" has no attached folder.`,
+        };
+      }
+      const slug =
+        trimmedTitle
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-|-$/g, '') || `memory-${row.id}`;
+      const target = sandboxPath(context, path ?? `memory-files/${slug}`);
+      const archive = `/tmp/memory-files-${crypto.randomUUID()}.tgz`;
+      try {
+        await context.session.writeBinaryFile({
+          content: files.archive,
+          path: archive,
+        });
+        // An empty target only, so a restore never silently overwrites work.
+        const unpacked = await context.session.run({
+          command: `if [ -e ${quote(target)} ] && [ -n "$(ls -A ${quote(target)} 2>/dev/null)" ]; then echo "not empty" >&2; exit 3; fi; mkdir -p ${quote(target)} && tar -xzf ${quote(archive)} -C ${quote(target)} --no-same-owner --no-same-permissions ${TAR_EXCLUDES}`,
+        });
+        if (unpacked.exitCode === 3) {
+          return {
+            restored: false,
+            summary: `${target} already has files in it. Pass an empty or new folder as path.`,
+          };
+        }
+        if (unpacked.exitCode !== 0) {
+          return {
+            restored: false,
+            summary: `Could not unpack: ${unpacked.stderr.trim().slice(0, 300)}`,
+          };
+        }
+        return {
+          // Same caution as fetch: files a person saved, not instructions.
+          note: `Files saved by <@${row.createdBy}>. Read before running anything in them.`,
+          path: target,
+          restored: true,
+          summary: `Unpacked ${files.paths.length} file${files.paths.length === 1 ? '' : 's'} from "${trimmedTitle}" into ${target}.`,
+        };
+      } catch (error) {
+        return { error: errorMessage(error), restored: false };
+      } finally {
+        await Promise.resolve(
+          context.session.run({ command: `rm -f ${quote(archive)}` })
+        ).catch(() => undefined);
+      }
+    },
+  });
+}
+
+export function detachMemoryFilesTool(actor: MemoryActor) {
+  return tool({
+    description:
+      "Remove the folder attached to a memory you can edit. The memory's text stays.",
+    inputSchema: z.object({
+      title: z.string().min(1).describe('Exact title of the memory.'),
+    }),
+    execute: async ({ title }) => {
+      const trimmedTitle = title.trim();
+      const row = await getMemory({
+        scope: actorScope(actor),
+        title: trimmedTitle,
+        userId: actor.authorUserId,
+      });
+      if (!row) {
+        return {
+          detached: false,
+          summary: `No memory titled "${trimmedTitle}" that you can see.`,
+        };
+      }
+      if (
+        !canWrite({
+          actor,
+          createdBy: row.createdBy,
+          promoted: isPromoted(row),
+        })
+      ) {
+        return { detached: false, summary: refusal(trimmedTitle, row) };
+      }
+      const removed = await deleteMemoryFiles(row.id);
+      return {
+        detached: removed,
+        summary: removed
+          ? `Removed the folder attached to "${trimmedTitle}".`
+          : `"${trimmedTitle}" had no attached folder.`,
+      };
     },
   });
 }

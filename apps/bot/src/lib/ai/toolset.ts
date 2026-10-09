@@ -75,9 +75,12 @@ import { joinThreadTool } from './tools/join-thread';
 import { leaveThreadTool } from './tools/leave-thread';
 import { listThreadsTool } from './tools/list-threads';
 import {
+  attachMemoryFilesTool,
   deleteMemoryTool,
+  detachMemoryFilesTool,
   editMemoryTool,
   fetchMemoryTool,
+  restoreMemoryFilesTool,
   restoreMemoryTool,
   saveMemoryTool,
 } from './tools/memory';
@@ -365,6 +368,15 @@ export async function buildTools({
     editMemory: editMemoryTool(memoryActor),
     deleteMemory: deleteMemoryTool(memoryActor),
     restoreMemory: restoreMemoryTool(memoryActor),
+    attachMemoryFiles: attachMemoryFilesTool({
+      ...memoryActor,
+      getSandboxContext,
+    }),
+    restoreMemoryFiles: restoreMemoryFilesTool({
+      ...memoryActor,
+      getSandboxContext,
+    }),
+    detachMemoryFiles: detachMemoryFilesTool(memoryActor),
     listThreads: listThreadsTool({
       askerUserId: authorUserId,
       currentThreadId: thread.id,

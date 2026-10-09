@@ -221,10 +221,13 @@ ${
 
 export function memoryPage({
   csrf,
+  files,
   memory,
   names,
 }: {
   csrf: string;
+  /** Its attached folder, if any — promoting shares these files too. */
+  files?: { bytes: number; paths: string[] };
   memory: Memory;
   names?: Names;
 }): string {
@@ -239,6 +242,13 @@ export function memoryPage({
     }</p>
 <p>${escapeHtml(memory.summary)}</p>
 <pre>${escapeHtml(memory.body)}</pre>
+${
+  files
+    ? `<h2>Attached folder</h2>
+<p class="muted">${files.paths.length} files, ${Math.ceil(files.bytes / 1024)} KB gzipped. Promoting shares these too: anyone who can see the memory can unpack them into their sandbox.</p>
+<pre>${escapeHtml(files.paths.join('\n'))}</pre>`
+    : ''
+}
 <div class="actions">
 ${
   memory.isGlobal
