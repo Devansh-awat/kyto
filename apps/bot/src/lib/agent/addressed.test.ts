@@ -19,13 +19,13 @@ describe('addressedState', () => {
   test('names kyto by its own id and leaves other pings as ids', () => {
     const state = addressedState({
       messages: [
-        message('owner', '<> <@UKYTO> you too'),
-        message('lily', '<@UGORKIE> build yours from scratch'),
+        message('owner', '<> <@U0KYTO> you too'),
+        message('lily', '<@U0OTHER> build yours from scratch'),
       ],
-      selfId: 'UKYTO',
+      selfId: 'U0KYTO',
     });
     expect(state).toBe(
-      'owner: <> @kyto you too\nlily: @UGORKIE build yours from scratch'
+      'owner: <> @kyto you too\nlily: @U0OTHER build yours from scratch'
     );
   });
 
