@@ -14,5 +14,7 @@ export type AbortReason = 'interrupt' | 'stop' | 'shutdown';
 
 export interface ActiveTurn {
   controller: AbortController;
+  /** What the turn is answering; unset for a `!secret` turn, which no check may read. */
+  message?: Message;
   pendingMessages: TurnInput[];
 }

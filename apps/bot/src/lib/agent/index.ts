@@ -18,6 +18,7 @@ import { env } from '@/env';
 import { restoreAnnotatedMentions } from '@/harness/markdown';
 import type { ThreadHandle } from '@/harness/thread';
 import type { Message, StreamChunk } from '@/harness/types';
+import { addressedState, isAddressedToKyto } from '@/lib/agent/addressed';
 import { createAttemptRouter } from '@/lib/agent/attempt-router';
 import {
   type GatheredResult,
@@ -229,7 +230,7 @@ function turnSlot({
   return asUserAccount ? `${threadId}${USER_ACCOUNT_TURN_SUFFIX}` : threadId;
 }
 
-export function runTurn(input: {
+export async function runTurn(input: {
   /**
    * Answer as kyto's Slack USER account (lib/chat `userBot`): like a person —
    * no plan, no thinking, no footer, only the reply and the odd status line,
@@ -282,12 +283,45 @@ export function runTurn(input: {
       { botId: input.message.author.userId, threadId: input.thread.id },
       '[bots] a bot message arrived during a running turn; not interrupting'
     );
-    return Promise.resolve();
+    return;
+  }
+  // A line meant for someone else must not cut kyto's answer short (#27). A
+  // ping, a DM and a subagent/background wake (synthetic: no Slack `ts`) are
+  // for kyto by definition; a `!secret` text never goes to Jev.
+  const askJev =
+    !(
+      input.message.isMention ||
+      slack.isDM(input.thread.id) ||
+      input.secret ||
+      typeof input.message.raw.ts !== 'string'
+    ) && turn.message !== undefined;
+  if (askJev) {
+    const addressed = await isAddressedToKyto(
+      addressedState({
+        messages: [
+          ...(turn.message ? [turn.message] : []),
+          ...turn.pendingMessages.map(({ message }) => message),
+          input.message,
+        ],
+        selfId: input.asUserAccount ? slack.userAccountId : slack.botUserId,
+      })
+    );
+    if (!addressed) {
+      logger.info(
+        { threadId: input.thread.id, userId: input.message.author.userId },
+        '[agent] message not meant for kyto; not interrupting'
+      );
+      return;
+    }
+    // Jev took a moment: the turn may have ended, or a follow-up replaced it.
+    if (getTurn({ threadId: slot }) !== turn) {
+      return runTurn(input);
+    }
   }
   interruptTurn({ activeTurn: turn, input });
   // The ✅ is the app's; a person doesn't react to say they read you.
   if (input.asUserAccount) {
-    return Promise.resolve();
+    return;
   }
   return slack
     .addReaction(input.thread.id, input.message.id, 'white_check_mark')
@@ -362,6 +396,7 @@ async function executeTurn(
   });
   const activeTurn: ActiveTurn = {
     controller,
+    message: secret ? undefined : message,
     pendingMessages: [],
   };
   const slot = turnSlot({ asUserAccount, threadId });
