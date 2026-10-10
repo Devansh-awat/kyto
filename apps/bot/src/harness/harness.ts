@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { isSlackFileHost } from './file-host';
 import { mrkdwnToMarkdown } from './markdown';
 import { filterOutbound, filterOutboundDeep } from './outbound';
+import { ThreadCache } from './thread-cache';
 import type { Author, Message, MessageAttachment, StreamChunk } from './types';
 import { UserAccountGateway } from './user-gateway';
 
@@ -37,6 +38,8 @@ const FAILED_USER_RETRY_MS = 60 * 1000;
 // for more is not an error, it just silently returns fewer — so paging a long
 // thread with a bigger number costs the same calls and looks like it worked.
 const SLACK_MAX_PAGE = 1000;
+// The page budget of a thread refresh, the same as the prompt's own read.
+const CACHED_THREAD_MAX_PAGES = 20;
 const SLACK_FILE_HOST = 'files.slack.com';
 // How often the typing indicator is re-sent; Slack's lasts a few seconds.
 const TYPING_PULSE_MS = 3000;
@@ -272,6 +275,8 @@ export class SlackHarness {
   /** The same session as request headers, for `url_private` file downloads. */
   private readonly userAccountHeaders: Record<string, string> | undefined;
   private readonly logger: Logger;
+  /** Threads the prompt read, kept current by message events (thread-cache). */
+  readonly threadCache = new ThreadCache();
   private readonly userCache = new Map<
     string,
     { at: number; author: Author }
@@ -579,6 +584,7 @@ export class SlackHarness {
     threadId: string,
     {
       asUserAccount = false,
+      cached = false,
       cursor,
       direction = 'backward',
       limit = 100,
@@ -591,6 +597,13 @@ export class SlackHarness {
        * ever for the thread that account was pinged in — never a tool's read.
        */
       asUserAccount?: boolean;
+      /**
+       * Serve the thread from the event-fed copy when there is one (the
+       * prompt's read, which sits in front of the model request). A hit is
+       * still checked against Slack in the background. The app's view only:
+       * the user account's threads don't reach the app's events.
+       */
+      cached?: boolean;
       cursor?: string;
       direction?: 'backward' | 'forward';
       limit?: number;
@@ -632,6 +645,123 @@ export class SlackHarness {
         nextCursor: oldest ? nextCursor : undefined,
       };
     }
+    const useCache =
+      cached && !asUserAccount && !cursor && direction === 'backward';
+    const held = useCache
+      ? this.threadCache.get({ key: `${channel}:${threadTs}`, oldest })
+      : undefined;
+    if (held) {
+      this.readThreadIntoCache({ channel, oldest, pages, threadTs }).catch(
+        () => undefined
+      );
+      return {
+        messages: await this.hydrateMessages(held.slice(-limit), channel),
+      };
+    }
+    ({ nextCursor, raw } = useCache
+      ? await this.readThreadIntoCache({ channel, oldest, pages, threadTs })
+      : await this.readReplies({
+          channel,
+          client,
+          cursor,
+          oldest,
+          pages,
+          pageSize,
+          threadTs,
+        }));
+    if (direction === 'backward') {
+      raw = raw.slice(-limit);
+    }
+    return {
+      messages: await this.hydrateMessages(raw, channel),
+      nextCursor,
+    };
+  }
+
+  /**
+   * Re-reads a thread the cache holds, off the request path: after a turn, so
+   * the next one sees kyto's own reply exactly as Slack has it.
+   */
+  async refreshCachedThread(threadId: string): Promise<void> {
+    const { channel, threadTs } = this.decodeThreadId(threadId);
+    const held = threadTs
+      ? this.threadCache.oldestOf(`${channel}:${threadTs}`)
+      : undefined;
+    if (!(threadTs && held)) {
+      return;
+    }
+    await this.readThreadIntoCache({
+      channel,
+      oldest: held.oldest,
+      pages: CACHED_THREAD_MAX_PAGES,
+      threadTs,
+    });
+  }
+
+  private async readThreadIntoCache({
+    channel,
+    oldest,
+    pages,
+    threadTs,
+  }: {
+    channel: string;
+    oldest: string | undefined;
+    pages: number;
+    threadTs: string;
+  }): Promise<{ nextCursor?: string; raw: RawSlackMessage[] }> {
+    const key = `${channel}:${threadTs}`;
+    this.threadCache.beginRead(key);
+    try {
+      const read = await this.readReplies({
+        channel,
+        client: this.webClient,
+        oldest,
+        pages,
+        pageSize: SLACK_MAX_PAGE,
+        threadTs,
+      });
+      if (read.nextCursor) {
+        this.threadCache.dropRead(key);
+        return read;
+      }
+      const { drifted } = this.threadCache.finishRead({
+        key,
+        oldest,
+        raw: read.raw,
+      });
+      if (drifted) {
+        // Counts only: how often events alone did not match Slack.
+        this.logger.info(
+          { messages: read.raw.length, thread: key },
+          '[thread-cache] cached copy had drifted from Slack; replaced'
+        );
+      }
+      return read;
+    } catch (error) {
+      this.threadCache.dropRead(key);
+      throw error;
+    }
+  }
+
+  private async readReplies({
+    channel,
+    client,
+    cursor,
+    oldest,
+    pages,
+    pageSize,
+    threadTs,
+  }: {
+    channel: string;
+    client: WebClient;
+    cursor?: string;
+    oldest: string | undefined;
+    pages: number;
+    pageSize: number;
+    threadTs: string;
+  }): Promise<{ nextCursor?: string; raw: RawSlackMessage[] }> {
+    let raw: RawSlackMessage[] = [];
+    let nextCursor = cursor;
     for (let page = 0; page < pages; page += 1) {
       const result = await client.conversations.replies({
         channel,
@@ -646,13 +776,7 @@ export class SlackHarness {
         break;
       }
     }
-    if (direction === 'backward') {
-      raw = raw.slice(-limit);
-    }
-    return {
-      messages: await this.hydrateMessages(raw, channel),
-      nextCursor,
-    };
+    return { nextCursor, raw };
   }
 
   /** Top-level channel history, newest first (Slack's native order). */

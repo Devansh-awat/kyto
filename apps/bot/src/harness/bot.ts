@@ -292,6 +292,11 @@ export class KytoBot {
       logLevel: LogLevel.WARN,
     });
     this.socket = socket;
+    // Events sent while the socket was down are gone, so a cached thread may
+    // be missing some: every copy is re-read from Slack on its next turn.
+    socket.on('reconnecting', () => {
+      this.harness.threadCache.clear();
+    });
 
     // The client emits the INNER event type for events_api envelopes (never
     // 'events_api' itself), so route everything off the 'slack_event'
@@ -378,6 +383,9 @@ export class KytoBot {
     }
     switch (event.type) {
       case 'message':
+        // Before any filtering: an edit or a deletion is never a turn, but the
+        // cached copy of its thread has to follow it (harness/thread-cache).
+        this.harness.threadCache.apply(event as RawSlackMessage);
         if (
           typeof event.action_token === 'string' &&
           typeof event.channel === 'string' &&

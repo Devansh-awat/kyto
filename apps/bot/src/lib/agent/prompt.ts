@@ -61,6 +61,7 @@ function readThread({
   return slack
     .fetchMessages(threadId, {
       asUserAccount,
+      cached: true,
       limit: MAX_HISTORY_MESSAGES,
       maxPages: MAX_HISTORY_PAGES,
       ...(oldest ? { oldest } : {}),

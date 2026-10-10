@@ -755,6 +755,12 @@ async function executeTurn(
     if (!secret) {
       scheduleKevinton(threadId).catch(() => undefined);
     }
+    // The next turn's prompt reads the cached thread, and Slack may not send
+    // the events of this turn's own streamed reply in full: re-read it now,
+    // while nobody is waiting on it.
+    if (!asUserAccount) {
+      slack.refreshCachedThread(threadId).catch(() => undefined);
+    }
     clearTurn({ threadId: slot, turn: activeTurn });
     // Only an interrupt replays queued messages; a rapid burst is merged into a
     // single follow-up so steering does not drop intermediate corrections.
