@@ -128,26 +128,46 @@ export async function buildPrompt(
     thread?: Thread;
   } = {}
 ): Promise<{ history: string[]; tail: string }> {
-  const current = await renderMessage(message);
-
-  // What kyto was THINKING on this thread's last few turns. Slack replayed above
-  // only records what it said, so without this each turn re-derives the reasoning
-  // (and the dead ends) of the one before it.
-  const thinking = thread
-    ? renderThinking(await recallThinking(thread.id))
-    : '';
-
-  // The user account reads the global notebook too; the app, only the
-  // channel's (lib/notebooks.ts). A failed read costs the notes, not the turn.
-  const notebooks = thread
-    ? await renderNotebooks({
-        channelId: slack.decodeThreadId(thread.id).channel,
-        includeGlobal: asUserAccount,
-      }).catch((error: unknown) => {
-        logger.warn({ err: error }, '[prompt] could not load the notebooks');
-        return '';
-      })
-    : '';
+  // Everything below is independent, so it is read at once: the Slack thread
+  // read is the slow part (~0.5s), and awaiting the rest in front of it put
+  // every one of their round trips between the ping and the model request.
+  const [current, thinking, notebooks, threadRead] = await Promise.all([
+    renderMessage(message),
+    // What kyto was THINKING on this thread's last few turns. Slack replayed
+    // above only records what it said, so without this each turn re-derives
+    // the reasoning (and the dead ends) of the one before it.
+    thread ? recallThinking(thread.id).then(renderThinking) : '',
+    // The user account reads the global notebook too; the app, only the
+    // channel's (lib/notebooks.ts). A failed read costs the notes, not the turn.
+    thread
+      ? renderNotebooks({
+          channelId: slack.decodeThreadId(thread.id).channel,
+          includeGlobal: asUserAccount,
+        }).catch((error: unknown) => {
+          logger.warn({ err: error }, '[prompt] could not load the notebooks');
+          return '';
+        })
+      : '',
+    thread
+      ? Promise.all([
+          // Focus mode: drop messages from non-focused users so kyto genuinely
+          // never sees what other people said in a focused thread (not just
+          // declines to reply). Its own messages and the owner's are always kept.
+          thread.state.catch(() => null),
+          // Start the read at the newest message an earlier turn already
+          // digested. Everything before it is in the summary, so re-reading it
+          // would be Slack API work whose only output we already have written down.
+          loadThreadSummary(thread.id).then(async (stored) => ({
+            fetched: await readThread({
+              asUserAccount,
+              oldest: stored?.throughMessageId,
+              threadId: thread.id,
+            }),
+            stored,
+          })),
+        ])
+      : undefined,
+  ]);
 
   // A native code channel's one conversation, not a thread (lib/code-channels).
   const inChannelConversation =
@@ -155,20 +175,9 @@ export async function buildPrompt(
   let history: string[] = [];
   let compacted = '';
   let pulledInLater = false;
-  if (thread) {
-    // Focus mode: drop messages from non-focused users so kyto genuinely never
-    // sees what other people said in a focused thread (not just declines to
-    // reply). Its own messages and the owner's are always kept.
-    const focusState = await thread.state.catch(() => null);
-    // Start the read at the newest message an earlier turn already digested.
-    // Everything before it is in the summary, so re-reading it would be Slack
-    // API work whose only output we already have written down.
-    const stored = await loadThreadSummary(thread.id);
-    let fetched = await readThread({
-      asUserAccount,
-      oldest: stored?.throughMessageId,
-      threadId: thread.id,
-    });
+  if (thread && threadRead) {
+    const [focusState, { stored, fetched: firstRead }] = threadRead;
+    let fetched = firstRead;
     // A cursor left over means the walk ran out of budget BEFORE the end of the
     // thread — so what we hold is a middle slice, and replaying its last 100
     // messages would hand the model a conversation from months ago as if it

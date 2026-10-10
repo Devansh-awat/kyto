@@ -178,6 +178,15 @@ const BARE_SKIP_MAX_CHARS = 16;
 // blank lines like the normal reply path does, falling back to a hard cut.
 const EPHEMERAL_MAX = 2900;
 
+// The thread as Jev last saw it, per thread, so the next turn's two Jev calls
+// can start at the ping instead of after the ~0.5s Slack read (owner's call,
+// 2026-10-10). Jev reads only the newest ~10k chars, so that is all that is
+// kept; a `!secret` turn's thread is never stored. In memory on purpose: after
+// a restart a thread is judged on its new message alone until it answers once.
+const JEV_CONTEXT_CHARS = 10_000;
+const MAX_JEV_CONTEXTS = 1000;
+const jevContexts = new Map<string, string>();
+
 function splitForEphemeral(text: string): string[] {
   const chunks: string[] = [];
   let rest = text;
@@ -366,14 +375,50 @@ async function executeTurn(
       // A `!secret` question must leave no trace, container logs included.
       text: secret ? undefined : message.text,
       threadId,
+      // Slack's timestamp is when the message was sent, so this is delivery
+      // plus every gate in front of the turn.
+      sinceMessageMs: turnStart - Math.round(Number(message.id) * 1000),
       userId: message.author.userId,
     },
     '[agent] turn started'
   );
+  // Neither feeds the prompt, so neither may sit between the ping and the model
+  // request (a status call is a ~0.35s Slack round trip, a cold channel index
+  // ~2s on the first turn after every deploy). renderTurn waits for both right
+  // before the first request, so the status still lands before anything posts.
+  // "kyto is thinking" is the app's assistant status — the user account shows
+  // nothing until it speaks. A status that fails is cosmetic, not a dead turn.
+  const thinkingShown = (
+    asUserAccount ? Promise.resolve() : startThinking({ thread })
+  ).catch((error: unknown) => {
+    logger.warn(
+      { err: errorMessage(error), threadId },
+      '[agent] failed to show the thinking status'
+    );
+  });
+  // Keeps the channel name→id index fresh (30-min TTL, shared in-flight
+  // refresh) so `#some-channel` in the reply becomes a real link. It swallows
+  // its own failures — a stale index just leaves a name as plain text.
+  const channelIndexReady = ensureChannelIndex().catch(() => undefined);
+  // Independent DB reads, at once rather than one round trip after another.
   // BYOK: a user who brought their own model keys runs on them instead of the
   // service models, and the shared chain is only reachable afterwards if they
   // opted in — a broken personal key must not silently spend the shared budget.
-  const routing = await resolveUserRouting(message.author.userId);
+  const [routing, hints, sandboxSessionId, codeChannel] = await Promise.all([
+    resolveUserRouting(message.author.userId),
+    requestHints({ message, thread }),
+    // The channel, in a code channel: its threads share one workspace.
+    sandboxKey(threadId),
+    getCodeChannel(threadId)
+      .catch(() => undefined)
+      .then((row) => {
+        if (!row) {
+          return;
+        }
+        return row.native ? ('native' as const) : ('ordinary' as const);
+      }),
+  ]);
+  const setupReadMs = Date.now() - turnStart;
   // Every rung past the user's own is kyto's shared chain, which is what the
   // prompt's code-goes-to-OpenCode rule is about.
   const ownModelsOnly =
@@ -413,18 +458,6 @@ async function executeTurn(
     clearTurn({ threadId: slot, turn: activeTurn });
     throw error;
   };
-  // "kyto is thinking" is the app's assistant status — the user account shows
-  // nothing until it speaks.
-  if (!asUserAccount) {
-    await startThinking({ thread }).catch(failSetup);
-  }
-  // Keep the channel name→id index fresh (30-min TTL, shared in-flight
-  // refresh) so `#some-channel` in the reply becomes a real link. A no-op on
-  // all but one turn in thirty minutes, and it swallows its own failures — a
-  // stale index just leaves a name as plain text.
-  await ensureChannelIndex().catch(failSetup);
-  const hints = await requestHints({ thread, message }).catch(failSetup);
-
   // Per-turn proxy secrets, revoked at turn end: the read-only Slack proxy (so
   // a script can query Slack without the bot token) and the GitHub proxy, which
   // is where the real PAT lives — nothing in the sandbox holds a GitHub
@@ -448,11 +481,7 @@ async function executeTurn(
     bootstrapCommand: proxies.bootstrapCommand,
     env: proxies.env,
     logger,
-    // The channel, in a code channel: its threads share one workspace.
-    sessionId: await sandboxKey(threadId).catch((error: unknown) => {
-      proxies.revoke();
-      return failSetup(error);
-    }),
+    sessionId: sandboxSessionId,
     store: threadSandboxStore,
   });
   const sandboxContext: SandboxContext = {
@@ -793,15 +822,25 @@ async function executeTurn(
     // failed build must not surface as an unhandled rejection meanwhile.
     pendingTools.catch(() => undefined);
     closeTools = async () => (await pendingTools).close();
+    // Two Jev calls at once, started BEFORE the prompt: is this coding work
+    // (then the prompt steers it to OpenCode), and which deferred tools will it
+    // need (lib/ai/tool-preload). They judge the thread as of kyto's last answer
+    // plus the new message, so they cost no wait behind the Slack read. What
+    // they can miss is a coding ask that only shows in messages posted since
+    // kyto last answered; every code tool call is still judged on the full
+    // thread (guardTool, after setConversation below).
+    const jevStart = Date.now();
+    const earlierThread = jevContexts.get(threadId) ?? '';
+    codingMonitor.setConversation(earlierThread);
+    const jevVerdicts = Promise.all([
+      codingMonitor.checkTurn(),
+      secret
+        ? Promise.resolve({ needsResearch: false, tools: [] })
+        : pickPreloadTools(`${earlierThread}\n\n${turnMessage.text}`),
+    ]);
+    const promptStart = Date.now();
     const { history, tail } = await buildPrompt(turnMessage, {
-      codeChannel: await getCodeChannel(turnThread.id)
-        .catch(() => undefined)
-        .then((row) => {
-          if (!row) {
-            return;
-          }
-          return row.native ? 'native' : 'ordinary';
-        }),
+      codeChannel,
       asUserAccount,
       channelInstructions: hints.channelInstructions,
       customizationPrompt: hints.customization?.prompt,
@@ -811,9 +850,6 @@ async function executeTurn(
     // The per-turn tail; the replayed thread stays in `history` so it can go
     // out as its own cacheable messages (see buildPrompt).
     let messageText = tail;
-    // Judged against the prompt the model is about to get — the thread, earlier
-    // thinking and the new message — because a follow-up like "now do the cf
-    // version" is only a coding request in light of what came before it.
     // The same message, again, after a restart cut the first try short. What
     // was already posted is in the thread above; what was already DONE (a post,
     // a file, a reminder) may not be obvious from it.
@@ -828,16 +864,24 @@ async function executeTurn(
       messageText = `${messageText}\n\n<resumed_after_restart>kyto restarted while answering this message and is picking it back up. Anything you already posted is in the thread above — continue from there instead of starting over, and check before repeating anything with a side effect (a post, a DM, a reminder, a file), since it may already have happened.</resumed_after_restart>`;
     }
     const conversation = [...history, messageText].join('\n\n');
+    const promptMs = Date.now() - promptStart;
     codingMonitor.setConversation(conversation);
-    // Two Jev calls at once: is this coding work (then the prompt steers it to
-    // OpenCode), and which deferred tools will it need (lib/ai/tool-preload).
-    // In parallel, so the preload costs no wait of its own.
-    const [isCodingWork, preload] = await Promise.all([
-      codingMonitor.checkTurn(),
-      secret
-        ? Promise.resolve({ needsResearch: false, tools: [] })
-        : pickPreloadTools(conversation),
-    ]);
+    if (!secret) {
+      jevContexts.delete(threadId);
+      // kyto's own reply is left out: what makes a turn coding work is what
+      // people ask, and the reply only exists once every attempt has ended.
+      jevContexts.set(
+        threadId,
+        [...history, turnMessage.text].join('\n\n').slice(-JEV_CONTEXT_CHARS)
+      );
+      // Map order is insertion order, and a touched thread was just re-inserted,
+      // so the first key is the one idle longest.
+      const idlest = jevContexts.keys().next().value;
+      if (jevContexts.size > MAX_JEV_CONTEXTS && idlest !== undefined) {
+        jevContexts.delete(idlest);
+      }
+    }
+    const [isCodingWork, preload] = await jevVerdicts;
     if (isCodingWork) {
       messageText = `${messageText}\n\n<coding_work>${DELEGATE_NOTE}</coding_work>`;
     }
@@ -917,8 +961,27 @@ async function executeTurn(
     let nextAttemptLabel: 'fallback' | 'upgraded' | undefined = stickyUpgrade
       ? 'upgraded'
       : undefined;
+    // From the Jev calls' start, so it overlaps promptMs: only what exceeds
+    // the prompt build is wait.
+    const jevMs = Date.now() - jevStart;
+    const toolsStart = Date.now();
     const built = await pendingTools;
     built.preload(preload.tools);
+    const toolsWaitMs = Date.now() - toolsStart;
+    // Nothing has posted yet, so the status is still first on screen.
+    const statusStart = Date.now();
+    await Promise.all([thinkingShown, channelIndexReady]);
+    logger.info(
+      {
+        jevMs,
+        promptMs,
+        readsMs: setupReadMs,
+        statusWaitMs: Date.now() - statusStart,
+        threadId,
+        toolsWaitMs,
+      },
+      '[agent] setup phases'
+    );
     // Always at hand in a native code channel: its tabs and context bar are
     // much of the point of working there, so not left to Jev noticing.
     if (isNativeCodeChannel(slack.decodeThreadId(threadId).channel)) {
