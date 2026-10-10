@@ -8,6 +8,7 @@ import { MemoryKV } from './kv';
 import { ThreadHandle } from './thread';
 import type {
   ActionEvent,
+  AgentSessionStoppedEvent,
   AppHomeEvent,
   AssistantThreadEvent,
   Author,
@@ -37,11 +38,20 @@ const messageActionSchema = z.object({
   trigger_id: z.string(),
   user: z.object({ id: z.string(), username: z.string().optional() }),
 });
-/** Returns what to say back, or undefined for the default greeting. */
+const actionChannelSchema = z.looseObject({
+  channel: z.looseObject({ id: z.string() }).optional(),
+});
+/**
+ * Returns what to say back, undefined for the default greeting, or null to
+ * say nothing (the command is answered some other way).
+ */
 type SlashCommandHandler = (command: {
+  channelId: string;
+  /** With its slash: `/kyto`, or one a code channel registered. */
+  command: string;
   text: string;
   userId: string;
-}) => Promise<string | undefined>;
+}) => Promise<string | null | undefined>;
 type ModalSubmitHandler = (
   event: ModalSubmitEvent
 ) => Promise<ModalSubmitResult> | ModalSubmitResult;
@@ -105,6 +115,10 @@ export class KytoBot {
   private readonly actionHandlers = new Map<string, ActionHandler>();
   private readonly shortcutHandlers = new Map<string, MessageShortcutHandler>();
   private slashHandler: SlashCommandHandler | undefined;
+  private unhandledActionHandler: ActionHandler | undefined;
+  private readonly sessionStoppedHandlers: ((
+    event: AgentSessionStoppedEvent
+  ) => Promise<void>)[] = [];
   private readonly modalHandlers = new Map<string, ModalSubmitHandler>();
   private readonly appHomeHandlers: ((event: AppHomeEvent) => Promise<void>)[] =
     [];
@@ -163,6 +177,20 @@ export class KytoBot {
     for (const id of Array.isArray(actionId) ? actionId : [actionId]) {
       this.actionHandlers.set(id, handler);
     }
+  }
+
+  /**
+   * Any block action no `onAction` handler claims — a button in a code
+   * channel's Block Kit tab, whose action ids are the model's own.
+   */
+  onUnhandledAction(handler: ActionHandler): void {
+    this.unhandledActionHandler = handler;
+  }
+
+  onAgentSessionStopped(
+    handler: (event: AgentSessionStoppedEvent) => Promise<void>
+  ): void {
+    this.sessionStoppedHandlers.push(handler);
   }
 
   onMessageShortcut(callbackId: string, handler: MessageShortcutHandler): void {
@@ -385,6 +413,15 @@ export class KytoBot {
         );
         return;
       }
+      case 'agent_session_stopped':
+        await runAll(this.sessionStoppedHandlers, {
+          channelId: String(event.channel ?? ''),
+          ...(typeof event.thread_ts === 'string'
+            ? { threadTs: event.thread_ts }
+            : {}),
+          ...(typeof event.user === 'string' ? { userId: event.user } : {}),
+        });
+        return;
       case 'member_joined_channel':
         await runAll(this.memberJoinedHandlers, {
           channelId: String(event.channel ?? ''),
@@ -476,16 +513,23 @@ export class KytoBot {
     const text = typeof body.text === 'string' ? body.text : '';
     const userId = typeof body.user_id === 'string' ? body.user_id : '';
     const reply = this.slashHandler
-      ? this.slashHandler({ text, userId })
+      ? this.slashHandler({
+          channelId: typeof body.channel_id === 'string' ? body.channel_id : '',
+          command: typeof body.command === 'string' ? body.command : '',
+          text,
+          userId,
+        })
       : Promise.resolve(undefined);
     reply
       .then((answer) =>
-        envelope.ack({
-          response_type: 'ephemeral',
-          text:
-            answer ??
-            "hi, i'm kyto! just @mention me in a channel or DM me — no slash command needed.",
-        })
+        answer === null
+          ? envelope.ack()
+          : envelope.ack({
+              response_type: 'ephemeral',
+              text:
+                answer ??
+                "hi, i'm kyto! just @mention me in a channel or DM me — no slash command needed.",
+            })
       )
       .catch((error: unknown) => {
         this.slackLogger.warn({ err: error }, '[harness] slash ack failed');
@@ -570,12 +614,16 @@ export class KytoBot {
     const user = (body.user ?? {}) as { id?: string; username?: string };
     for (const action of actions) {
       const handler = action.action_id
-        ? this.actionHandlers.get(action.action_id)
+        ? (this.actionHandlers.get(action.action_id) ??
+          this.unhandledActionHandler)
         : undefined;
       if (!handler) {
         continue;
       }
-      const channel = container.channel_id;
+      // A tab's action has no message container; its channel is the body's.
+      const channel =
+        container.channel_id ??
+        actionChannelSchema.safeParse(body).data?.channel?.id;
       const threadId = channel
         ? this.harness.encodeThreadId({
             channel,

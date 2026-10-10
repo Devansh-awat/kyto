@@ -50,7 +50,7 @@ const GROUPS = {
   },
   codeChannels: {
     question:
-      'Does this ask to create, turn on, turn off or list a code channel?',
+      'Does this ask to create, turn on, turn off, list, rename or archive a code channel, or to change its tabs, context bar or commands?',
     tools: ['codeChannel'],
   },
   diagrams: {

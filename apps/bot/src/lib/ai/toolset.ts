@@ -588,12 +588,8 @@ export async function buildTools({
     },
     codeChannel: {
       summary:
-        'code channels: create/enable/disable/list channels where you answer every message and threads share one sandbox',
-      tool: codeChannelTool({
-        authorUserId,
-        currentChannel: channelId,
-        isOwner,
-      }),
+        'Slack code channels: create one for a task, enable/disable/list; inside one, its tabs (diff, html, canvas, PR), context bar, slash commands, rename, archive',
+      tool: codeChannelTool({ isOwner, message, thread }),
     },
     setChannelTopic: {
       summary: 'set a channel topic',

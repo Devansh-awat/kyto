@@ -40,7 +40,10 @@
         "callback_id": "delete_message",
         "description": "Owner only: delete this message and clear kyto's memory of the thread"
       }
-    ]
+    ],
+    "code_channels": {
+      "enabled": true
+    }
   },
   "oauth_config": {
     "scopes": {
@@ -57,6 +60,7 @@
         "channels:write.invites",
         "chat:write",
         "chat:write.customize",
+        "code_channels:manage",
         "commands",
         "emoji:read",
         "files:read",
@@ -104,6 +108,7 @@
   "settings": {
     "event_subscriptions": {
       "bot_events": [
+        "agent_session_stopped",
         "app_home_opened",
         "app_mention",
         "assistant_thread_context_changed",

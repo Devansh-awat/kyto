@@ -12,7 +12,13 @@ import {
   noteHumanMessage,
 } from '@/lib/bot-pings';
 import { bot, slack, userBot } from '@/lib/chat';
-import { isCodeChannel } from '@/lib/code-channels';
+import {
+  enableCodeChannel,
+  getCodeChannel,
+  isCodeChannel,
+  isNativeCodeChannel,
+  knownCodeChannel,
+} from '@/lib/code-channels';
 import { handleCommand } from '@/lib/commands';
 import logger from '@/lib/logger';
 import {
@@ -22,6 +28,7 @@ import {
   offerOptIn,
 } from '@/lib/onboarding';
 import { handleSecret, secretQuestion } from '@/lib/secret';
+import { kytoIsAgentOf } from '@/lib/slack/code-channel-api';
 import { toLogError } from '@/lib/utils/error';
 import {
   isAddressedOnly,
@@ -32,6 +39,7 @@ import '@/features/approvals';
 import '@/features/ask-question';
 import '@/features/assistant';
 import '@/features/channel-instructions';
+import { runCodeChannelCommand } from '@/features/code-channels';
 import '@/features/confirm-post';
 import '@/features/customizations';
 import '@/features/feedback';
@@ -120,7 +128,16 @@ async function answerAsAccount({
  */
 function listen(target: KytoBot): void {
   const asUserAccount = target.answersAs === 'user';
-  target.onNewMention(async (thread, message) => {
+  target.onNewMention(async (mentionThread, mentionMessage) => {
+    if (!asUserAccount && skipsCodeChannelOpener(mentionMessage)) {
+      return;
+    }
+    const { message, thread } = asUserAccount
+      ? { message: mentionMessage, thread: mentionThread }
+      : await adoptStartedCodeChannel({
+          message: mentionMessage,
+          thread: mentionThread,
+        });
     if (asUserAccount) {
       if (firstTimeForAccount(message)) {
         await answerMention({ asUserAccount, message, thread });
@@ -188,6 +205,65 @@ function listen(target: KytoBot): void {
 }
 
 const ADDRESSED_BOT_WINDOW_SECONDS = 60 * 60;
+// kyto's one manifest slash command.
+const KYTO_COMMAND = '/kyto';
+
+// Slack opens a code channel linked to a request with a "Context from #origin"
+// message quoting it — mention included — posted as the request's author.
+const CONTEXT_OPENER =
+  /^<https?:\/\/[^|>]+\/archives\/[A-Z0-9]+\/p\d+[^|>]*\|Context> from <#/;
+
+/**
+ * That opener, in a code channel kyto created: the handoff turn
+ * (tools/code-channel) already carries the request, so answering the quote too
+ * would start the same work twice. In a channel someone started from Slack's
+ * own UI it is the request itself, and is answered.
+ */
+function skipsCodeChannelOpener(message: Message): boolean {
+  const row = knownCodeChannel(slack.decodeThreadId(message.threadId).channel);
+  return Boolean(
+    row?.native &&
+      row.originThreadId &&
+      CONTEXT_OPENER.test(rawSlackText(message) ?? '')
+  );
+}
+
+/**
+ * A mention at the top of a code channel someone started with kyto from
+ * Slack's own UI (its first message is that mention): register it as a native
+ * code channel, and answer as the channel's one conversation from then on.
+ */
+async function adoptStartedCodeChannel({
+  message,
+  thread,
+}: {
+  message: Message;
+  thread: Thread;
+}): Promise<{ message: Message; thread: Thread }> {
+  const { channel, threadTs } = slack.decodeThreadId(message.threadId);
+  if (
+    threadTs !== message.id ||
+    message.author.isBot === true ||
+    (await getCodeChannel(channel)) ||
+    !(await kytoIsAgentOf(channel))
+  ) {
+    return { message, thread };
+  }
+  await enableCodeChannel({
+    channelId: channel,
+    enabledBy: message.author.userId,
+    native: true,
+  });
+  logger.info(
+    { channel, userId: message.author.userId },
+    '[code-channel] adopted a code channel started from Slack'
+  );
+  const channelThreadId = slack.encodeThreadId({ channel, threadTs: '' });
+  return {
+    message: { ...message, threadId: channelThreadId },
+    thread: bot.thread(channelThreadId),
+  };
+}
 
 /**
  * The bot-loop cap (lib/bot-pings), and the one line kyto says when it hits it
@@ -340,18 +416,24 @@ async function answerThreadMessage({
   message: Message;
   thread: Thread;
 }): Promise<void> {
-  // A code channel: every top-level message from a person is for kyto (the
-  // app — the user account is not a code channel's bot). Bots still need an
-  // explicit mention there (lib/bot-pings).
+  // A code channel: a person's messages there are for kyto (the app — the
+  // user account is not a code channel's agent) without a mention. In a
+  // native one that is every message, threads included — Slack's design is
+  // that the agent answers everything in its channel; in an ordinary one,
+  // every top-level message. Bots still need an explicit mention there
+  // (lib/bot-pings).
   const { channel, threadTs } = slack.decodeThreadId(message.threadId);
-  if (
-    !asUserAccount &&
-    message.author.isBot !== true &&
-    threadTs === message.id &&
-    (await isCodeChannel(channel))
-  ) {
-    await answerMention({ asUserAccount, message, thread });
-    return;
+  if (!asUserAccount && message.author.isBot !== true) {
+    if (isNativeCodeChannel(channel)) {
+      if (!skipsCodeChannelOpener(message)) {
+        await answerMention({ asUserAccount, message, thread });
+      }
+      return;
+    }
+    if (threadTs === message.id && (await isCodeChannel(channel))) {
+      await answerMention({ asUserAccount, message, thread });
+      return;
+    }
   }
   // Pinging the OTHER kyto is talking to it, not to this one — both
   // connections see the message, and the pinged one answers it.
@@ -440,7 +522,11 @@ async function offerOptInAs({
 // `/kyto ban @someone 1d reason`, `/kyto unban @someone`, `/kyto bans`. The
 // same three run as `@kyto!ban …` (lib/commands); this is the form the owner
 // asked for, and it costs no model turn either.
-bot.onSlashCommand(async ({ text, userId }) => {
+bot.onSlashCommand(async ({ channelId, command, text, userId }) => {
+  // Any other command is one a code channel registered (features/code-channels).
+  if (command && command !== KYTO_COMMAND) {
+    return await runCodeChannelCommand({ channelId, command, text, userId });
+  }
   const [word = '', ...rest] = text.trim().split(/\s+/);
   const action = word.toLowerCase();
   if (action === 'ban' || action === 'unban' || action === 'bans') {

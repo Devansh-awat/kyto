@@ -1,6 +1,7 @@
 import { env } from '@/env';
 import { KytoBot } from '@/harness/bot';
 import { SlackHarness } from '@/harness/harness';
+import { isNativeCodeChannel } from '@/lib/code-channels';
 import logger from '@/lib/logger';
 
 // kyto's custom Slack harness (replaces the chat-sdk + @chat-adapter/slack).
@@ -18,6 +19,7 @@ export const slack = new SlackHarness({
       }
     : {}),
 });
+slack.isChannelConversation = isNativeCodeChannel;
 
 export const bot = new KytoBot({
   appToken: env.SLACK_APP_TOKEN,

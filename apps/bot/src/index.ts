@@ -11,6 +11,7 @@ import {
 import { startThinkingReaper } from '@/lib/agent/thinking';
 import { buildAllowlist } from '@/lib/allowed-users';
 import { slack, userBot } from '@/lib/chat';
+import { loadCodeChannels } from '@/lib/code-channels';
 import { startKevinton } from '@/lib/kevinton';
 import logger from '@/lib/logger';
 import { startMemoryCuration } from '@/lib/memory-curation';
@@ -92,6 +93,8 @@ try {
   // an empty allowlist answered everyone — the owner included — with the
   // opt-in prompt for the few seconds it took to build.
   await buildAllowlist();
+  // Before the socket opens: native code channels shape how a message is built.
+  await loadCodeChannels();
   await bot.initialize();
   // After the app's: it resolves the account id this connection's pings use.
   // A failure here must not take the app down with it.

@@ -1,6 +1,8 @@
 import type { ThreadHandle as Thread } from '@/harness/thread';
 import { slack } from '@/lib/chat';
+import { isNativeCodeChannel } from '@/lib/code-channels';
 import logger from '@/lib/logger';
+import { setSessionStatus } from '@/lib/slack/code-channel-api';
 import { errorMessage } from '@/lib/utils/error';
 
 const loadingMessages = [
@@ -51,6 +53,12 @@ export async function startThinking({
   thread: Thread;
 }): Promise<void> {
   const { channel, threadTs } = slack.decodeThreadId(thread.id);
+  // A native code channel's one conversation: Slack's own "Working…" for the
+  // channel's session, cleared at turn end (executeTurn).
+  if (!threadTs && isNativeCodeChannel(channel)) {
+    await setSessionStatus({ channel, status: 'processing' });
+    return;
+  }
   if (!threadTs) {
     await thread.startTyping('is thinking');
     return;

@@ -1,5 +1,6 @@
 import type { Logger } from '@repo/logging/logger';
 import { WebClient } from '@slack/web-api';
+import { z } from 'zod';
 import { isSlackFileHost } from './file-host';
 import { mrkdwnToMarkdown } from './markdown';
 import { filterOutbound, filterOutboundDeep } from './outbound';
@@ -136,6 +137,109 @@ export function reactionName(name: string): string {
   return name.trim().replace(/^:+|:+$/g, '');
 }
 
+// ChatStreamer's text buffer size: fewer appendStream calls for the same text.
+const STREAM_BUFFER_CHARS = 256;
+const startedStreamSchema = z.looseObject({ ts: z.string() });
+
+/**
+ * `chatStream` at a channel's TOP level, which Slack allows only in a code
+ * channel. The SDK's streamer insists on a `thread_ts` (its types do, even in
+ * v8), so this speaks chat.startStream/appendStream/stopStream itself, the
+ * same way and with the same text buffer.
+ */
+class TopLevelStreamer {
+  private readonly args: { channel: string } & Record<string, unknown>;
+  private buffer = '';
+  private readonly client: WebClient;
+  private readonly logger: Logger;
+  // Slack refused to start the stream: what would have gone in it is dropped,
+  // not thrown — it holds only the plan's task cards (the reply itself is
+  // posted on its own), and those are not worth failing the turn over.
+  private refused = false;
+  private streamTs: string | undefined;
+
+  constructor({
+    args,
+    client,
+    logger,
+  }: {
+    args: { channel: string } & Record<string, unknown>;
+    client: WebClient;
+    logger: Logger;
+  }) {
+    this.args = args;
+    this.client = client;
+    this.logger = logger;
+  }
+
+  get ts(): string | undefined {
+    return this.streamTs;
+  }
+
+  async append({
+    chunks,
+    markdown_text,
+  }: {
+    chunks?: unknown[];
+    markdown_text?: string;
+  }): Promise<void> {
+    if (markdown_text) {
+      this.buffer += markdown_text;
+    }
+    if (chunks || this.buffer.length >= STREAM_BUFFER_CHARS) {
+      await this.flush(chunks);
+    }
+  }
+
+  async stop(): Promise<void> {
+    if (!this.streamTs) {
+      await this.flush();
+    }
+    if (this.refused || !this.streamTs) {
+      return;
+    }
+    await this.client.apiCall('chat.stopStream', {
+      channel: this.args.channel,
+      chunks: this.takeBuffer(),
+      ts: this.streamTs,
+    });
+  }
+
+  private takeBuffer(): unknown[] {
+    const text = this.buffer;
+    this.buffer = '';
+    return text ? [{ text, type: 'markdown_text' }] : [];
+  }
+
+  private async flush(chunks: unknown[] = []): Promise<void> {
+    const all = [...this.takeBuffer(), ...chunks];
+    if (this.refused || all.length === 0) {
+      return;
+    }
+    if (this.streamTs) {
+      await this.client.apiCall('chat.appendStream', {
+        channel: this.args.channel,
+        chunks: all,
+        ts: this.streamTs,
+      });
+      return;
+    }
+    try {
+      const started = await this.client.apiCall('chat.startStream', {
+        ...this.args,
+        chunks: all,
+      });
+      this.streamTs = startedStreamSchema.parse(started).ts;
+    } catch (error) {
+      this.refused = true;
+      this.logger.warn(
+        { channel: this.args.channel, err: error },
+        '[harness] top-level stream refused; dropping its cards'
+      );
+    }
+  }
+}
+
 export class SlackHarness {
   readonly webClient: WebClient;
   botUserId: string | undefined;
@@ -143,6 +247,13 @@ export class SlackHarness {
    * as a `bot_message` carrying only this, not the user id. */
   botId: string | undefined;
   teamId: string | undefined;
+  /**
+   * A channel that is ONE conversation (a native code channel,
+   * lib/code-channels): its top-level messages share the channel-level thread
+   * id `slack:C…` instead of each rooting a thread. Set by lib/chat; must be
+   * synchronous, as messages are built synchronously.
+   */
+  isChannelConversation: (channel: string) => boolean = () => false;
   /** The `U…` id of kyto's own Slack USER account, when its session is set.
    * Its posts are kyto's too — a human-looking message from it must never be
    * answered, or kyto replies to itself (every message in a code channel is). */
@@ -289,8 +400,14 @@ export class SlackHarness {
     const channel = event.channel ?? '';
     const ts = event.ts ?? '';
     // Every message threads: a top-level message roots its own thread (this is
-    // the DM-threading behavior the old adapter needed a patch for).
-    const threadTs = event.thread_ts || ts;
+    // the DM-threading behavior the old adapter needed a patch for) — except in
+    // a channel that is one conversation, where a top-level message (or the
+    // root of a thread, read back from history) belongs to the channel.
+    const isRoot = !event.thread_ts || event.thread_ts === ts;
+    const threadTs =
+      isRoot && this.isChannelConversation(channel)
+        ? ''
+        : event.thread_ts || ts;
     const text = event.text ?? '';
     // Slack renders tables (and some rich content) as `table` blocks whose text
     // is NOT in `event.text`, so the model would otherwise be blind to them.
@@ -482,9 +599,6 @@ export class SlackHarness {
     } = {}
   ): Promise<{ messages: Message[]; nextCursor?: string }> {
     const { channel, threadTs } = this.decodeThreadId(threadId);
-    if (!threadTs) {
-      return { messages: [] };
-    }
     const pages = maxPages ?? (direction === 'backward' ? 10 : 1);
     const pageSize = Math.min(Math.max(limit, 1), SLACK_MAX_PAGE);
     let raw: RawSlackMessage[] = [];
@@ -492,6 +606,32 @@ export class SlackHarness {
     const client = asUserAccount
       ? this.requireUserAccountClient()
       : this.webClient;
+    if (!threadTs) {
+      // A channel that is one conversation: its top-level history. Slack pages
+      // it NEWEST first, so the walk always reaches the end — a cursor left
+      // over means messages between `oldest` and the newest page were never
+      // read, which callers take the same way as an unfinished thread walk.
+      for (let page = 0; page < pages; page += 1) {
+        const result = await client.conversations.history({
+          channel,
+          ...(nextCursor ? { cursor: nextCursor } : {}),
+          ...(oldest ? { oldest } : {}),
+          limit: pageSize,
+        });
+        raw = raw.concat((result.messages ?? []) as RawSlackMessage[]);
+        nextCursor = result.response_metadata?.next_cursor || undefined;
+        if (!nextCursor || (direction === 'backward' && raw.length >= limit)) {
+          break;
+        }
+      }
+      raw.reverse();
+      raw = direction === 'backward' ? raw.slice(-limit) : raw.slice(0, limit);
+      return {
+        messages: await this.hydrateMessages(raw, channel),
+        // Without `oldest` the newest `limit` is everything asked for.
+        nextCursor: oldest ? nextCursor : undefined,
+      };
+    }
     for (let page = 0; page < pages; page += 1) {
       const result = await client.conversations.replies({
         channel,
@@ -695,22 +835,26 @@ export class SlackHarness {
     // The ts of every message this posted, so a caller can take them back.
     const posted: string[] = [];
     const { channel, threadTs } = this.decodeThreadId(threadId);
-    if (!threadTs) {
-      throw new Error('Slack streaming requires a thread ts.');
-    }
+    const streamArgs = {
+      channel,
+      recipient_team_id: options.recipientTeamId,
+      recipient_user_id: options.recipientUserId,
+      ...(options.taskDisplayMode
+        ? { task_display_mode: options.taskDisplayMode }
+        : {}),
+      ...(options.username ? { username: options.username } : {}),
+      ...(options.iconEmoji ? { icon_emoji: options.iconEmoji } : {}),
+      ...(options.iconUrl ? { icon_url: options.iconUrl } : {}),
+    };
+    // No thread: a channel that is one conversation, streamed at its top level.
     const startStreamer = () =>
-      this.webClient.chatStream({
-        channel,
-        recipient_team_id: options.recipientTeamId,
-        recipient_user_id: options.recipientUserId,
-        ...(options.taskDisplayMode
-          ? { task_display_mode: options.taskDisplayMode }
-          : {}),
-        ...(options.username ? { username: options.username } : {}),
-        ...(options.iconEmoji ? { icon_emoji: options.iconEmoji } : {}),
-        ...(options.iconUrl ? { icon_url: options.iconUrl } : {}),
-        thread_ts: threadTs,
-      });
+      threadTs
+        ? this.webClient.chatStream({ ...streamArgs, thread_ts: threadTs })
+        : new TopLevelStreamer({
+            args: streamArgs,
+            client: this.webClient,
+            logger: this.logger,
+          });
     let streamer = startStreamer();
     let streamStartedAt = Date.now();
     // Whether the CURRENT streamer has appended anything: decides whether to stop
@@ -758,12 +902,14 @@ export class SlackHarness {
       if (!currentHasContent) {
         return;
       }
-      if (streamer.ts) {
-        posted.push(streamer.ts);
-      }
       await streamer.stop().catch((error: unknown) => {
         this.logger.warn({ err: error }, '[harness] stream stop failed');
       });
+      // After stop: a short message is buffered until then, so before it the
+      // stream may not have started and has no ts to take back.
+      if (streamer.ts) {
+        posted.push(streamer.ts);
+      }
     };
     // Rotate to a fresh streamer before Slack expires the current one (see
     // STREAM_ROTATE_MS). Finalizes the current card and opens a new one that

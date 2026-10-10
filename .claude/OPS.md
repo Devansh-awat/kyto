@@ -149,3 +149,18 @@ CREATE TABLE IF NOT EXISTS notebooks (
 kyto's notebooks, written only by kevinton (`lib/notebooks.ts`). "Your data"
 erase deletes the person's DM-with-the-app notebook; shared-channel and global
 ones are derived from everyone and stay.
+
+## `code_channels`: native code channels (2026-10-10)
+
+```sql
+ALTER TABLE code_channels ADD COLUMN IF NOT EXISTS native boolean NOT NULL DEFAULT false;
+ALTER TABLE code_channels ADD COLUMN IF NOT EXISTS origin_thread_id text;
+ALTER TABLE code_channels ADD COLUMN IF NOT EXISTS canvas_views jsonb NOT NULL DEFAULT '{}'::jsonb;
+```
+
+Applied 2026-10-10 (`sudo -u postgres psql gorkie`). The four rows from before
+are the old user-account/Datadog channels: Datadog is their agent, not kyto,
+so they stay `native = false` (ordinary) — `agents.*` calls would be refused
+there. Native code channels need the app's `code_channels:manage` scope and
+`features.code_channels` in `slack-manifest.json`; until the app is
+reinstalled with them, `create` reports Slack's `missing_scope` in words.

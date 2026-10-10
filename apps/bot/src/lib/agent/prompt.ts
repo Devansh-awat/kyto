@@ -104,7 +104,7 @@ export async function buildPrompt(
   {
     asUserAccount = false,
     channelInstructions,
-    codeChannel = false,
+    codeChannel,
     customizationPrompt,
     includeHidden = false,
     ownModelsOnly = false,
@@ -115,7 +115,7 @@ export async function buildPrompt(
     /** The channel's standing instructions; per channel, so the front of history. */
     channelInstructions?: string;
     /** In a code channel (lib/code-channels). Per channel, so volatile tail. */
-    codeChannel?: boolean;
+    codeChannel?: 'native' | 'ordinary';
     customizationPrompt?: string;
     /**
      * Kevinton's review: replay `##` messages too, marked as hidden. People
@@ -149,6 +149,9 @@ export async function buildPrompt(
       })
     : '';
 
+  // A native code channel's one conversation, not a thread (lib/code-channels).
+  const inChannelConversation =
+    thread !== undefined && !slack.decodeThreadId(thread.id).threadTs;
   let history: string[] = [];
   let compacted = '';
   let pulledInLater = false;
@@ -266,7 +269,7 @@ export async function buildPrompt(
       );
       history = rendered.map((line, index) =>
         index === 0
-          ? `Conversation so far in this Slack thread (oldest first):\n${line}`
+          ? `Conversation so far in this Slack ${inChannelConversation ? 'channel' : 'thread'} (oldest first):\n${line}`
           : line
       );
     }
@@ -311,9 +314,19 @@ export async function buildPrompt(
           "This message doesn't mention you, and this thread didn't start with you — someone brought you in partway, so you're seeing every reply here, most of them people talking to each other. Decide whether this one needs you: reply only if it's addressed to you, follows up on something you said, or asks something you should clearly answer. Otherwise call skip — nothing is posted.",
         ]
       : []),
-    ...(codeChannel
+    ...(codeChannel === 'ordinary'
       ? [
           'This is a CODE CHANNEL: every top-level message here is for you without a mention, and every thread in the channel shares ONE sandbox workspace — files from earlier threads are already there, so check before starting over. Earlier threads are readable with the Slack history tools.',
+        ]
+      : []),
+    ...(codeChannel === 'native' && thread && inChannelConversation
+      ? [
+          "This is a Slack CODE CHANNEL and you are its agent: the whole channel is ONE conversation with you about one task — every message here is for you, no mention needed — and your replies go at the top level. The channel has one sandbox workspace; what you built earlier is still there. Show your work in the channel's tabs with the codeChannel tool (a `diff` tab after changing code, the pull request as a `pull_request` tab, a `canvas` tab for a plan people can comment on) and keep the context bar on the repo, branch and PR. Archive the channel only when someone asks.",
+        ]
+      : []),
+    ...(codeChannel === 'native' && thread && !inChannelConversation
+      ? [
+          "This thread is inside a Slack CODE CHANNEL you are the agent of: someone started a thread off the channel's main conversation, so answer here. The task itself is the channel's top-level conversation (read it with readConversationHistory on this channel if you need it); the sandbox is the same one.",
         ]
       : []),
   ].join('\n');

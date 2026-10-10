@@ -88,7 +88,11 @@ import { createCodingMonitor, DELEGATE_NOTE } from '@/lib/anti-coding';
 import { recordByokOutcome, resolveUserRouting } from '@/lib/byok';
 import { bot, slack } from '@/lib/chat';
 import { recordChatgptOutcome } from '@/lib/chatgpt';
-import { isCodeChannel, sandboxKey } from '@/lib/code-channels';
+import {
+  getCodeChannel,
+  isNativeCodeChannel,
+  sandboxKey,
+} from '@/lib/code-channels';
 import {
   agentErrorMessage,
   BudgetExhaustedError,
@@ -103,6 +107,7 @@ import type { ModerationItem } from '@/lib/moderation-flags';
 import { openSandboxProxies } from '@/lib/sandbox/proxies';
 import { acquireThreadSandbox, threadSandboxStore } from '@/lib/sandbox/store';
 import { ensureChannelIndex } from '@/lib/slack/channel-links';
+import { setSessionStatus } from '@/lib/slack/code-channel-api';
 import {
   deepErrorText,
   describeMalformedPrompt,
@@ -708,6 +713,12 @@ async function executeTurn(
   } finally {
     // cleanup() (which pauses the sandbox) has already run on both paths above.
     releaseSandbox();
+    // Slack's "Working…" in a native code channel (set by startThinking) stays
+    // until it is told the turn is over.
+    const at = slack.decodeThreadId(threadId);
+    if (!(asUserAccount || at.threadTs) && isNativeCodeChannel(at.channel)) {
+      await setSessionStatus({ channel: at.channel, status: 'active' });
+    }
     await endTracking({
       cutByShutdown: abortReasonOf(controller.signal) === 'shutdown',
     });
@@ -783,9 +794,14 @@ async function executeTurn(
     pendingTools.catch(() => undefined);
     closeTools = async () => (await pendingTools).close();
     const { history, tail } = await buildPrompt(turnMessage, {
-      codeChannel: await isCodeChannel(
-        slack.channelIdFromThreadId(turnThread.id)
-      ),
+      codeChannel: await getCodeChannel(turnThread.id)
+        .catch(() => undefined)
+        .then((row) => {
+          if (!row) {
+            return;
+          }
+          return row.native ? 'native' : 'ordinary';
+        }),
       asUserAccount,
       channelInstructions: hints.channelInstructions,
       customizationPrompt: hints.customization?.prompt,
@@ -903,6 +919,11 @@ async function executeTurn(
       : undefined;
     const built = await pendingTools;
     built.preload(preload.tools);
+    // Always at hand in a native code channel: its tabs and context bar are
+    // much of the point of working there, so not left to Jev noticing.
+    if (isNativeCodeChannel(slack.decodeThreadId(threadId).channel)) {
+      built.preload(['codeChannel']);
+    }
     const knownTools = new Set(Object.keys(built.tools));
 
     // Which model runs next and what failed so far (lib/agent/attempt-router).

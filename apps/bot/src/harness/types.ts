@@ -160,6 +160,14 @@ export interface AssistantThreadEvent {
   threadTs: string;
 }
 
+/** Someone pressed stop on an agent session (a code channel's, or a thread's). */
+export interface AgentSessionStoppedEvent {
+  channelId: string;
+  /** Set for a thread's session; absent for a code channel's. */
+  threadTs?: string;
+  userId?: string;
+}
+
 export interface MemberJoinedEvent {
   channelId: string;
   /**
