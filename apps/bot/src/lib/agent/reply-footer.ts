@@ -14,7 +14,7 @@ const PRIMARY_LABEL = 'claude haiku 5.5 on hack club ai';
  *
  * The weaker-model note is for an answer that came from anywhere other than the
  * primary on kyto's own chain: not for a person's own key (their choice, their
- * model), not for the thread's `!with` model (also their choice), and not for
+ * model), not for the thread's `--model` (also their choice), and not for
  * an upgrade (a step UP, which the Thinking card already says).
  */
 export async function postReplyFooter({

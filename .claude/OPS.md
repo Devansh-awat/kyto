@@ -73,6 +73,7 @@ CREATE INDEX IF NOT EXISTS memory_curations_author_idx ON memory_curations (auth
 CREATE TABLE IF NOT EXISTS site_views (site text NOT NULL, day date NOT NULL, path text NOT NULL, views integer NOT NULL DEFAULT 0, PRIMARY KEY (site, day, path)); -- 2026-10-08
 CREATE TABLE IF NOT EXISTS site_hits (day date NOT NULL, ip text NOT NULL, site text NOT NULL, requests integer NOT NULL DEFAULT 0, PRIMARY KEY (day, ip, site)); -- 2026-10-08
 CREATE TABLE IF NOT EXISTS thread_model_choices (thread_id text PRIMARY KEY, model text, reasoning_effort text, updated_by text NOT NULL, updated_at timestamptz NOT NULL DEFAULT now()); -- 2026-10-10
+ALTER TABLE thread_model_choices ADD COLUMN IF NOT EXISTS model_set_by text; -- 2026-10-10
 ```
 
 The anti-coding gate's ledger: the last catch and how many in a row (each

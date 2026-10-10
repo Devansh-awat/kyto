@@ -17,20 +17,28 @@ export async function loadThreadModelChoices(
 
 export async function saveThreadModelChoice({
   model,
+  modelSetBy,
   reasoningEffort,
   threadId,
   updatedBy,
 }: {
   model: string | null;
+  modelSetBy: string | null;
   reasoningEffort: string | null;
   threadId: string;
   updatedBy: string;
 }): Promise<void> {
   await db
     .insert(threadModelChoices)
-    .values({ model, reasoningEffort, threadId, updatedBy })
+    .values({ model, modelSetBy, reasoningEffort, threadId, updatedBy })
     .onConflictDoUpdate({
-      set: { model, reasoningEffort, updatedAt: new Date(), updatedBy },
+      set: {
+        model,
+        modelSetBy,
+        reasoningEffort,
+        updatedAt: new Date(),
+        updatedBy,
+      },
       target: threadModelChoices.threadId,
     });
 }

@@ -64,7 +64,17 @@ const SERVICE_ONLY: UserRouting = {
  * skipped rather than failing the turn — the user still gets an answer, and the
  * row is marked invalid so the App Home tab tells them to re-add it.
  */
-export async function resolveUserRouting(userId: string): Promise<UserRouting> {
+export async function resolveUserRouting({
+  model,
+  userId,
+}: {
+  /**
+   * A slug this person picked with `--model`: tried first on each of their own
+   * providers (which one serves it is unknown), then their usual attempts.
+   */
+  model?: string;
+  userId: string;
+}): Promise<UserRouting> {
   if (!byokConfigured()) {
     return SERVICE_ONLY;
   }
@@ -149,6 +159,20 @@ export async function resolveUserRouting(userId: string): Promise<UserRouting> {
 
   if (own.length === 0) {
     return SERVICE_ONLY;
+  }
+  // An explicit pick beats the model mode: asking for a slug only their key
+  // can serve is asking to spend their key, even in "kyto's models" mode.
+  if (model) {
+    logger.info(
+      { model, providers: own.map((attempt) => attempt.provider), userId },
+      '[byok] routing turn on the slug the user picked'
+    );
+    return {
+      own: [...own.map((attempt) => ({ ...attempt, model })), ...own],
+      ownFirst: true,
+      serviceFallback,
+      switchOnCoding: false,
+    };
   }
   const mode: ModelMode =
     (await getUserCustomization(userId).catch(() => null))?.modelMode ?? 'own';

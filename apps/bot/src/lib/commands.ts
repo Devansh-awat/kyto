@@ -4,13 +4,16 @@ import type { ThreadHandle as Thread } from '@/harness/thread';
 import type { Message } from '@/harness/types';
 import { stopTurn } from '@/lib/agent';
 import {
+  hasOwnModels,
   isReasoningEffort,
+  isSharedModel,
   MODEL_CHOICES,
-  threadModelChoice,
+  type ReasoningEffort,
   updateThreadModelChoice,
 } from '@/lib/agent/model-choice';
 import { removeAllowedUser } from '@/lib/allowed-users';
 import { runBanCommand } from '@/lib/bans';
+import { type ParsedFlags, parseFlags } from '@/lib/flags';
 import logger from '@/lib/logger';
 import { toLogError } from '@/lib/utils/error';
 import { rawText, withoutLeadingMentions } from '@/lib/utils/message';
@@ -36,15 +39,7 @@ import { rawText, withoutLeadingMentions } from '@/lib/utils/message';
 interface BotCommand {
   /** Everything after the command word, unparsed. */
   args: string;
-  type:
-    | 'ban'
-    | 'bans'
-    | 'focusmode'
-    | 'optout'
-    | 'reasoning'
-    | 'stop'
-    | 'unban'
-    | 'with';
+  type: 'ban' | 'bans' | 'focusmode' | 'optout' | 'stop' | 'unban';
 }
 
 // Slack user ids look like U0123ABCD / W0123ABCD, either as a real `<@U…>`
@@ -54,9 +49,10 @@ interface BotCommand {
 const MENTIONED_USER =
   /<@([UW][A-Z0-9]{6,})(?:\|[^>]+)?>|\b([UW][A-Z0-9]{6,})\b/g;
 const CLEAR_WORDS = new Set(['clear', 'off', 'none', 'stop']);
-// `none` is a real effort, so it can't clear `!reasoning`.
+// `none` is a real effort, so it can't clear `--reasoning`.
 const DEFAULT_WORDS = new Set(['default', 'random', 'reset', 'clear', 'off']);
-const LEADING_WORD = /^\s*(\S*)\s*([\s\S]*)$/;
+// What a `--model` slug may look like (`openai/gpt-5.1`, `claude-sonnet-4-5@x`).
+const MODEL_SLUG = /^[\w.:/@-]{1,200}$/;
 
 export async function handleCommand({
   message,
@@ -65,6 +61,10 @@ export async function handleCommand({
   message: Message;
   thread: Thread;
 }): Promise<boolean> {
+  const parsed = parseFlags(withoutLeadingMentions(rawText(message)));
+  if (parsed) {
+    return await runFlags({ message, parsed, thread });
+  }
   const command = cmd(message);
   if (!command) {
     return false;
@@ -76,14 +76,6 @@ export async function handleCommand({
   if (command.type === 'optout') {
     await runOptOut({ message, thread });
     return true;
-  }
-  if (command.type === 'with' || command.type === 'reasoning') {
-    return await runModelChoice({
-      args: command.args,
-      kind: command.type,
-      message,
-      thread,
-    });
   }
   if (
     command.type === 'ban' ||
@@ -161,95 +153,98 @@ async function runStop({
 }
 
 /**
- * `!with luna|haiku|default` and `!reasoning none|low|medium|high|default` —
- * this thread's model / effort until cleared (lib/agent/model-choice). Open to
- * anyone: both models sit on the same cheap Hack Club key.
+ * `--model`, `--reasoning`, `--focusmode` (lib/flags). Everything is checked
+ * before anything is saved, so one bad flag changes nothing.
  *
- * Returns false when a question follows the choice (`!with luna why is…`), so
- * that message still gets its turn — on the model just picked.
+ * `--model luna|haiku` is open to anyone (both are on kyto's cheap Hack Club
+ * key); any other slug only for someone with their own key or ChatGPT account,
+ * and it then runs on their turns only (lib/agent/model-choice).
+ *
+ * Returns false when a question follows the flags, so that message still gets
+ * its turn — already on the new settings.
  */
-async function runModelChoice({
-  args,
-  kind,
+async function runFlags({
   message,
+  parsed,
   thread,
 }: {
-  args: string;
-  kind: 'reasoning' | 'with';
   message: Message;
+  parsed: ParsedFlags;
   thread: Thread;
 }): Promise<boolean> {
-  const [, word = '', rest = ''] = LEADING_WORD.exec(args) ?? [];
-  const value = word.toLowerCase();
-  const models = Object.keys(MODEL_CHOICES).join('`, `');
-  const usage =
-    kind === 'with'
-      ? `\`!with ${models}\`, or \`!with default\` to go back.`
-      : '`!reasoning none|low|medium|high`, or `!reasoning default` to go back to the default (random for haiku and luna).';
-  if (!value) {
-    const current = await threadModelChoice(thread.id);
-    const now =
-      kind === 'with'
-        ? `this thread uses ${current.model ?? 'the default model (haiku)'}.`
-        : `this thread uses ${current.effort ? `${current.effort} reasoning` : 'the default reasoning (random for haiku and luna)'}.`;
-    await tell({ message, text: `${now} ${usage}`, thread, what: kind });
+  const reply = async (text: string): Promise<boolean> => {
+    await tell({ message, text, thread, what: 'flag feedback' });
     return true;
+  };
+  if (!parsed.ok) {
+    return await reply(parsed.error);
   }
-  const clear = DEFAULT_WORDS.has(value);
-  const valid =
-    clear ||
-    (kind === 'with'
-      ? Object.hasOwn(MODEL_CHOICES, value)
-      : isReasoningEffort(value));
-  if (!valid) {
-    await tell({
-      message,
-      text: `i don't know \`${word}\`. ${usage}`,
-      thread,
-      what: kind,
-    });
-    return true;
+  const { flags } = parsed;
+  const userId = message.author.userId;
+  const change: { effort?: ReasoningEffort | null; model?: string | null } = {};
+  const said: string[] = [];
+  if (flags.model !== undefined) {
+    const lower = flags.model.toLowerCase();
+    if (DEFAULT_WORDS.has(lower)) {
+      change.model = null;
+      said.push('back on the default model');
+    } else if (isSharedModel(lower)) {
+      change.model = lower;
+      said.push(`model ${lower}`);
+    } else if (!MODEL_SLUG.test(flags.model)) {
+      return await reply(`\`${flags.model}\` doesn't look like a model slug.`);
+    } else if (await hasOwnModels(userId).catch(() => false)) {
+      change.model = flags.model;
+      said.push(`model ${flags.model}, on your own key (only your messages)`);
+    } else {
+      return await reply(
+        `on kyto's models it's \`--model ${Object.keys(MODEL_CHOICES).join('|')}\`. any other slug needs your own key or ChatGPT account (App Home → Models).`
+      );
+    }
   }
-  const choice = clear ? null : value;
+  if (flags.reasoning !== undefined) {
+    const lower = flags.reasoning.toLowerCase();
+    if (DEFAULT_WORDS.has(lower)) {
+      change.effort = null;
+      said.push('default reasoning (random for haiku and luna)');
+    } else if (isReasoningEffort(lower)) {
+      change.effort = lower;
+      said.push(`${lower} reasoning`);
+    } else {
+      return await reply(
+        '`--reasoning none|low|medium|high`, or `--reasoning default`.'
+      );
+    }
+  }
   try {
-    await updateThreadModelChoice({
-      change:
-        kind === 'with'
-          ? { model: choice }
-          : { effort: isReasoningEffort(choice) ? choice : null },
-      threadId: thread.id,
-      userId: message.author.userId,
-    });
+    if (change.model !== undefined || change.effort !== undefined) {
+      await updateThreadModelChoice({ change, threadId: thread.id, userId });
+    }
+    if (flags.focus !== undefined) {
+      const focus =
+        flags.focus && flags.focus.length === 0 ? [userId] : flags.focus;
+      await thread.setFocus(focus);
+      said.push(
+        focus
+          ? `focus on ${focus.map((id) => `<@${id}>`).join(', ')}`
+          : 'focus mode off'
+      );
+    }
   } catch (error) {
     logger.warn(
       { ...toLogError(error), threadId: thread.id },
-      '[commands] could not save a model choice'
+      '[commands] could not apply flags'
     );
-    await tell({
-      message,
-      text: "couldn't save that, try again in a moment.",
-      thread,
-      what: kind,
-    });
-    return true;
+    return await reply("couldn't save that, try again in a moment.");
   }
   logger.info(
-    { choice, kind, threadId: thread.id, userId: message.author.userId },
-    '[commands] thread model choice set'
+    { change, focus: flags.focus, threadId: thread.id, userId },
+    '[commands] flags applied'
   );
-  if (rest.trim()) {
+  if (flags.rest) {
     return false;
   }
-  let done = choice
-    ? `this thread now uses ${choice} reasoning.`
-    : 'this thread is back on the default reasoning.';
-  if (kind === 'with') {
-    done = choice
-      ? `this thread now runs on ${choice}.`
-      : 'this thread is back on the default model.';
-  }
-  await tell({ message, text: done, thread, what: kind });
-  return true;
+  return await reply(`this thread now: ${said.join('; ')}.`);
 }
 
 /**
@@ -358,10 +353,6 @@ function cmd(message: Message): BotCommand | null {
       return { args, type: 'bans' };
     case 'optout':
       return { args, type: 'optout' };
-    case 'with':
-      return { args, type: 'with' };
-    case 'reasoning':
-      return { args, type: 'reasoning' };
     // Anything else is not a command and must still reach the model — `!` opens
     // plenty of ordinary sentences too.
     default:

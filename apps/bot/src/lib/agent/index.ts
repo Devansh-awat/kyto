@@ -41,7 +41,11 @@ import {
   markTierDead,
 } from '@/lib/agent/fallback-cache';
 import { trackTurn } from '@/lib/agent/inflight';
-import { MODEL_CHOICES, threadModelChoice } from '@/lib/agent/model-choice';
+import {
+  isSharedModel,
+  MODEL_CHOICES,
+  threadModelChoice,
+} from '@/lib/agent/model-choice';
 import { buildPrompt } from '@/lib/agent/prompt';
 import {
   continueTruncatedReply,
@@ -406,8 +410,21 @@ async function executeTurn(
   // BYOK: a user who brought their own model keys runs on them instead of the
   // service models, and the shared chain is only reachable afterwards if they
   // opted in — a broken personal key must not silently spend the shared budget.
+  // The thread's `--model` / `--reasoning` (lib/agent/model-choice). A slug
+  // that isn't one of kyto's runs on its picker's own key, on their turns only.
+  const pendingChoice = threadModelChoice(threadId);
   const [routing, hints, sandboxSessionId, codeChannel] = await Promise.all([
-    resolveUserRouting(message.author.userId),
+    pendingChoice.then((choice) =>
+      resolveUserRouting({
+        model:
+          choice.model &&
+          !isSharedModel(choice.model) &&
+          choice.modelSetBy === message.author.userId
+            ? choice.model
+            : undefined,
+        userId: message.author.userId,
+      })
+    ),
     requestHints({ message, thread }),
     // The channel, in a code channel: its threads share one workspace.
     sandboxKey(threadId),
@@ -498,7 +515,7 @@ async function executeTurn(
   let handledSteps: number | undefined;
   // Which reasoning effort the answering attempt ran at (issue #36 experiment).
   let handledEffort: string | undefined;
-  // False when the effort was the thread's `!reasoning`: those turns are not
+  // False when the effort was the thread's `--reasoning`: those turns are not
   // part of the experiment and must be filtered out of its numbers.
   let handledEffortRandom: boolean | undefined;
   // Every attempt that failed this turn, so the terminal log line explains the
@@ -510,9 +527,7 @@ async function executeTurn(
   // took, feedback buttons, and a note when a weaker model had to answer.
   // Unset on a skip or a turn that failed, which get no footer.
   let answeredBy: ModelAttempt | undefined;
-  // The thread's `!with` model, if any (lib/agent/model-choice). Read now so
-  // the first turn after a restart loads the choices alongside the setup.
-  const pendingChoice = threadModelChoice(threadId);
+  // The thread's `--model`, when it is one of kyto's own (lib/agent/model-choice).
   let chosenAttempt: ModelAttempt | undefined;
   // The turn ended on a deliberate skip, and the plan messages it streamed:
   // a skip that never said anything takes its plan back (below).
@@ -966,11 +981,14 @@ async function executeTurn(
     // (see claimStickyUpgrade for the two bounds). `used` is set with it: the
     // turn is already on the strongest rung kyto has, and letting it ask for
     // another upgrade would only burn a second slot to arrive where it is.
-    // `!with` / `!reasoning` (lib/agent/model-choice). A picked model wins
+    // `--model` / `--reasoning` (lib/agent/model-choice). A picked model wins
     // over a sticky upgrade: the person chose it, the upgrade was the model's
     // own call on an earlier turn.
     const choice = await pendingChoice;
-    chosenAttempt = choice.model ? MODEL_CHOICES[choice.model] : undefined;
+    chosenAttempt =
+      choice.model && isSharedModel(choice.model)
+        ? MODEL_CHOICES[choice.model]
+        : undefined;
     const stickyUpgrade =
       !chosenAttempt && claimStickyUpgrade(threadId)
         ? UPGRADE_ATTEMPTS.find((candidate) => candidate)
@@ -1195,7 +1213,7 @@ async function executeTurn(
         // and once complete, so `details` never stacks.
         // The effort is decided here rather than inside the request so the
         // card can say which one this attempt runs on — and whether it was the
-        // random draw (the effort experiment) or the thread's `!reasoning`.
+        // random draw (the effort experiment) or the thread's `--reasoning`.
         let effort: { effort: string; random: boolean } | undefined;
         if (currentAttempt.provider === HACKCLUB_PROVIDER) {
           effort = choice.effort
