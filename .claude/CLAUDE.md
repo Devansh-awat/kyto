@@ -194,7 +194,7 @@ In `apps/bot/src/lib/ai/tools/`, registered in `lib/ai/toolset.ts`; `TOOLS.md` i
 
 ## Models / fallback — full detail in [`MODELS.md`](./MODELS.md)
 
-- **Primary: `openai/gpt-6-luna` on Hack Club AI** (`PRIMARY_ATTEMPT`; owner's call 2026-10-05, for speed — ~2x GLM's output rate, served by OpenAI directly). `z-ai/glm-5.3-flash` (smarter, slower) is the first fallback rung. TokenBom is removed — do not re-add without the owner's explicit ask. The DigitalOcean tier is gone.
+- **Primary: `anthropic/claude-haiku-5.5` on Hack Club AI, pinned to Anthropic's own API** (`ANTHROPIC_ONLY_MODELS`, owner's call 2026-10-10): Hack Club's 30% Claude discount applies only when Anthropic is the upstream that served it — Vertex/Bedrock/Azure host it at full price. `openai/gpt-6-luna` (primary 2026-10-05 → 10-10, fast) is the first fallback rung, then `z-ai/glm-5.3-flash`. TokenBom is removed — do not re-add without the owner's explicit ask. The DigitalOcean tier is gone.
 - **Hack Club requests exclude fp4 upstream hosts** (`provider.quantizations` in `tuneBody`) — fp4 GLM turns into word salad on long contexts.
 - **Hack Club 504s are its proxy's 5s header timeout** — time-to-first-byte is load-bearing; gateway statuses are replayed ≤2× inside the fetch (`gateway-retry.ts`), and a 504 does not condemn the tier (`condemnsHackclub`).
 - **`LEADERBOARD_FALLBACK` is CHEAP ON PURPOSE** — one $3/day cap. Price any new rung first. Fallback walks by TIER, best-first (`buildFallbackQueue`, an ALLOWLIST of tiers). **No provider whose terms allow training on inputs may be a tier** (Hack Club forbids training on Slack).

@@ -38,18 +38,31 @@ export interface ModelAttempt {
 }
 
 /**
- * The primary model for main queries: GPT-6 Luna via the Hack Club gateway.
- * Owner's call, 2026-10-05 ("luna is faster now, so use luna as default"):
- * through the proxy on a cold ~32k-token prompt it wrote ~2x faster than GLM
- * 5.3 Flash (110-130 vs 44-79 tok/s; a 600-word answer in 8-11s vs 20-21s),
- * costs less per token, and is served by OpenAI directly, so an OpenRouter
- * spending-limit 429 (which took GLM down that same afternoon) doesn't reach
- * it. GLM was primary 2026-08-26 → 2026-10-05 because it was smarter; it is
- * now the first fallback rung.
+ * The primary model for main queries: Claude Haiku 5.5 via the Hack Club
+ * gateway, pinned to Anthropic's own API (`ANTHROPIC_ONLY_MODELS`). Owner's
+ * call, 2026-10-10: Hack Club takes 30% off a Claude request ONLY when
+ * OpenRouter's upstream that served it was Anthropic (its billing `discounts`,
+ * matched on the upstream that ran) — Vertex, Bedrock, Azure and AWS host the
+ * same model at the same list price ($0.10/M in, $0.50/M out, same as luna)
+ * and get nothing off.
  */
-export const PRIMARY_MODEL = 'openai/gpt-6-luna';
+export const PRIMARY_MODEL = 'anthropic/claude-haiku-5.5';
 
-/** The primary before luna — smart but slow — and now the first fallback. */
+/**
+ * GPT-6 Luna, the primary 2026-10-05 → 2026-10-10, now the first fallback: ~2x
+ * GLM's output rate and served by OpenAI directly, so an Anthropic outage on
+ * the pinned primary lands on a different vendor.
+ */
+export const LUNA_MODEL = 'openai/gpt-6-luna';
+
+/**
+ * Models that may be served ONLY by Anthropic's own API, never another host —
+ * the 30% Hack Club discount needs Anthropic to be the upstream that ran. No
+ * fallback host: if Anthropic refuses, the turn walks to the next RUNG instead.
+ */
+export const ANTHROPIC_ONLY_MODELS = new Set<string>([PRIMARY_MODEL]);
+
+/** The primary before luna — smart but slow — and now the second fallback. */
 const GLM_FLASH_MODEL = 'z-ai/glm-5.3-flash';
 
 /** The primary before GLM, now the second fallback rung: proven and cheap. */
@@ -167,7 +180,7 @@ export const PRIMARY_ATTEMPT: ModelAttempt = catalogAttempt(PRIMARY_MODEL);
  * itself says the task is beyond it (owner's call, 2026-08-05 — "model self
  * escalate whenever needed … anyone can escalate it").
  *
- * These are DEAR. kimi-k3 is $3/M in and $15/M out against the low-cost Luna
+ * These are DEAR. kimi-k3 is $3/M in and $15/M out against the low-cost Haiku
  * primary (and ~20x/50x the HackClub rungs behind it) — and the whole
  * HackClub tier shares one $3/day cap, so a single long escalated turn can eat
  * most of a day's budget. That is why escalation is capped per turn AND per day
@@ -249,9 +262,10 @@ export const compactionAttempt: ModelAttempt | undefined =
 // provider keys rate-limited or in cooldown"). Re-add rungs here only after
 // verifying a real completion succeeds.
 export const LEADERBOARD_FALLBACK: ModelAttempt[] = [
+  catalogAttempt(LUNA_MODEL),
   // GLM 5.3 Flash, the primary 2026-08-26 → 2026-10-05: smarter than Luna but
   // half its speed, and the same price class. Served through OpenRouter, so it
-  // shares a failure mode the Luna primary doesn't (the top-up-wait 429).
+  // shares a failure mode Luna doesn't (the top-up-wait 429).
   catalogAttempt(GLM_FLASH_MODEL),
   // DeepSeek V4 Flash, the primary 2026-08-01 → 2026-08-21. It is proven
   // tools-capable and remains inexpensive.

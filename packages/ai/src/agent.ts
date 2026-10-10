@@ -17,11 +17,12 @@ import {
 } from './cache-probe';
 import { fetchWithGatewayRetry, type GatewayRetryInfo } from './gateway-retry';
 import {
+  ANTHROPIC_ONLY_MODELS,
   GEMINI_PROVIDER,
   HACKCLUB_PROVIDER,
+  LUNA_MODEL,
   MAX_OUTPUT_TOKENS,
   type ModelAttempt,
-  PRIMARY_MODEL,
 } from './providers/attempts';
 import { CHATGPT_PROVIDER } from './providers/chatgpt';
 import { stabilizeToolOrder } from './tool-order';
@@ -581,7 +582,7 @@ function tunedFetch({
   // once per attempt and logged with the turn, so speed and quality can be
   // compared per effort from thread_logs. Every other Hack Club model: medium.
   const reasoningEffort =
-    attempt.model === PRIMARY_MODEL
+    attempt.model === LUNA_MODEL
       ? (LUNA_EFFORTS[Math.floor(Math.random() * LUNA_EFFORTS.length)] ??
         'medium')
       : 'medium';
@@ -753,7 +754,9 @@ function tuneBody(
       attempt.provider === HACKCLUB_PROVIDER &&
       payload.provider === undefined
     ) {
-      payload.provider = { quantizations: ALLOWED_QUANTIZATIONS };
+      payload.provider = ANTHROPIC_ONLY_MODELS.has(attempt.model)
+        ? { allow_fallbacks: false, only: ['anthropic'] }
+        : { quantizations: ALLOWED_QUANTIZATIONS };
       changed = true;
     }
     if (
