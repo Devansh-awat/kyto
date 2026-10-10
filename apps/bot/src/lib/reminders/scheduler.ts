@@ -48,40 +48,12 @@ async function buildReminderMessage(
   return reminder.text;
 }
 
-// How much of the standing instruction to echo back. Enough to recognise which
-// job this is; the full text lives in `reminders` (action `list`).
-const JOB_HEADER_MAX = 160;
-
-/**
- * The line that says which standing instruction produced this post.
- *
- * An agent job's output is just… prose, arriving in a DM out of nowhere, and
- * the reader has no idea which of their recurring jobs wrote it or that it was
- * automated at all. This is what a "you asked me to check X" line buys, without
- * kyto posting AS the person — impersonating the owner is exactly what the
- * confirm gate exists to prevent, and it must not become automatic just because
- * a scheduler triggered it.
- *
- * Only for `agent` jobs: a plain text reminder IS the message, and a bash or
- * script reminder already carries its own command output.
- */
-function jobHeader(reminder: Reminder): string {
-  if (reminder.kind !== 'agent') {
-    return '';
-  }
-  const instruction = reminder.text.trim().replace(/\s+/g, ' ');
-  const shown =
-    instruction.length > JOB_HEADER_MAX
-      ? `${instruction.slice(0, JOB_HEADER_MAX)}…`
-      : instruction;
-  return shown ? `_recurring job — you asked me to: ${shown}_\n\n` : '';
-}
-
 async function fireReminder(bot: Chat, reminder: Reminder): Promise<void> {
   let markdown: string;
   try {
     const built = await buildReminderMessage(reminder);
-    // An agent job that already posted its report where this would land.
+    // An agent job that skipped, or already posted its report where this
+    // would land.
     if (built === null) {
       return;
     }
@@ -103,7 +75,7 @@ async function fireReminder(bot: Chat, reminder: Reminder): Promise<void> {
   const identity = await resolveIdentity('reminder').catch(
     (): ResolvedIdentity => ({})
   );
-  const body = `${reminder.channelId ? `<@${reminder.userId}> ` : ''}${jobHeader(reminder)}${markdown}`;
+  const body = `${reminder.channelId ? `<@${reminder.userId}> ` : ''}${markdown}`;
   // The row was already advanced (claimed) before this fire, so a post that
   // fails here is never retried by the scheduler: a one-shot reminder would be
   // gone for good. Retry a transient Slack failure in place.
@@ -141,7 +113,7 @@ async function fireReminder(bot: Chat, reminder: Reminder): Promise<void> {
     try {
       const dm = await bot.openDM(reminder.userId);
       await dm.post({
-        markdown: `I couldn't post your reminder in <#${reminder.channelId}> (${errorMessage(lastError)}), so here it is:\n\n${jobHeader(reminder)}${markdown}`,
+        markdown: `I couldn't post your reminder in <#${reminder.channelId}> (${errorMessage(lastError)}), so here it is:\n\n${markdown}`,
       });
     } catch (error) {
       logger.error(
