@@ -1,22 +1,9 @@
 import { afterAll, expect, test } from 'bun:test';
-import { mkdtemp, readdir, readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readdir, readFile } from 'node:fs/promises';
 import nodePath from 'node:path';
 
-// The room writes under SITES_ROOT, so point it at a scratch directory BEFORE
-// anything reads the env — @/env validates and freezes the whole environment at
-// import time, which is also why the service keys below are stubbed: this test
-// runs from the repo root, where apps/bot/.env is not loaded, and it needs none
-// of them to talk to a websocket.
-process.env.SITES_ROOT = await mkdtemp(nodePath.join(tmpdir(), 'kyto-boards-'));
-process.env.SLACK_BOT_TOKEN ??= 'xoxb-test';
-process.env.SLACK_SIGNING_SECRET ??= 'test-signing-secret';
-process.env.SLACK_APP_TOKEN ??= 'xapp-test';
-process.env.E2B_API_KEY ??= 'e2b-test';
-process.env.HACKCLUB_API_KEY ??= 'sk-hc-test';
-process.env.EXA_API_KEY ??= 'exa-test';
-process.env.DATABASE_URL ??= 'postgres://test/test';
-
+// SITES_ROOT points at a scratch directory and the service keys are stubbed
+// by the test preload (test-env.ts), before anything imports @/env.
 const { deleteWhiteboard, flushWhiteboards, registerWhiteboard } = await import(
   './room'
 );
