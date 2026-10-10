@@ -33,7 +33,7 @@ const HACKCLUB_OUTAGE_THRESHOLD = 1;
  * failed. Pulled out of the agent loop so the walk is testable: the order and
  * the skip rules here are where the worst routing regression came from.
  *
- * Shared chain: the lead (a sticky upgrade, or the thread's `!with` model) or
+ * Shared chain: the lead (a sticky upgrade, or the thread's `--model`) or
  * the primary, then the primary, then the fallback queue in tier order — skipping failed
  * rungs, and every Hack Club rung once its budget is spent or it looks down.
  * Own attempts (a person's ChatGPT account / keys) go before or after it per
@@ -61,7 +61,7 @@ export function createAttemptRouter({
     ownFirst: boolean;
     serviceFallback: boolean;
   };
-  /** Tried before the primary: a sticky upgrade or the thread's `!with` model. */
+  /** Tried before the primary: a sticky upgrade or the thread's `--model`. */
   lead: ModelAttempt | undefined;
 }) {
   const ownQueue = [...routing.own];

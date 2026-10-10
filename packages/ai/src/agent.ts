@@ -686,7 +686,7 @@ const ALLOWED_QUANTIZATIONS = ['fp8', 'fp16', 'bf16', 'fp32', 'unknown'];
 // `high` is left out because the experiment is about speed.
 const EXPERIMENT_EFFORTS = ['none', 'low', 'medium'];
 
-/** What `!reasoning` accepts — all four passed the proxy on both models. */
+/** What `--reasoning` accepts — all four passed the proxy on both models. */
 export const REASONING_EFFORTS = ['none', 'low', 'medium', 'high'] as const;
 
 /**

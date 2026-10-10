@@ -1,6 +1,6 @@
 import { pgTable, text, timestamp } from 'drizzle-orm/pg-core';
 
-// A thread's `!with <model>` / `!reasoning <effort>` choice, sticky until
+// A thread's `--model` / `--reasoning` choice (lib/flags), sticky until
 // cleared. Kept apart from thread_subscriptions because a row there means
 // "kyto follows this thread", and choosing a model must not subscribe it.
 export const threadModelChoices = pgTable('thread_model_choices', {
