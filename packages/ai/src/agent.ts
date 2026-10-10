@@ -163,6 +163,7 @@ export function streamAttempt({
   onError,
   onGatewayRetry,
   prompt,
+  reasoningEffort,
   requireToolFirst,
   serviceTier,
   system,
@@ -219,6 +220,11 @@ export function streamAttempt({
   onGatewayRetry?: (info: GatewayRetryInfo) => void;
   prompt: string;
   /**
+   * Hack Club only: the effort to send, already decided by the caller (so it
+   * can show it). Omitted → `pickReasoningEffort`.
+   */
+  reasoningEffort?: string;
+  /**
    * Make the FIRST step a tool call. For a question that needs looking up: the
    * prompt alone said "search first" and the model still answered an exam from
    * memory with zero tool calls. Later steps are free to answer.
@@ -268,6 +274,7 @@ export function streamAttempt({
           holder,
           onCachePrefix,
           onGatewayRetry,
+          reasoningEffort,
           serviceTier,
           toolOrder,
         }) as unknown as typeof fetch,
@@ -550,11 +557,13 @@ function tunedFetch({
   holder,
   onCachePrefix,
   onGatewayRetry,
+  reasoningEffort: effort,
   serviceTier,
   toolOrder = { names: [] },
 }: {
   attempt: ModelAttempt;
   historyMessages: number;
+  reasoningEffort?: string;
   holder: ResolvedModelHolder;
   onCachePrefix?: (info: PrefixDivergence) => void;
   onGatewayRetry?: (info: GatewayRetryInfo) => void;
@@ -579,16 +588,7 @@ function tunedFetch({
     serviceTier === 'flex' &&
     attempt.provider === HACKCLUB_PROVIDER &&
     attempt.model.startsWith('openai/');
-  // The effort experiment (issue #36, owner's calls 2026-10-09 for luna and
-  // 2026-10-10 for haiku): drawn once per attempt and logged with the turn, so
-  // speed and quality can be compared per model and effort from thread_logs.
-  // Every other Hack Club model: medium.
-  const reasoningEffort =
-    attempt.model === LUNA_MODEL || attempt.model === PRIMARY_MODEL
-      ? (EXPERIMENT_EFFORTS[
-          Math.floor(Math.random() * EXPERIMENT_EFFORTS.length)
-        ] ?? 'medium')
-      : 'medium';
+  const reasoningEffort = effort ?? pickReasoningEffort(attempt).effort;
   if (attempt.provider === HACKCLUB_PROVIDER) {
     holder.reasoningEffort = reasoningEffort;
   }
@@ -685,6 +685,31 @@ const ALLOWED_QUANTIZATIONS = ['fp8', 'fp16', 'bf16', 'fp32', 'unknown'];
 // Each accepted by luna (2026-10-09) and haiku (2026-10-10) through the proxy;
 // `high` is left out because the experiment is about speed.
 const EXPERIMENT_EFFORTS = ['none', 'low', 'medium'];
+
+/** What `!reasoning` accepts — all four passed the proxy on both models. */
+export const REASONING_EFFORTS = ['none', 'low', 'medium', 'high'] as const;
+
+/**
+ * The effort experiment (issue #36, owner's calls 2026-10-09 for luna and
+ * 2026-10-10 for haiku): drawn once per attempt and logged with the turn, so
+ * speed and quality can be compared per model and effort from thread_logs.
+ * Every other model: medium.
+ */
+export function pickReasoningEffort(attempt: ModelAttempt): {
+  effort: string;
+  random: boolean;
+} {
+  if (attempt.model !== LUNA_MODEL && attempt.model !== PRIMARY_MODEL) {
+    return { effort: 'medium', random: false };
+  }
+  return {
+    effort:
+      EXPERIMENT_EFFORTS[
+        Math.floor(Math.random() * EXPERIMENT_EFFORTS.length)
+      ] ?? 'medium',
+    random: true,
+  };
+}
 
 function tuneBody(
   raw: string | undefined,

@@ -25,7 +25,7 @@ const router = (
     ownModelsOnly: () => false,
     primary,
     routing: { own: [], ownFirst: false, serviceFallback: true },
-    stickyUpgrade: undefined,
+    lead: undefined,
     ...overrides,
   });
 
@@ -57,7 +57,7 @@ describe('createAttemptRouter', () => {
   });
 
   test('a sticky upgrade leads, then the primary', () => {
-    const walk = router({ stickyUpgrade: strong });
+    const walk = router({ lead: strong });
     const first = walk.next();
     expect(first?.model).toBe('kimi');
     if (first) {

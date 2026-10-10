@@ -33,8 +33,8 @@ const HACKCLUB_OUTAGE_THRESHOLD = 1;
  * failed. Pulled out of the agent loop so the walk is testable: the order and
  * the skip rules here are where the worst routing regression came from.
  *
- * Shared chain: the sticky upgrade (if this thread escalated) or the primary,
- * then the primary, then the fallback queue in tier order — skipping failed
+ * Shared chain: the lead (a sticky upgrade, or the thread's `!with` model) or
+ * the primary, then the primary, then the fallback queue in tier order — skipping failed
  * rungs, and every Hack Club rung once its budget is spent or it looks down.
  * Own attempts (a person's ChatGPT account / keys) go before or after it per
  * `routing.ownFirst`, or alone when the turn was caught doing coding work on
@@ -46,8 +46,8 @@ export function createAttemptRouter({
   hackclubProvider,
   ownModelsOnly,
   primary,
+  lead,
   routing,
-  stickyUpgrade,
 }: {
   /** What earlier turns found dead (lib/agent/fallback-cache). */
   cached: { providers: string[]; rungs: string[] };
@@ -61,7 +61,8 @@ export function createAttemptRouter({
     ownFirst: boolean;
     serviceFallback: boolean;
   };
-  stickyUpgrade: ModelAttempt | undefined;
+  /** Tried before the primary: a sticky upgrade or the thread's `!with` model. */
+  lead: ModelAttempt | undefined;
 }) {
   const ownQueue = [...routing.own];
   const failedKeys = new Set<string>(cached.rungs);
@@ -80,14 +81,14 @@ export function createAttemptRouter({
   const nextShared = (): ModelAttempt | undefined => {
     if (!triedPrimary) {
       triedPrimary = true;
-      // A thread that escalated leads with the strong rung; if it fails, the
-      // walk carries on from the primary exactly as it always did.
-      const first = stickyUpgrade ?? primary;
+      // A thread that escalated, or picked a model, leads with it; if it
+      // fails, the walk carries on from the primary exactly as it always did.
+      const first = lead ?? primary;
       if (!skipShared(first)) {
         return first;
       }
     }
-    if (stickyUpgrade && !skipShared(primary)) {
+    if (lead && !skipShared(primary)) {
       return primary;
     }
     fallbackQueue ??= buildFallbackQueue(fallback);

@@ -1,6 +1,8 @@
 export {
   type ImageInput,
   MAX_STEPS,
+  pickReasoningEffort,
+  REASONING_EFFORTS,
   type ResolvedModelHolder,
   SKIP_TOOL_NAME,
   streamAttempt,
@@ -18,6 +20,7 @@ export {
   GEMINI_PROVIDER,
   HACKCLUB_PROVIDER,
   LEADERBOARD_FALLBACK,
+  LUNA_MODEL,
   MAX_OUTPUT_TOKENS,
   type ModelAttempt,
   modelSupportsVision,

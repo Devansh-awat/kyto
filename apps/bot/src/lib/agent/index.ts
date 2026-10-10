@@ -6,6 +6,7 @@ import {
   type ModelAttempt,
   modelSupportsVision,
   PRIMARY_ATTEMPT,
+  pickReasoningEffort,
   type ResolvedModelHolder,
   type SandboxContext,
   streamAttempt,
@@ -40,6 +41,7 @@ import {
   markTierDead,
 } from '@/lib/agent/fallback-cache';
 import { trackTurn } from '@/lib/agent/inflight';
+import { MODEL_CHOICES, threadModelChoice } from '@/lib/agent/model-choice';
 import { buildPrompt } from '@/lib/agent/prompt';
 import {
   continueTruncatedReply,
@@ -496,6 +498,9 @@ async function executeTurn(
   let handledSteps: number | undefined;
   // Which reasoning effort the answering attempt ran at (issue #36 experiment).
   let handledEffort: string | undefined;
+  // False when the effort was the thread's `!reasoning`: those turns are not
+  // part of the experiment and must be filtered out of its numbers.
+  let handledEffortRandom: boolean | undefined;
   // Every attempt that failed this turn, so the terminal log line explains the
   // whole fallback walk (which models were tried, and why each one died).
   const attempts: AttemptFailure[] = [];
@@ -505,6 +510,10 @@ async function executeTurn(
   // took, feedback buttons, and a note when a weaker model had to answer.
   // Unset on a skip or a turn that failed, which get no footer.
   let answeredBy: ModelAttempt | undefined;
+  // The thread's `!with` model, if any (lib/agent/model-choice). Read now so
+  // the first turn after a restart loads the choices alongside the setup.
+  const pendingChoice = threadModelChoice(threadId);
+  let chosenAttempt: ModelAttempt | undefined;
   // The turn ended on a deliberate skip, and the plan messages it streamed:
   // a skip that never said anything takes its plan back (below).
   let turnSkipped = false;
@@ -658,6 +667,7 @@ async function executeTurn(
       await postReplyFooter({
         answeredBy,
         durationMs: Date.now() - turnStart,
+        isChosen: answeredBy === chosenAttempt,
         isOwnAttempt: routing.own.includes(answeredBy),
         showFooter: hints.customization?.showUsageFooter !== false,
         thread,
@@ -679,6 +689,7 @@ async function executeTurn(
         failedAttempts: failedAttemptsLog(attempts),
         outputTokens: turnUsage?.outputTokens,
         reasoningEffort: handledEffort,
+        reasoningRandom: handledEffortRandom,
         steps: handledSteps,
         threadId,
         timing: timingLog(),
@@ -955,9 +966,15 @@ async function executeTurn(
     // (see claimStickyUpgrade for the two bounds). `used` is set with it: the
     // turn is already on the strongest rung kyto has, and letting it ask for
     // another upgrade would only burn a second slot to arrive where it is.
-    const stickyUpgrade = claimStickyUpgrade(threadId)
-      ? UPGRADE_ATTEMPTS.find((candidate) => candidate)
-      : undefined;
+    // `!with` / `!reasoning` (lib/agent/model-choice). A picked model wins
+    // over a sticky upgrade: the person chose it, the upgrade was the model's
+    // own call on an earlier turn.
+    const choice = await pendingChoice;
+    chosenAttempt = choice.model ? MODEL_CHOICES[choice.model] : undefined;
+    const stickyUpgrade =
+      !chosenAttempt && claimStickyUpgrade(threadId)
+        ? UPGRADE_ATTEMPTS.find((candidate) => candidate)
+        : undefined;
     if (stickyUpgrade) {
       escalation.used = true;
     }
@@ -1006,8 +1023,10 @@ async function executeTurn(
       hackclubProvider: HACKCLUB_PROVIDER,
       ownModelsOnly: () => codingMonitor.ownModelsOnly,
       primary: PRIMARY_ATTEMPT,
+      lead:
+        stickyUpgrade ??
+        (chosenAttempt === PRIMARY_ATTEMPT ? undefined : chosenAttempt),
       routing,
-      stickyUpgrade,
     });
     let attempt = router.next();
     // The cache must never be what leaves a turn with nothing to try: if every
@@ -1174,8 +1193,19 @@ async function executeTurn(
         // attempt runs (showing the model it's about to run), completed exactly
         // once with the slug it actually resolved to. Yielded once in_progress
         // and once complete, so `details` never stacks.
+        // The effort is decided here rather than inside the request so the
+        // card can say which one this attempt runs on — and whether it was the
+        // random draw (the effort experiment) or the thread's `!reasoning`.
+        let effort: { effort: string; random: boolean } | undefined;
+        if (currentAttempt.provider === HACKCLUB_PROVIDER) {
+          effort = choice.effort
+            ? { effort: choice.effort, random: false }
+            : pickReasoningEffort(currentAttempt);
+        }
         yield {
-          details: currentAttempt.model,
+          details: effort
+            ? `${currentAttempt.model} · ${effort.effort} reasoning${effort.random ? ' (random)' : ''}`
+            : currentAttempt.model,
           id: modelTaskId,
           status: 'in_progress',
           title: modelTaskTitle,
@@ -1197,6 +1227,7 @@ async function executeTurn(
           images: modelImages,
           // The user account's turns too: it was the one that answered an exam
           // from memory (issue #36).
+          reasoningEffort: effort?.effort,
           requireToolFirst: preload.needsResearch,
           // An image the SDK's schema would reject is dropped rather than
           // allowed to invalidate the whole prompt. Log it: silently ignoring
@@ -1663,10 +1694,12 @@ async function executeTurn(
         }
         handledSteps = holder.calls;
         handledEffort = holder.reasoningEffort;
+        handledEffortRandom = effort?.random;
         logger.info(
           {
             attempt: attemptLog(currentAttempt),
             reasoningEffort: holder.reasoningEffort,
+            reasoningRandom: effort?.random,
             durationMs: Date.now() - attemptStart,
             outcome: skipped ? 'skip' : 'text',
             steps: holder.calls,
