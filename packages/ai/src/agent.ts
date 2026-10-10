@@ -23,6 +23,7 @@ import {
   LUNA_MODEL,
   MAX_OUTPUT_TOKENS,
   type ModelAttempt,
+  PRIMARY_MODEL,
 } from './providers/attempts';
 import { CHATGPT_PROVIDER } from './providers/chatgpt';
 import { stabilizeToolOrder } from './tool-order';
@@ -578,13 +579,15 @@ function tunedFetch({
     serviceTier === 'flex' &&
     attempt.provider === HACKCLUB_PROVIDER &&
     attempt.model.startsWith('openai/');
-  // Luna's effort is an experiment (issue #36, owner's call 2026-10-09): drawn
-  // once per attempt and logged with the turn, so speed and quality can be
-  // compared per effort from thread_logs. Every other Hack Club model: medium.
+  // The effort experiment (issue #36, owner's calls 2026-10-09 for luna and
+  // 2026-10-10 for haiku): drawn once per attempt and logged with the turn, so
+  // speed and quality can be compared per model and effort from thread_logs.
+  // Every other Hack Club model: medium.
   const reasoningEffort =
-    attempt.model === LUNA_MODEL
-      ? (LUNA_EFFORTS[Math.floor(Math.random() * LUNA_EFFORTS.length)] ??
-        'medium')
+    attempt.model === LUNA_MODEL || attempt.model === PRIMARY_MODEL
+      ? (EXPERIMENT_EFFORTS[
+          Math.floor(Math.random() * EXPERIMENT_EFFORTS.length)
+        ] ?? 'medium')
       : 'medium';
   if (attempt.provider === HACKCLUB_PROVIDER) {
     holder.reasoningEffort = reasoningEffort;
@@ -679,9 +682,9 @@ const REQUIRED_TOP_P: Record<string, number> = {};
 // OpenRouter's upstream precision labels kyto accepts — see tuneBody.
 const ALLOWED_QUANTIZATIONS = ['fp8', 'fp16', 'bf16', 'fp32', 'unknown'];
 
-// Each accepted by luna through the proxy (2026-10-09); `high` is left out
-// because the experiment is about speed.
-const LUNA_EFFORTS = ['none', 'low', 'medium'];
+// Each accepted by luna (2026-10-09) and haiku (2026-10-10) through the proxy;
+// `high` is left out because the experiment is about speed.
+const EXPERIMENT_EFFORTS = ['none', 'low', 'medium'];
 
 function tuneBody(
   raw: string | undefined,
