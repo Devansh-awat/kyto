@@ -17,6 +17,7 @@ import { env } from '@/env';
 import type { KytoBot } from '@/harness/bot';
 import type { ThreadHandle } from '@/harness/thread';
 import type { Message } from '@/harness/types';
+import { startEffect } from '@/lib/agent/inflight';
 import { buildMcpTools } from '@/lib/ai/mcp';
 import { withBuiltinMcpServers } from '@/lib/ai/mcp-builtin';
 import { resolveTurnMcpServers } from '@/lib/ai/mcp-scope';
@@ -192,6 +193,32 @@ const CODE_TOOLS = new Set([
 ]);
 
 // Tools that post or otherwise act visibly in Slack — withheld on `!secret`.
+// Tools whose call DOES something outside the turn that a resumed turn must
+// not do twice (lib/agent/inflight `startEffect`). Reads, the sandbox and
+// reactions are left out: redoing those is harmless.
+const EFFECT_TOOLS = new Set([
+  'bookmarkLink',
+  'canvasDelete',
+  'canvasWrite',
+  'cancelReminder',
+  'createChannel',
+  'deploySite',
+  'editAsUser',
+  'editReminder',
+  'pinMessage',
+  'poll',
+  'postMessage',
+  'removeSite',
+  'replyEmail',
+  'scheduleRecurringReminder',
+  'scheduleReminder',
+  'sendAsUser',
+  'sendEmail',
+  'setChannelTopic',
+  'submitEmoji',
+  'unpinMessage',
+]);
+
 const PUBLIC_POSTING_TOOLS = [
   'askQuestion',
   'bookmarkLink',
@@ -908,12 +935,22 @@ export async function buildTools({
         // for every tool including MCP ones (lib/redact).
         // A thrown error reaches the model as text too (an MCP server's or a
         // CLI's message can quote a credential), so it is scrubbed the same way.
+        const finishEffect = EFFECT_TOOLS.has(name)
+          ? startEffect({ input, threadId: thread.id, tool: name })
+          : undefined;
         try {
-          return redactSecretsDeep(
-            await original(input, options),
-            `tool ${name}`
+          const result = await original(input, options);
+          finishEffect?.(
+            typeof result === 'object' &&
+              result !== null &&
+              (('success' in result && result.success === false) ||
+                ('error' in result && Boolean(result.error)))
+              ? 'failed'
+              : 'done'
           );
+          return redactSecretsDeep(result, `tool ${name}`);
         } catch (error) {
+          finishEffect?.('failed');
           // Rethrown as-is unless a secret was found: an abort must stay an
           // abort for the loop to recognise it.
           const message = errorMessage(error);

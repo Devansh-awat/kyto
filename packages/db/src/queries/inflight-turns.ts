@@ -1,8 +1,12 @@
 import { and, eq, gt, gte, lt, or, sql } from 'drizzle-orm';
 import { db } from '../client';
-import { type InflightTurn, inflightTurns } from '../schema';
+import {
+  type InflightEffect,
+  type InflightTurn,
+  inflightTurns,
+} from '../schema';
 
-export type { InflightTurn } from '../schema';
+export type { InflightEffect, InflightTurn } from '../schema';
 
 /** A turn started (or a resumed one restarted) on this instance. */
 export async function startInflightTurn({
@@ -42,7 +46,9 @@ export async function startInflightTurn({
         instanceId,
         messageId,
         resumed,
-        // A resumption keeps its count; a new turn in the thread starts over.
+        // A resumption keeps its count and its record of what it already
+        // did; a new turn in the thread starts over.
+        effects: resumed ? sql`${inflightTurns.effects}` : [],
         resumes: resumed ? sql`${inflightTurns.resumes}` : 0,
         startedAt: now,
         status: 'running',
@@ -62,6 +68,27 @@ export async function heartbeatInflightTurn({
   await db
     .update(inflightTurns)
     .set({ heartbeatAt: new Date() })
+    .where(
+      and(
+        eq(inflightTurns.threadId, threadId),
+        eq(inflightTurns.instanceId, instanceId)
+      )
+    );
+}
+
+/** Replace this turn's record of its outward actions. */
+export async function setInflightEffects({
+  effects,
+  instanceId,
+  threadId,
+}: {
+  effects: InflightEffect[];
+  instanceId: string;
+  threadId: string;
+}): Promise<void> {
+  await db
+    .update(inflightTurns)
+    .set({ effects })
     .where(
       and(
         eq(inflightTurns.threadId, threadId),

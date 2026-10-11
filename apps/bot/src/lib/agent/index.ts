@@ -16,6 +16,7 @@ import {
 } from '@repo/ai';
 import { comparePrefix, type PrefixUnit } from '@repo/ai/cache-probe';
 import { stepsCacheWrites, stepsCostUsd } from '@repo/ai/usage-cost';
+import type { InflightEffect } from '@repo/db/queries';
 import { LazySandbox } from '@repo/sandbox';
 import { env } from '@/env';
 import { restoreAnnotatedMentions } from '@/harness/markdown';
@@ -43,7 +44,7 @@ import {
   markRungDead,
   markTierDead,
 } from '@/lib/agent/fallback-cache';
-import { trackTurn } from '@/lib/agent/inflight';
+import { describePriorEffects, trackTurn } from '@/lib/agent/inflight';
 import {
   experimentAttempt,
   isSharedModel,
@@ -273,6 +274,8 @@ export async function runTurn(input: {
    */
   asUserAccount?: boolean;
   message: Message;
+  /** A resumed turn's outward actions from before the restart. */
+  priorEffects?: InflightEffect[];
   /** Re-running a turn a restart cut short (lib/agent/inflight). */
   resumed?: boolean;
   /**
@@ -368,6 +371,7 @@ async function executeTurn(
   {
     asUserAccount = false,
     message,
+    priorEffects = [],
     resumed = false,
     secret = false,
     thread,
@@ -375,6 +379,8 @@ async function executeTurn(
   }: {
     asUserAccount?: boolean;
     message: Message;
+    /** A resumed turn's outward actions from before the restart. */
+    priorEffects?: InflightEffect[];
     resumed?: boolean;
     secret?: boolean;
     thread: ThreadHandle;
@@ -652,7 +658,7 @@ async function executeTurn(
   // question is already deleted, and resuming it would mean remembering it.
   const endTracking = secret
     ? (_: { cutByShutdown: boolean }) => Promise.resolve()
-    : trackTurn({ asUserAccount, message, resumed, threadId });
+    : trackTurn({ asUserAccount, message, priorEffects, resumed, threadId });
 
   try {
     // Slack's native streaming API renders the thinking/task-card UI. Every
@@ -964,7 +970,7 @@ async function executeTurn(
       messageText = `${messageText}\n\n<unanswered_earlier>These earlier messages in the thread were addressed to you, and a newer message interrupted you before you replied to them:\n${lines.join('\n')}\nAnswer them in this reply too, unless the thread has already settled them.</unanswered_earlier>`;
     }
     if (resumed) {
-      messageText = `${messageText}\n\n<resumed_after_restart>kyto restarted while answering this message and is picking it back up. Anything you already posted is in the thread above — continue from there instead of starting over, and check before repeating anything with a side effect (a post, a DM, a reminder, a file), since it may already have happened.</resumed_after_restart>`;
+      messageText = `${messageText}\n\n<resumed_after_restart>kyto restarted while answering this message and is picking it back up. Anything you already posted is in the thread above — continue from there instead of starting over.\n${describePriorEffects(priorEffects)}</resumed_after_restart>`;
     }
     const conversation = [...history, messageText].join('\n\n');
     const promptMs = Date.now() - promptStart;

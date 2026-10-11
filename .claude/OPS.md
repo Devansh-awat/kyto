@@ -92,6 +92,7 @@ CREATE INDEX IF NOT EXISTS message_revisions_thread_idx ON message_revisions (ch
 CREATE TABLE IF NOT EXISTS turn_timings (id serial PRIMARY KEY, thread_id text NOT NULL, message_ts text NOT NULL, outcome text, total_ms integer NOT NULL, timing jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now()); -- 2026-10-11
 CREATE INDEX IF NOT EXISTS turn_timings_thread_idx ON turn_timings (thread_id, created_at); -- 2026-10-11
 CREATE TABLE IF NOT EXISTS debug_snapshots (id text PRIMARY KEY, thread_id text NOT NULL, created_by text NOT NULL, body jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now()); -- 2026-10-11
+ALTER TABLE inflight_turns ADD COLUMN IF NOT EXISTS effects jsonb NOT NULL DEFAULT '[]'::jsonb; -- 2026-10-11
 ```
 
 The anti-coding gate's ledger: the last catch and how many in a row (each

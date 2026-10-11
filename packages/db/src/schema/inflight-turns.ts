@@ -1,6 +1,7 @@
 import {
   boolean,
   integer,
+  jsonb,
   pgTable,
   text,
   timestamp,
@@ -16,6 +17,14 @@ import {
 // CLAIMS such rows atomically (status → `resuming`, its own instance id), which
 // is what stops the old and new containers of a rolling deploy from both
 // running the same turn.
+export interface InflightEffect {
+  at: string;
+  /** Compact, redacted input: enough to recognise it, not to redo it. */
+  input: string;
+  status: 'done' | 'failed' | 'started';
+  tool: string;
+}
+
 export const inflightTurns = pgTable('inflight_turns', {
   threadId: text('thread_id').primaryKey(),
   messageId: text('message_id').notNull(),
@@ -34,6 +43,10 @@ export const inflightTurns = pgTable('inflight_turns', {
   resumes: integer('resumes').notNull().default(0),
   // Answered as kyto's Slack user account, not the app: resumed the same way.
   asUserAccount: boolean('as_user_account').notNull().default(false),
+  // Outward actions this turn took (a post, an email, a deploy), each written
+  // BEFORE it runs and marked after, so a turn resumed after a restart knows
+  // which ones are done and which were cut mid-way (apps/bot/src/lib/agent/effects.ts).
+  effects: jsonb('effects').$type<InflightEffect[]>().notNull().default([]),
   startedAt: timestamp('started_at', { withTimezone: true })
     .notNull()
     .defaultNow(),

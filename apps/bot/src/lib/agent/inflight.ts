@@ -4,14 +4,17 @@ import {
   claimOrphanedTurns,
   finishInflightTurn,
   heartbeatInflightTurn,
+  type InflightEffect,
   markInstanceInterrupted,
   pruneInflightTurns,
+  setInflightEffects,
   startInflightTurn,
 } from '@repo/db/queries';
 import type { KytoBot } from '@/harness/bot';
 import type { Message } from '@/harness/types';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
+import { redactSecrets } from '@/lib/redact';
 import { toLogError } from '@/lib/utils/error';
 
 // Picking a turn back up after a restart (owner's ask, 2026-09-29, after seeing
@@ -56,15 +59,19 @@ let shuttingDown = false;
 export function trackTurn({
   asUserAccount,
   message,
+  priorEffects = [],
   resumed,
   threadId,
 }: {
   asUserAccount: boolean;
   message: Message;
+  /** A resumed turn's record from before the restart; it keeps growing. */
+  priorEffects?: InflightEffect[];
   resumed: boolean;
   threadId: string;
 }): (options: { cutByShutdown: boolean }) => Promise<void> {
   const ids = { instanceId: INSTANCE_ID, threadId };
+  effectsByThread.set(threadId, resumed ? [...priorEffects] : []);
   startInflightTurn({
     ...ids,
     asUserAccount,
@@ -79,6 +86,7 @@ export function trackTurn({
   }, HEARTBEAT_MS);
   return async ({ cutByShutdown }) => {
     clearInterval(beat);
+    effectsByThread.delete(threadId);
     // Only a turn the shutdown actually CUT stays resumable. One that finished
     // on its own inside the shutdown window keeps no row — left `interrupted`,
     // the next instance answered it a second time.
@@ -87,6 +95,80 @@ export function trackTurn({
     }
     await finishInflightTurn(ids).catch(() => undefined);
   };
+}
+
+// Outward actions of each running turn, mirrored into its inflight row.
+const effectsByThread = new Map<string, InflightEffect[]>();
+const MAX_EFFECTS = 40;
+const EFFECT_INPUT_MAX = 240;
+
+/**
+ * Record an outward action BEFORE it runs, and return the call that marks it
+ * done or failed. A restart between the two leaves it `started`: the resumed
+ * turn is told it may or may not have happened, instead of finding out by
+ * posting the same message twice. Best-effort; never in the tool's way.
+ */
+export function startEffect({
+  input,
+  threadId,
+  tool,
+}: {
+  input: unknown;
+  threadId: string;
+  tool: string;
+}): (status: 'done' | 'failed') => void {
+  const effects = effectsByThread.get(threadId) ?? [];
+  let text: string;
+  try {
+    text = typeof input === 'string' ? input : (JSON.stringify(input) ?? '');
+  } catch {
+    text = String(input);
+  }
+  const effect: InflightEffect = {
+    at: new Date().toISOString(),
+    input: redactSecrets(
+      text.length > EFFECT_INPUT_MAX
+        ? `${text.slice(0, EFFECT_INPUT_MAX)}…`
+        : text,
+      'inflight effect'
+    ),
+    status: 'started',
+    tool,
+  };
+  const next = [...effects, effect].slice(-MAX_EFFECTS);
+  effectsByThread.set(threadId, next);
+  const save = () =>
+    setInflightEffects({
+      effects: effectsByThread.get(threadId) ?? [],
+      instanceId: INSTANCE_ID,
+      threadId,
+    }).catch(() => undefined);
+  // Awaited by nobody, but issued now: the point is to be on disk before the
+  // action itself, and the action's own network call takes longer than this.
+  save();
+  return (status) => {
+    effect.status = status;
+    save();
+  };
+}
+
+const EFFECT_STATE: Record<InflightEffect['status'], string> = {
+  done: 'DONE — do not do it again',
+  failed: 'failed',
+  started:
+    'STARTED, result UNKNOWN — the restart cut it before or after it happened; check (read the thread, the channel, the inbox, the site) before doing it again',
+};
+
+/** For a resumed turn: what the cut turn did, told plainly. */
+export function describePriorEffects(effects: InflightEffect[]): string {
+  if (effects.length === 0) {
+    return 'Before the restart this turn had taken no outward action (no post, DM, email, deploy or reminder), so nothing will be repeated by doing the work.';
+  }
+  const lines = effects.map((effect) => {
+    const state = EFFECT_STATE[effect.status];
+    return `- ${effect.tool}(${effect.input}) at ${effect.at}: ${state}`;
+  });
+  return `Outward actions this turn took before the restart:\n${lines.join('\n')}`;
 }
 
 /** Called first thing on SIGTERM: everything running here becomes resumable. */
@@ -142,6 +224,7 @@ async function resumeOnce({
   runTurn: (input: {
     asUserAccount: boolean;
     message: Message;
+    priorEffects: InflightEffect[];
     resumed: boolean;
     thread: ReturnType<KytoBot['thread']>;
   }) => Promise<void>;
@@ -218,6 +301,7 @@ async function resumeOnce({
     runTurn({
       asUserAccount: row.asUserAccount,
       message,
+      priorEffects: row.effects,
       resumed: true,
       thread,
     }).catch((error: unknown) => {
