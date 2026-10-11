@@ -89,6 +89,37 @@ function authorLabel(message: Message): string {
     : message.author.userName;
 }
 
+// Below this a pause is just conversation; above it, the thread replayed as
+// one block reads as one moment, and kyto answered week-old state as live.
+const GAP_NOTE_MIN_SECONDS = 10 * 60;
+
+/** "The previous message here was 3 days ago", when there was a real pause. */
+function gapLine({
+  currentId,
+  previousId,
+}: {
+  currentId: string;
+  previousId?: string;
+}): string[] {
+  const gap = Number(currentId) - Number(previousId);
+  if (!(previousId && Number.isFinite(gap)) || gap < GAP_NOTE_MIN_SECONDS) {
+    return [];
+  }
+  const minutes = Math.round(gap / 60);
+  const hours = Math.round(gap / 3600);
+  const days = Math.round(gap / 86_400);
+  let ago = `${minutes} minutes`;
+  if (days >= 2) {
+    ago = `${days} days`;
+  } else if (hours >= 2) {
+    ago = `${hours} hours`;
+  }
+  const at = new Date(Number(previousId) * 1000).toISOString();
+  return [
+    `This conversation resumed after a pause: the message before this one was ${ago} earlier (${at}). What was true then — a status, a deadline, a plan, something you were waiting on — may have changed, so re-check anything time-sensitive instead of treating it as current.`,
+  ];
+}
+
 async function renderMessage(message: Message): Promise<string> {
   const slackText = rawSlackText(message);
   const text = slackText
@@ -176,6 +207,7 @@ export async function buildPrompt(
   let history: string[] = [];
   let compacted = '';
   let pulledInLater = false;
+  let previousMessageId: string | undefined;
   if (thread && threadRead) {
     const [focusState, { stored, fetched: firstRead }] = threadRead;
     let fetched = firstRead;
@@ -228,6 +260,7 @@ export async function buildPrompt(
       selfId !== undefined &&
       root.author.userId !== selfId &&
       !(rawSlackText(root) ?? '').includes(`<@${selfId}>`);
+    previousMessageId = prior.findLast((entry) => entry.id < message.id)?.id;
     // Split AFTER filtering, so a focused thread's window is 100 messages kyto
     // may actually see rather than 100 slots partly spent on hidden ones.
     const start = replayWindowStart({
@@ -303,6 +336,7 @@ export async function buildPrompt(
   const nowLine = [
     `The current date and time is ${new Date().toISOString()}.`,
     `The message you're responding to has id ${message.id}.`,
+    ...gapLine({ currentId: message.id, previousId: previousMessageId }),
     // Per person, so it lives down here with the clock: in the system prompt it
     // would split the cached prefix between key-holders and everyone else.
     ...(ownModelsOnly
