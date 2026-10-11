@@ -7,6 +7,7 @@ import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
 import { askerSlackToken, slackAuthorizeUrl } from '@/lib/slack-oauth';
 import { toLogError } from '@/lib/utils/error';
+import { rememberRepeatReads } from './repeat-reads';
 
 const actionTokenSchema = z.looseObject({
   action_token: z.string().min(1).optional(),
@@ -225,7 +226,7 @@ export function searchSlackTool({ message }: { message: Message }) {
           'Search text. Supports Slack modifiers like from:@user, in:#channel, in:@user (DM), has:link, has:star, before:2026-01-01, after:2026-01-01, is:thread, filename:name, ext:filetype.'
         ),
     }),
-    execute: async ({ cursor, order, query }) => {
+    execute: rememberRepeatReads(async ({ cursor, order, query }) => {
       const userId = message.author.userId;
       const currentChannel = slack.channelIdFromThreadId(message.threadId);
       const parsedRaw = actionTokenSchema.safeParse(message.raw);
@@ -476,6 +477,6 @@ export function searchSlackTool({ message }: { message: Message }) {
         summary:
           "Could not search Slack: no assistant search token this turn, and kyto's user account is not configured.",
       };
-    },
+    }),
   });
 }

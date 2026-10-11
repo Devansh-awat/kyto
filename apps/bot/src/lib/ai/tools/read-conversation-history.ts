@@ -9,6 +9,7 @@ import {
   toRawSlackChannelId,
 } from '@/lib/slack/ids';
 import { askerSlackToken, slackAuthorizeUrl } from '@/lib/slack-oauth';
+import { rememberRepeatReads } from './repeat-reads';
 import { assertReadableChannel, joinChannel } from './utils';
 
 export function readConversationHistoryTool({
@@ -39,127 +40,124 @@ export function readConversationHistoryTool({
           'The `nextCursor` from a previous readConversationHistory response, verbatim. NOT a message ts — to start at a message, pass it as threadTs or permalink.'
         ),
     }),
-    execute: async ({
-      channelId,
-      cursor,
-      limit,
-      permalink,
-      threadId,
-      threadTs,
-    }) => {
-      const link = permalink?.trim() ? parseSlackPermalink(permalink) : null;
-      if (permalink?.trim() && !link) {
-        throw new Error(
-          `${permalink} is not a Slack message link (https://<workspace>.slack.com/archives/<CHANNEL>/p<digits>).`
-        );
-      }
-      // gpt-6-luna fills every optional field, so an unused one arrives as "".
-      const decodedThread = threadId?.startsWith('slack:')
-        ? slack.decodeThreadId(threadId)
-        : undefined;
-      const resolvedChannelId =
-        link?.channelId ||
-        channelId ||
-        (decodedThread ? `slack:${decodedThread.channel}` : undefined);
-      const resolvedThreadTs =
-        link?.threadTs || threadTs || decodedThread?.threadTs || undefined;
-      if (!resolvedChannelId) {
-        throw new Error('readConversationHistory needs channelId or threadId.');
-      }
-      // A message ts passed as the cursor came back `invalid_cursor` four times
-      // in one turn, each a 3-4s round trip, and the model kept guessing (#65).
-      if (cursor && MESSAGE_TS.test(cursor)) {
-        throw new Error(
-          `cursor ${cursor} is a message timestamp, not a pagination cursor. Pass the nextCursor from the previous response, or omit cursor and pass the thread's ts as threadTs to start from its first page.`
-        );
-      }
-
-      const chatChannelId = toChatSlackChannelId(resolvedChannelId);
-
-      const refusal = await assertReadableChannel(chatChannelId, {
-        askerUserId,
-        currentThreadId,
-      }).then(
-        () => undefined,
-        (error: unknown) => error
-      );
-      if (refusal) {
-        // kyto's bot can't read it (a DM, or a private channel it isn't in —
-        // or one the asker isn't in). The asker's OWN token can read exactly
-        // the conversations they are in, so asking for one of theirs is the
-        // consent (owner's call 2026-10-05: no click per read).
-        const token = await askerSlackToken(askerUserId);
-        if (!token) {
-          const connect = slackAuthorizeUrl(askerUserId);
+    execute: rememberRepeatReads(
+      async ({ channelId, cursor, limit, permalink, threadId, threadTs }) => {
+        const link = permalink?.trim() ? parseSlackPermalink(permalink) : null;
+        if (permalink?.trim() && !link) {
           throw new Error(
-            connect
-              ? `kyto's bot can't read that conversation. If it is one the person is in, they can connect their own Slack account and kyto will read it as them: ${connect}`
-              : String(refusal instanceof Error ? refusal.message : refusal)
+            `${permalink} is not a Slack message link (https://<workspace>.slack.com/archives/<CHANNEL>/p<digits>).`
           );
         }
-        return await readAsAsker({
-          channel: toRawSlackChannelId(chatChannelId),
-          cursor,
-          limit,
-          threadTs: resolvedThreadTs,
-          token,
+        // gpt-6-luna fills every optional field, so an unused one arrives as "".
+        const decodedThread = threadId?.startsWith('slack:')
+          ? slack.decodeThreadId(threadId)
+          : undefined;
+        const resolvedChannelId =
+          link?.channelId ||
+          channelId ||
+          (decodedThread ? `slack:${decodedThread.channel}` : undefined);
+        const resolvedThreadTs =
+          link?.threadTs || threadTs || decodedThread?.threadTs || undefined;
+        if (!resolvedChannelId) {
+          throw new Error(
+            'readConversationHistory needs channelId or threadId.'
+          );
+        }
+        // A message ts passed as the cursor came back `invalid_cursor` four times
+        // in one turn, each a 3-4s round trip, and the model kept guessing (#65).
+        if (cursor && MESSAGE_TS.test(cursor)) {
+          throw new Error(
+            `cursor ${cursor} is a message timestamp, not a pagination cursor. Pass the nextCursor from the previous response, or omit cursor and pass the thread's ts as threadTs to start from its first page.`
+          );
+        }
+
+        const chatChannelId = toChatSlackChannelId(resolvedChannelId);
+
+        const refusal = await assertReadableChannel(chatChannelId, {
+          askerUserId,
+          currentThreadId,
+        }).then(
+          () => undefined,
+          (error: unknown) => error
+        );
+        if (refusal) {
+          // kyto's bot can't read it (a DM, or a private channel it isn't in —
+          // or one the asker isn't in). The asker's OWN token can read exactly
+          // the conversations they are in, so asking for one of theirs is the
+          // consent (owner's call 2026-10-05: no click per read).
+          const token = await askerSlackToken(askerUserId);
+          if (!token) {
+            const connect = slackAuthorizeUrl(askerUserId);
+            throw new Error(
+              connect
+                ? `kyto's bot can't read that conversation. If it is one the person is in, they can connect their own Slack account and kyto will read it as them: ${connect}`
+                : String(refusal instanceof Error ? refusal.message : refusal)
+            );
+          }
+          return await readAsAsker({
+            channel: toRawSlackChannelId(chatChannelId),
+            cursor,
+            limit,
+            threadTs: resolvedThreadTs,
+            token,
+          });
+        }
+
+        await joinChannel(chatChannelId);
+
+        const result = await (resolvedThreadTs
+          ? slack.fetchMessages(`${chatChannelId}:${resolvedThreadTs}`, {
+              cursor,
+              limit,
+            })
+          : slack.fetchChannelMessages(chatChannelId, {
+              cursor,
+              limit,
+            })
+        ).catch((error: unknown) => {
+          // A bare thread_not_found read as "that thread is gone"; it is almost
+          // always a channel or ts copied wrong from a link.
+          if (String(error).includes('invalid_cursor')) {
+            throw new Error(
+              'invalid_cursor: a cursor is only valid as the exact nextCursor of the previous response for the SAME channel/thread. Omit it to start from the first page again.'
+            );
+          }
+          if (String(error).includes('thread_not_found') && !link) {
+            throw new Error(
+              `No message ${resolvedThreadTs} in ${chatChannelId}. If this came from a link, pass the whole link as \`permalink\` instead of copying the channel and ts out of it.`
+            );
+          }
+          throw error;
         });
-      }
 
-      await joinChannel(chatChannelId);
-
-      const result = await (resolvedThreadTs
-        ? slack.fetchMessages(`${chatChannelId}:${resolvedThreadTs}`, {
-            cursor,
-            limit,
-          })
-        : slack.fetchChannelMessages(chatChannelId, {
-            cursor,
-            limit,
-          })
-      ).catch((error: unknown) => {
-        // A bare thread_not_found read as "that thread is gone"; it is almost
-        // always a channel or ts copied wrong from a link.
-        if (String(error).includes('invalid_cursor')) {
-          throw new Error(
-            'invalid_cursor: a cursor is only valid as the exact nextCursor of the previous response for the SAME channel/thread. Omit it to start from the first page again.'
-          );
-        }
-        if (String(error).includes('thread_not_found') && !link) {
-          throw new Error(
-            `No message ${resolvedThreadTs} in ${chatChannelId}. If this came from a link, pass the whole link as \`permalink\` instead of copying the channel and ts out of it.`
-          );
-        }
-        throw error;
-      });
-
-      return {
-        channelId: chatChannelId,
-        messages: result.messages.map((message) => ({
-          id: message.id,
-          threadId: message.threadId,
-          text: message.text,
-          author: {
-            userId: message.author.userId,
-            userName: message.author.userName,
-            fullName: message.author.fullName,
-            isBot: message.author.isBot,
-            isMe: message.author.isMe,
-          },
-          dateSent: message.metadata.dateSent?.toISOString(),
-          edited: message.metadata.edited,
-          isMention: message.isMention,
-          attachments: (message.attachments ?? []).map((attachment) => ({
-            type: attachment.type,
-            name: attachment.name,
-            mimeType: attachment.mimeType,
-            url: attachment.url,
+        return {
+          channelId: chatChannelId,
+          messages: result.messages.map((message) => ({
+            id: message.id,
+            threadId: message.threadId,
+            text: message.text,
+            author: {
+              userId: message.author.userId,
+              userName: message.author.userName,
+              fullName: message.author.fullName,
+              isBot: message.author.isBot,
+              isMe: message.author.isMe,
+            },
+            dateSent: message.metadata.dateSent?.toISOString(),
+            edited: message.metadata.edited,
+            isMention: message.isMention,
+            attachments: (message.attachments ?? []).map((attachment) => ({
+              type: attachment.type,
+              name: attachment.name,
+              mimeType: attachment.mimeType,
+              url: attachment.url,
+            })),
           })),
-        })),
-        nextCursor: result.nextCursor,
-        threadTs: resolvedThreadTs ?? null,
-      };
-    },
+          nextCursor: result.nextCursor,
+          threadTs: resolvedThreadTs ?? null,
+        };
+      }
+    ),
   });
 }
 
