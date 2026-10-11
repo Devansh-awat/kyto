@@ -55,4 +55,26 @@ describe('createToolMarkupFilter', () => {
     const more = filter.push('more markup');
     expect(more.dropped).toBe('more markup');
   });
+
+  test("catches Claude's plain-XML call, leaving the bare skip", () => {
+    // What haiku 5.5 posted to a thread on 2026-10-10.
+    const filter = createToolMarkupFilter();
+    const kept =
+      filter.push('skip\n<inv').text +
+      filter.push('oke name="skip">\n<parameter name="reason">x</parameter>')
+        .text +
+      filter.flush().text;
+    expect(kept).toBe('skip\n');
+    expect(filter.leaked).toBe(true);
+  });
+
+  test('ordinary angle-bracket prose is not held or dropped', () => {
+    const filter = createToolMarkupFilter();
+    const kept =
+      filter.push('a <b> tag and <in').text +
+      filter.push('put> here').text +
+      filter.flush().text;
+    expect(kept).toBe('a <b> tag and <input> here');
+    expect(filter.leaked).toBe(false);
+  });
 });
