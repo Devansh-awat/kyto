@@ -11,6 +11,13 @@ export interface StreamTiming {
   /** Everything else: the model thinking and writing, plus our own overhead. */
   modelMs: number;
   /**
+   * Characters of reply text and tool-call arguments per second, from a step's
+   * first such character to its last. Tokens/s can't compare models: haiku's
+   * tokenizer spends more tokens on the same text than luna's, and output
+   * tokens include reasoning that one model shows and the other hides.
+   */
+  outputCharsPerSecond?: number;
+  /**
    * Output tokens per second of GENERATION (a step's first model output to
    * its last),
    * across steps that reported usage. Absent when no step did.
@@ -29,6 +36,10 @@ export interface StreamTiming {
 
 /** The fields of a stream part the timer reads. */
 export interface TimedPart {
+  /** `tool-input-delta`'s text. */
+  delta?: string;
+  /** `text-delta`'s text. */
+  text?: string;
   toolCallId?: string;
   toolName?: string;
   type: string;
@@ -66,6 +77,11 @@ export function createStreamTimer(now: () => number = Date.now) {
   let steps = 0;
   let generatedTokens = 0;
   let generatingMs = 0;
+  let stepFirstCharAt: number | undefined;
+  let stepLastCharAt: number | undefined;
+  let stepChars = 0;
+  let writtenChars = 0;
+  let writingMs = 0;
   const firstOutputMs: number[] = [];
   const toolStarts = new Map<string, { at: number; name: string }>();
   const tools: { ms: number; name: string }[] = [];
@@ -79,7 +95,26 @@ export function createStreamTimer(now: () => number = Date.now) {
         stepStartedAt = at;
         stepFirstOutputAt = undefined;
         stepLastOutputAt = undefined;
+        stepFirstCharAt = undefined;
+        stepLastCharAt = undefined;
+        stepChars = 0;
         return;
+      }
+      let chars = 0;
+      if (type === 'text-delta') {
+        chars = part.text?.length ?? 0;
+      } else if (type === 'tool-input-delta') {
+        chars = part.delta?.length ?? 0;
+      }
+      if (chars > 0) {
+        // The first delta's characters arrived before the window opened, so
+        // only the ones after it are counted against it.
+        if (stepFirstCharAt === undefined) {
+          stepFirstCharAt = at;
+        } else {
+          stepChars += chars;
+        }
+        stepLastCharAt = at;
       }
       if (MODEL_OUTPUT.has(type)) {
         stepLastOutputAt = at;
@@ -131,6 +166,14 @@ export function createStreamTimer(now: () => number = Date.now) {
           generatedTokens += tokens;
           generatingMs += ms;
         }
+        if (
+          stepFirstCharAt !== undefined &&
+          stepLastCharAt !== undefined &&
+          stepLastCharAt > stepFirstCharAt
+        ) {
+          writtenChars += stepChars;
+          writingMs += stepLastCharAt - stepFirstCharAt;
+        }
       }
     },
     summary(): StreamTiming {
@@ -153,6 +196,13 @@ export function createStreamTimer(now: () => number = Date.now) {
           ? {
               outputTokensPerSecond: Math.round(
                 (generatedTokens * MS_PER_SECOND) / generatingMs
+              ),
+            }
+          : {}),
+        ...(writtenChars > 0 && writingMs > 0
+          ? {
+              outputCharsPerSecond: Math.round(
+                (writtenChars * MS_PER_SECOND) / writingMs
               ),
             }
           : {}),

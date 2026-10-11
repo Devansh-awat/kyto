@@ -77,4 +77,18 @@ describe('createStreamTimer', () => {
     c.set(5000);
     expect(timer.summary()).toMatchObject({ modelMs: 1000, toolMs: 4000 });
   });
+
+  test('measures characters per second from the first character to the last', () => {
+    const c = clock();
+    const timer = createStreamTimer(c.now);
+    timer.observe('start-step');
+    c.set(1000);
+    timer.observe({ text: 'hello', type: 'text-delta' });
+    c.set(2000);
+    timer.observe({ text: 'x'.repeat(50), type: 'text-delta' });
+    c.set(3000);
+    timer.observe({ delta: 'y'.repeat(150), type: 'tool-input-delta' });
+    timer.observe('finish-step');
+    expect(timer.summary().outputCharsPerSecond).toBe(100);
+  });
 });

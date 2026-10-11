@@ -14,6 +14,7 @@ import {
   UPGRADE_ATTEMPTS,
   visionAttempt,
 } from '@repo/ai';
+import { stepsCostUsd } from '@repo/ai/usage-cost';
 import { LazySandbox } from '@repo/sandbox';
 import { env } from '@/env';
 import { restoreAnnotatedMentions } from '@/harness/markdown';
@@ -542,6 +543,7 @@ async function executeTurn(
     /** Model streams: attempts plus any nudge or continuation call. */
     modelCalls: number;
     modelMs: number;
+    outputCharsPerSecond?: number;
     outputTokensPerSecond?: number;
     setupMs?: number;
     slowestTools: { ms: number; name: string }[];
@@ -561,6 +563,8 @@ async function executeTurn(
     );
     turnTiming.outputTokensPerSecond =
       timing.outputTokensPerSecond ?? turnTiming.outputTokensPerSecond;
+    turnTiming.outputCharsPerSecond =
+      timing.outputCharsPerSecond ?? turnTiming.outputCharsPerSecond;
     turnTiming.slowestTools = [...turnTiming.slowestTools, ...timing.tools]
       .sort((a, b) => b.ms - a.ms)
       .slice(0, SLOWEST_TOOLS_LOGGED);
@@ -1766,16 +1770,10 @@ async function executeTurn(
             Promise.resolve(result.usage).catch(() => undefined),
             Promise.resolve(result.steps).catch(() => []),
           ]);
-          // What the proxy actually charged (OpenRouter's `usage.cost`, kept in
-          // the raw usage) — the token split alone hides that an uncached
-          // token on gpt-6-luna is a cache WRITE at 1.25x, 12.5x a cached read.
-          let costUsd: number | undefined;
-          for (const step of steps) {
-            const cost = step.usage.raw?.cost;
-            if (typeof cost === 'number') {
-              costUsd = (costUsd ?? 0) + cost;
-            }
-          }
+          // What the proxy actually charged — the token split alone hides that
+          // an uncached token on gpt-6-luna is a cache WRITE at 1.25x, 12.5x a
+          // cached read.
+          const costUsd = stepsCostUsd(steps);
           turnUsage = {
             cacheReadTokens: usage?.inputTokenDetails?.cacheReadTokens,
             cacheWriteTokens: usage?.inputTokenDetails?.cacheWriteTokens,
