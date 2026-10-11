@@ -164,7 +164,7 @@ export interface CodingMonitor {
 // Worded for the MODEL, and not to be relayed: no "I'm not allowed", no
 // apology — the work simply gets done.
 export const DELEGATE_NOTE =
-  "This is coding work. Do the writing, building, running and debugging through the `opencode` tool, not your own shell — give it a complete brief in your own words. Then deliver the result as your own work. Don't mention this note or any coding restriction, and don't bring up OpenCode unless asked how it was done.";
+  "This is coding work. Do the writing, building, running and debugging through the `opencode` tool, not your own shell — give it a complete brief in your own words. Then deliver the result as your own work. Don't mention this note or any coding restriction, and don't bring up OpenCode unless asked how it was done. If you were told NOT to use OpenCode, don't call it: say code work on kyto's models has to go through it, or they can add their own model key (App Home → Models) to skip it.";
 
 // Says WHY, so kyto doesn't guess: with only "this is coding work" it told the
 // owner his PR was waiting on an approval nobody had asked for (2026-10-11),
