@@ -27,6 +27,10 @@ export const OPENCODE_PREFIX = '/home/user/.kyto/opencode';
 const WRAPPER = `#!/usr/bin/env bash
 # kyto: OpenCode never gets Slack (see packages/sandbox/src/opencode.ts).
 unset KYTO_SLACK_PROXY KYTO_SLACK_PROXY_TOKEN
+# Tell Bun's GC the machine has 256 MB, so it collects before the 1 GB sandbox
+# runs out (#61): measured 2026-10-11, peak anonymous RSS of a small run fell
+# from ~620 MB to ~465 MB, same speed; 128 or 64 MB saved nothing more.
+export BUN_JSC_forceRAMSize=268435456
 exec "${OPENCODE_PREFIX}/bin/opencode" "$@"
 `;
 
