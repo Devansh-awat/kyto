@@ -101,6 +101,23 @@ export function trackTurn({
 const effectsByThread = new Map<string, InflightEffect[]>();
 const MAX_EFFECTS = 40;
 const EFFECT_INPUT_MAX = 240;
+// Room for a canvas/site/message link and its id: a canvas created just before
+// a restart was marked DONE with no link, so the resumed turn and every turn
+// after it said "the save didn't return one".
+const EFFECT_RESULT_MAX = 400;
+
+function compact(value: unknown, max: number): string {
+  let text: string;
+  try {
+    text = typeof value === 'string' ? value : (JSON.stringify(value) ?? '');
+  } catch {
+    text = String(value);
+  }
+  return redactSecrets(
+    text.length > max ? `${text.slice(0, max)}…` : text,
+    'inflight effect'
+  );
+}
 
 /**
  * Record an outward action BEFORE it runs, and return the call that marks it
@@ -116,22 +133,11 @@ export function startEffect({
   input: unknown;
   threadId: string;
   tool: string;
-}): (status: 'done' | 'failed') => void {
+}): (status: 'done' | 'failed', result?: unknown) => void {
   const effects = effectsByThread.get(threadId) ?? [];
-  let text: string;
-  try {
-    text = typeof input === 'string' ? input : (JSON.stringify(input) ?? '');
-  } catch {
-    text = String(input);
-  }
   const effect: InflightEffect = {
     at: new Date().toISOString(),
-    input: redactSecrets(
-      text.length > EFFECT_INPUT_MAX
-        ? `${text.slice(0, EFFECT_INPUT_MAX)}…`
-        : text,
-      'inflight effect'
-    ),
+    input: compact(input, EFFECT_INPUT_MAX),
     status: 'started',
     tool,
   };
@@ -146,8 +152,11 @@ export function startEffect({
   // Awaited by nobody, but issued now: the point is to be on disk before the
   // action itself, and the action's own network call takes longer than this.
   save();
-  return (status) => {
+  return (status, result) => {
     effect.status = status;
+    if (result !== undefined) {
+      effect.result = compact(result, EFFECT_RESULT_MAX);
+    }
     save();
   };
 }
@@ -166,7 +175,8 @@ export function describePriorEffects(effects: InflightEffect[]): string {
   }
   const lines = effects.map((effect) => {
     const state = EFFECT_STATE[effect.status];
-    return `- ${effect.tool}(${effect.input}) at ${effect.at}: ${state}`;
+    const result = effect.result ? ` → ${effect.result}` : '';
+    return `- ${effect.tool}(${effect.input}) at ${effect.at}: ${state}${result}`;
   });
   return `Outward actions this turn took before the restart:\n${lines.join('\n')}`;
 }

@@ -100,7 +100,11 @@ const filesListSchema = z.looseObject({
   error: z.string().optional(),
   files: z
     .array(
-      z.looseObject({ id: z.string().optional(), title: z.string().optional() })
+      z.looseObject({
+        id: z.string().optional(),
+        permalink: z.string().optional(),
+        title: z.string().optional(),
+      })
     )
     .optional(),
   ok: z.boolean(),
@@ -114,7 +118,7 @@ function channelIdFromThread(thread: Thread): string | undefined {
 export function canvasListTool({ thread }: { thread: Thread }) {
   return tool({
     description:
-      'List existing Slack canvases in a channel so you can discover one to read or edit. Defaults to the current channel; pass channelId to inspect another channel (e.g. to review a canvas in #some-channel). Returns canvas ids and titles.',
+      'List existing Slack canvases in a channel so you can discover one to read or edit. Defaults to the current channel; pass channelId to inspect another channel (e.g. to review a canvas in #some-channel). Returns canvas ids, titles and links.',
     inputSchema: z.object({
       channelId: z
         .string()
@@ -157,6 +161,7 @@ export function canvasListTool({ thread }: { thread: Thread }) {
         }
         const canvases = (result.files ?? []).map((file) => ({
           canvasId: file.id,
+          link: file.permalink,
           title: file.title,
         }));
         return {
@@ -398,9 +403,12 @@ export function canvasReadTool() {
           };
         }
         const content = await response.text();
+        // The link too: "give me the link" answered from a read used to
+        // come back with only an id.
         return {
           canvasId,
           content,
+          link: info.file.permalink,
           success: true,
           title: info.file.title,
         };

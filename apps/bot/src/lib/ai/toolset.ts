@@ -971,7 +971,8 @@ export async function buildTools({
               (('success' in result && result.success === false) ||
                 ('error' in result && Boolean(result.error)))
               ? 'failed'
-              : 'done'
+              : 'done',
+            result
           );
           return redactSecretsDeep(result, `tool ${name}`);
         } catch (error) {
