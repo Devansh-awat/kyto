@@ -19,7 +19,9 @@ describe('keepable', () => {
   });
 
   test('keeps a <> message only when it pinged kyto', () => {
-    expect(keepable({ kytoIds, text: '&lt;&gt; <@U0OTHER> do it' })).toBe(false);
+    expect(keepable({ kytoIds, text: '&lt;&gt; <@U0OTHER> do it' })).toBe(
+      false
+    );
     expect(keepable({ kytoIds, text: '<> <@U0KYTO> do it' })).toBe(true);
     expect(keepable({ kytoIds, text: '<@U0KYTO> &lt;&gt; do it' })).toBe(true);
   });
