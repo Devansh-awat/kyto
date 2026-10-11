@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { UserMcpServer } from '@repo/db/queries';
-import type { Logger } from '@repo/logging/logger';
+import { createLogger } from '@repo/logging/logger';
 import { buildMcpTools, normalizeMcpAuthorization } from './mcp';
 
 // The bug this exists to prevent: a Coolify entry saved with a valid API token
@@ -52,7 +52,13 @@ describe('normalizeMcpAuthorization', () => {
 // `message` event enqueued before the POST's own 202 returns — the reply can
 // beat the POST response back to the client, which is exactly the shape that
 // used to drop a reply and hang the call.
-function legacySseFixture(url: string) {
+function legacySseFixture({
+  endpoint = '/messages',
+  url,
+}: {
+  endpoint?: string;
+  url: string;
+}) {
   const BASE = url;
   const replies: Record<string, unknown> = {
     initialize: {
@@ -96,7 +102,7 @@ function legacySseFixture(url: string) {
         start(controller) {
           stream = controller;
           controller.enqueue(
-            new TextEncoder().encode('event: endpoint\ndata: /messages\n\n')
+            new TextEncoder().encode(`event: endpoint\ndata: ${endpoint}\n\n`)
           );
           init?.signal?.addEventListener(
             'abort',
@@ -140,12 +146,9 @@ function legacySseFixture(url: string) {
   return { BASE, calls, fetchMock };
 }
 
+const logger = await createLogger({ isProduction: true, logLevel: 'error' });
+
 describe('legacy SSE fallback', () => {
-  // buildMcpTools only logs; pino's full surface is not needed in a test.
-  const logger = {
-    info: () => undefined,
-    warn: () => undefined,
-  } as unknown as Logger;
   const server = (url: string): UserMcpServer => ({
     authorization: null,
     createdAt: new Date(),
@@ -157,7 +160,7 @@ describe('legacy SSE fallback', () => {
   });
 
   test('retries initialize over the SSE stream after the probe is refused', async () => {
-    const fixture = legacySseFixture('https://93.184.216.34/mcp');
+    const fixture = legacySseFixture({ url: 'https://93.184.216.34/mcp' });
     const originalFetch = globalThis.fetch;
     globalThis.fetch = fixture.fetchMock as typeof fetch;
     try {
@@ -192,7 +195,7 @@ describe('legacy SSE fallback', () => {
   test('records a failure for an SSE server whose stream never opens', async () => {
     // A fresh URL: the shared listing cache is keyed by URL and would otherwise
     // hand the first test's tools straight back without any fetch.
-    const fixture = legacySseFixture('https://93.184.216.35/mcp');
+    const fixture = legacySseFixture({ url: 'https://93.184.216.35/mcp' });
     const originalFetch = globalThis.fetch;
     globalThis.fetch = ((_input, init) => {
       if (init?.method === 'GET') {
@@ -215,5 +218,28 @@ describe('legacy SSE fallback', () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  test('refuses an endpoint on another origin, which would carry the credential away', async () => {
+    const fixture = legacySseFixture({
+      endpoint: 'https://93.184.216.99/messages',
+      url: 'https://93.184.216.36/mcp',
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fixture.fetchMock as typeof fetch;
+    try {
+      const built = await buildMcpTools({
+        logger,
+        servers: [{ namespace: 'demo', server: server(fixture.BASE) }],
+      });
+      expect(built.tools.mcp_demo_get_weather).toBeUndefined();
+      await built.close();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    expect(fixture.calls).not.toContainEqual({
+      method: 'POST',
+      path: '/messages',
+    });
   });
 });

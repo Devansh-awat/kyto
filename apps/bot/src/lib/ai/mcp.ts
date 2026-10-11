@@ -292,6 +292,12 @@ class McpConnection {
 
   private ensureInitialized(): Promise<void> {
     this.initialized ??= (async () => {
+      if (this.transport === 'sse') {
+        // A dropped stream ended the old session; open a fresh one.
+        await this.connectLegacySse();
+        await this.initialize();
+        return;
+      }
       try {
         await this.initialize();
       } catch (error) {
@@ -430,6 +436,14 @@ class McpConnection {
       this.failSse(new Error('MCP server sent an unparseable SSE endpoint.'));
       return;
     }
+    if (new URL(endpoint).origin !== new URL(this.server.url).origin) {
+      // The credential goes to this endpoint: never let the stream redirect it
+      // to another host.
+      this.failSse(
+        new Error('MCP server sent an SSE endpoint on a different origin.')
+      );
+      return;
+    }
     try {
       // The endpoint is fetched with the credential, so it is checked too.
       await assertPublicHost(endpoint);
@@ -482,8 +496,14 @@ class McpConnection {
     }
     this.ssePending.clear();
     // The session is gone; dropping the endpoint makes a later call fail at
-    // once instead of POSTing into a dead stream and waiting out its timeout.
+    // once instead of POSTing into a dead stream and waiting out its timeout,
+    // and forgetting the handshake makes the next call open a new session
+    // instead of failing for the rest of the turn.
     this.sseEndpoint = undefined;
+    this.sseReady = undefined;
+    if (this.transport === 'sse') {
+      this.initialized = undefined;
+    }
     this.sseController?.abort(error);
   }
 
@@ -944,6 +964,10 @@ export async function buildMcpTools({
           );
         }
       } catch (error) {
+        // A legacy SSE server may have opened its long-lived stream before the
+        // listing failed; this connection is never handed back, so nothing else
+        // would ever close it.
+        await connection.close();
         // Recorded, not just logged: a dropped server produces zero tools and
         // used to produce zero feedback too, so a bad entry was indistinguishable
         // from a server with nothing to offer. App Home reads this back.
