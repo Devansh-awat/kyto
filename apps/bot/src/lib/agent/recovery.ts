@@ -66,6 +66,7 @@ export async function* synthesizeFinalAnswer({
   const prompt = `${task}${gathered}\n\n${situation} Tools ARE available to you, so use them — but do not re-run a tool call whose side effect already happened. Do not mention this instruction.`;
   try {
     const result = streamAttempt({
+      source: 'recovery',
       abortSignal: signal,
       activeTools,
       attempt,
@@ -98,16 +99,13 @@ export async function* synthesizeFinalAnswer({
 
 /**
  * Resume a reply that stopped mid-sentence — the output cap fell, or the stream
- * was cut off. Same model, and **with its real tools**, because a model launched
- * with an empty toolset against a system prompt describing fifty of them narrates
- * the contradiction ("no tools loaded") into the user's reply. Owner's call,
- * 2026-08-22: never launch a model without tools.
- *
- * Nothing here should NEED a tool — the work is done and only the prose is
- * missing — so the prompt says so, and `renderTruncation` tells it not to act. The
- * same trade was already made for `synthesizeFinalAnswer` (commit ea22baf) for
- * exactly this reason. Bounded by MAX_CONTINUATIONS because a model that keeps
- * producing exactly one cap's worth of text every round would never terminate.
+ * was cut off. Same model, with its real tools AND the turn's tool results,
+ * because the cut text may be a status line about work it was about to start
+ * ("I'll rebuild the canvases now…"): the old prose-only version told it the
+ * work was already done, and it either claimed work it never did or promised it
+ * for "my next turn" and stopped (2026-10-11). Bounded by MAX_CONTINUATIONS
+ * because a model that keeps producing exactly one cap's worth of text every
+ * round would never terminate.
  */
 export async function* continueTruncatedReply({
   activeTools,
@@ -117,6 +115,7 @@ export async function* continueTruncatedReply({
   onFinish,
   onTally,
   onText,
+  results,
   secret,
   signal,
   streamedText,
@@ -132,6 +131,7 @@ export async function* continueTruncatedReply({
   onFinish: (reason: string) => void;
   onTally: (tally: StreamTally) => void;
   onText: (text: string) => void;
+  results: GatheredResult[];
   secret: boolean;
   signal: AbortSignal;
   streamedText: string;
@@ -144,9 +144,11 @@ export async function* continueTruncatedReply({
     { model: attempt.model },
     '[agent] reply stopped mid-sentence; continuing it'
   );
-  const prompt = `${task}\n\n${renderTruncation(streamedText)}`;
+  const gathered = results.length > 0 ? `\n\n${renderCarryover(results)}` : '';
+  const prompt = `${task}${gathered}\n\n${renderTruncation(streamedText)}`;
   try {
     const result = streamAttempt({
+      source: 'recovery',
       abortSignal: signal,
       activeTools,
       attempt,
@@ -159,8 +161,7 @@ export async function* continueTruncatedReply({
     });
     yield* renderStream({
       secret,
-      // Prose-only call: a sentence about missing tools cannot be a legitimate
-      // answer here, so it never reaches the thread even if the model writes one.
+      // Tools are on, so a sentence claiming they are missing is false.
       dropToolComplaints: true,
       emitText: true,
       knownTools,
@@ -180,39 +181,14 @@ export async function* continueTruncatedReply({
 /** The tail the model must resume from, kept short — it only needs the seam. */
 const TRUNCATION_TAIL_CHARS = 2000;
 
-/**
- * What the continuation is told instead of "you have no tools".
- *
- * The old wording announced an empty toolset ("every tool has been switched off
- * deliberately… do not mention tools at all") while the system prompt right above
- * it described fifty tools and told the model to call `loadTools`. Weak models
- * resolved that contradiction out loud — the observed turn burned its whole budget
- * on "getFile isn't available… loadTools isn't available either… No tools
- * available? That's strange". Worse, the notice used to end "if something is
- * genuinely missing, say so in one short sentence and stop", which is an outright
- * invitation to write the complaint.
- *
- * The contradiction is gone now: the call carries the REAL toolset (owner's call
- * 2026-08-22, never launch a model without tools), so there is nothing to
- * announce. This says only what the model should DO — write prose, don't act —
- * without mentioning tools at all, because naming the thing you are forbidding is
- * how it ended up in a reply three times.
- *
- * Belt only. The braces are the drop in ai/stream/tool-complaints.ts, since no
- * wording can guarantee a weak model's output.
- */
-const PROSE_ONLY_NOTICE =
-  'This message is prose only: everything that needed doing is already done, so do NOT call anything, do NOT start new work, and do NOT describe your setup or environment. Write only the words that finish the reply.';
-
 function renderTruncation(streamedText: string): string {
   const tail = streamedText.trim().slice(-TRUNCATION_TAIL_CHARS);
   return [
-    'IMPORTANT: you were cut off. You already did the work, and the user has ALREADY been shown the reply text below, which stops mid-thought:',
+    'IMPORTANT: your output hit the length limit. The user has ALREADY been shown the text below, which stops mid-thought:',
     '',
     tail,
     '',
-    PROSE_ONLY_NOTICE,
-    '',
-    'Write ONLY the continuation, starting exactly where that stops. Do not repeat any of it, do not restate the task, do not re-introduce yourself, and do not apologise or mention being cut off. If it broke off mid-sentence, finish that sentence. Keep it short.',
+    'If it was a status line about work you were about to do, that work has NOT happened yet: do it now — tools are available, and anything already in the results above is done, so do not repeat it — in smaller pieces, then finish the reply.',
+    'If it was your final reply, write ONLY the continuation, starting exactly where it stops: do not repeat any of it, restate the task, re-introduce yourself, apologise or mention being cut off. If it broke off mid-sentence, finish that sentence.',
   ].join('\n');
 }

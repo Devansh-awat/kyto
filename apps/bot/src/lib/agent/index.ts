@@ -1780,9 +1780,8 @@ async function executeTurn(
         // cut off with no finish reason at all (truncatedStream). Both leave the
         // user reading a dangling colon while the attempt counts as handled, and
         // both are fixed the same way: ask the SAME model to carry on from what
-        // the user was already shown. It keeps its real tools (a model launched
-        // with an empty toolset narrates that fact into the reply); the prompt is
-        // what tells it not to act, and the complaint filter is the backstop.
+        // the user was already shown, with its tools and results — the cut text
+        // may be a status line for work that hasn't started.
         //
         // Note the `length` case here is NOT the one the nudge above handles:
         // there the cap ate a tool call and no reply existed, here it ate the
@@ -1807,6 +1806,7 @@ async function executeTurn(
                 streamedText = appendStreamedText(streamedText, text);
                 moderationReply += text;
               },
+              results: gatheredResults,
               secret,
               signal: AbortSignal.any([controller.signal, attemptAbort.signal]),
               streamedText,
