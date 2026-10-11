@@ -6,6 +6,7 @@ import {
   type ModelAttempt,
   modelSupportsVision,
   PRIMARY_ATTEMPT,
+  PRIMARY_MODEL,
   pickReasoningEffort,
   type ResolvedModelHolder,
   type SandboxContext,
@@ -1266,6 +1267,10 @@ async function executeTurn(
       // would count its predecessor's text as its own and return silently.
       let attemptText = false;
       let attemptToolActivity = false;
+      // Whether the attempt's latest output was reply text rather than a tool
+      // call: an output cap that falls after a narration line ("I'll rebuild the
+      // canvas…") ate the tool call, not the reply.
+      let lastOutputWasText = false;
       let attemptFinishReason: string | undefined;
       let attemptStreamError: StreamError | undefined;
       // Trips if THIS model stops answering and starts looping (see degenerate.ts).
@@ -1311,8 +1316,16 @@ async function executeTurn(
         // random draw (the effort experiment) or the thread's `--reasoning`.
         let effort: { effort: string; random: boolean } | undefined;
         if (currentAttempt.provider === HACKCLUB_PROVIDER) {
-          effort = choice.effort
-            ? { effort: choice.effort, random: false }
+          // Haiku's thinking shares the 8000-token output cap, and `high` left
+          // it ~1600 tokens to answer in: replies and tool calls were cut off
+          // mid-way, and the turns cost ~40x a medium one (owner's call
+          // 2026-10-11).
+          const chosen =
+            choice.effort === 'high' && currentAttempt.model === PRIMARY_MODEL
+              ? 'medium'
+              : choice.effort;
+          effort = chosen
+            ? { effort: chosen, random: false }
             : pickReasoningEffort({ attempt: currentAttempt, threadId });
         }
         yield {
@@ -1476,6 +1489,7 @@ async function executeTurn(
             attemptText = true;
             errorStage = 'after_text';
             attemptRawText += text;
+            lastOutputWasText = true;
             moderationReply += text;
             streamedText = appendStreamedText(streamedText, text);
             // Progress: reset the stall watchdog (see armWatchdog).
@@ -1486,10 +1500,15 @@ async function executeTurn(
           },
           onToolActivity: () => {
             attemptToolActivity = true;
+            lastOutputWasText = false;
             armWatchdog(ATTEMPT_TIMEOUT_MS);
+          },
+          onToolInputStart: () => {
+            lastOutputWasText = false;
           },
           onToolResult: (info) => {
             armWatchdog(ATTEMPT_TIMEOUT_MS);
+            lastOutputWasText = false;
             codingMonitor.recordResult(info);
             const key = `${info.toolName}:${stableInput(info.input)}`;
             if (gatheredKeys.has(key)) {
@@ -1720,8 +1739,20 @@ async function executeTurn(
         // hit with a call still pending) — exactly the cases the old
         // `sawCleanStop` guard excluded, so they fell through to a fallback
         // cascade that re-ran the work and often died with no reply at all.
-        if (!(attemptText || skipped) && attemptToolActivity) {
+        // The cap fell while the model was writing a tool call (or thinking),
+        // after it had already narrated what it was about to do. The prose-only
+        // continuation below tells it "you already did the work", which was
+        // false: it either claimed work it never did or wrote "I'll do it next
+        // turn" and stopped (the exam canvases, 2026-10-11). This one keeps the
+        // tools and says what really happened.
+        const cutInWork =
+          attemptText &&
+          !skipped &&
+          attemptFinishReason === 'length' &&
+          !lastOutputWasText;
+        if ((!(attemptText || skipped) && attemptToolActivity) || cutInWork) {
           yield* synthesizeFinalAnswer({
+            cutOff: cutInWork,
             onTally: recordTiming,
             activeTools: built.activeTools,
             attempt: currentAttempt,
@@ -1758,7 +1789,7 @@ async function executeTurn(
         // reply itself.
         if (
           attemptText &&
-          (attemptFinishReason === 'length' || truncatedStream)
+          ((attemptFinishReason === 'length' && !cutInWork) || truncatedStream)
         ) {
           for (let round = 0; round < MAX_CONTINUATIONS; round += 1) {
             let continuationFinish: string | undefined;

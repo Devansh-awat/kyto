@@ -78,6 +78,7 @@ export async function* renderStream({
   onReasoning,
   onSkip,
   onToolActivity,
+  onToolInputStart,
   onToolResult,
   onError,
   onFinish,
@@ -124,6 +125,10 @@ export async function* renderStream({
   // so a turn that ran tools is never discarded as empty and restarted on a
   // fresh model (which would re-do all the work and burn the fallback chain).
   onToolActivity?: () => void;
+  // Fires when the model STARTS writing a tool call's arguments — before it is
+  // known whether the call will arrive whole. The agent loop uses it to tell an
+  // output cap that fell inside a tool call from one that fell inside the reply.
+  onToolInputStart?: () => void;
   // Fires once per completed (non-phantom, non-skip) tool call with its input and
   // output. Lets the agent loop stash gathered results so that if a later step
   // truncates and the turn falls back to another model, those results can be
@@ -329,6 +334,10 @@ export async function* renderStream({
         }
         case 'reasoning-end': {
           yield* renderClosed(reasoningTracker.close(part.id));
+          break;
+        }
+        case 'tool-input-start': {
+          onToolInputStart?.();
           break;
         }
         case 'tool-call': {

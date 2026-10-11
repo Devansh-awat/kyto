@@ -271,7 +271,11 @@ async function runFlags({
       said.push('default reasoning (random for haiku and luna)');
     } else if (isReasoningEffort(lower)) {
       change.effort = lower;
-      said.push(`${lower} reasoning`);
+      said.push(
+        lower === 'high'
+          ? 'high reasoning (haiku runs at medium — high cut its replies off)'
+          : `${lower} reasoning`
+      );
     } else {
       return await reply(
         '`--reasoning none|low|medium|high`, or `--reasoning default`.'
