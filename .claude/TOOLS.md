@@ -193,7 +193,9 @@ the legacy 2024-11-05 HTTP+SSE transport when the Streamable-HTTP `initialize`
 is refused (404/405) or answered with non-JSON: one long-lived GET stream whose
 `endpoint` event must be SAME-ORIGIN as the saved URL (the credential goes
 there) and pass the public-host check; a dropped stream reopens on the next
-call. Hand-rolled JSON-RPC client, listings cached 10 min per URL+credential, tools namespaced
+call. Each turn the asker's own and shared servers (not the built-ins) are
+listed in an `<mcp_servers>` block in the prompt TAIL (after the cache
+breakpoint) with their tool count or failure (#60). Hand-rolled JSON-RPC client, listings cached 10 min per URL+credential, tools namespaced
 `mcp_<server>_<tool>` and deferred behind `loadTools`. The security rules
 (`never` = never registered, who may click an `ask` prompt, no DM fallback,
 unattended refuses, fail-closed parsing) are in CLAUDE.md — read them before

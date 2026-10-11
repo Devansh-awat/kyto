@@ -139,6 +139,13 @@ export interface BuiltTools {
    */
   drainImages: () => ImageInput[];
   /**
+   * The speaker's own and shared MCP servers and how each fared this turn, as
+   * a prompt block ('' when there are none). Without it a server that failed
+   * to list was simply absent, and kyto told people it could not see servers
+   * they had just added (#60).
+   */
+  mcpStatus: string;
+  /**
    * Load deferred tools before the first step, as if `loadTools` had been
    * called (lib/ai/tool-preload). Unknown or already-active names are ignored.
    */
@@ -1058,6 +1065,16 @@ export async function buildTools({
       await Promise.all([mcp.close(), slackBrowser?.close()]);
     },
     drainImages: () => pendingImages.splice(0),
+    mcpStatus:
+      mcp.status.length === 0
+        ? ''
+        : `<mcp_servers>The asker's MCP servers this turn (added in App Home; their tools are in loadTools' catalog as mcp_<server>_<tool>):\n${mcp.status
+            .map(({ failure, server, tools: count }) =>
+              failure
+                ? `- ${server}: not connected — ${failure} (fixed in App Home; it is retried automatically)`
+                : `- ${server}: connected, ${count} tool${count === 1 ? '' : 's'}`
+            )
+            .join('\n')}</mcp_servers>`,
     // Remembered for the thread like a model's own loadTools. It used to be
     // per message, so the tools array differed between a thread's turns
     // whenever Jev's guess did — and a changed tools array throws away every

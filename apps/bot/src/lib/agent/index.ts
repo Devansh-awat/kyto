@@ -1022,6 +1022,9 @@ async function executeTurn(
     const jevMs = Date.now() - jevStart;
     const toolsStart = Date.now();
     const built = await pendingTools;
+    if (built.mcpStatus) {
+      messageText = `${messageText}\n\n${built.mcpStatus}`;
+    }
     built.preload(preload.tools);
     const toolsWaitMs = Date.now() - toolsStart;
     // Nothing has posted yet, so the status is still first on screen.

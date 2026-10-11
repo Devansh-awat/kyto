@@ -820,6 +820,11 @@ export interface BuiltMcpTools {
   close: () => Promise<void>;
   /** By namespaced tool name, so the caller can describe what it exposed. */
   gates: Record<string, McpToolGate>;
+  /**
+   * The person's own and shared servers (not the built-ins), each with how
+   * many tools it exposed or why it failed this turn, sorted by namespace.
+   */
+  status: { failure?: string; server: string; tools: number }[];
   tools: Record<string, Tool>;
 }
 
@@ -849,8 +854,10 @@ export async function buildMcpTools({
   const tools: Record<string, Tool> = {};
   const gates: Record<string, McpToolGate> = {};
   const blocked: BuiltMcpTools['blocked'] = [];
+  const status: BuiltMcpTools['status'] = [];
   await Promise.all(
     servers.map(async ({ namespace, server, sharedBy }) => {
+      const builtin = server.id.startsWith('builtin:');
       const key = failureKey(server.id);
       const recent = failures.get(key);
       const ttl =
@@ -858,12 +865,16 @@ export async function buildMcpTools({
           ? AUTH_FAILURE_TTL_MS
           : FAILURE_TTL_MS;
       if (recent && Date.now() - recent.at < ttl) {
+        if (!builtin) {
+          status.push({ failure: recent.message, server: namespace, tools: 0 });
+        }
         return;
       }
       const connection = new McpConnection({ server });
       const rules = parseMcpRules(server.rules);
       const hidden = new Set<McpCategory>();
       let hiddenCount = 0;
+      let registered = 0;
       try {
         const infos = await connection.listTools();
         connections.push(connection);
@@ -891,6 +902,7 @@ export async function buildMcpTools({
             );
             continue;
           }
+          registered += 1;
           gates[toolName] = {
             category,
             ownerUserId: server.userId,
@@ -947,6 +959,9 @@ export async function buildMcpTools({
             },
           });
         }
+        if (!builtin) {
+          status.push({ server: namespace, tools: registered });
+        }
         if (hiddenCount > 0) {
           blocked.push({
             categories: [...hidden].sort(),
@@ -971,13 +986,13 @@ export async function buildMcpTools({
         // Recorded, not just logged: a dropped server produces zero tools and
         // used to produce zero feedback too, so a bad entry was indistinguishable
         // from a server with nothing to offer. App Home reads this back.
-        failures.set(key, {
-          at: Date.now(),
-          message: (error instanceof Error
-            ? error.message
-            : String(error)
-          ).slice(0, MAX_FAILURE_MESSAGE),
-        });
+        const message = (
+          error instanceof Error ? error.message : String(error)
+        ).slice(0, MAX_FAILURE_MESSAGE);
+        failures.set(key, { at: Date.now(), message });
+        if (!builtin) {
+          status.push({ failure: message, server: namespace, tools: 0 });
+        }
         logger.warn(
           { err: error, server: namespace, url: server.url },
           '[mcp] server unavailable this turn'
@@ -991,6 +1006,7 @@ export async function buildMcpTools({
       await Promise.all(connections.map((connection) => connection.close()));
     },
     gates,
+    status: status.sort((a, b) => a.server.localeCompare(b.server)),
     tools,
   };
 }
