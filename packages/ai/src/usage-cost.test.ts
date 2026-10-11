@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { stepsCostUsd } from './usage-cost';
+import { stepsCacheWrites, stepsCostUsd } from './usage-cost';
 
 describe('stepsCostUsd', () => {
   test('adds the upstream cost on a BYOK route, where cost is 0', () => {
@@ -33,5 +33,20 @@ describe('stepsCostUsd', () => {
     expect(stepsCostUsd([{ usage: {} }, { usage: { raw: 'x' } }])).toBe(
       undefined
     );
+  });
+});
+
+describe('stepsCacheWrites', () => {
+  test('reads OpenRouter cache writes per step, 0 where none is reported', () => {
+    const steps = [
+      {
+        usage: {
+          raw: { prompt_tokens_details: { cache_write_tokens: 16_843 } },
+        },
+      },
+      { usage: { raw: { prompt_tokens_details: { cached_tokens: 16_843 } } } },
+      { usage: {} },
+    ];
+    expect(stepsCacheWrites(steps)).toEqual([16_843, 0, 0]);
   });
 });

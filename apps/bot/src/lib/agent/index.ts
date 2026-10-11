@@ -15,7 +15,7 @@ import {
   visionAttempt,
 } from '@repo/ai';
 import { comparePrefix, type PrefixUnit } from '@repo/ai/cache-probe';
-import { stepsCostUsd } from '@repo/ai/usage-cost';
+import { stepsCacheWrites, stepsCostUsd } from '@repo/ai/usage-cost';
 import { LazySandbox } from '@repo/sandbox';
 import { env } from '@/env';
 import { restoreAnnotatedMentions } from '@/harness/markdown';
@@ -597,7 +597,7 @@ async function executeTurn(
         /** [input, cache read] per step: a step that reads far less than the
          * previous step's input is where the cache broke; one that reads it
          * all but is still mostly input just received a big tool result. */
-        perStep?: [number, number][];
+        perStep?: [number, number, number][];
       }
     | undefined;
 
@@ -1842,14 +1842,19 @@ async function executeTurn(
           // an uncached token on gpt-6-luna is a cache WRITE at 1.25x, 12.5x a
           // cached read.
           const costUsd = stepsCostUsd(steps);
+          const writes = stepsCacheWrites(steps);
           turnUsage = {
             cacheReadTokens: usage?.inputTokenDetails?.cacheReadTokens,
-            cacheWriteTokens: usage?.inputTokenDetails?.cacheWriteTokens,
+            cacheWriteTokens:
+              usage?.inputTokenDetails?.cacheWriteTokens ||
+              writes.reduce((sum, tokens) => sum + tokens, 0),
             costUsd,
             inputTokens: usage?.inputTokens,
-            perStep: steps.map((step) => [
+            // [input, cache read, cache write] per step.
+            perStep: steps.map((step, index) => [
               step.usage.inputTokens ?? 0,
               step.usage.inputTokenDetails.cacheReadTokens ?? 0,
+              writes[index] ?? 0,
             ]),
             outputTokens: usage?.outputTokens ?? usage?.totalTokens,
           };

@@ -8,6 +8,9 @@ const rawUsage = z.object({
     .object({ upstream_inference_cost: z.number().optional() })
     .optional(),
   is_byok: z.boolean().optional(),
+  prompt_tokens_details: z
+    .object({ cache_write_tokens: z.number().optional() })
+    .optional(),
 });
 
 /**
@@ -40,4 +43,21 @@ export function stepsCostUsd(
     total = (total ?? 0) + (cost ?? 0) + (upstream ?? 0);
   }
   return total;
+}
+
+/**
+ * Prompt tokens each step WROTE to the prompt cache, from the raw usage.
+ * OpenRouter reports them as `prompt_tokens_details.cache_write_tokens`, which
+ * the openai-compatible provider does not map, so the turn log said `write: 0`
+ * on every turn — a cache write costs 1.25x a plain token on Anthropic, which
+ * is exactly what the log exists to show.
+ */
+export function stepsCacheWrites(
+  steps: readonly { usage: { raw?: unknown } }[]
+): number[] {
+  return steps.map(
+    (step) =>
+      rawUsage.safeParse(step.usage.raw).data?.prompt_tokens_details
+        ?.cache_write_tokens ?? 0
+  );
 }
