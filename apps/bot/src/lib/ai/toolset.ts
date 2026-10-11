@@ -103,6 +103,7 @@ import {
   resumeReminderTool,
   scheduleRecurringReminderTool,
 } from './tools/reminders';
+import { runJsTool } from './tools/run-js';
 import {
   bashTool,
   editFileTool,
@@ -397,6 +398,9 @@ export async function buildTools({
       currentThreadId: thread.id,
     }),
     searchSlack: searchSlackTool({ message }),
+    // Core: its whole point is being faster than starting a sandbox, and a
+    // loadTools step first would spend that.
+    runJs: runJsTool(),
     searchWeb: searchWebTool({ apiKey: env.EXA_API_KEY }),
     loadSkill: loadSkillTool({ skills: await listSkills() }),
     uploadFile: uploadFileTool({
