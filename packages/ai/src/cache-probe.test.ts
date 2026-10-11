@@ -23,13 +23,13 @@ describe('prefixUnits', () => {
       })
     );
     expect(units.map((unit) => unit.label)).toEqual([
-      'tools(1)',
+      'tool:bash',
       '0:system',
       '1:user',
     ]);
   });
 
-  it('omits the tools unit when the request sends none', () => {
+  it('sends no tool units when the request has no tools', () => {
     const units = prefixUnits(
       payload({ messages: [{ content: 'hi', role: 'user' }] })
     );
@@ -100,8 +100,8 @@ describe('comparePrefix', () => {
     );
     const divergence = comparePrefix(first, second);
     expect(divergence?.appendOnly).toBe(false);
-    expect(divergence?.index).toBe(0);
-    expect(divergence?.label).toBe('tools(2)');
+    expect(divergence?.index).toBe(1);
+    expect(divergence?.label).toBe('tool:gh');
   });
 
   it('counts the stable characters ahead of the divergence', () => {

@@ -12,6 +12,8 @@
 // pure APPEND: every earlier unit identical, only new assistant/tool messages on
 // the end. Anything else is prefix churn and gets logged.
 
+import { z } from 'zod';
+
 export interface PrefixUnit {
   chars: number;
   hash: number;
@@ -52,6 +54,19 @@ function unitOf(label: string, value: unknown): PrefixUnit {
   return { chars: text.length, hash: hashString(text), label };
 }
 
+const namedTool = z.union([
+  z.object({ function: z.object({ name: z.string() }) }),
+  z.object({ name: z.string() }),
+]);
+
+function toolName(item: unknown): string | undefined {
+  const parsed = namedTool.safeParse(item).data;
+  if (!parsed) {
+    return;
+  }
+  return 'function' in parsed ? parsed.function.name : parsed.name;
+}
+
 /**
  * Split a chat-completions payload into ordered prefix units. Tools come first
  * because that is where providers put them in the rendered prompt — a tool
@@ -63,9 +78,12 @@ function unitOf(label: string, value: unknown): PrefixUnit {
  */
 export function prefixUnits(payload: Record<string, unknown>): PrefixUnit[] {
   const units: PrefixUnit[] = [];
-  if (payload.tools !== undefined) {
-    const count = Array.isArray(payload.tools) ? payload.tools.length : 0;
-    units.push(unitOf(`tools(${count})`, payload.tools));
+  // One unit per tool, so a divergence names the tool that changed: hashed as
+  // one block, "tools(27) diverged" on most turns said nothing about which of
+  // them differed from the last turn.
+  const tools = Array.isArray(payload.tools) ? payload.tools : [];
+  for (const [index, item] of tools.entries()) {
+    units.push(unitOf(`tool:${toolName(item) ?? index}`, item));
   }
   const messages = Array.isArray(payload.messages) ? payload.messages : [];
   for (const [index, message] of messages.entries()) {

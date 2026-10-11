@@ -220,3 +220,9 @@ the model-slug rule — is in [`.claude/MODELS.md`](./MODELS.md).**
 
 **Every routing failure above is readable from the container's logs** (`docker logs <container>` on the oracle server, or the Coolify dashboard — NOT `journalctl`, the systemd unit is masked) — the turn's lifecycle lines and what each one tells you are in MODELS.md ("Turn logging").
 
+## Output-cap continuations (2026-10-11)
+
+When a step ends on `length`, kyto checks whether the model's last output was reply text or a tool call (`lastOutputWasText`, fed by `onToolInputStart` in `renderStream`). Cut inside a tool call → `synthesizeFinalAnswer({ cutOff: true })`: tools on, gathered results, "that call never ran, do it now in smaller pieces". Cut inside text → `continueTruncatedReply`, which now ALSO carries the tools and results and says that a cut status line means the work hasn't started. The old prose-only wording ("everything is already done") made haiku either claim work it never did or write "I'll do it next turn" and stop.
+
+The cross-turn cache probe (`cache-probe.ts`) has one unit per TOOL (`tool:<name>`), so `divergedAt` names the tool whose schema changed. As one block, `tools(27)` diverged on most of 2026-10-11's turns, which is why the first request of a turn so often read 0 from cache.
+
