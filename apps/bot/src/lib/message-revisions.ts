@@ -23,6 +23,7 @@ const MAX_TEXT_CHARS = 4000;
 // Token shapes a person might paste by mistake and then delete. Their own
 // secrets aren't known to kyto the way its env is (lib/redact.ts), so the
 // shape is the only handle; a deleted password stays deleted from here.
+// cspell:disable
 const TOKEN_SHAPES = [
   /\bxox[a-z]-[A-Za-z0-9-]{10,}/g,
   /\bgh[pousr]_[A-Za-z0-9]{20,}/g,
@@ -32,6 +33,7 @@ const TOKEN_SHAPES = [
   /\bAIza[A-Za-z0-9_-]{30,}/g,
   /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
 ];
+// cspell:enable
 
 const ADDRESSED_ONLY = /^(?:<>|&lt;&gt;)/;
 const LEADING_MENTIONS = /^\s*(?:<@[A-Z0-9][A-Z0-9._-]*(?:\|[^>]+)?>\s*)+/;
