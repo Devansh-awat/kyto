@@ -1,6 +1,6 @@
 import { pgTable, text, timestamp } from 'drizzle-orm/pg-core';
 
-// A thread's `--model` / `--reasoning` choice (lib/flags), sticky until
+// A thread's `--model` / `--reasoning` / `--no-memory` choice (lib/flags), sticky until
 // cleared. Kept apart from thread_subscriptions because a row there means
 // "kyto follows this thread", and choosing a model must not subscribe it.
 export const threadModelChoices = pgTable('thread_model_choices', {
@@ -14,6 +14,8 @@ export const threadModelChoices = pgTable('thread_model_choices', {
   modelSetBy: text('model_set_by'),
   /** none/low/medium/high; null = the default (random for the experiment models). */
   reasoningEffort: text('reasoning_effort'),
+  /** `stale` (--no-memory) / `off` (--NO-MEMORY); null = memories as usual. */
+  memoryMode: text('memory_mode'),
   updatedBy: text('updated_by').notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true })
     .notNull()

@@ -18,6 +18,7 @@ import type { KytoBot } from '@/harness/bot';
 import type { ThreadHandle } from '@/harness/thread';
 import type { Message } from '@/harness/types';
 import { startEffect } from '@/lib/agent/inflight';
+import { threadModelChoice } from '@/lib/agent/model-choice';
 import { buildMcpTools } from '@/lib/ai/mcp';
 import { withBuiltinMcpServers } from '@/lib/ai/mcp-builtin';
 import { resolveTurnMcpServers } from '@/lib/ai/mcp-scope';
@@ -321,12 +322,16 @@ export async function buildTools({
   // Resolved ONCE — two tool families needing the same lookup is not a reason to
   // make the same query twice a turn.
   const channelId = slack.channelIdFromThreadId(thread.id);
-  const channelGroupIds = await listGroupIdsForChannel(channelId).catch(
-    (error: unknown) => {
+  const [channelGroupIds, { memory: memoryMode }] = await Promise.all([
+    listGroupIdsForChannel(channelId).catch((error: unknown) => {
       logger.warn({ channelId, err: error }, '[channel-groups] lookup failed');
       return [] as string[];
-    }
-  );
+    }),
+    // The thread's `--NO-MEMORY` (lib/flags), read here so a subagent or a
+    // reminder in the thread drops the memory tool too.
+    threadModelChoice(thread.id),
+  ]);
+  const memoriesOff = memoryMode === 'off';
   const memoryActor = { authorUserId, channelGroupIds, channelId, isOwner };
 
   // Images the model loaded with viewImage this turn, waiting to be injected
@@ -399,20 +404,25 @@ export async function buildTools({
           }),
         }
       : {}),
-    saveMemory: saveMemoryTool(memoryActor),
-    fetchMemory: fetchMemoryTool(memoryActor),
-    editMemory: editMemoryTool(memoryActor),
-    deleteMemory: deleteMemoryTool(memoryActor),
-    restoreMemory: restoreMemoryTool(memoryActor),
-    attachMemoryFiles: attachMemoryFilesTool({
-      ...memoryActor,
-      getSandboxContext,
-    }),
-    restoreMemoryFiles: restoreMemoryFilesTool({
-      ...memoryActor,
-      getSandboxContext,
-    }),
-    detachMemoryFiles: detachMemoryFilesTool(memoryActor),
+    // `--NO-MEMORY` hides every memory, so it can't be one `fetch` away.
+    ...(memoriesOff
+      ? {}
+      : {
+          saveMemory: saveMemoryTool(memoryActor),
+          fetchMemory: fetchMemoryTool(memoryActor),
+          editMemory: editMemoryTool(memoryActor),
+          deleteMemory: deleteMemoryTool(memoryActor),
+          restoreMemory: restoreMemoryTool(memoryActor),
+          attachMemoryFiles: attachMemoryFilesTool({
+            ...memoryActor,
+            getSandboxContext,
+          }),
+          restoreMemoryFiles: restoreMemoryFilesTool({
+            ...memoryActor,
+            getSandboxContext,
+          }),
+          detachMemoryFiles: detachMemoryFilesTool(memoryActor),
+        }),
     listThreads: listThreadsTool({
       askerUserId: authorUserId,
       currentThreadId: thread.id,

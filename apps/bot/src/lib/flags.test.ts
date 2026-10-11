@@ -38,6 +38,25 @@ describe('parseFlags', () => {
     });
   });
 
+  test('--no-memory and --NO-MEMORY differ by case and take no value', () => {
+    expect(parseFlags('--no-memory what is x')).toEqual({
+      flags: { memory: 'stale', rest: 'what is x' },
+      ok: true,
+    });
+    expect(parseFlags('--NO-MEMORY --model luna hi')).toEqual({
+      flags: { memory: 'off', model: 'luna', rest: 'hi' },
+      ok: true,
+    });
+    expect(parseFlags('--No-Memory')).toEqual({
+      flags: { memory: 'stale', rest: '' },
+      ok: true,
+    });
+    expect(parseFlags('--memory hi')).toEqual({
+      flags: { memory: null, rest: 'hi' },
+      ok: true,
+    });
+  });
+
   test('a missing value or an unknown flag is an error', () => {
     expect(parseFlags('--model')?.ok).toBe(false);
     expect(parseFlags('--model --reasoning high')?.ok).toBe(false);

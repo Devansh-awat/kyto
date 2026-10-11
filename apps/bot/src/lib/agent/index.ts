@@ -953,6 +953,7 @@ async function executeTurn(
       asUserAccount,
       channelInstructions: hints.channelInstructions,
       customizationPrompt: hints.customization?.prompt,
+      memoriesOff: hints.memoryMode === 'off',
       ownModelsOnly,
       thread: turnThread,
     });

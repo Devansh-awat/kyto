@@ -187,6 +187,7 @@ export async function buildPrompt(
     codeChannel,
     customizationPrompt,
     includeHidden = false,
+    memoriesOff = false,
     ownModelsOnly = false,
     thread,
   }: {
@@ -203,6 +204,8 @@ export async function buildPrompt(
      * what a review needs to read. Never for a turn that answers anyone.
      */
     includeHidden?: boolean;
+    /** `--NO-MEMORY`: no notebooks and no reasoning replayed from earlier turns. */
+    memoriesOff?: boolean;
     /** Runs only on the asker's own model key, where the no-coding rule lifts. */
     ownModelsOnly?: boolean;
     thread?: Thread;
@@ -217,7 +220,7 @@ export async function buildPrompt(
       // What kyto was THINKING on this thread's last few turns. Slack replayed
       // above only records what it said, so without this each turn re-derives
       // the reasoning (and the dead ends) of the one before it.
-      thread
+      thread && !memoriesOff
         ? recallThinking({
             speakerId: message.author.userId,
             threadId: thread.id,
@@ -225,7 +228,7 @@ export async function buildPrompt(
         : '',
       // The user account reads the global notebook too; the app, only the
       // channel's (lib/notebooks.ts). A failed read costs the notes, not the turn.
-      thread
+      thread && !memoriesOff
         ? renderNotebooks({
             channelId: slack.decodeThreadId(thread.id).channel,
             includeGlobal: asUserAccount,

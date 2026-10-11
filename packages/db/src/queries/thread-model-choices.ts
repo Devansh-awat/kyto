@@ -16,12 +16,14 @@ export async function loadThreadModelChoices(
 }
 
 export async function saveThreadModelChoice({
+  memoryMode,
   model,
   modelSetBy,
   reasoningEffort,
   threadId,
   updatedBy,
 }: {
+  memoryMode: string | null;
   model: string | null;
   modelSetBy: string | null;
   reasoningEffort: string | null;
@@ -30,9 +32,17 @@ export async function saveThreadModelChoice({
 }): Promise<void> {
   await db
     .insert(threadModelChoices)
-    .values({ model, modelSetBy, reasoningEffort, threadId, updatedBy })
+    .values({
+      memoryMode,
+      model,
+      modelSetBy,
+      reasoningEffort,
+      threadId,
+      updatedBy,
+    })
     .onConflictDoUpdate({
       set: {
+        memoryMode,
         model,
         modelSetBy,
         reasoningEffort,

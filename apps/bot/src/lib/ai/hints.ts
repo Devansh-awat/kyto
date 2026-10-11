@@ -9,6 +9,7 @@ import {
 import { env } from '@/env';
 import type { ThreadHandle as Thread } from '@/harness/thread';
 import type { Message } from '@/harness/types';
+import { threadModelChoice } from '@/lib/agent/model-choice';
 import { slack } from '@/lib/chat';
 import { resolveKytoEmail } from '@/lib/email/address';
 import { resolveChannelName, resolveWorkspaceName } from '@/lib/slack/names';
@@ -25,7 +26,12 @@ export async function requestHints({
 }): Promise<RequestHints> {
   const channelId = slack.channelIdFromThreadId(thread.id);
   const { channel: rawChannelId } = slack.decodeThreadId(thread.id);
-  const groupIds = await listGroupIdsForChannel(channelId).catch(() => []);
+  const [groupIds, { memory: memoryMode }] = await Promise.all([
+    listGroupIdsForChannel(channelId).catch(() => []),
+    threadModelChoice(thread.id),
+  ]);
+  // `--NO-MEMORY`: not read at all, so nothing of them can leak into the turn.
+  const memoriesOff = memoryMode === 'off';
   const [
     channel,
     workspace,
@@ -43,15 +49,19 @@ export async function requestHints({
     // THIS channel (or a group it belongs to). Someone else's private notes
     // are never in this list, so they can't become instructions on a
     // stranger's turn — every wider branch needs a promotion the owner made.
-    listMemoryIndex(message.author.userId, { channelId, groupIds }).catch(
-      () => []
-    ),
+    memoriesOff
+      ? []
+      : listMemoryIndex(message.author.userId, { channelId, groupIds }).catch(
+          () => []
+        ),
     // Cached after the first resolve — no per-turn AgentMail call.
     resolveKytoEmail().catch(() => undefined),
-    listMemoryCurations({
-      author: message.author.userId,
-      since: new Date(Date.now() - CURATION_NOTE_MS),
-    }).catch(() => []),
+    memoriesOff
+      ? []
+      : listMemoryCurations({
+          author: message.author.userId,
+          since: new Date(Date.now() - CURATION_NOTE_MS),
+        }).catch(() => []),
     getChannelInstructions(channelId).catch(() => undefined),
   ]);
   const changes = curations.flatMap((pass) => pass.changes);
@@ -66,6 +76,7 @@ export async function requestHints({
     customization,
     email,
     memories,
+    memoryMode,
     memoryCuration: {
       merged: changes
         .filter((change) => change.action === 'merge')

@@ -48,8 +48,14 @@ export function experimentAttempt(threadId: string): ModelAttempt {
 
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 
+// `--no-memory` / `--NO-MEMORY` (lib/flags), kept with the model choice so it
+// is sticky the same way: flipping memories per message would change the
+// cached system prompt on every turn.
+export type MemoryMode = 'off' | 'stale';
+
 export interface ThreadModelChoice {
   effort?: ReasoningEffort;
+  memory?: MemoryMode;
   model?: string;
   modelSetBy?: string;
 }
@@ -84,6 +90,10 @@ function choices(): Promise<Map<string, ThreadModelChoice>> {
           effort: isReasoningEffort(row.reasoningEffort)
             ? row.reasoningEffort
             : undefined,
+          memory:
+            row.memoryMode === 'off' || row.memoryMode === 'stale'
+              ? row.memoryMode
+              : undefined,
           model: row.model ?? undefined,
           modelSetBy: row.modelSetBy ?? undefined,
         });
@@ -121,7 +131,11 @@ export async function updateThreadModelChoice({
   threadId,
   userId,
 }: {
-  change: { effort?: ReasoningEffort | null; model?: string | null };
+  change: {
+    effort?: ReasoningEffort | null;
+    memory?: MemoryMode | null;
+    model?: string | null;
+  };
   threadId: string;
   userId: string;
 }): Promise<void> {
@@ -131,11 +145,15 @@ export async function updateThreadModelChoice({
   if (change.effort !== undefined) {
     next.effort = change.effort ?? undefined;
   }
+  if (change.memory !== undefined) {
+    next.memory = change.memory ?? undefined;
+  }
   if (change.model !== undefined) {
     next.model = change.model ?? undefined;
     next.modelSetBy = change.model ? userId : undefined;
   }
   await saveThreadModelChoice({
+    memoryMode: next.memory ?? null,
     model: next.model ?? null,
     modelSetBy: next.modelSetBy ?? null,
     reasoningEffort: next.effort ?? null,

@@ -31,6 +31,11 @@ export interface RequestHints {
    * kyto never DMs anyone about it unasked.
    */
   memoryCuration?: { merged: string[]; removed: string[] };
+  /**
+   * The thread's `--no-memory` (`stale`: listed but not to be relied on) or
+   * `--NO-MEMORY` (`off`: no memories, notebooks or earlier reasoning at all).
+   */
+  memoryMode?: 'off' | 'stale';
   ownerUserId?: string;
   threadId: string;
   workspace?: string;

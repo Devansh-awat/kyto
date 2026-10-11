@@ -2,19 +2,25 @@
 //
 //   @kyto --model luna --reasoning high --focusmode @a @b what is …
 //
+// `--no-memory` and `--NO-MEMORY` are told apart by CASE (owner's ask
+// 2026-10-11): lowercase keeps the memories in the prompt but says they may be
+// stale, capitals hide every kind of memory. `--memory` turns either off.
+//
 // Only LEADING flags count, so a question that quotes `--model` halfway through
 // is never read as one. Pure on purpose: lib/commands applies the result.
 
 interface MessageFlags {
   /** `[]` = focus on the author; `null` = clear; absent = untouched. */
   focus?: string[] | null;
+  /** `stale` = shown but distrusted; `off` = hidden; `null` = back to normal. */
+  memory?: 'off' | 'stale' | null;
   model?: string;
   reasoning?: string;
   /** The message with the flags taken off — empty when it was only flags. */
   rest: string;
 }
 
-const FLAG = /^--([a-z]+)(?:=(\S*))?(?:\s+|$)/i;
+const FLAG = /^--([a-z][a-z-]*)(?:=(\S*))?(?:\s+|$)/i;
 const NEXT_TOKEN = /^(\S+)(?:\s+|$)/;
 const MENTION = /^<@([UW][A-Z0-9]{6,})(?:\|[^>]+)?>(?:\s+|$)/;
 const FOCUS_OFF = /^(?:off|clear|none|stop)(?:\s+|$)/i;
@@ -31,8 +37,17 @@ export function parseFlags(body: string): ParsedFlags | null {
   }
   const flags: MessageFlags = { rest: '' };
   for (let match = FLAG.exec(text); match; match = FLAG.exec(text)) {
-    const name = (match[1] ?? '').toLowerCase();
+    const raw = match[1] ?? '';
+    const name = raw.toLowerCase();
     text = text.slice(match[0].length);
+    if (name === 'no-memory') {
+      flags.memory = raw === 'NO-MEMORY' ? 'off' : 'stale';
+      continue;
+    }
+    if (name === 'memory') {
+      flags.memory = null;
+      continue;
+    }
     if (name === 'focus' || name === 'focusmode') {
       const off = FOCUS_OFF.exec(text);
       if (off) {
@@ -50,7 +65,7 @@ export function parseFlags(body: string): ParsedFlags | null {
     }
     if (name !== 'model' && name !== 'reasoning') {
       return {
-        error: `i don't know \`--${name}\`. flags: \`--model\`, \`--reasoning\`, \`--focusmode\`.`,
+        error: `i don't know \`--${raw}\`. flags: \`--model\`, \`--reasoning\`, \`--focusmode\`, \`--no-memory\`, \`--NO-MEMORY\`, \`--memory\`.`,
         ok: false,
       };
     }

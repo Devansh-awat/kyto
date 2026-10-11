@@ -7,6 +7,7 @@ import {
   hasOwnModels,
   isReasoningEffort,
   isSharedModel,
+  type MemoryMode,
   MODEL_CHOICES,
   type ReasoningEffort,
   updateThreadModelChoice,
@@ -210,7 +211,7 @@ async function runStop({
 }
 
 /**
- * `--model`, `--reasoning`, `--focusmode` (lib/flags). Everything is checked
+ * `--model`, `--reasoning`, `--focusmode`, `--no-memory`/`--NO-MEMORY`/`--memory` (lib/flags). Everything is checked
  * before anything is saved, so one bad flag changes nothing.
  *
  * `--model luna|haiku` is open to anyone (both are on kyto's cheap Hack Club
@@ -238,7 +239,11 @@ async function runFlags({
   }
   const { flags } = parsed;
   const userId = message.author.userId;
-  const change: { effort?: ReasoningEffort | null; model?: string | null } = {};
+  const change: {
+    effort?: ReasoningEffort | null;
+    memory?: MemoryMode | null;
+    model?: string | null;
+  } = {};
   const said: string[] = [];
   if (flags.model !== undefined) {
     const lower = flags.model.toLowerCase();
@@ -273,8 +278,26 @@ async function runFlags({
       );
     }
   }
+  if (flags.memory !== undefined) {
+    change.memory = flags.memory;
+    if (flags.memory === 'off') {
+      said.push(
+        'memories hidden (saved memories, notebooks and my earlier reasoning)'
+      );
+    } else if (flags.memory === 'stale') {
+      said.push(
+        "memories kept but treated as possibly stale — i won't rely on them"
+      );
+    } else {
+      said.push('memories back to normal');
+    }
+  }
   try {
-    if (change.model !== undefined || change.effort !== undefined) {
+    if (
+      change.model !== undefined ||
+      change.effort !== undefined ||
+      change.memory !== undefined
+    ) {
       await updateThreadModelChoice({ change, threadId: thread.id, userId });
     }
     if (flags.focus !== undefined) {

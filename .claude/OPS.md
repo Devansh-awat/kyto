@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS debug_snapshots (id text PRIMARY KEY, thread_id text 
 ALTER TABLE inflight_turns ADD COLUMN IF NOT EXISTS effects jsonb NOT NULL DEFAULT '[]'::jsonb; -- 2026-10-11
 ALTER TYPE reminder_recurrence ADD VALUE IF NOT EXISTS 'event'; -- 2026-10-11
 ALTER TABLE reminders ADD COLUMN IF NOT EXISTS trigger jsonb; ALTER TABLE reminders ADD COLUMN IF NOT EXISTS webhook_secret text; ALTER TABLE reminders ADD COLUMN IF NOT EXISTS last_fired_at timestamptz; -- 2026-10-11
+ALTER TABLE thread_model_choices ADD COLUMN IF NOT EXISTS memory_mode text; -- 2026-10-11
 ```
 
 The anti-coding gate's ledger: the last catch and how many in a row (each
