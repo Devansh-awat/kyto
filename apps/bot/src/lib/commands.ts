@@ -64,6 +64,21 @@ const MENTIONED_USER =
 const CLEAR_WORDS = new Set(['clear', 'off', 'none', 'stop']);
 // `none` is a real effort, so it can't clear `--reasoning`.
 const DEFAULT_WORDS = new Set(['default', 'random', 'reset', 'clear', 'off']);
+// How far a bare slug may stray from one of kyto's model names and still be
+// read as a typo of it (`haikue`, `lun`) rather than a model of its own.
+const NEAR_MISS_CHARS = 2;
+
+function nearSharedModel(slug: string): string | undefined {
+  if (slug.includes('/')) {
+    return;
+  }
+  return Object.keys(MODEL_CHOICES).find(
+    (name) =>
+      name !== slug &&
+      (slug.startsWith(name) || name.startsWith(slug)) &&
+      Math.abs(slug.length - name.length) <= NEAR_MISS_CHARS
+  );
+}
 // What a `--model` slug may look like (`openai/gpt-5.1`, `claude-sonnet-4-5@x`).
 const MODEL_SLUG = /^[\w.:/@-]{1,200}$/;
 
@@ -269,6 +284,13 @@ async function runFlags({
       said.push(`model ${lower}`);
     } else if (!MODEL_SLUG.test(flags.model)) {
       return await reply(`\`${flags.model}\` doesn't look like a model slug.`);
+    } else if (nearSharedModel(lower)) {
+      // `--model haikue` went through as an own-key slug, the owner's parked
+      // ChatGPT account couldn't run it, and the turn fell back to kyto's
+      // chain without a word (#66).
+      return await reply(
+        `did you mean \`--model ${nearSharedModel(lower)}\`? a slug of your own key's needs its provider prefix (e.g. \`openai/…\`) when it's this close to one of kyto's.`
+      );
     } else if (await hasOwnModels(userId).catch(() => false)) {
       change.model = flags.model;
       said.push(`model ${flags.model}, on your own key (only your messages)`);
