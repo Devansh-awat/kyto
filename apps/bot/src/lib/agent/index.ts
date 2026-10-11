@@ -14,6 +14,7 @@ import {
   UPGRADE_ATTEMPTS,
   visionAttempt,
 } from '@repo/ai';
+import { comparePrefix, type PrefixUnit } from '@repo/ai/cache-probe';
 import { stepsCostUsd } from '@repo/ai/usage-cost';
 import { LazySandbox } from '@repo/sandbox';
 import { env } from '@/env';
@@ -195,6 +196,15 @@ const EPHEMERAL_MAX = 2900;
 const JEV_CONTEXT_CHARS = 10_000;
 const MAX_JEV_CONTEXTS = 1000;
 const jevContexts = new Map<string, string>();
+// Each thread's previous turn's first request, as prefix units, so the next
+// turn can log where its prompt stopped matching. Within a turn every step is
+// checked (onCachePrefix); ACROSS turns nothing was, and haiku's first step
+// read only the static system prefix, never the thread's history (2026-10-11).
+const MAX_TURN_PREFIXES = 1000;
+const turnPrefixes = new Map<
+  string,
+  { at: number; effort?: string; model: string; units: PrefixUnit[] }
+>();
 
 function splitForEphemeral(text: string): string[] {
   const chunks: string[] = [];
@@ -1304,6 +1314,44 @@ async function executeTurn(
           // divergence at full price. Nothing else surfaces that — the turn
           // succeeds either way and only the invoice differs — so log where it
           // broke, and what share of the request could still be cached.
+          onFirstRequest: (units) => {
+            const previous = turnPrefixes.get(threadId);
+            turnPrefixes.delete(threadId);
+            turnPrefixes.set(threadId, {
+              at: Date.now(),
+              effort: effort?.effort,
+              model: currentAttempt.model,
+              units,
+            });
+            const idlest = turnPrefixes.keys().next().value;
+            if (turnPrefixes.size > MAX_TURN_PREFIXES && idlest !== undefined) {
+              turnPrefixes.delete(idlest);
+            }
+            if (!previous) {
+              return;
+            }
+            const divergence = comparePrefix(previous.units, units);
+            if (!divergence) {
+              return;
+            }
+            logger.info(
+              {
+                divergedAt: divergence.label,
+                effortChanged: previous.effort !== effort?.effort,
+                // The previous first request ended in its per-turn tail, so a
+                // healthy turn diverges exactly there and no earlier.
+                healthy: divergence.index >= previous.units.length - 1,
+                index: divergence.index,
+                minutesSince: Math.round((Date.now() - previous.at) / 60_000),
+                modelChanged: previous.model !== currentAttempt.model,
+                previousUnits: previous.units.length,
+                stableChars: divergence.stableChars,
+                threadId,
+                totalChars: divergence.totalChars,
+              },
+              '[agent] cross-turn prefix'
+            );
+          },
           onCachePrefix: (divergence) => {
             if (divergence.appendOnly) {
               return;

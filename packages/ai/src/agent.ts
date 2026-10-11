@@ -160,6 +160,7 @@ export function streamAttempt({
   history = [],
   onCachePrefix,
   onDroppedImages,
+  onFirstRequest,
   onError,
   onGatewayRetry,
   prompt,
@@ -211,6 +212,12 @@ export function streamAttempt({
    * reports that: the turn succeeds either way and only the invoice differs.
    */
   onCachePrefix?: (info: PrefixDivergence) => void;
+  /**
+   * Called with the prefix units of the attempt's FIRST request, so the caller
+   * can compare it with the previous turn's — the cross-turn half of the probe
+   * that onCachePrefix can't see, since each attempt starts a fresh one.
+   */
+  onFirstRequest?: (units: PrefixUnit[]) => void;
   /**
    * Called when a step's request came back a gateway failure and is being sent
    * again (see gateway-retry). Purely observational — the retry happens either
@@ -273,6 +280,7 @@ export function streamAttempt({
           historyMessages: history.length,
           holder,
           onCachePrefix,
+          onFirstRequest,
           onGatewayRetry,
           reasoningEffort,
           serviceTier,
@@ -556,6 +564,7 @@ function tunedFetch({
   historyMessages,
   holder,
   onCachePrefix,
+  onFirstRequest,
   onGatewayRetry,
   reasoningEffort: effort,
   serviceTier,
@@ -566,6 +575,7 @@ function tunedFetch({
   reasoningEffort?: string;
   holder: ResolvedModelHolder;
   onCachePrefix?: (info: PrefixDivergence) => void;
+  onFirstRequest?: (units: PrefixUnit[]) => void;
   onGatewayRetry?: (info: GatewayRetryInfo) => void;
   serviceTier?: 'flex';
   toolOrder?: { names: string[] };
@@ -602,7 +612,9 @@ function tunedFetch({
         await readRequestBody(input, init),
         attempt,
         isGemini ? thoughtSignatures : undefined,
-        onCachePrefix ? { onCachePrefix, state: cacheProbe } : undefined,
+        onCachePrefix
+          ? { onCachePrefix, onFirstRequest, state: cacheProbe }
+          : undefined,
         toolOrder,
         { flex, historyMessages, reasoningEffort }
       );
@@ -717,6 +729,7 @@ function tuneBody(
   thoughtSignatures?: Map<string, string>,
   probe?: {
     onCachePrefix: (info: PrefixDivergence) => void;
+    onFirstRequest?: (units: PrefixUnit[]) => void;
     state: { units: PrefixUnit[] };
   },
   toolOrder?: { names: string[] },
@@ -749,6 +762,9 @@ function tuneBody(
     // provider never sees.
     if (probe) {
       const units = prefixUnits(payload);
+      if (probe.state.units.length === 0) {
+        probe.onFirstRequest?.(units);
+      }
       const divergence = comparePrefix(probe.state.units, units);
       probe.state.units = units;
       if (divergence) {
