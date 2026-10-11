@@ -86,6 +86,27 @@ describe('isNotCodingCall', () => {
     }
   });
 
+  test('a chain of exempt commands is exempt, quoted text is only text', () => {
+    // The owner's refused "do it" on 2026-10-11, verbatim in shape.
+    for (const command of [
+      'cd /home/user/kyto && git status --short && git branch --show-current && git log --oneline -1',
+      'cd /home/user/kyto && git push -u origin feat/x 2>&1 | tail -5 && gh pr create --repo o/r --base main --head feat/x --title "feat(mcp): x" --body "Adds a fallback (GET stream, then POSTs). Tests: 7/7; full suite not run.\nKnown gap: none."',
+      "gh issue comment 3 --body 'costs $5 & (maybe) more'",
+    ]) {
+      expect(gh(command)).toBe(true);
+    }
+    for (const command of [
+      'git status && npm test',
+      'git push 2>&1 | tail -5 | sh',
+      'gh pr create --title x --body "$(cat body.md)"',
+      'gh pr create --title x --body "`id`"',
+      'cd $HOME && git status',
+      'git status ||  true',
+    ]) {
+      expect(gh(command)).toBe(false);
+    }
+  });
+
   test('only the shell tools, and only a command string', () => {
     expect(
       isNotCodingCall({ input: { code: 'true' }, toolName: 'codeMode' })

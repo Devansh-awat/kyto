@@ -16,11 +16,11 @@ import { z } from 'zod';
 
 const SHELL_TOOLS = new Set(['bash', 'gh', 'runBackgroundProcess']);
 
-// Anything that could chain, redirect, substitute, glob or escape.
+// Outside quotes: anything that could chain, redirect, substitute, glob or
+// escape. `&&`, a `| tail` and `2>&1` are recognised before this is applied.
 const UNSAFE = /[;&|<>`$(){}*?~!#\\\n\r\0[\]]/;
-
-// Only quotes group words — UNSAFE has already ruled out every expansion.
-const WORD = /(?:'[^']*'|"[^"]*"|[^\s'"])+/g;
+// Inside double quotes the shell still expands these.
+const UNSAFE_IN_DOUBLE_QUOTES = /[$`\\!]/;
 
 const PLAIN = new Set([
   'basename',
@@ -48,6 +48,18 @@ const PLAIN = new Set([
 ]);
 
 const GIT_READ = new Set(['diff', 'log', 'rev-parse', 'show', 'status']);
+// `git branch NAME` creates one, so only its listing flags count as reading.
+const GIT_BRANCH_LISTS = new Set([
+  '--all',
+  '--list',
+  '--remotes',
+  '--show-current',
+  '--verbose',
+  '-a',
+  '-r',
+  '-v',
+  '-vv',
+]);
 const GIT_PUBLISH = new Set(['push']);
 const GIT_PUSH_RUNS = /^--(?:receive-pack|exec)(?:=|$)/;
 // `git diff --output=f` and `git log -o f` write a file.
@@ -96,24 +108,95 @@ const API_ENDPOINT =
 
 const commandInput = z.object({ command: z.string() });
 
-// The wrapping a model puts around a one-liner: `cd dir && …` in front, and
-// `2>&1 | tail -5` behind. Neither can make the command inside it code work, so
-// it is peeled off before the command is judged. The directory is a plain path
-// — no `~`, `$` or quotes — so `cd` can't run anything either.
-const CD_PREFIX = /^cd\s+[\w./-]+\s*&&\s*/;
-const OUTPUT_TAIL =
-  /(?:\s+2>&1)?(?:\s*\|\s*(?:head|tail)(?:\s+-n)?(?:\s+-?\d+)?)?\s*$/;
+type Token = { op: '&&' | '|' | '2>&1' } | { word: string };
 
-function unwrap(command: string): string {
-  return command.trim().replace(CD_PREFIX, '').replace(OUTPUT_TAIL, '');
+// A shell line as words and the three operators a model wraps a one-liner in:
+// `cd dir && …`, `… && …`, and `2>&1 | tail -5`. Null for anything else outside
+// quotes. Quoted text is only text — a PR body with "(" in it is still a PR —
+// except what double quotes still expand.
+function tokenize(command: string): Token[] | null {
+  const tokens: Token[] = [];
+  let word: string | undefined;
+  const endWord = () => {
+    if (word !== undefined) {
+      tokens.push({ word });
+      word = undefined;
+    }
+  };
+  let i = 0;
+  while (i < command.length) {
+    const char = command[i] ?? '';
+    if (char === ' ' || char === '\t') {
+      endWord();
+      i += 1;
+    } else if (command.startsWith('&&', i)) {
+      endWord();
+      tokens.push({ op: '&&' });
+      i += 2;
+    } else if (char === '|' && command[i + 1] !== '|') {
+      endWord();
+      tokens.push({ op: '|' });
+      i += 1;
+    } else if (word === undefined && command.startsWith('2>&1', i)) {
+      tokens.push({ op: '2>&1' });
+      i += 4;
+    } else if (char === "'" || char === '"') {
+      const close = command.indexOf(char, i + 1);
+      const inner = command.slice(i + 1, close);
+      if (
+        close === -1 ||
+        (char === '"' && UNSAFE_IN_DOUBLE_QUOTES.test(inner))
+      ) {
+        return null;
+      }
+      word = (word ?? '') + inner;
+      i = close + 1;
+    } else if (UNSAFE.test(char)) {
+      return null;
+    } else {
+      word = (word ?? '') + char;
+      i += 1;
+    }
+  }
+  endWord();
+  return tokens;
 }
 
-function words(command: string): string[] | null {
-  // An unclosed quote leaves characters no word covers.
-  if (command.replace(WORD, '').trim() !== '') {
-    return null;
+const TAIL_COUNT = /^-?\d+$/;
+const CD_PATH = /^[\w./-]+$/;
+
+// One `&&`-separated command's words, with a trailing `2>&1 | tail -N` peeled
+// off (it can't make the command code work). Null if any other operator is in it.
+function segmentArgv(tokens: Token[]): string[] | null {
+  let rest = tokens;
+  const pipe = rest.findIndex((token) => 'op' in token && token.op === '|');
+  if (pipe !== -1) {
+    const filter = rest
+      .slice(pipe + 1)
+      .map((token) => ('word' in token ? token.word : null));
+    const [name, ...args] = filter;
+    const count = args[0] === '-n' ? args.slice(1) : args;
+    if (
+      (name !== 'head' && name !== 'tail') ||
+      count.length > 1 ||
+      (count[0] !== undefined && !TAIL_COUNT.test(count[0] ?? ''))
+    ) {
+      return null;
+    }
+    rest = rest.slice(0, pipe);
   }
-  return (command.match(WORD) ?? []).map((word) => word.replace(/['"]/g, ''));
+  const last = rest.at(-1);
+  if (last && 'op' in last && last.op === '2>&1') {
+    rest = rest.slice(0, -1);
+  }
+  const argv: string[] = [];
+  for (const token of rest) {
+    if (!('word' in token)) {
+      return null;
+    }
+    argv.push(token.word);
+  }
+  return argv;
 }
 
 function isNotCodingGh(args: string[]): boolean {
@@ -145,26 +228,13 @@ function isNotCodingGh(args: string[]): boolean {
   );
 }
 
-export function isNotCodingCall({
-  input,
-  toolName,
-}: {
-  input: unknown;
-  toolName: string;
-}): boolean {
-  if (!SHELL_TOOLS.has(toolName)) {
-    return false;
-  }
-  const parsed = commandInput.safeParse(input);
-  const command = parsed.success ? unwrap(parsed.data.command) : '';
-  if (!command || UNSAFE.test(command)) {
-    return false;
-  }
-  const argv = words(command);
-  const [head, ...args] = argv ?? [];
+function isNotCodingArgv([head, ...args]: string[]): boolean {
   // `FOO=bar cmd` could point a read-only tool at a different program.
   if (!head || head.includes('=')) {
     return false;
+  }
+  if (head === 'cd') {
+    return args.length === 1 && CD_PATH.test(args[0] ?? '');
   }
   if (head === 'gh') {
     return isNotCodingGh(args);
@@ -173,6 +243,9 @@ export function isNotCodingCall({
     // `git -C dir …` is the same command run elsewhere; any other global flag
     // (`-c key=value`) could reconfigure what runs.
     const [sub, ...rest] = args[0] === '-C' ? args.slice(2) : args;
+    if (sub === 'branch') {
+      return rest.every((arg) => GIT_BRANCH_LISTS.has(arg));
+    }
     if (sub !== undefined && GIT_PUBLISH.has(sub)) {
       // `--receive-pack`/`--exec` name a program to RUN for a local remote.
       return !rest.some((arg) => GIT_PUSH_RUNS.test(arg));
@@ -184,4 +257,37 @@ export function isNotCodingCall({
     );
   }
   return PLAIN.has(head);
+}
+
+// Every command in a `&&` chain must be one on its own: the owner's "do it"
+// on a finished PR was refused at 0.96 because kyto ran
+// `git push … 2>&1 | tail -5 && gh pr create …` as one call, and each half
+// alone would have skipped Jev (2026-10-11).
+export function isNotCodingCall({
+  input,
+  toolName,
+}: {
+  input: unknown;
+  toolName: string;
+}): boolean {
+  if (!SHELL_TOOLS.has(toolName)) {
+    return false;
+  }
+  const parsed = commandInput.safeParse(input);
+  const tokens = parsed.success ? tokenize(parsed.data.command.trim()) : null;
+  if (!tokens || tokens.length === 0) {
+    return false;
+  }
+  const segments: Token[][] = [[]];
+  for (const token of tokens) {
+    if ('op' in token && token.op === '&&') {
+      segments.push([]);
+    } else {
+      segments.at(-1)?.push(token);
+    }
+  }
+  return segments.every((segment) => {
+    const argv = segmentArgv(segment);
+    return argv !== null && isNotCodingArgv(argv);
+  });
 }
