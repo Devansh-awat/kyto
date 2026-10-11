@@ -48,6 +48,19 @@ with `UNIQUE(server_id, scope_kind, scope_id)` + an index on
 an index on the pair. A `UNIQUE` constraint has no `IF NOT EXISTS` form — re-run
 the DDL and swallow "already exists".
 
+## The `github_contributions` table (2026-10-11)
+
+The ledger behind third-party PRs/issues/comments (`lib/github/contributions.ts`): one row per posted (`opened`, later `merged`/`closed`) or review-refused (`refused`, with `reason`) contribution. The daily caps count it; PR rows are re-checked on GitHub lazily to settle `merged`/`closed`. Created by hand:
+
+```sql
+CREATE TABLE IF NOT EXISTS github_contributions (id serial PRIMARY KEY, user_id text NOT NULL, repo text NOT NULL, kind text NOT NULL, outcome text NOT NULL, number integer, thread_id text, reason text, created_at timestamptz NOT NULL DEFAULT now(), resolved_at timestamptz);
+CREATE INDEX IF NOT EXISTS github_contributions_user_idx ON github_contributions (user_id, created_at);
+CREATE INDEX IF NOT EXISTS github_contributions_kind_idx ON github_contributions (kind, created_at);
+ALTER TABLE github_contributions OWNER TO gorkie;
+```
+
+Not erased by "Your data", like `github_repos`/`github_trust`: it's an abuse ledger (erasing would reset a cap or a pause), and every row points at something already public on GitHub.
+
 ## Owner dashboard
 
 `lib/dashboard/`, mounted on the **sites** Bun.serve at **`/_dashboard`** (shares `SITES_PUBLIC_HOST`; the sites name regex can't produce `_dashboard`, so no collision). Server-rendered HTML, no client framework or external assets.

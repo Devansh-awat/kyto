@@ -1,12 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import { isReadOnlyCall } from './read-only';
+import { isNotCodingCall } from './not-coding';
 
 const bash = (command: string) =>
-  isReadOnlyCall({ input: { command }, toolName: 'bash' });
+  isNotCodingCall({ input: { command }, toolName: 'bash' });
 const gh = (command: string) =>
-  isReadOnlyCall({ input: { command }, toolName: 'gh' });
+  isNotCodingCall({ input: { command }, toolName: 'gh' });
 
-describe('isReadOnlyCall', () => {
+describe('isNotCodingCall', () => {
   test('skips Jev for plain liveness and state checks', () => {
     for (const command of [
       'echo alive',
@@ -57,7 +57,12 @@ describe('isReadOnlyCall', () => {
       'npm install cloakbrowser',
       'git commit -m x',
       'git diff --output=patch',
-      'gh pr create --title x',
+      'git push --receive-pack=./evil ../local',
+      'git -c core.sshCommand=x push',
+      'cd /tmp && npm test',
+      'cd ~ && git push',
+      'gh pr comment 3 --edit-last',
+      'gh issue create --web',
       'gh issue view 3 --comment',
       'gh api -X POST repos/o/r/issues',
       'gh api repos/o/r/issues -f title=x',
@@ -67,12 +72,26 @@ describe('isReadOnlyCall', () => {
     }
   });
 
+  test('publishing finished work skips Jev, wrapped or not', () => {
+    for (const command of [
+      'git push -u origin feat/mcp-legacy-sse',
+      'cd /home/user/kyto && git push -u origin feat/mcp-legacy-sse 2>&1 | tail -5',
+      'git -C /home/user/kyto push origin HEAD:u0123/fix',
+      'gh pr create --repo o/r --base main --head kyto-agent:u0123/fix --title x --body y',
+      'gh issue create --repo o/r --title x --body y',
+      'gh pr comment 3 --body thanks',
+      'gh repo fork o/r --clone=false',
+    ]) {
+      expect(gh(command)).toBe(true);
+    }
+  });
+
   test('only the shell tools, and only a command string', () => {
     expect(
-      isReadOnlyCall({ input: { code: 'true' }, toolName: 'codeMode' })
+      isNotCodingCall({ input: { code: 'true' }, toolName: 'codeMode' })
     ).toBe(false);
     expect(
-      isReadOnlyCall({ input: { script: 'true' }, toolName: 'bash' })
+      isNotCodingCall({ input: { script: 'true' }, toolName: 'bash' })
     ).toBe(false);
   });
 });

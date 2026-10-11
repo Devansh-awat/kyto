@@ -1,9 +1,15 @@
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
+import { vetContribution } from '@/lib/github/contributions';
 import { GITHUB_LOGIN, guardGithubTargets } from '@/lib/github/guard';
 import { brokerableGithubToken } from '@/lib/github/token';
+import {
+  type Contribution,
+  classifyContribution,
+} from '@/lib/github-proxy/contribution';
 import { graphqlTarget, type NodeInfo } from '@/lib/github-proxy/graphql';
 import { mayCarryPat } from '@/lib/github-proxy/host';
+import { peekPushRefs } from '@/lib/github-proxy/push-refs';
 import logger from '@/lib/logger';
 
 /**
@@ -417,6 +423,41 @@ const STRIPPED_RESPONSE_HEADERS = new Set([
   'transfer-encoding',
 ]);
 
+/**
+ * The repo a contribution lands on and, for a PR, where its head branch lives.
+ * Null when a GraphQL node id can't be placed — then it is not treated as a
+ * contribution, and the ordinary gate decides.
+ */
+async function contributionTarget(contribution: Contribution): Promise<{
+  headOwner?: string;
+  headRef?: string;
+  repo: string;
+} | null> {
+  const ids = [contribution.subjectId, contribution.headRepositoryId].filter(
+    (id): id is string => Boolean(id)
+  );
+  const nodes = ids.length > 0 ? await resolveNodes(ids) : new Map();
+  const repo =
+    contribution.repo ??
+    (contribution.subjectId
+      ? nodes.get(contribution.subjectId)?.repo
+      : undefined);
+  if (!repo) {
+    return null;
+  }
+  const [named, branch] = contribution.headRef?.includes(':')
+    ? contribution.headRef.split(':', 2)
+    : [undefined, contribution.headRef];
+  const headRepo = contribution.headRepositoryId
+    ? nodes.get(contribution.headRepositoryId)?.repo
+    : undefined;
+  return {
+    headOwner: named ?? headRepo?.split('/')[0] ?? repo.split('/')[0],
+    headRef: branch,
+    repo,
+  };
+}
+
 function refusal(reason: string, status: number): Response {
   // Shaped like GitHub's own error body so `gh` prints the message rather than
   // "unexpected response". The model reads this text, so it has to say what to
@@ -489,11 +530,28 @@ export async function handleGithubProxy(
         403
       );
     }
+    const contribution = classifyContribution({ body, method, pathname });
+    const placed = contribution ? await contributionTarget(contribution) : null;
+    // A push's refs, for the shared-fork rule; its body is replayed after.
+    let pushBody: ReadableStream<Uint8Array> | undefined;
+    let forkRefs: string[] | undefined;
+    if (pathname.endsWith('/git-receive-pack') && request.body) {
+      const peeked = await peekPushRefs(request.body);
+      pushBody = peeked.body;
+      // Unreadable refs match no prefix, so they only stop a non-claimant.
+      forkRefs = peeked.refs ?? ['(unreadable push)'];
+    } else if (isGit) {
+      // The ref advertisement before a push changes nothing.
+      forkRefs = [];
+    }
     const guard = await guardGithubTargets({
       commandText: `${method} ${pathname}`,
+      contribution: Boolean(placed),
       creates: target.creates,
+      forkRefs,
       isOwner: principal.isOwner,
-      repos: target.repos,
+      // A PR names its head fork too, but opening it doesn't write there.
+      repos: placed ? [placed.repo] : target.repos,
       threadId: principal.threadId,
       userId: principal.userId,
     });
@@ -504,7 +562,36 @@ export async function handleGithubProxy(
       );
       return refusal(guard.reason, 403);
     }
-    const response = await forward({ body: raw, request, target });
+    let sent:
+      | ArrayBuffer
+      | Uint8Array
+      | ReadableStream<Uint8Array>
+      | undefined = pushBody ?? raw;
+    let record:
+      | ((answer: { ok: boolean; text: string }) => Promise<void>)
+      | undefined;
+    if (guard.needsVetting) {
+      if (!(contribution && placed)) {
+        return refusal('Refused: this write needs vetting it cannot get.', 403);
+      }
+      const vetting = await vetContribution({
+        baseRef: contribution.baseRef,
+        headOwner: placed.headOwner,
+        headRef: placed.headRef,
+        kind: contribution.kind,
+        repo: placed.repo,
+        text: contribution.text,
+        threadId: principal.threadId,
+        title: contribution.title,
+        userId: principal.userId,
+      });
+      if (!vetting.allowed) {
+        return refusal(vetting.reason, 403);
+      }
+      sent = new TextEncoder().encode(contribution.withText(vetting.text));
+      record = vetting.record;
+    }
+    const response = await forward({ body: sent, request, target });
     // GraphQL answers 200 even when the mutation failed, so a body carrying
     // `errors` claims nothing — else a failing mutation naming a repo kyto
     // hasn't created yet would squat it for whoever sent it.
@@ -527,6 +614,11 @@ export async function handleGithubProxy(
       // conservative direction.
       await guard.claim();
     }
+    if (record) {
+      const ok =
+        response.status >= 200 && response.status < 300 && !graphqlFailed;
+      await record({ ok, text: ok ? await response.clone().text() : '' });
+    }
     return response;
   }
   return await forward({ body: raw, request, target });
@@ -537,7 +629,7 @@ async function forward({
   request,
   target,
 }: {
-  body: ArrayBuffer | undefined;
+  body: ArrayBuffer | Uint8Array | ReadableStream<Uint8Array> | undefined;
   request: Request;
   target: Target;
 }): Promise<Response> {

@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { env } from '@/env';
 import logger from '@/lib/logger';
 
@@ -26,9 +27,21 @@ import logger from '@/lib/logger';
 const TTL_MS = 10 * 60 * 1000;
 const TIMEOUT_MS = 10_000;
 
-const cache = new Map<string, { at: number; push: boolean }>();
+const repoSchema = z.looseObject({
+  fork: z.boolean().optional(),
+  permissions: z.looseObject({ push: z.boolean().optional() }).optional(),
+});
 
-async function askGithub(repo: string, token: string): Promise<boolean> {
+interface RepoAccess {
+  fork: boolean;
+  push: boolean;
+}
+
+const NO_ACCESS: RepoAccess = { fork: false, push: false };
+
+const cache = new Map<string, RepoAccess & { at: number }>();
+
+async function askGithub(repo: string, token: string): Promise<RepoAccess> {
   const response = await fetch(`https://api.github.com/repos/${repo}`, {
     headers: {
       accept: 'application/vnd.github+json',
@@ -39,36 +52,46 @@ async function askGithub(repo: string, token: string): Promise<boolean> {
   if (!response.ok) {
     // 404 for a repo the token can't see, 401/403 for a dead token. None of
     // those are "kyto is a collaborator", so the gate stays closed.
-    return false;
+    return NO_ACCESS;
   }
-  const body = (await response.json()) as {
-    permissions?: { push?: boolean };
-  };
-  return body.permissions?.push === true;
+  const body = repoSchema.parse(await response.json());
+  return { fork: body.fork === true, push: body.permissions?.push === true };
 }
 
-/**
- * True when kyto's own GitHub identity can push to `owner/name`. Cached per
- * repo; any failure answers false, so a GitHub outage tightens the gate rather
- * than opening it.
- */
-export async function kytoCanPush(repo: string): Promise<boolean> {
+/** Cached per repo; any failure answers no access and no fork. */
+async function repoAccess(repo: string): Promise<RepoAccess> {
   const token = env.GH_TOKEN;
   if (!token) {
-    return false;
+    return NO_ACCESS;
   }
   const key = repo.toLowerCase();
   const cached = cache.get(key);
   if (cached && Date.now() - cached.at < TTL_MS) {
-    return cached.push;
+    return cached;
   }
-  const push = await askGithub(key, token).catch((error: unknown) => {
+  const access = await askGithub(key, token).catch((error: unknown) => {
     logger.warn(
       { err: error instanceof Error ? error.message : String(error), repo },
       '[github] collaborator check failed; treating as no access'
     );
-    return false;
+    return NO_ACCESS;
   });
-  cache.set(key, { at: Date.now(), push });
-  return push;
+  cache.set(key, { ...access, at: Date.now() });
+  return access;
+}
+
+/**
+ * True when kyto's own GitHub identity can push to `owner/name`. A GitHub
+ * outage answers false, so it tightens the gate rather than opening it.
+ */
+export async function kytoCanPush(repo: string): Promise<boolean> {
+  return (await repoAccess(repo)).push;
+}
+
+/**
+ * True when `owner/name` is a fork. A failed lookup answers false, which keeps
+ * a fork's claim exclusive — the stricter reading.
+ */
+export async function isFork(repo: string): Promise<boolean> {
+  return (await repoAccess(repo)).fork;
 }

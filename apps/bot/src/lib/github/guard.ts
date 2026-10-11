@@ -9,7 +9,7 @@ import { env } from '@/env';
 import { canEdit } from '@/lib/ai/tools/editors';
 import { requestApproval } from '@/lib/approvals/request';
 import logger from '@/lib/logger';
-import { kytoCanPush } from './collaborator';
+import { isFork, kytoCanPush } from './collaborator';
 import { parseGithubCommand } from './command';
 
 /**
@@ -31,6 +31,15 @@ import { parseGithubCommand } from './command';
  *    EXCEPTION: a repo that added kyto's GitHub account as a collaborator with
  *    push access skips this gate — the invitation is the grant (see
  *    ./collaborator.ts). Gate 1 still runs first and is unaffected.
+ *    CONTRIBUTIONS (a PR, an issue, a comment) skip trust too (owner's call,
+ *    2026-10-11: "let kyto make prs but prevent abuse"). They come back as
+ *    `needsVetting`, and the GitHub proxy then caps, reviews and footers them
+ *    (./contributions.ts) — so only the proxy may honour that flag.
+ *
+ * A FORK in kyto's namespace is shared: kyto has one fork per upstream, so the
+ * first person to fork a repo would otherwise lock everyone else out of ever
+ * opening a PR to it. Anyone may push to it, but only branches under their own
+ * prefix (`forkBranchPrefix`); the claimant keeps the rest.
  *
  * Enforcement is at execute time against the REQUESTING user, never against
  * whoever the model says it is acting for — same rule as reminders and sites.
@@ -40,8 +49,13 @@ import { parseGithubCommand } from './command';
 export const GITHUB_LOGIN = env.GH_LOGIN;
 
 export type GithubGuard =
-  | { allowed: true; claim: () => Promise<void> }
+  | { allowed: true; claim: () => Promise<void>; needsVetting?: true }
   | { allowed: false; reason: string };
+
+/** The branch namespace a non-claimant may push to on one of kyto's forks. */
+function forkBranchPrefix(userId: string): string {
+  return `${userId.toLowerCase()}/`;
+}
 
 const ALLOW_NOOP: GithubGuard = {
   allowed: true,
@@ -117,6 +131,8 @@ export async function guardGithubCommand({
     return ALLOW_NOOP;
   }
   const targets = new Set(parsed.repos);
+  // A push's refs are only readable in the request git sends, so a push to a
+  // shared fork is waved on here and checked branch by branch at the proxy.
   if (parsed.needsRemote && context) {
     for (const repo of await remoteRepos({ context, workingDirectory })) {
       targets.add(repo);
@@ -124,7 +140,9 @@ export async function guardGithubCommand({
   }
   return await guardGithubTargets({
     commandText: command,
+    contribution: parsed.contribution,
     creates: parsed.creates,
+    forkRefs: parsed.pushOnly ? 'unchecked' : undefined,
     isOwner,
     repos: [...targets],
     threadId,
@@ -145,14 +163,24 @@ export async function guardGithubCommand({
  */
 export async function guardGithubTargets({
   commandText,
+  contribution = false,
   creates,
+  forkRefs,
   isOwner,
   repos,
   threadId,
   userId,
 }: {
   commandText: string;
+  /** A PR, issue or comment — vetted by the proxy instead of needing trust. */
+  contribution?: boolean;
   creates: string[];
+  /**
+   * The refs a push updates, for the shared-fork rule; `'unchecked'` from the
+   * command guard, which can't read them and leaves them to the proxy. Omit for
+   * anything that isn't a push.
+   */
+  forkRefs?: string[] | 'unchecked';
   isOwner: boolean;
   repos: string[];
   threadId?: string;
@@ -178,6 +206,19 @@ export async function guardGithubTargets({
       })
     ) {
       continue;
+    }
+    if (forkRefs && inKytoNamespace(claim.repo) && (await isFork(claim.repo))) {
+      const prefix = `refs/heads/${forkBranchPrefix(userId)}`;
+      if (
+        forkRefs === 'unchecked' ||
+        forkRefs.every((ref) => ref.startsWith(prefix))
+      ) {
+        continue;
+      }
+      return {
+        allowed: false,
+        reason: `Refused: "${claim.repo}" is your fork, shared by everyone who has you open PRs, so this person may only push branches named \`${forkBranchPrefix(userId)}<something>\` there — rename the branch (e.g. \`git push origin HEAD:${forkBranchPrefix(userId)}fix-thing\`) and open the PR from that.`,
+      };
     }
     return {
       allowed: false,
@@ -217,6 +258,15 @@ export async function guardGithubTargets({
     const untrusted = trust?.allRepos
       ? []
       : gated.filter((repo) => !(trust?.repos ?? []).includes(repo));
+    if (untrusted.length > 0 && contribution) {
+      // Not trust but a vetting, which only the proxy can do: it holds the
+      // request body that is reviewed and signed.
+      return {
+        allowed: true,
+        claim: () => Promise.resolve(),
+        needsVetting: true,
+      };
+    }
     if (untrusted.length > 0) {
       // Don't hold the turn open waiting for a decision — a turn can't block
       // for hours. Record it, refuse, and let them ask again once approved.
@@ -261,7 +311,7 @@ export async function guardGithubTargets({
         : "The request is waiting for him on kyto's dashboard, and it does not expire.";
       return {
         allowed: false,
-        reason: `Refused for now: ${list} ${untrusted.length === 1 ? 'is not a repo' : 'are not repos'} you own, and writes there go out under your own GitHub account, so <@${env.OWNER_USER_ID}> has to approve this person for it. ${queued} Tell them it's waiting on his approval and that they can ask you again once he's granted it — approving grants the access but deliberately does NOT re-run the command. Don't look for another route — forking it, pushing from a different checkout, and calling the REST API directly are all the same thing. Reading the repo is still fine.`,
+        reason: `Refused for now: ${list} ${untrusted.length === 1 ? 'is not a repo' : 'are not repos'} you own, and writes there go out under your own GitHub account, so <@${env.OWNER_USER_ID}> has to approve this person for it. ${queued} Tell them it's waiting on his approval and that they can ask you again once he's granted it — approving grants the access but deliberately does NOT re-run the command. Don't look for another route — pushing from a different checkout or calling the REST API directly is the same thing. Reading the repo is still fine, and so is CONTRIBUTING without approval: fork it, push a branch to your fork, and open a PR (\`gh pr create\`), or file an issue or comment — those are capped and reviewed, not approved.`,
       };
     }
   }

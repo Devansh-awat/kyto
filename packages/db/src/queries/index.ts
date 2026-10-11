@@ -6,6 +6,7 @@ export * from './chatgpt-accounts';
 export * from './code-channels';
 export * from './customizations';
 export * from './feedback';
+export * from './github-contributions';
 export * from './github-repos';
 export * from './github-trust';
 export * from './identity';

@@ -82,7 +82,19 @@ function gitVerb(tokens: string[]): string | undefined {
   return;
 }
 
+// gh commands that only CONTRIBUTE — open a PR, file an issue, comment. Those
+// need no owner trust on a third-party repo; the proxy vets them instead.
+const CONTRIBUTION_VERBS: Record<string, Set<string>> = {
+  issue: new Set(['comment', 'create']),
+  pr: new Set(['comment', 'create']),
+};
+
+// Flags that turn a contribution verb into an edit or a delete.
+const NON_CONTRIBUTION_FLAGS = /^--(?:edit-last|delete-last)(?:=|$)/;
+
 export interface ParsedGithubCommand {
+  /** True when every write in it is a PR, an issue or a comment. */
+  contribution: boolean;
   /** Repos this command would CREATE (claimed on success, never gated). */
   creates: string[];
   /** True when some part of the command writes to GitHub. */
@@ -92,8 +104,21 @@ export interface ParsedGithubCommand {
    * from the checkout's remote (the caller does that against the sandbox).
    */
   needsRemote: boolean;
+  /** True when every write in it is a git push. */
+  pushOnly: boolean;
   /** Every repo the command names, lowercased "owner/name". */
   repos: string[];
+}
+
+function isContributionGh(tokens: string[]): boolean {
+  const args = tokens.slice(1).filter((token) => !token.startsWith('-'));
+  const [group, verb] = args;
+  return (
+    group !== undefined &&
+    verb !== undefined &&
+    CONTRIBUTION_VERBS[group]?.has(verb) === true &&
+    !tokens.some((token) => NON_CONTRIBUTION_FLAGS.test(token))
+  );
 }
 
 function tokenize(segment: string): string[] {
@@ -187,6 +212,8 @@ export function parseGithubCommand(command: string): ParsedGithubCommand {
   const creates = new Set<string>();
   let mutating = false;
   let needsRemote = false;
+  let contribution = true;
+  let pushOnly = true;
 
   for (const match of command.matchAll(INVOCATION)) {
     const invocation = (match[1] ?? '').replace(/["'`)\\]+$/, '');
@@ -201,6 +228,8 @@ export function parseGithubCommand(command: string): ParsedGithubCommand {
         continue;
       }
       mutating = true;
+      pushOnly = false;
+      contribution &&= isContributionGh(tokens);
       for (const repo of [...named, ...reposInGhTokens(tokens)]) {
         repos.add(repo.toLowerCase());
       }
@@ -215,6 +244,7 @@ export function parseGithubCommand(command: string): ParsedGithubCommand {
       continue;
     }
     mutating = true;
+    contribution = false;
     if (named.length === 0) {
       needsRemote = true;
     }
@@ -233,6 +263,8 @@ export function parseGithubCommand(command: string): ParsedGithubCommand {
       (WRITE_METHOD.test(segment) || /\s(?:-d|--data|--json)\b/.test(segment))
     ) {
       mutating = true;
+      contribution = false;
+      pushOnly = false;
       for (const repo of named) {
         repos.add(repo.toLowerCase());
       }
@@ -240,9 +272,11 @@ export function parseGithubCommand(command: string): ParsedGithubCommand {
   }
 
   return {
+    contribution: mutating && contribution,
     creates: [...creates],
     mutating,
     needsRemote,
+    pushOnly: mutating && pushOnly,
     repos: [...repos],
   };
 }

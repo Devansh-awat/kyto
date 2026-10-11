@@ -24,7 +24,7 @@ import type { Message } from '@/harness/types';
 import logger from '@/lib/logger';
 import { toLogError } from '@/lib/utils/error';
 import { decideCodingAction } from './decide';
-import { isReadOnlyCall } from './read-only';
+import { isNotCodingCall } from './not-coding';
 import { type CodingAction, renderCodingState } from './state';
 
 const JEV_URL = 'https://ai.hackclub.com/proxy/v1/jev/systemone';
@@ -219,7 +219,7 @@ export function createCodingMonitor({
   return {
     checkTurn: async () => (await judge()) === 'delegate',
     guardTool: async (call) => {
-      if (isReadOnlyCall(call)) {
+      if (isNotCodingCall(call)) {
         actions.push({ input: call.input, toolName: call.toolName });
         return null;
       }

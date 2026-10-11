@@ -88,3 +88,36 @@ describe('git global flags', () => {
     expect(parseGithubCommand('git -C /repo status').mutating).toBe(false);
   });
 });
+
+describe('contribution and push-only commands', () => {
+  test('gh pr/issue create and comment are contributions', () => {
+    for (const command of [
+      'gh pr create --repo o/r --title x --body y',
+      'gh issue create -R o/r --title x',
+      'gh pr comment 3 --repo o/r --body ok',
+    ]) {
+      expect(parseGithubCommand(command)).toMatchObject({
+        contribution: true,
+        pushOnly: false,
+      });
+    }
+  });
+
+  test('anything else in the same command stops it being one', () => {
+    for (const command of [
+      'gh pr create --repo o/r && gh pr merge 3 --repo o/r',
+      'gh pr comment 3 --repo o/r --edit-last --body y',
+      'gh pr create --repo o/r; git push origin main',
+    ]) {
+      expect(parseGithubCommand(command).contribution).toBe(false);
+    }
+  });
+
+  test('a lone push is push-only', () => {
+    expect(parseGithubCommand('git push -u origin u1/fix')).toMatchObject({
+      contribution: false,
+      pushOnly: true,
+    });
+    expect(parseGithubCommand('gh repo list').pushOnly).toBe(false);
+  });
+});
