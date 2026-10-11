@@ -11,10 +11,16 @@ import { isFocusAllowed } from '@/lib/agent/focus';
 import { annotateMentions } from '@/lib/agent/mentions';
 import { recallThinking, renderThinking } from '@/lib/agent/thinking';
 import { slack } from '@/lib/chat';
+import { parseFlags, withoutFlags } from '@/lib/flags';
 import logger from '@/lib/logger';
 import { threadRevisions } from '@/lib/message-revisions';
 import { renderNotebooks } from '@/lib/notebooks';
-import { isHiddenFromBot, rawSlackText } from '@/lib/utils/message';
+import {
+  isHiddenFromBot,
+  rawSlackText,
+  rawText,
+  withoutLeadingMentions,
+} from '@/lib/utils/message';
 
 // We never persist a session, so the whole Slack thread is the agent's only
 // memory. Cap how many prior messages we replay VERBATIM to bound prompt size.
@@ -171,8 +177,8 @@ function gapLine({
 async function renderMessage(message: Message): Promise<string> {
   const slackText = rawSlackText(message);
   const text = slackText
-    ? mrkdwnToMarkdown(await annotateMentions(slackText))
-    : message.text;
+    ? mrkdwnToMarkdown(await annotateMentions(withoutFlags(slackText)))
+    : withoutFlags(message.text);
   const pronouns = message.author.pronouns
     ? `, ${message.author.pronouns}`
     : '';
@@ -296,8 +302,15 @@ export async function buildPrompt(
         contiguous = false;
       }
     }
+    // A message that was ONLY flags changed settings and never got a turn;
+    // with the flags taken off (renderMessage) it would be an empty line.
+    const onlyFlags = (entry: Message) => {
+      const parsed = parseFlags(withoutLeadingMentions(rawText(entry)));
+      return parsed?.ok === true && parsed.flags.rest === '';
+    };
     const visible = (entry: Message) =>
       entry.id !== message.id &&
+      !onlyFlags(entry) &&
       isFocusAllowed(focusState, entry.author.userId, {
         isMe: entry.author.isMe === true,
       });

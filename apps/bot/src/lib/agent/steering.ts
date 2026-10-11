@@ -1,4 +1,5 @@
 import type { Message } from '@/harness/types';
+import { withoutFlags } from '@/lib/flags';
 import type { AbortReason, ActiveTurn, TurnInput } from '@/types/agent';
 
 export class TurnAbort extends Error {
@@ -64,7 +65,7 @@ export function queuedInput(activeTurn: ActiveTurn): TurnInput | undefined {
   }
 
   const text = run
-    .map(({ message }) => message.text.trim())
+    .map(({ message }) => withoutFlags(message.text).trim())
     .filter(Boolean)
     .join('\n\n');
 

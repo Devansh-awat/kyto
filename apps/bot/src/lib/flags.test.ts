@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { parseFlags } from '@/lib/flags';
+import { parseFlags, withoutFlags } from '@/lib/flags';
 
 describe('parseFlags', () => {
   test('a message without a leading flag is not flags', () => {
@@ -61,5 +61,19 @@ describe('parseFlags', () => {
     expect(parseFlags('--model')?.ok).toBe(false);
     expect(parseFlags('--model --reasoning high')?.ok).toBe(false);
     expect(parseFlags('--temperature 2')?.ok).toBe(false);
+  });
+});
+
+describe('withoutFlags', () => {
+  test('takes the flags off and keeps the leading mention', () => {
+    expect(
+      withoutFlags('<@U0BD3555UCQ> --model luna --reasoning high hi')
+    ).toBe('<@U0BD3555UCQ> hi');
+    expect(withoutFlags('--NO-MEMORY what is x')).toBe('what is x');
+  });
+
+  test('leaves ordinary text and unparseable flags alone', () => {
+    expect(withoutFlags('what does --model do?')).toBe('what does --model do?');
+    expect(withoutFlags('--temperature 2 hi')).toBe('--temperature 2 hi');
   });
 });

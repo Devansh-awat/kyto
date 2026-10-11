@@ -83,3 +83,17 @@ export function parseFlags(body: string): ParsedFlags | null {
   flags.rest = text.trim();
   return { flags, ok: true };
 }
+
+const LEADING_MENTIONS = /^\s*(?:<@[A-Z0-9][A-Z0-9._-]*(?:\|[^>]+)?>\s*)*/;
+
+/**
+ * The message as a model should read it: leading flags taken off, leading
+ * mentions kept. The flags are settings for the harness, already applied — a
+ * model that sees `--model luna` starts talking about which model it is on.
+ * Unparseable flags are left alone: that message got an error, not a turn.
+ */
+export function withoutFlags(text: string): string {
+  const mentions = LEADING_MENTIONS.exec(text)?.[0] ?? '';
+  const parsed = parseFlags(text.slice(mentions.length));
+  return parsed?.ok ? `${mentions}${parsed.flags.rest}` : text;
+}

@@ -21,6 +21,7 @@ import { z } from 'zod';
 import { env } from '@/env';
 import type { ThreadHandle } from '@/harness/thread';
 import type { Message } from '@/harness/types';
+import { withoutFlags } from '@/lib/flags';
 import logger from '@/lib/logger';
 import { toLogError } from '@/lib/utils/error';
 import { CODING_THRESHOLD, decideCodingAction } from './decide';
@@ -205,7 +206,12 @@ export function createCodingMonitor({
     probability: number | null;
   }> => {
     const probability = await scoreCodingRequest(
-      renderCodingState({ actions, conversation, latest: message.text, next })
+      renderCodingState({
+        actions,
+        conversation,
+        latest: withoutFlags(message.text),
+        next,
+      })
     );
     const decision = decideCodingAction({ probability, usesOwnModels });
     // Every score, not just the catches: the threshold was set on 25 cases, and
