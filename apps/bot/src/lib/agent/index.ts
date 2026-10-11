@@ -85,6 +85,7 @@ import {
 } from '@/lib/ai/stream';
 import { createCardBudget } from '@/lib/ai/stream/cards';
 import { pickPreloadTools } from '@/lib/ai/tool-preload';
+import { WAKE_ID } from '@/lib/ai/tools/background';
 import {
   claimStickyUpgrade,
   type Escalation,
@@ -1041,6 +1042,12 @@ async function executeTurn(
     // much of the point of working there, so not left to Jev noticing.
     if (isNativeCodeChannel(slack.decodeThreadId(threadId).channel)) {
       built.preload(['codeChannel']);
+    }
+    // A background-process wake tells the model to check or kill the process
+    // with the `process` tool, which is deferred: without this the wake turn
+    // called it unloaded and died on AI_NoSuchToolError (#58).
+    if (WAKE_ID.test(message.id)) {
+      built.preload(['process']);
     }
     const knownTools = new Set(Object.keys(built.tools));
 

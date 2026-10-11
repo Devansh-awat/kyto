@@ -113,7 +113,7 @@ const WATCH_POLL_MS = 20 * 1000;
 // A wake turn that starts or re-checks a job may be woken again, but not
 // forever: a model re-arming every half hour would run all day.
 const MAX_WAKE_CHAIN = 3;
-const WAKE_ID = /^process-report-(\d+)-/;
+export const WAKE_ID = /^process-report-(\d+)-/;
 const WAKE_QUIET_MAX_MS = 15 * 60 * 1000;
 const OUTPUT_TAIL_CHARS = 3000;
 
