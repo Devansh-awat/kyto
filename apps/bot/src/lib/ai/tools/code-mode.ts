@@ -25,6 +25,14 @@ import { clamp } from '@/lib/utils/text';
 const OUTPUT_MAX = 12_000;
 const CODE_DIR = '.codemode';
 
+// The sandbox template never shipped bun, so every codeMode call died with
+// "bun: command not found" (exit 127) and the model fell back to bash (#63).
+// Installed on first use rather than at bootstrap, so a chat-only turn pays
+// nothing; the /usr/local/bin link puts it on PATH for the post-edit
+// diagnostics' `bun build` too. Sandboxes persist, so this runs once per thread.
+const BUN_PATH = 'export PATH="$HOME/.bun/bin:$PATH"';
+const ENSURE_BUN = `${BUN_PATH}; command -v bun >/dev/null 2>&1 || { curl -fsSL https://bun.sh/install | bash >/dev/null 2>&1 && sudo -n ln -sf "$HOME/.bun/bin/bun" /usr/local/bin/bun 2>/dev/null; command -v bun >/dev/null 2>&1; }`;
+
 // A small, always-refreshed helper module the script can import as
 // `./kyto.ts`. Rewritten on every run so it survives a resumed sandbox (whose
 // files persist, but a helper version bump would otherwise go stale). Exposes
@@ -120,10 +128,25 @@ export function codeModeTool({
         path: nodePath.join(dir, 'run.ts'),
       });
 
+      const bun = await context.session.run({
+        abortSignal,
+        command: ENSURE_BUN,
+        workingDirectory: dir,
+      });
+      if (bun.exitCode !== 0) {
+        return {
+          exitCode: bun.exitCode,
+          stderr: clamp(bun.stderr, OUTPUT_MAX),
+          stdout: '',
+          summary:
+            'Could not install bun in the sandbox, so the program did not run. Use bash (node or python3) instead.',
+        };
+      }
+
       if (install && install.length > 0) {
         const installResult = await context.session.run({
           abortSignal,
-          command: `bun add ${install.map((pkg) => `'${pkg.replaceAll("'", '')}'`).join(' ')}`,
+          command: `${BUN_PATH}; bun add ${install.map((pkg) => `'${pkg.replaceAll("'", '')}'`).join(' ')}`,
           workingDirectory: dir,
         });
         if (installResult.exitCode !== 0) {
@@ -138,7 +161,7 @@ export function codeModeTool({
 
       const result = await context.session.run({
         abortSignal,
-        command: 'bun run run.ts',
+        command: `${BUN_PATH}; bun run run.ts`,
         workingDirectory: dir,
       });
       if (result.exitCode === 0) {

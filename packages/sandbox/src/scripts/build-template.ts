@@ -101,6 +101,9 @@ async function main(): Promise<void> {
         'npm config --global set prefix /usr/local',
         'python3 -m pip install --no-cache-dir --break-system-packages --no-user --upgrade pip',
         'python3 -m pip install --no-cache-dir --break-system-packages --no-user pillow matplotlib numpy pandas requests',
+        // codeMode runs its TypeScript with bun; it installs bun itself into a
+        // sandbox from an older template (#63).
+        'bash -lc "curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash"',
         'npm install -g agent-browser',
         'bash -lc "yes | agent-browser install --with-deps"',
         // The browser tool drives agent-browser against CloakBrowser's stealth
