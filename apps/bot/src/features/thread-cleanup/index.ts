@@ -7,6 +7,10 @@ import { mrkdwn, plainText } from '@/harness/views';
 import { stopTurn } from '@/lib/agent/turns';
 import { bot, slack } from '@/lib/chat';
 import logger from '@/lib/logger';
+import {
+  forgetDeletionOf,
+  forgetThreadRevisions,
+} from '@/lib/message-revisions';
 import { toLogError } from '@/lib/utils/error';
 
 // Two owner-only message shortcuts for cleaning up a thread: delete every kyto
@@ -93,6 +97,7 @@ async function forgetThread(threadId: string): Promise<void> {
   await Promise.all([
     clearThreadThinking(threadId),
     clearThreadSummary(threadId),
+    forgetThreadRevisions(threadId),
   ]).catch((error: unknown) => {
     logger.warn(
       { ...toLogError(error), threadId },
@@ -324,6 +329,7 @@ bot.onMessageShortcut(DELETE_MESSAGE_SHORTCUT, async (event) => {
     );
     return;
   }
+  forgetDeletionOf({ channel: channelId, ts: message.ts });
   try {
     await (identity
       ? clientFor(identity).chat.delete({ channel: channelId, ts: message.ts })

@@ -17,6 +17,7 @@ export * from './mcp';
 export * from './memories';
 export * from './memory-curations';
 export * from './memory-files';
+export * from './message-revisions';
 export * from './model-credentials';
 export * from './notebooks';
 export * from './opt-ins';

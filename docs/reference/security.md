@@ -108,7 +108,9 @@ Both are enforced at execute time against the requesting Slack user, in `gh`,
 ## What Kyto stores from Slack
 
 Kyto does **not** persist a verbatim transcript. Thread history is read live
-from Slack per turn and is not written to the database.
+from Slack per turn and is not written to the database. The one verbatim
+exception is `message_revisions` below (owner's call, 2026-10-11): an edit or a
+deletion must not be able to rewrite what kyto was asked.
 
 A few kinds of *derived* text are persisted, and they can paraphrase message
 content:
@@ -117,6 +119,7 @@ content:
 | --- | --- | --- |
 | `thread_thinking` | Kyto's own reasoning and tool observations from the last few turns of a thread | ~30 days, daily reaper |
 | `thread_summaries` | Kyto's own compacted digest of the part of a thread too old to fit in its prompt | ~30 days, daily reaper |
+| `message_revisions` | What a message said before its author edited it, and the text of a deleted one — verbatim (token shapes and kyto's own secrets redacted), only for opted-in authors, only in threads kyto is part of, never `##`, never a `<>` message that didn't ping kyto, never `!secret` | 30 days, daily reaper; erased by the author's "Your data" |
 | `memories` | Notes Kyto wrote after solving something | Until deleted |
 | `thread_sandboxes` | A sandbox id per thread (no message content) | Sandbox reaped after 7 days idle |
 

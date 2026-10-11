@@ -2,6 +2,7 @@ import type { Logger } from '@repo/logging/logger';
 import { SocketModeClient } from '@slack/socket-mode';
 import { LogLevel } from '@slack/web-api';
 import { z } from 'zod';
+import { recordRevision } from '@/lib/message-revisions';
 import { rememberActionToken } from './action-tokens';
 import type { RawSlackMessage, SlackHarness } from './harness';
 import { MemoryKV } from './kv';
@@ -386,6 +387,8 @@ export class KytoBot {
         // Before any filtering: an edit or a deletion is never a turn, but the
         // cached copy of its thread has to follow it (harness/thread-cache).
         this.harness.threadCache.apply(event as RawSlackMessage);
+        // Never awaited: a slow DB write must not hold up the turn.
+        recordRevision(event);
         if (
           typeof event.action_token === 'string' &&
           typeof event.channel === 'string' &&

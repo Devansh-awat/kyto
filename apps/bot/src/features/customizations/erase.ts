@@ -6,6 +6,7 @@ import {
   deleteMemoryCurationsByAuthor,
   deleteNotebook,
   deletePrivateMemoriesByAuthor,
+  deleteRevisionsForUser,
   deleteSlackGrant,
   deleteSummariesForChannel,
   deleteThinkingForChannel,
@@ -60,6 +61,8 @@ export interface EraseResult {
     customInstructions: boolean;
     mcpServers: number;
     memories: number;
+    /** Kept earlier versions of their edited messages, and deleted ones. */
+    messageRevisions: number;
     modelKeys: number;
     /** Whether kyto's notebook (lib/notebooks.ts) for the DM was deleted. */
     dmNotebook: boolean;
@@ -203,6 +206,18 @@ export async function eraseUserData({
     });
   }
 
+  // Keyed by author, so every channel's copies go, not just the DM's: an
+  // edited or deleted message is that person's own words.
+  const messageRevisions = await deleteRevisionsForUser(userId).catch(
+    (error: unknown) => {
+      logger.error(
+        { err: errorMessage(error), userId },
+        '[erase] failed to delete kept message versions'
+      );
+      return 0;
+    }
+  );
+
   const settings = includeSettings
     ? await eraseSettings(userId)
     : {
@@ -218,6 +233,7 @@ export async function eraseUserData({
       ...settings,
       dmNotebook,
       memoryCount,
+      messageRevisions,
       sandboxes,
       summarizedThreads,
       thinkingThreads,
@@ -232,6 +248,7 @@ export async function eraseUserData({
       ...settings,
       dmNotebook,
       memories: memoryCount,
+      messageRevisions,
       sandboxesLeft,
       sandboxes,
       summarizedThreads,
@@ -341,6 +358,11 @@ export function summarize(result: EraseResult): string {
       `• ${removed.sandboxesLeft} sandbox ${removed.sandboxesLeft === 1 ? 'workspace' : 'workspaces'} could NOT be destroyed right now — run this again in a few minutes`
     );
   }
+  if (removed.messageRevisions > 0) {
+    lines.push(
+      `• ${removed.messageRevisions} kept ${removed.messageRevisions === 1 ? 'copy' : 'copies'} of your edited or deleted messages deleted`
+    );
+  }
   if (removed.dmNotebook) {
     lines.push("• kyto's notes from your DM with it deleted");
   }
@@ -359,7 +381,7 @@ export function summarize(result: EraseResult): string {
     );
   }
   lines.push(
-    '\nSlack still holds the messages themselves — kyto reads your thread as context every turn and never stored a copy. Delete a message in Slack and it is gone from what kyto can see.'
+    "\nSlack still holds the messages themselves — kyto reads your thread as context every turn. In threads kyto is part of, it keeps what a message said before you edited or deleted it for 30 days (so an edit can't rewrite what it was asked); those copies were just deleted."
   );
   return lines.join('\n');
 }

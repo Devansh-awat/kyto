@@ -87,6 +87,8 @@ CREATE TABLE IF NOT EXISTS site_views (site text NOT NULL, day date NOT NULL, pa
 CREATE TABLE IF NOT EXISTS site_hits (day date NOT NULL, ip text NOT NULL, site text NOT NULL, requests integer NOT NULL DEFAULT 0, PRIMARY KEY (day, ip, site)); -- 2026-10-08
 CREATE TABLE IF NOT EXISTS thread_model_choices (thread_id text PRIMARY KEY, model text, reasoning_effort text, updated_by text NOT NULL, updated_at timestamptz NOT NULL DEFAULT now()); -- 2026-10-10
 ALTER TABLE thread_model_choices ADD COLUMN IF NOT EXISTS model_set_by text; -- 2026-10-10
+CREATE TABLE IF NOT EXISTS message_revisions (id serial PRIMARY KEY, channel text NOT NULL, root_ts text NOT NULL, message_ts text NOT NULL, user_id text NOT NULL, kind text NOT NULL, text text NOT NULL, created_at timestamptz NOT NULL DEFAULT now()); -- 2026-10-11
+CREATE INDEX IF NOT EXISTS message_revisions_thread_idx ON message_revisions (channel, root_ts); -- 2026-10-11
 ```
 
 The anti-coding gate's ledger: the last catch and how many in a row (each

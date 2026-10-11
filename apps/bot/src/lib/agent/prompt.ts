@@ -1,3 +1,4 @@
+import type { MessageRevision } from '@repo/db/queries';
 import { mrkdwnToMarkdown } from '@/harness/markdown';
 import type { ThreadHandle as Thread } from '@/harness/thread';
 import type { Message } from '@/harness/types';
@@ -11,6 +12,7 @@ import { annotateMentions } from '@/lib/agent/mentions';
 import { recallThinking, renderThinking } from '@/lib/agent/thinking';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
+import { threadRevisions } from '@/lib/message-revisions';
 import { renderNotebooks } from '@/lib/notebooks';
 import { isHiddenFromBot, rawSlackText } from '@/lib/utils/message';
 
@@ -89,6 +91,52 @@ function authorLabel(message: Message): string {
     : message.author.userName;
 }
 
+const quoteRevision = (text: string) => `"${text.replaceAll('\n', ' ⏎ ')}"`;
+
+/** Earlier versions, oldest first, as one line appended to a message. */
+function earlierVersions(rows: MessageRevision[]): string {
+  const edits = rows.filter((row) => row.kind === 'edited');
+  if (edits.length === 0) {
+    return '';
+  }
+  return `\n[edited — earlier ${edits.length === 1 ? 'version' : 'versions, oldest first'}: ${edits.map((row) => quoteRevision(row.text)).join(' → ')}]`;
+}
+
+async function renderWithRevisions({
+  entry,
+  hidden,
+  includeHidden,
+  revisions,
+}: {
+  entry: Message;
+  hidden: boolean;
+  includeHidden: boolean;
+  revisions: MessageRevision[];
+}): Promise<string> {
+  if (hidden && includeHidden) {
+    return `[## — hidden from kyto's own turns] ${await renderMessage(entry)}`;
+  }
+  if (hidden) {
+    // Its current text is a `##` message, which kyto never sees; only what it
+    // said before the edit is shown.
+    return `@${authorLabel(entry)} (${entry.author.userId}): [this message was later edited into one hidden from you]${earlierVersions(revisions)}`;
+  }
+  return `${await renderMessage(entry)}${earlierVersions(revisions)}`;
+}
+
+async function renderDeleted({
+  row,
+  rows,
+}: {
+  row: MessageRevision;
+  rows: MessageRevision[];
+}): Promise<string> {
+  const line = mrkdwnToMarkdown(
+    await annotateMentions(`<@${row.userId}> (${row.userId}): ${row.text}`)
+  );
+  return `[deleted by its author] ${line}${earlierVersions(rows)}`;
+}
+
 // Below this a pause is just conversation; above it, the thread replayed as
 // one block reads as one moment, and kyto answered week-old state as live.
 const GAP_NOTE_MIN_SECONDS = 10 * 60;
@@ -163,43 +211,50 @@ export async function buildPrompt(
   // Everything below is independent, so it is read at once: the Slack thread
   // read is the slow part (~0.5s), and awaiting the rest in front of it put
   // every one of their round trips between the ping and the model request.
-  const [current, thinking, notebooks, threadRead] = await Promise.all([
-    renderMessage(message),
-    // What kyto was THINKING on this thread's last few turns. Slack replayed
-    // above only records what it said, so without this each turn re-derives
-    // the reasoning (and the dead ends) of the one before it.
-    thread ? recallThinking(thread.id).then(renderThinking) : '',
-    // The user account reads the global notebook too; the app, only the
-    // channel's (lib/notebooks.ts). A failed read costs the notes, not the turn.
-    thread
-      ? renderNotebooks({
-          channelId: slack.decodeThreadId(thread.id).channel,
-          includeGlobal: asUserAccount,
-        }).catch((error: unknown) => {
-          logger.warn({ err: error }, '[prompt] could not load the notebooks');
-          return '';
-        })
-      : '',
-    thread
-      ? Promise.all([
-          // Focus mode: drop messages from non-focused users so kyto genuinely
-          // never sees what other people said in a focused thread (not just
-          // declines to reply). Its own messages and the owner's are always kept.
-          thread.state.catch(() => null),
-          // Start the read at the newest message an earlier turn already
-          // digested. Everything before it is in the summary, so re-reading it
-          // would be Slack API work whose only output we already have written down.
-          loadThreadSummary(thread.id).then(async (stored) => ({
-            fetched: await readThread({
-              asUserAccount,
-              oldest: stored?.throughMessageId,
-              threadId: thread.id,
-            }),
-            stored,
-          })),
-        ])
-      : undefined,
-  ]);
+  const [current, thinking, notebooks, threadRead, revisions] =
+    await Promise.all([
+      renderMessage(message),
+      // What kyto was THINKING on this thread's last few turns. Slack replayed
+      // above only records what it said, so without this each turn re-derives
+      // the reasoning (and the dead ends) of the one before it.
+      thread ? recallThinking(thread.id).then(renderThinking) : '',
+      // The user account reads the global notebook too; the app, only the
+      // channel's (lib/notebooks.ts). A failed read costs the notes, not the turn.
+      thread
+        ? renderNotebooks({
+            channelId: slack.decodeThreadId(thread.id).channel,
+            includeGlobal: asUserAccount,
+          }).catch((error: unknown) => {
+            logger.warn(
+              { err: error },
+              '[prompt] could not load the notebooks'
+            );
+            return '';
+          })
+        : '',
+      thread
+        ? Promise.all([
+            // Focus mode: drop messages from non-focused users so kyto genuinely
+            // never sees what other people said in a focused thread (not just
+            // declines to reply). Its own messages and the owner's are always kept.
+            thread.state.catch(() => null),
+            // Start the read at the newest message an earlier turn already
+            // digested. Everything before it is in the summary, so re-reading it
+            // would be Slack API work whose only output we already have written down.
+            loadThreadSummary(thread.id).then(async (stored) => ({
+              fetched: await readThread({
+                asUserAccount,
+                oldest: stored?.throughMessageId,
+                threadId: thread.id,
+              }),
+              stored,
+            })),
+          ])
+        : undefined,
+      thread
+        ? threadRevisions(thread.id)
+        : new Map<string, MessageRevision[]>(),
+    ]);
 
   // A native code channel's one conversation, not a thread (lib/code-channels).
   const inChannelConversation =
@@ -238,8 +293,12 @@ export async function buildPrompt(
       isFocusAllowed(focusState, entry.author.userId, {
         isMe: entry.author.isMe === true,
       });
+    // A message edited INTO a `##` one is still shown, as what it said
+    // before: hiding it afterwards must not erase what kyto was asked.
     const prior = (fetched?.messages ?? []).filter(
-      (entry) => visible(entry) && !isHiddenFromBot(entry)
+      (entry) =>
+        visible(entry) &&
+        (!isHiddenFromBot(entry) || (!includeHidden && revisions.has(entry.id)))
     );
     // A reply kyto wasn't pinged for, in a thread whose top didn't ping it
     // either: someone pulled it in partway, so most of what follows is people
@@ -293,7 +352,14 @@ export async function buildPrompt(
       const rendered = await Promise.all(
         overflow.map(async (entry) => ({
           id: entry.id,
-          rendered: await renderMessage(entry),
+          // Never the current text of a message edited into a `##` one: the
+          // digest is shared by every later turn.
+          rendered: await renderWithRevisions({
+            entry,
+            hidden: isHiddenFromBot(entry),
+            includeHidden: false,
+            revisions: revisions.get(entry.id) ?? [],
+          }),
         }))
       );
       compacted = await compactOverflow({
@@ -302,14 +368,37 @@ export async function buildPrompt(
         ...(stored ? { stored } : {}),
       });
     }
-    if (replayed.length > 0) {
-      const rendered = await Promise.all(
-        replayed.map(async (entry) =>
-          isHiddenFromBot(entry)
-            ? `[## — hidden from kyto's own turns] ${await renderMessage(entry)}`
-            : renderMessage(entry)
-        )
-      );
+    // Deleted messages are gone from the read, so they are put back at their
+    // place by ts — only inside the replay window, like everything else.
+    const windowStart = overflow.length > 0 ? firstReplayed : undefined;
+    const present = new Set((fetched?.messages ?? []).map((entry) => entry.id));
+    const deleted = [...revisions.entries()].flatMap(([ts, rows]) => {
+      const gone = rows.find((row) => row.kind === 'deleted');
+      return gone &&
+        !present.has(ts) &&
+        ts !== message.id &&
+        (windowStart === undefined || ts >= windowStart)
+        ? [{ id: ts, row: gone, rows }]
+        : [];
+    });
+    if (replayed.length > 0 || deleted.length > 0) {
+      const lines = await Promise.all([
+        ...replayed.map(async (entry) => ({
+          id: entry.id,
+          line: await renderWithRevisions({
+            entry,
+            hidden: isHiddenFromBot(entry),
+            includeHidden,
+            revisions: revisions.get(entry.id) ?? [],
+          }),
+        })),
+        ...deleted.map(async ({ id, row, rows }) => ({
+          id,
+          line: await renderDeleted({ row, rows }),
+        })),
+      ]);
+      lines.sort((a, b) => (a.id < b.id ? -1 : Number(a.id > b.id)));
+      const rendered = lines.map(({ line }) => line);
       history = rendered.map((line, index) =>
         index === 0
           ? `Conversation so far in this Slack ${inChannelConversation ? 'channel' : 'thread'} (oldest first):\n${line}`

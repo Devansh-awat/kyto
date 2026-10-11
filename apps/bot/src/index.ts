@@ -15,6 +15,7 @@ import { loadCodeChannels } from '@/lib/code-channels';
 import { startKevinton } from '@/lib/kevinton';
 import logger from '@/lib/logger';
 import { startMemoryCuration } from '@/lib/memory-curation';
+import { startRevisionReaper } from '@/lib/message-revisions';
 import { redactSecrets, setRedactionAlert } from '@/lib/redact';
 import { startReminderScheduler } from '@/lib/reminders/scheduler';
 import { startSandboxReaper } from '@/lib/sandbox/store';
@@ -108,6 +109,8 @@ try {
   startSandboxReaper();
   // Reap thread reasoning older than the retention window.
   startThinkingReaper();
+  // Earlier versions of edited messages and deleted ones, kept 30 days.
+  startRevisionReaper();
   startKevinton();
   startMemoryCuration();
   startChannelPairing();
