@@ -19,8 +19,33 @@ const SHELL_TOOLS = new Set(['bash', 'gh', 'runBackgroundProcess']);
 // Outside quotes: anything that could chain, redirect, substitute, glob or
 // escape. `&&`, a `| tail` and `2>&1` are recognised before this is applied.
 const UNSAFE = /[;&|<>`$(){}*?~!#\\\n\r\0[\]]/;
-// Inside double quotes the shell still expands these.
-const UNSAFE_IN_DOUBLE_QUOTES = /[$`\\!]/;
+// Read a double-quoted string the way bash does: `\` escapes the next
+// character (a PR body's markdown is full of \`code\`), and an unescaped `$` or
+// backtick still expands, so it is refused. Returns the text and where it ends.
+function readDoubleQuoted(
+  command: string,
+  open: number
+): { end: number; text: string } | null {
+  let text = '';
+  let i = open + 1;
+  while (i < command.length) {
+    const char = command[i];
+    if (char === '"') {
+      return { end: i + 1, text };
+    }
+    if (char === '$' || char === '`') {
+      return null;
+    }
+    if (char === '\\') {
+      text += command[i + 1] ?? '';
+      i += 2;
+    } else {
+      text += char;
+      i += 1;
+    }
+  }
+  return null;
+}
 
 const PLAIN = new Set([
   'basename',
@@ -140,17 +165,20 @@ function tokenize(command: string): Token[] | null {
     } else if (word === undefined && command.startsWith('2>&1', i)) {
       tokens.push({ op: '2>&1' });
       i += 4;
-    } else if (char === "'" || char === '"') {
-      const close = command.indexOf(char, i + 1);
-      const inner = command.slice(i + 1, close);
-      if (
-        close === -1 ||
-        (char === '"' && UNSAFE_IN_DOUBLE_QUOTES.test(inner))
-      ) {
+    } else if (char === "'") {
+      const close = command.indexOf("'", i + 1);
+      if (close === -1) {
         return null;
       }
-      word = (word ?? '') + inner;
+      word = (word ?? '') + command.slice(i + 1, close);
       i = close + 1;
+    } else if (char === '"') {
+      const quoted = readDoubleQuoted(command, i);
+      if (!quoted) {
+        return null;
+      }
+      word = (word ?? '') + quoted.text;
+      i = quoted.end;
     } else if (UNSAFE.test(char)) {
       return null;
     } else {

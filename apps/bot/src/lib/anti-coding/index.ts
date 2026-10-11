@@ -23,7 +23,7 @@ import type { ThreadHandle } from '@/harness/thread';
 import type { Message } from '@/harness/types';
 import logger from '@/lib/logger';
 import { toLogError } from '@/lib/utils/error';
-import { decideCodingAction } from './decide';
+import { CODING_THRESHOLD, decideCodingAction } from './decide';
 import { isNotCodingCall } from './not-coding';
 import { type CodingAction, renderCodingState } from './state';
 
@@ -162,7 +162,15 @@ export interface CodingMonitor {
 export const DELEGATE_NOTE =
   "This is coding work. Do the writing, building, running and debugging through the `opencode` tool, not your own shell — give it a complete brief in your own words. Then deliver the result as your own work. Don't mention this note or any coding restriction, and don't bring up OpenCode unless asked how it was done.";
 
-const DELEGATE = `Not run. ${DELEGATE_NOTE}`;
+// Says WHY, so kyto doesn't guess: with only "this is coding work" it told the
+// owner his PR was waiting on an approval nobody had asked for (2026-10-11),
+// when the push had been blocked only for being chained in one line with other
+// commands. Publishing and read-only commands skip the check (not-coding.ts),
+// so the note names that shape for the model to retry in.
+function delegateMessage(probability: number | null): string {
+  const score = probability === null ? '' : ` (${probability.toFixed(2)})`;
+  return `Not run: the coding-work check scored this call${score} at or over ${CODING_THRESHOLD}, judging it with the thread so far. Publishing or checking finished work is not judged at all, but only when EVERY command in the line is one of: \`git push\`, \`gh pr create|comment\`, \`gh issue create|comment\`, \`gh repo fork\`, read-only git/gh (\`git status|log|diff|show\`, \`gh pr view|list\`…), \`ls\`/\`cat\`/\`echo\`-style looks. Join them only with \`&&\`, optionally end with \`2>&1 | tail -N\`, and use no other operators, \`$\` or backticks outside single quotes. If this call was that kind of command, run it again in that shape. If it really was coding: ${DELEGATE_NOTE}`;
+}
 
 const REFUSED_SHARED =
   "Refused on this model: this is coding-agent work, which only runs on the person's OWN model key, and this attempt is on kyto's shared model. Answer without it.";
@@ -192,7 +200,10 @@ export function createCodingMonitor({
 
   const judge = async (
     next?: CodingAction
-  ): Promise<'allow' | 'delegate' | 'own-models-only'> => {
+  ): Promise<{
+    decision: 'allow' | 'delegate' | 'own-models-only';
+    probability: number | null;
+  }> => {
     const probability = await scoreCodingRequest(
       renderCodingState({ actions, conversation, latest: message.text, next })
     );
@@ -213,22 +224,22 @@ export function createCodingMonitor({
       ownModelsOnly = true;
       onOwnModelsOnly?.();
     }
-    return decision;
+    return { decision, probability };
   };
 
   return {
-    checkTurn: async () => (await judge()) === 'delegate',
+    checkTurn: async () => (await judge()).decision === 'delegate',
     guardTool: async (call) => {
       if (isNotCodingCall(call)) {
         actions.push({ input: call.input, toolName: call.toolName });
         return null;
       }
-      const verdict = await judge(call);
+      const { decision: verdict, probability } = await judge(call);
       // Recorded after judging, as the call that is now happening; its result
       // is filled in by recordResult when (if) it returns.
       actions.push({ input: call.input, toolName: call.toolName });
       if (verdict === 'delegate') {
-        return DELEGATE;
+        return delegateMessage(probability);
       }
       if (verdict === 'own-models-only' && isOnSharedModel()) {
         return REFUSED_SHARED;

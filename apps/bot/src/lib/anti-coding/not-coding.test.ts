@@ -92,6 +92,8 @@ describe('isNotCodingCall', () => {
       'cd /home/user/kyto && git status --short && git branch --show-current && git log --oneline -1',
       'cd /home/user/kyto && git push -u origin feat/x 2>&1 | tail -5 && gh pr create --repo o/r --base main --head feat/x --title "feat(mcp): x" --body "Adds a fallback (GET stream, then POSTs). Tests: 7/7; full suite not run.\nKnown gap: none."',
       "gh issue comment 3 --body 'costs $5 & (maybe) more'",
+      // The 08:16 retry, still refused before escapes were read: markdown code.
+      'cd /home/user/kyto && git push -u origin feat/x 2>&1 | tail -5 && gh pr create --title "x" --body "GET stream, \\`endpoint\\` event.\n\nTests: \\`bun test\\` 7/7." 2>&1 | tail -5',
     ]) {
       expect(gh(command)).toBe(true);
     }
@@ -100,6 +102,7 @@ describe('isNotCodingCall', () => {
       'git push 2>&1 | tail -5 | sh',
       'gh pr create --title x --body "$(cat body.md)"',
       'gh pr create --title x --body "`id`"',
+      'gh pr create --title x --body "a \\\\`id`"',
       'cd $HOME && git status',
       'git status ||  true',
     ]) {
