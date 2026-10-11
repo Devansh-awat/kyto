@@ -13,9 +13,11 @@ import {
 } from '@/lib/agent/model-choice';
 import { removeAllowedUser } from '@/lib/allowed-users';
 import { runBanCommand } from '@/lib/bans';
+import { createDebugSnapshot, debugSnapshotUrl } from '@/lib/debug-snapshot';
 import { type ParsedFlags, parseFlags } from '@/lib/flags';
 import logger from '@/lib/logger';
-import { toLogError } from '@/lib/utils/error';
+import { describeThreadTimings } from '@/lib/turn-timings';
+import { errorMessage, toLogError } from '@/lib/utils/error';
 import { rawText, withoutLeadingMentions } from '@/lib/utils/message';
 
 // Commands the HARNESS answers itself, before any model turn exists.
@@ -39,7 +41,15 @@ import { rawText, withoutLeadingMentions } from '@/lib/utils/message';
 interface BotCommand {
   /** Everything after the command word, unparsed. */
   args: string;
-  type: 'ban' | 'bans' | 'focusmode' | 'optout' | 'stop' | 'unban';
+  type:
+    | 'ban'
+    | 'bans'
+    | 'debug'
+    | 'focusmode'
+    | 'optout'
+    | 'stop'
+    | 'timings'
+    | 'unban';
 }
 
 // Slack user ids look like U0123ABCD / W0123ABCD, either as a real `<@U…>`
@@ -77,6 +87,19 @@ export async function handleCommand({
     await runOptOut({ message, thread });
     return true;
   }
+  if (command.type === 'timings') {
+    // Anyone: a thread's stage timings name models and durations, nothing
+    // anyone said.
+    const text = await describeThreadTimings(thread.id).catch(
+      (error: unknown) => `couldn't read the timings: ${errorMessage(error)}`
+    );
+    await tell({ message, text, thread, what: 'timings' });
+    return true;
+  }
+  if (command.type === 'debug') {
+    await runDebug({ message, thread });
+    return true;
+  }
   if (
     command.type === 'ban' ||
     command.type === 'unban' ||
@@ -93,6 +116,40 @@ export async function handleCommand({
   }
   await runFocusMode({ args: command.args, message, thread });
   return true;
+}
+
+/**
+ * `!debug` — owner only: freeze this thread's timings, logs, reasoning and
+ * kept edits into a dashboard page. Owner only because the snapshot holds
+ * everything kyto saw here, private reads included.
+ */
+async function runDebug({
+  message,
+  thread,
+}: {
+  message: Message;
+  thread: Thread;
+}): Promise<void> {
+  if (!env.OWNER_USER_ID || message.author.userId !== env.OWNER_USER_ID) {
+    await tell({
+      message,
+      text: '`!debug` is for the bot owner: a snapshot holds everything i saw in the thread. `!timings` shows where the time went.',
+      thread,
+      what: 'debug refusal',
+    });
+    return;
+  }
+  let text: string;
+  try {
+    const id = await createDebugSnapshot({
+      createdBy: message.author.userId,
+      threadId: thread.id,
+    });
+    text = `snapshot saved: ${debugSnapshotUrl(id)}`;
+  } catch (error) {
+    text = `couldn't save a snapshot: ${errorMessage(error)}`;
+  }
+  await tell({ message, text, thread, what: 'debug snapshot' });
 }
 
 /**
@@ -353,6 +410,10 @@ function cmd(message: Message): BotCommand | null {
       return { args, type: 'bans' };
     case 'optout':
       return { args, type: 'optout' };
+    case 'timings':
+      return { args, type: 'timings' };
+    case 'debug':
+      return { args, type: 'debug' };
     // Anything else is not a command and must still reach the model — `!` opens
     // plenty of ordinary sentences too.
     default:

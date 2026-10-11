@@ -12,6 +12,7 @@ import { startThinkingReaper } from '@/lib/agent/thinking';
 import { buildAllowlist } from '@/lib/allowed-users';
 import { slack, userBot } from '@/lib/chat';
 import { loadCodeChannels } from '@/lib/code-channels';
+import { startDebugSnapshotReaper } from '@/lib/debug-snapshot';
 import { startKevinton } from '@/lib/kevinton';
 import logger from '@/lib/logger';
 import { startMemoryCuration } from '@/lib/memory-curation';
@@ -23,6 +24,7 @@ import { flushSiteViews, startSiteAnalytics } from '@/lib/sites/analytics';
 import { startSitesServer } from '@/lib/sites/server';
 import { ensureChannelIndex } from '@/lib/slack/channel-links';
 import { flushThreadLogs, startThreadLogs } from '@/lib/thread-logs';
+import { startTimingsReaper } from '@/lib/turn-timings';
 import { flushWhiteboards } from '@/lib/whiteboard/room';
 
 let shuttingDown = false;
@@ -111,6 +113,8 @@ try {
   startThinkingReaper();
   // Earlier versions of edited messages and deleted ones, kept 30 days.
   startRevisionReaper();
+  startTimingsReaper();
+  startDebugSnapshotReaper();
   startKevinton();
   startMemoryCuration();
   startChannelPairing();

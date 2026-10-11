@@ -119,6 +119,7 @@ import { openSandboxProxies } from '@/lib/sandbox/proxies';
 import { acquireThreadSandbox, threadSandboxStore } from '@/lib/sandbox/store';
 import { ensureChannelIndex } from '@/lib/slack/channel-links';
 import { setSessionStatus } from '@/lib/slack/code-channel-api';
+import { saveTurnTiming } from '@/lib/turn-timings';
 import {
   deepErrorText,
   describeMalformedPrompt,
@@ -561,11 +562,28 @@ async function executeTurn(
     outputCharsPerSecond?: number;
     outputTokensPerSecond?: number;
     setupMs?: number;
+    /** Slack's ts on the message to the turn starting: Socket Mode's delay. */
+    ingressMs?: number;
+    /** The setup's parts, run in parallel (see the `[agent] setup` line). */
+    jevMs?: number;
+    promptMs?: number;
+    readsMs?: number;
+    toolsWaitMs?: number;
     slowestTools: { ms: number; name: string }[];
     toolMs: number;
     /** Time to first token of EVERY model request in the turn, in order. */
     ttftMs: number[];
-  } = { modelCalls: 0, modelMs: 0, slowestTools: [], toolMs: 0, ttftMs: [] };
+  } = {
+    // Past a few minutes this is a resumed or woken turn, not Slack's delay.
+    ingressMs: ((lag) => (lag >= 0 && lag < 300_000 ? lag : undefined))(
+      turnStart - Number(message.id) * 1000
+    ),
+    modelCalls: 0,
+    modelMs: 0,
+    slowestTools: [],
+    toolMs: 0,
+    ttftMs: [],
+  };
   const recordTiming = ({ timing }: StreamTally): void => {
     if (!timing) {
       return;
@@ -735,6 +753,19 @@ async function executeTurn(
       },
       '[agent] turn complete'
     );
+    if (!secret) {
+      await saveTurnTiming({
+        messageTs: message.id,
+        outcome: 'complete',
+        threadId,
+        timing: {
+          ...timingLog(),
+          answeredBy: answeredBy?.model,
+          costUsd: turnUsage?.costUsd,
+          reasoningEffort: handledEffort,
+        },
+      });
+    }
   } catch (error) {
     const reason = abortReasonOf(controller.signal);
     if (reason) {
@@ -742,6 +773,14 @@ async function executeTurn(
         { reason, threadId, timing: timingLog() },
         '[agent] turn interrupted'
       );
+      if (!secret) {
+        await saveTurnTiming({
+          messageTs: message.id,
+          outcome: 'interrupted',
+          threadId,
+          timing: timingLog(),
+        });
+      }
       // What it had already written still goes out, as on a failure.
       await reply?.flush({ thread }).catch(() => undefined);
       await cleanup();
@@ -760,6 +799,14 @@ async function executeTurn(
         },
         '[agent] turn failed'
       );
+      if (!secret) {
+        await saveTurnTiming({
+          messageTs: message.id,
+          outcome: 'failed',
+          threadId,
+          timing: timingLog(),
+        });
+      }
       await reply?.flush({ thread });
       await cleanup();
       // A `!secret` failure goes to the asker alone: a public "something broke"
@@ -1038,6 +1085,12 @@ async function executeTurn(
     }
     built.preload(preload.tools);
     const toolsWaitMs = Date.now() - toolsStart;
+    Object.assign(turnTiming, {
+      jevMs,
+      promptMs,
+      readsMs: setupReadMs,
+      toolsWaitMs,
+    });
     // Nothing has posted yet, so the status is still first on screen.
     const statusStart = Date.now();
     await Promise.all([thinkingShown, channelIndexReady]);

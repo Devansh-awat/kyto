@@ -1,6 +1,7 @@
 import {
   decideGithubRequest,
   deleteMemory,
+  getDebugSnapshot,
   getGithubRequest,
   getMemoryById,
   getMemoryFileIndex,
@@ -16,7 +17,12 @@ import {
 import { env } from '@/env';
 import logger from '@/lib/logger';
 import { resolveUserNames } from '@/lib/slack/names';
-import { loginPage, memoryPage, overviewPage } from './render';
+import {
+  debugSnapshotPage,
+  loginPage,
+  memoryPage,
+  overviewPage,
+} from './render';
 import {
   clearCookie,
   csrfValid,
@@ -288,6 +294,13 @@ export async function handleDashboard(
     }
     if (path === '/') {
       return await overview(session.csrf);
+    }
+    const debugView = /^\/debug\/([0-9a-f]{32})$/.exec(path);
+    if (debugView?.[1]) {
+      const snapshot = await getDebugSnapshot(debugView[1]);
+      return snapshot
+        ? html(debugSnapshotPage(snapshot))
+        : new Response('Not found', { headers: HTML_HEADERS, status: 404 });
     }
     const memoryView = /^\/memory\/(\d+)$/.exec(path);
     if (memoryView) {

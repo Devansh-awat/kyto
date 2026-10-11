@@ -1,5 +1,6 @@
 import type {
   ChannelGroupWithChannels,
+  DebugSnapshot,
   GithubRequest,
   GithubTrust,
   Memory,
@@ -265,5 +266,26 @@ ${
 <form method="post" action="/_dashboard/memory/${memory.id}/scope">${hidden(csrf)}
   <input name="scope" placeholder="channel:C0123ABCD or group:&lt;group id&gt;" value="${escapeHtml(memory.scopeKind && memory.scopeId ? `${memory.scopeKind}:${memory.scopeId}` : '')}">
   <button type="submit">Save scope</button></form>`
+  );
+}
+
+/** A frozen `!debug` snapshot (lib/debug-snapshot.ts), section by section. */
+export function debugSnapshotPage(snapshot: DebugSnapshot): string {
+  const section = (title: string, value: unknown) => {
+    const text =
+      typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+    return `<h2>${escapeHtml(title)}</h2>\n<pre>${escapeHtml(text || '(empty)')}</pre>`;
+  };
+  const { body } = snapshot;
+  return page(
+    'Debug snapshot',
+    `<p class="muted"><a href="/_dashboard">&larr; back</a></p>
+<h1>Debug snapshot</h1>
+<p class="muted">${escapeHtml(snapshot.threadId)} · taken ${snapshot.createdAt.toISOString().replace('T', ' ').slice(0, 16)} UTC · frozen, secrets redacted</p>
+${section('Turn timings (newest first)', body.timings)}
+${section('Stored reasoning and tool results', body.thinking)}
+${section('Compacted digest', body.summary)}
+${section('Kept edits and deletions', body.revisions)}
+${section('Captured log lines (last 24h)', body.logs)}`
   );
 }
