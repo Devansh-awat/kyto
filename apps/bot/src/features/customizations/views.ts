@@ -1149,7 +1149,7 @@ export function buildMcpModal({
       type: 'plain_text_input',
     },
     hint: plainText(
-      'Streamable HTTP endpoint. Servers on your own machine are not reachable from Slack.'
+      'Streamable HTTP or SSE endpoint. Servers on your own machine are not reachable from Slack.'
     ),
     label: plainText('Server URL'),
     type: 'input',
