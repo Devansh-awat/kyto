@@ -43,6 +43,7 @@ import {
 } from '@/lib/agent/fallback-cache';
 import { trackTurn } from '@/lib/agent/inflight';
 import {
+  experimentAttempt,
   isSharedModel,
   MODEL_CHOICES,
   threadModelChoice,
@@ -530,6 +531,8 @@ async function executeTurn(
   let answeredBy: ModelAttempt | undefined;
   // The thread's `--model`, when it is one of kyto's own (lib/agent/model-choice).
   let chosenAttempt: ModelAttempt | undefined;
+  // This thread's side of the haiku/luna experiment (model-choice.ts).
+  let experimentArm: ModelAttempt | undefined;
   // The turn ended on a deliberate skip, and the plan messages it streamed:
   // a skip that never said anything takes its plan back (below).
   let turnSkipped = false;
@@ -686,7 +689,9 @@ async function executeTurn(
       await postReplyFooter({
         answeredBy,
         durationMs: Date.now() - turnStart,
-        isChosen: answeredBy === chosenAttempt,
+        // The experiment's luna is no step down either: it was drawn, not
+        // fallen back to.
+        isChosen: answeredBy === chosenAttempt || answeredBy === experimentArm,
         isOwnAttempt: routing.own.includes(answeredBy),
         showFooter: hints.customization?.showUsageFooter !== false,
         thread,
@@ -709,6 +714,9 @@ async function executeTurn(
         outputTokens: turnUsage?.outputTokens,
         reasoningEffort: handledEffort,
         reasoningRandom: handledEffortRandom,
+        // Which model the experiment drew for this thread; undefined when a
+        // `--model` or an upgrade decided it — leave those out of the numbers.
+        experimentModel: experimentArm?.model,
         steps: handledSteps,
         threadId,
         timing: timingLog(),
@@ -1000,6 +1008,8 @@ async function executeTurn(
     if (stickyUpgrade) {
       escalation.used = true;
     }
+    experimentArm =
+      chosenAttempt || stickyUpgrade ? undefined : experimentAttempt(threadId);
     // Why the NEXT attempt is starting, for its Thinking card. An escalation the
     // model asked for is not kyto recovering from a broken provider, and reading
     // "fallback" for one made a deliberate upgrade look like a failure.
@@ -1039,15 +1049,14 @@ async function executeTurn(
     // cache): a spent Hack Club cap or a vanished model fails every turn the
     // same way, and re-discovering it cost each message a doomed request.
     const cached = cachedDeadness();
+    const lead = stickyUpgrade ?? chosenAttempt ?? experimentArm;
     const router = createAttemptRouter({
       cached,
       fallback: LEADERBOARD_FALLBACK,
       hackclubProvider: HACKCLUB_PROVIDER,
       ownModelsOnly: () => codingMonitor.ownModelsOnly,
       primary: PRIMARY_ATTEMPT,
-      lead:
-        stickyUpgrade ??
-        (chosenAttempt === PRIMARY_ATTEMPT ? undefined : chosenAttempt),
+      lead: lead === PRIMARY_ATTEMPT ? undefined : lead,
       routing,
     });
     let attempt = router.next();
@@ -1064,6 +1073,7 @@ async function executeTurn(
           cached.rungs.length > 0 || cached.providers.length > 0
             ? cached
             : undefined,
+        experimentModel: experimentArm?.model,
         model: attempt?.model,
         provider: attempt?.provider,
         threadId,

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   catalogAttempt,
   LUNA_MODEL,
@@ -29,6 +30,21 @@ export const MODEL_CHOICES: Record<string, ModelAttempt> = {
   haiku: PRIMARY_ATTEMPT,
   luna: catalogAttempt(LUNA_MODEL),
 };
+
+/**
+ * The model experiment (owner's call 2026-10-11): a thread with no `--model`
+ * leads with haiku or luna, half of threads each, so the two can be compared on
+ * the same traffic. Drawn per THREAD, not per turn — each model has its own
+ * prompt cache, and switching models between turns would rewrite the whole
+ * thread at 1.25x every time. Derived from the thread id, so it survives a
+ * restart without being stored.
+ */
+export function experimentAttempt(threadId: string): ModelAttempt {
+  const firstByte = createHash('sha256').update(threadId).digest()[0] ?? 0;
+  return firstByte % 2 === 0
+    ? PRIMARY_ATTEMPT
+    : (MODEL_CHOICES.luna ?? PRIMARY_ATTEMPT);
+}
 
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 
