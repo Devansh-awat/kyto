@@ -35,7 +35,9 @@ export function readConversationHistoryTool({
       cursor: z
         .string()
         .optional()
-        .describe('Slack pagination cursor from a previous response.'),
+        .describe(
+          'The `nextCursor` from a previous readConversationHistory response, verbatim. NOT a message ts — to start at a message, pass it as threadTs or permalink.'
+        ),
     }),
     execute: async ({
       channelId,
@@ -63,6 +65,13 @@ export function readConversationHistoryTool({
         link?.threadTs || threadTs || decodedThread?.threadTs || undefined;
       if (!resolvedChannelId) {
         throw new Error('readConversationHistory needs channelId or threadId.');
+      }
+      // A message ts passed as the cursor came back `invalid_cursor` four times
+      // in one turn, each a 3-4s round trip, and the model kept guessing (#65).
+      if (cursor && MESSAGE_TS.test(cursor)) {
+        throw new Error(
+          `cursor ${cursor} is a message timestamp, not a pagination cursor. Pass the nextCursor from the previous response, or omit cursor and pass the thread's ts as threadTs to start from its first page.`
+        );
       }
 
       const chatChannelId = toChatSlackChannelId(resolvedChannelId);
@@ -111,6 +120,11 @@ export function readConversationHistoryTool({
       ).catch((error: unknown) => {
         // A bare thread_not_found read as "that thread is gone"; it is almost
         // always a channel or ts copied wrong from a link.
+        if (String(error).includes('invalid_cursor')) {
+          throw new Error(
+            'invalid_cursor: a cursor is only valid as the exact nextCursor of the previous response for the SAME channel/thread. Omit it to start from the first page again.'
+          );
+        }
         if (String(error).includes('thread_not_found') && !link) {
           throw new Error(
             `No message ${resolvedThreadTs} in ${chatChannelId}. If this came from a link, pass the whole link as \`permalink\` instead of copying the channel and ts out of it.`
@@ -175,6 +189,8 @@ const askerHistorySchema = z.looseObject({
 });
 
 const MS_PER_SECOND = 1000;
+// A Slack message ts (`1791695940.351679`); a real cursor is base64.
+const MESSAGE_TS = /^\d+\.\d+$/;
 
 /** A conversation read with the asker's own token: only theirs can be read. */
 async function readAsAsker({
