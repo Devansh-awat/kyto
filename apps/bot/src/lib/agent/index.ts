@@ -1252,7 +1252,7 @@ async function executeTurn(
         if (currentAttempt.provider === HACKCLUB_PROVIDER) {
           effort = choice.effort
             ? { effort: choice.effort, random: false }
-            : pickReasoningEffort(currentAttempt);
+            : pickReasoningEffort({ attempt: currentAttempt, threadId });
         }
         yield {
           details: effort

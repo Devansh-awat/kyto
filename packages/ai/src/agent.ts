@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import {
@@ -598,7 +599,7 @@ function tunedFetch({
     serviceTier === 'flex' &&
     attempt.provider === HACKCLUB_PROVIDER &&
     attempt.model.startsWith('openai/');
-  const reasoningEffort = effort ?? pickReasoningEffort(attempt).effort;
+  const reasoningEffort = effort ?? pickReasoningEffort({ attempt }).effort;
   if (attempt.provider === HACKCLUB_PROVIDER) {
     holder.reasoningEffort = reasoningEffort;
   }
@@ -697,28 +698,46 @@ const ALLOWED_QUANTIZATIONS = ['fp8', 'fp16', 'bf16', 'fp32', 'unknown'];
 // Each accepted by luna (2026-10-09) and haiku (2026-10-10) through the proxy;
 // `high` is left out because the experiment is about speed.
 const EXPERIMENT_EFFORTS = ['none', 'low', 'medium'];
+const THINKING_EFFORTS = ['low', 'medium'];
 
 /** What `--reasoning` accepts — all four passed the proxy on both models. */
 export const REASONING_EFFORTS = ['none', 'low', 'medium', 'high'] as const;
 
 /**
  * The effort experiment (issue #36, owner's calls 2026-10-09 for luna and
- * 2026-10-10 for haiku): drawn once per attempt and logged with the turn, so
- * speed and quality can be compared per model and effort from thread_logs.
- * Every other model: medium.
+ * 2026-10-10 for haiku), logged with the turn so speed and quality can be
+ * compared per model and effort from thread_logs. Every other model: medium.
+ *
+ * On haiku, `none` is drawn once per THREAD (a third of them) and kept, and the
+ * rest draw low/medium per attempt (owner's call 2026-10-11). Anthropic keeps
+ * thinking-on and thinking-off requests in separate caches, while low and
+ * medium share one (both measured through the proxy): a thread switching
+ * between `none` and the others re-read nothing from cache on 66% of turns.
  */
-export function pickReasoningEffort(attempt: ModelAttempt): {
+export function pickReasoningEffort({
+  attempt,
+  threadId,
+}: {
+  attempt: ModelAttempt;
+  threadId?: string;
+}): {
   effort: string;
   random: boolean;
 } {
   if (attempt.model !== LUNA_MODEL && attempt.model !== PRIMARY_MODEL) {
     return { effort: 'medium', random: false };
   }
+  let efforts = EXPERIMENT_EFFORTS;
+  if (attempt.model === PRIMARY_MODEL && threadId) {
+    // Salted, so it doesn't line up with the haiku/luna split, which hashes
+    // the bare thread id.
+    const byte =
+      createHash('sha256').update(`effort:${threadId}`).digest()[0] ?? 0;
+    efforts =
+      byte % EXPERIMENT_EFFORTS.length === 0 ? ['none'] : THINKING_EFFORTS;
+  }
   return {
-    effort:
-      EXPERIMENT_EFFORTS[
-        Math.floor(Math.random() * EXPERIMENT_EFFORTS.length)
-      ] ?? 'medium',
+    effort: efforts[Math.floor(Math.random() * efforts.length)] ?? 'medium',
     random: true,
   };
 }
