@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { env } from '@/env';
 import logger from '@/lib/logger';
+import { recordJevSpend } from '@/lib/spend';
 import { toLogError } from '@/lib/utils/error';
 
 // Jev decides, once at the start of a turn, which DEFERRED tools it will need,
@@ -189,7 +190,9 @@ export async function pickPreloadTools(
       );
       return none;
     }
-    const parsed = responseSchema.safeParse(await response.json());
+    const body: unknown = await response.json();
+    recordJevSpend({ body, source: 'jev-preload' });
+    const parsed = responseSchema.safeParse(body);
     if (!parsed.success) {
       return none;
     }

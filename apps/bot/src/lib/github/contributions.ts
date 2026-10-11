@@ -355,6 +355,7 @@ async function review({
   for (const attempt of subagentAttempts) {
     try {
       const result = streamAttempt({
+        source: 'github-review',
         abortSignal: AbortSignal.timeout(REVIEW_TIMEOUT_MS),
         attempt,
         holder: {},

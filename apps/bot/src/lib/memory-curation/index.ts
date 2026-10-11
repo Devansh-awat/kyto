@@ -52,6 +52,7 @@ async function proposePlan(memories: Memory[]) {
   for (const attempt of subagentAttempts) {
     try {
       const result = streamAttempt({
+        source: 'memory-curation',
         abortSignal: AbortSignal.timeout(CURATE_TIMEOUT_MS),
         attempt,
         holder: {},

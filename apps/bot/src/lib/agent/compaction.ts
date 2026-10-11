@@ -107,6 +107,7 @@ async function summarize({
   ].join('\n');
   try {
     const result = streamAttempt({
+      source: 'compaction',
       abortSignal: AbortSignal.timeout(SUMMARY_TIMEOUT_MS),
       attempt: compactionAttempt,
       // Nothing reads the resolved model back off a compaction pass.

@@ -9,6 +9,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { generateText } from 'ai';
 import type { ImageInput } from './agent';
 import type { ModelAttempt } from './providers/attempts';
+import { reportSpend } from './spend';
 
 // Cap how many images one turn describes, so a bulk upload can't fan out into a
 // huge multi-image vision call. The rest are still on disk in the sandbox for a
@@ -56,7 +57,7 @@ export async function describeImages({
     name: attempt.provider,
   }).chatModel(attempt.model);
   try {
-    const { text } = await generateText({
+    const { steps, text } = await generateText({
       abortSignal: signal,
       messages: [
         {
@@ -77,6 +78,13 @@ export async function describeImages({
         },
       ],
       model,
+    });
+    reportSpend({
+      effort: undefined,
+      model: attempt.model,
+      provider: attempt.provider,
+      source: 'vision',
+      steps,
     });
     const trimmed = text.trim();
     return trimmed.length > 0 ? trimmed : null;

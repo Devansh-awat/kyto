@@ -28,6 +28,7 @@ import {
   PRIMARY_MODEL,
 } from './providers/attempts';
 import { CHATGPT_PROVIDER } from './providers/chatgpt';
+import { reportSpend } from './spend';
 import { stabilizeToolOrder } from './tool-order';
 
 // Ceiling on agentic steps within one attempt (model → tools → model …).
@@ -169,6 +170,7 @@ export function streamAttempt({
   reasoningEffort,
   requireToolFirst,
   serviceTier,
+  source = 'turn',
   system,
   toolOrder,
   tools,
@@ -245,6 +247,8 @@ export function streamAttempt({
    * a request the flex tier refuses is re-sent once at the normal tier.
    */
   serviceTier?: 'flex';
+  /** What this call's bill is filed under in `model_spend` (see spend.ts). */
+  source?: string;
   /** One system message, or several in order (see systemPrompt). */
   system: string | string[];
   /**
@@ -317,6 +321,16 @@ export function streamAttempt({
           ] satisfies ModelMessage[],
         }
       : { prompt };
+  const billSteps = (steps: Parameters<typeof reportSpend>[0]['steps']) =>
+    reportSpend({
+      effort: holder.reasoningEffort ?? reasoningEffort,
+      model: attempt.model,
+      provider: attempt.byokProvider
+        ? `byok:${attempt.byokProvider}`
+        : attempt.provider,
+      source,
+      steps,
+    });
   return streamText({
     ...promptInput,
     abortSignal,
@@ -413,6 +427,10 @@ export function streamAttempt({
       hasToolCall(SKIP_TOOL_NAME),
       hasToolCall(UPGRADE_TOOL_NAME),
     ],
+    // An aborted attempt (a stop, the watchdog, an interrupt) was paid for
+    // too, step by step.
+    onAbort: ({ steps }) => billSteps(steps),
+    onFinish: ({ steps }) => billSteps(steps),
     system:
       typeof system === 'string'
         ? system

@@ -280,6 +280,7 @@ async function review({
     for (const attempt of subagentAttempts) {
       try {
         const result = streamAttempt({
+          source: 'kevinton',
           abortSignal: AbortSignal.timeout(REVIEW_TIMEOUT_MS),
           activeTools: () => names,
           attempt,

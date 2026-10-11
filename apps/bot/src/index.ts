@@ -24,6 +24,7 @@ import { startSandboxReaper } from '@/lib/sandbox/store';
 import { flushSiteViews, startSiteAnalytics } from '@/lib/sites/analytics';
 import { startSitesServer } from '@/lib/sites/server';
 import { ensureChannelIndex } from '@/lib/slack/channel-links';
+import { startSpendLedger } from '@/lib/spend';
 import { flushThreadLogs, startThreadLogs } from '@/lib/thread-logs';
 import { startTimingsReaper } from '@/lib/turn-timings';
 import { flushWhiteboards } from '@/lib/whiteboard/room';
@@ -116,6 +117,7 @@ try {
   // Earlier versions of edited messages and deleted ones, kept 30 days.
   startRevisionReaper();
   startTimingsReaper();
+  startSpendLedger();
   startDebugSnapshotReaper();
   startKevinton();
   startMemoryCuration();

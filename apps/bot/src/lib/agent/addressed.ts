@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { env } from '@/env';
 import type { Message } from '@/harness/types';
 import logger from '@/lib/logger';
+import { recordJevSpend } from '@/lib/spend';
 import { toLogError } from '@/lib/utils/error';
 
 // Whether a message that lands while kyto is mid-turn is meant for kyto at all
@@ -72,7 +73,9 @@ export async function isAddressedToKyto(state: string): Promise<boolean> {
       );
       return true;
     }
-    const parsed = responseSchema.safeParse(await response.json());
+    const body: unknown = await response.json();
+    recordJevSpend({ body, source: 'jev-addressed' });
+    const parsed = responseSchema.safeParse(body);
     if (!parsed.success) {
       return true;
     }

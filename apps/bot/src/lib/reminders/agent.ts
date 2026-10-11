@@ -143,6 +143,7 @@ async function synthesizeReport({
 }): Promise<string | null | undefined> {
   try {
     const result = streamAttempt({
+      source: 'reminder',
       abortSignal: AbortSignal.timeout(REPORT_TIMEOUT_MS),
       activeTools: built.activeTools,
       attempt,
@@ -244,6 +245,7 @@ async function runAgent(
         : `a DM to <@${reminder.userId}> (id ${reminder.userId}), the person who set this job up`
     }</output_destination>`;
     const result = streamAttempt({
+      source: 'reminder',
       abortSignal: AbortSignal.timeout(RUN_TIMEOUT_MS),
       activeTools: built.activeTools,
       attempt,

@@ -271,6 +271,7 @@ export function runSubagentTool({
                 yield card(modelTaskId, modelTitle, 'in_progress');
                 try {
                   const result = streamAttempt({
+                    source: 'subagent',
                     abortSignal,
                     activeTools: built.activeTools,
                     attempt,
@@ -638,6 +639,7 @@ async function synthesizeReport({
   tools: ToolSet;
 }): Promise<string> {
   const result = streamAttempt({
+    source: 'subagent',
     abortSignal,
     activeTools,
     attempt,

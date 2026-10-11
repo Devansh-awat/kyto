@@ -92,6 +92,8 @@ CREATE INDEX IF NOT EXISTS message_revisions_thread_idx ON message_revisions (ch
 CREATE TABLE IF NOT EXISTS turn_timings (id serial PRIMARY KEY, thread_id text NOT NULL, message_ts text NOT NULL, outcome text, total_ms integer NOT NULL, timing jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now()); -- 2026-10-11
 CREATE INDEX IF NOT EXISTS turn_timings_thread_idx ON turn_timings (thread_id, created_at); -- 2026-10-11
 CREATE TABLE IF NOT EXISTS debug_snapshots (id text PRIMARY KEY, thread_id text NOT NULL, created_by text NOT NULL, body jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now()); -- 2026-10-11
+CREATE TABLE IF NOT EXISTS model_spend (id serial PRIMARY KEY, source text NOT NULL, provider text NOT NULL, model text NOT NULL, effort text, thread_id text, cost_usd double precision, input_tokens integer NOT NULL, cache_read_tokens integer NOT NULL, cache_write_tokens integer NOT NULL, output_tokens integer NOT NULL, created_at timestamptz NOT NULL DEFAULT now()); -- 2026-10-11, owned by gorkie
+CREATE INDEX IF NOT EXISTS model_spend_created_idx ON model_spend (created_at); -- 2026-10-11
 ALTER TABLE inflight_turns ADD COLUMN IF NOT EXISTS effects jsonb NOT NULL DEFAULT '[]'::jsonb; -- 2026-10-11
 ALTER TYPE reminder_recurrence ADD VALUE IF NOT EXISTS 'event'; -- 2026-10-11
 ALTER TABLE reminders ADD COLUMN IF NOT EXISTS trigger jsonb; ALTER TABLE reminders ADD COLUMN IF NOT EXISTS webhook_secret text; ALTER TABLE reminders ADD COLUMN IF NOT EXISTS last_fired_at timestamptz; -- 2026-10-11

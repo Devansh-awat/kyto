@@ -23,6 +23,7 @@ import type { ThreadHandle } from '@/harness/thread';
 import type { Message } from '@/harness/types';
 import { withoutFlags } from '@/lib/flags';
 import logger from '@/lib/logger';
+import { recordJevSpend } from '@/lib/spend';
 import { toLogError } from '@/lib/utils/error';
 import { CODING_THRESHOLD, decideCodingAction } from './decide';
 import { isNotCodingCall } from './not-coding';
@@ -117,7 +118,9 @@ async function scoreCodingRequest(text: string): Promise<number | null> {
       );
       return null;
     }
-    const parsed = jevResponseSchema.safeParse(await response.json());
+    const body: unknown = await response.json();
+    recordJevSpend({ body, source: 'jev-anti-coding' });
+    const parsed = jevResponseSchema.safeParse(body);
     if (!parsed.success) {
       logger.warn(
         { issues: parsed.error.issues },

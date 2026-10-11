@@ -1,4 +1,5 @@
 import { provider } from '@repo/ai';
+import { reportSpend } from '@repo/ai/spend';
 import { generateText, tool } from 'ai';
 import { z } from 'zod';
 import type { KytoBot as Chat } from '@/harness/bot';
@@ -47,11 +48,18 @@ export function summarizeThreadTool({
           return `${author}: ${message.text}`;
         })
         .join('\n');
-      const { text } = await generateText({
+      const { steps, text } = await generateText({
         model: provider.languageModel('chat-model'),
         prompt: `${input.instructions ? `${input.instructions}\n\n` : ''}Summarize this thread clearly and concisely. Preserve decisions, open questions, and action items when present.\n\n${transcript}`,
       });
 
+      reportSpend({
+        effort: undefined,
+        model: 'google/gemini-3-flash-preview',
+        provider: 'hackclub',
+        source: 'summarize-thread',
+        steps,
+      });
       return {
         messageCount: result.messages.length,
         success: true,

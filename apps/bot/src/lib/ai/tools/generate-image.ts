@@ -3,6 +3,7 @@ import type { SandboxContext } from '@repo/ai';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { env } from '@/env';
+import { recordCompletionSpend } from '@/lib/spend';
 import { errorMessage } from '@/lib/utils/error';
 import type { GeneratedImage } from '@/types/tools/generate-image';
 
@@ -122,7 +123,9 @@ async function requestImages({
       error: `Image ${images.length > 0 ? 'editing' : 'generation'} failed (${response.status}): ${body.slice(0, 300)}`,
     };
   }
-  const payload = (await response.json()) as {
+  const body: unknown = await response.json();
+  recordCompletionSpend({ body, model: IMAGE_MODEL, source: 'image' });
+  const payload = body as {
     choices?: {
       message?: {
         content?: string;

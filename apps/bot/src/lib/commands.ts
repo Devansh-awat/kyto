@@ -17,6 +17,7 @@ import { runBanCommand } from '@/lib/bans';
 import { createDebugSnapshot, debugSnapshotUrl } from '@/lib/debug-snapshot';
 import { type ParsedFlags, parseFlags } from '@/lib/flags';
 import logger from '@/lib/logger';
+import { describeSpend } from '@/lib/spend';
 import { describeThreadTimings } from '@/lib/turn-timings';
 import { errorMessage, toLogError } from '@/lib/utils/error';
 import { rawText, withoutLeadingMentions } from '@/lib/utils/message';
@@ -48,6 +49,7 @@ interface BotCommand {
     | 'debug'
     | 'focusmode'
     | 'optout'
+    | 'spend'
     | 'stop'
     | 'timings'
     | 'unban';
@@ -99,6 +101,18 @@ export async function handleCommand({
   }
   if (command.type === 'debug') {
     await runDebug({ message, thread });
+    return true;
+  }
+  if (command.type === 'spend') {
+    // Owner only: it is his bill.
+    const text =
+      env.OWNER_USER_ID && message.author.userId === env.OWNER_USER_ID
+        ? await describeSpend(command.args).catch(
+            (error: unknown) =>
+              `couldn't read the spend: ${errorMessage(error)}`
+          )
+        : '`!spend` is for the bot owner.';
+    await tell({ message, text, thread, what: 'spend' });
     return true;
   }
   if (
@@ -441,6 +455,8 @@ function cmd(message: Message): BotCommand | null {
       return { args, type: 'timings' };
     case 'debug':
       return { args, type: 'debug' };
+    case 'spend':
+      return { args, type: 'spend' };
     // Anything else is not a command and must still reach the model — `!` opens
     // plenty of ordinary sentences too.
     default:

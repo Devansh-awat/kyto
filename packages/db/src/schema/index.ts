@@ -20,6 +20,7 @@ export * from './memory-curations';
 export * from './memory-files';
 export * from './message-revisions';
 export * from './model-credentials';
+export * from './model-spend';
 export * from './notebooks';
 export * from './opt-ins';
 export * from './reminders';
