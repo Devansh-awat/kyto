@@ -11,9 +11,12 @@ import {
 import { toRawSlackChannelId } from '@/lib/slack/ids';
 import { errorMessage } from '@/lib/utils/error';
 
+// One part of a page. A longer page is read in parts via `offset`: a hard cut
+// with no way past it had kyto "summarising" legal pages from their first 20k
+// characters (Microsoft's services agreement is ~124k).
 const MAX_CONTENT_CHARS = 20_000;
-// Read at most this much of the body: the text is cut to MAX_CONTENT_CHARS
-// anyway, and an unbounded read of a multi-gigabyte URL would OOM the bot.
+// Read at most this much of the body: an unbounded read of a multi-gigabyte URL
+// would OOM the bot.
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
 
 // Slack workspace/message/file URLs (e.g. foo.slack.com, files.slack.com) —
@@ -105,9 +108,17 @@ export function getPermalinkTool({
  * on a Slack link or a non-OK response. Shared by the `fetchUrl` tool and by
  * 'script' reminders, which post a URL's content on a schedule.
  */
-export async function fetchUrlText(url: string): Promise<{
+export async function fetchUrlText({
+  offset = 0,
+  url,
+}: {
+  offset?: number;
+  url: string;
+}): Promise<{
   content: string;
   contentType: string;
+  nextOffset?: number;
+  totalChars: number;
   truncated: boolean;
 }> {
   // Slack message/file links aren't publicly fetchable (they 302 to a login
@@ -126,7 +137,14 @@ export async function fetchUrlText(url: string): Promise<{
   });
   if (!response.ok) {
     await response.body?.cancel();
-    throw new Error(`Fetch failed: ${response.status}`);
+    // 401/403 on a public page is a bot wall (Cloudflare, a "security
+    // verification" page), not a permissions problem: retrying with curl or
+    // other headers just burns steps.
+    const hint =
+      response.status === 401 || response.status === 403
+        ? ' — the site blocks automated fetches; a real browser may get through, or ask the user to paste or attach the page'
+        : '';
+    throw new Error(`Fetch failed: ${response.status}${hint}`);
   }
   const contentType = response.headers.get('content-type') ?? '';
   const raw = await readCapped(response);
@@ -139,10 +157,13 @@ export async function fetchUrlText(url: string): Promise<{
         .replace(/\s+/g, ' ')
         .trim()
     : raw;
-  const truncated = text.length > MAX_CONTENT_CHARS;
+  const end = offset + MAX_CONTENT_CHARS;
+  const truncated = text.length > end;
   return {
-    content: truncated ? text.slice(0, MAX_CONTENT_CHARS) : text,
+    content: text.slice(offset, end),
     contentType,
+    ...(truncated ? { nextOffset: end } : {}),
+    totalChars: text.length,
     truncated,
   };
 }
@@ -176,13 +197,21 @@ async function readCapped(response: Response): Promise<string> {
 export function fetchUrlTool() {
   return tool({
     description:
-      'Fetch the raw text content of a specific URL the user pasted or referenced. Use this instead of a web search when you already have the exact link.',
+      "Fetch the text content of a specific URL the user pasted or referenced. Use this instead of a web search when you already have the exact link. A page longer than 20,000 characters comes in parts: the result's `totalChars` is the whole page and `nextOffset` is where the next part starts — call again with `offset: nextOffset` (several offsets in parallel is fine) until there is no `nextOffset`. Read every part before summarising or quoting a whole page; never present a summary of part of a page as the page's.",
     inputSchema: z.object({
+      offset: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe(
+          "Character offset to start from — a previous result's `nextOffset`. Omit for the start."
+        ),
       url: z.string().url().describe('The URL to fetch.'),
     }),
-    execute: async ({ url }) => {
+    execute: async ({ offset, url }) => {
       try {
-        return { ...(await fetchUrlText(url)), success: true };
+        return { ...(await fetchUrlText({ offset, url })), success: true };
       } catch (error) {
         logger.warn({ error: errorMessage(error) }, '[fetchUrl] failed');
         return { error: errorMessage(error), success: false };

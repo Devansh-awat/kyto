@@ -357,6 +357,15 @@ export async function buildTools({
       background,
       getSandboxContext,
       github: { isOwner, threadId: thread.id, userId: authorUserId },
+      // Its result says "check it with `process`", which is deferred: the model
+      // called it unloaded and the turn showed "Something went wrong" — the
+      // same failure #58 fixed for wake turns.
+      onBackgrounded: () => {
+        if (deferred.process && !active.has('process')) {
+          active.add('process');
+          rememberLoadedTools(thread.id, ['process']);
+        }
+      },
     }),
     codeMode: codeModeTool({
       getSandboxContext,

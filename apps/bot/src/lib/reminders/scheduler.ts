@@ -34,7 +34,7 @@ async function buildReminderMessage(
     if (!reminder.url) {
       throw new Error("Script reminder is missing a 'url'.");
     }
-    const { content } = await fetchUrlText(reminder.url);
+    const { content } = await fetchUrlText({ url: reminder.url });
     return reminder.text ? `${reminder.text}\n\n${content}` : content;
   }
   if (reminder.kind === 'bash') {

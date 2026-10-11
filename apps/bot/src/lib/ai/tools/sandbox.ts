@@ -6,7 +6,11 @@ import { githubAuthHint } from '@/lib/github/diagnose';
 import { guardGithubCommand } from '@/lib/github/guard';
 import { fileDiagnostics } from '@/lib/sandbox/diagnostics';
 import { disarmFetchedRepos } from '@/lib/sandbox/git-safety';
-import { clipOutput, fullOutputPath } from '@/lib/sandbox/output-clip';
+import {
+  clipOutput,
+  fullOutputPath,
+  OUTPUT_MAX,
+} from '@/lib/sandbox/output-clip';
 import { clamp } from '@/lib/utils/text';
 import type { BackgroundProcessTools } from './background';
 
@@ -58,12 +62,15 @@ export function bashTool({
   background,
   getSandboxContext,
   github,
+  onBackgrounded,
 }: {
   // Shared with the background-process trio, so an auto-backgrounded command is
   // pollable via getProcessOutput. Optional so a caller can opt out of
   // auto-backgrounding (then a long command blocks as before).
   background?: BackgroundProcessTools;
   getSandboxContext: () => SandboxContext;
+  /** A command outlived the wait and now needs the `process` tool to follow. */
+  onBackgrounded?: () => void;
   /**
    * Who this turn runs for, so a `gh`/`git push` typed into bash goes through
    * the same repo-ownership gate as the `gh` tool — otherwise the gate would be
@@ -108,6 +115,9 @@ export function bashTool({
           context,
           workingDirectory: resolvedDir,
         });
+        if (backgrounded.running) {
+          onBackgrounded?.();
+        }
         // Only once it has actually finished — a still-running extraction gets
         // disarmed when getProcessOutput reports it done.
         if (!backgrounded.running) {
@@ -202,13 +212,21 @@ export function readFileTool({
 }) {
   return tool({
     description:
-      'Read a text file from the sandbox workspace. Returns null if the file does not exist.',
+      'Read a text file from the sandbox workspace (null if it does not exist). Up to 12,000 characters come back per call, as one contiguous part: when the result has `nextOffset`, call again with `offset: nextOffset` (several in parallel is fine) to get the next part, and keep going until there is none — that is how to read a long document IN FULL. `startLine`/`endLine` narrow to a line range first; `offset` then pages within it.',
     inputSchema: z.object({
       endLine: z.number().int().min(1).optional(),
+      offset: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe(
+          "Character offset to start from — a previous result's `nextOffset`."
+        ),
       path: z.string(),
       startLine: z.number().int().min(1).optional(),
     }),
-    execute: async ({ endLine, path, startLine }) => {
+    execute: async ({ endLine, offset = 0, path, startLine }) => {
       const context = getSandboxContext();
       const bytes = await context.session.readBinaryFile({
         path: resolvePath(context, path),
@@ -223,11 +241,15 @@ export function readFileTool({
           .slice(Math.max((startLine ?? 1) - 1, 0), endLine)
           .join('\n');
       }
-      // The complete file is already on disk — the notice points back at it
-      // (with startLine/endLine) instead of saving a second copy.
+      // Contiguous parts, not a head+tail clip: a clip hides the middle, and a
+      // 75 KB story with 1-10k-character lines could not be read in full by any
+      // line range — kyto re-read the same gaps turn after turn.
+      const end = offset + OUTPUT_MAX;
       return {
-        content: clipOutput(text, resolvePath(context, path)).text,
+        content: text.slice(offset, end),
         found: true,
+        ...(text.length > end ? { nextOffset: end } : {}),
+        totalChars: text.length,
       };
     },
   });
