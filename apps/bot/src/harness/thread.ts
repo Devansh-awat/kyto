@@ -264,12 +264,27 @@ export class ThreadHandle {
       ? filterOutboundDeep(options.blocks)
       : undefined;
     const safeText = filterOutbound(text);
+    // An ephemeral threaded under a message with no replies yet is accepted
+    // by Slack and shown to nobody: there is no "1 reply" link to open it.
+    // That is every answer to a top-level `@kyto!spend` (or a ban notice, an
+    // opt-in offer…), so those go to the channel instead. A failed check
+    // keeps the thread, as before.
+    const threaded =
+      threadTs &&
+      (await this.adapter.webClient.conversations
+        .replies({ channel, limit: 1, ts: threadTs })
+        .then(
+          ({ messages }) =>
+            (messages?.[0]?.reply_count ?? 0) > 0 ||
+            messages?.[0]?.ts !== threadTs
+        )
+        .catch(() => true));
     try {
       await this.adapter.webClient.chat.postEphemeral({
         channel,
         text: safeText,
         ...(blocks ? { blocks } : {}),
-        ...(threadTs ? { thread_ts: threadTs } : {}),
+        ...(threaded ? { thread_ts: threadTs } : {}),
         user: userId,
       } as Parameters<typeof this.adapter.webClient.chat.postEphemeral>[0]);
       return { delivery: 'ephemeral' };
