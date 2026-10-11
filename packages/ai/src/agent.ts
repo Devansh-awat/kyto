@@ -17,6 +17,7 @@ import {
   prefixUnits,
 } from './cache-probe';
 import { fetchWithGatewayRetry, type GatewayRetryInfo } from './gateway-retry';
+import { capContextImages } from './image-cap';
 import {
   ANTHROPIC_ONLY_MODELS,
   GEMINI_PROVIDER,
@@ -377,11 +378,12 @@ export function streamAttempt({
               getFreshImages?.() ?? [],
               onDroppedImages
             );
+            let stepMessages = messages;
             if (fresh.length > 0) {
               const label = fresh
                 .map((image) => image.path ?? 'image')
                 .join(', ');
-              result.messages = [
+              stepMessages = [
                 ...messages,
                 {
                   content: [
@@ -394,6 +396,10 @@ export function streamAttempt({
                   role: 'user' as const,
                 },
               ];
+            }
+            const capped = capContextImages({ messages: stepMessages });
+            if (capped !== messages) {
+              result.messages = capped;
             }
             return result;
           },
