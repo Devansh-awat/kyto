@@ -3,6 +3,7 @@ import { SocketModeClient } from '@slack/socket-mode';
 import { LogLevel } from '@slack/web-api';
 import { z } from 'zod';
 import { recordRevision } from '@/lib/message-revisions';
+import { onSlackMessage, onSlackReaction } from '@/lib/reminders/events';
 import { rememberActionToken } from './action-tokens';
 import type { RawSlackMessage, SlackHarness } from './harness';
 import { MemoryKV } from './kv';
@@ -389,6 +390,12 @@ export class KytoBot {
         this.harness.threadCache.apply(event as RawSlackMessage);
         // Never awaited: a slow DB write must not hold up the turn.
         recordRevision(event);
+        onSlackMessage(event).catch((error: unknown) => {
+          this.slackLogger.warn(
+            { err: error },
+            '[harness] event reminder match failed'
+          );
+        });
         if (
           typeof event.action_token === 'string' &&
           typeof event.channel === 'string' &&
@@ -402,6 +409,9 @@ export class KytoBot {
         }
         await this.dispatchMessage(event as RawSlackMessage);
         return;
+      case 'reaction_added':
+        await onSlackReaction(event);
+        break;
       case 'app_home_opened':
         await runAll(this.appHomeHandlers, {
           userId: String(event.user ?? ''),

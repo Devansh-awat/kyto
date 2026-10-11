@@ -9,10 +9,18 @@ export type ReminderSchedule =
   | { recurrence: 'interval'; intervalSeconds: number }
   | { recurrence: 'daily'; timeOfDayMinutes: number }
   | { recurrence: 'weekly'; timeOfDayMinutes: number; weekday: number }
-  | { recurrence: 'cron'; cronExpression: string; timezone: string };
+  | { recurrence: 'cron'; cronExpression: string; timezone: string }
+  | { recurrence: 'event' };
+
+// An event reminder's next "run" is whenever its event happens; this keeps it
+// out of every due-reminder query.
+export const EVENT_REMINDER_NEXT_RUN = new Date('9999-12-31T00:00:00Z');
 
 /** Compute the next fire time for a schedule, strictly after `from`. */
 export function computeNextRun(schedule: ReminderSchedule, from: Date): Date {
+  if (schedule.recurrence === 'event') {
+    return EVENT_REMINDER_NEXT_RUN;
+  }
   if (schedule.recurrence === 'cron') {
     const next = new Cron(schedule.cronExpression, {
       paused: true,

@@ -18,6 +18,7 @@ import logger from '@/lib/logger';
 import { startMemoryCuration } from '@/lib/memory-curation';
 import { startRevisionReaper } from '@/lib/message-revisions';
 import { redactSecrets, setRedactionAlert } from '@/lib/redact';
+import { startEventReminders } from '@/lib/reminders/events';
 import { startReminderScheduler } from '@/lib/reminders/scheduler';
 import { startSandboxReaper } from '@/lib/sandbox/store';
 import { flushSiteViews, startSiteAnalytics } from '@/lib/sites/analytics';
@@ -107,6 +108,7 @@ try {
   await startSitesServer();
   startSiteAnalytics();
   startReminderScheduler(bot);
+  startEventReminders(bot);
   // Paused thread sandboxes keep costing storage; collect the idle ones.
   startSandboxReaper();
   // Reap thread reasoning older than the retention window.

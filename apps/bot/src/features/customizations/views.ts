@@ -45,7 +45,20 @@ const IDENTITY_LABELS: Record<IdentityType, string> = {
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
+const EVENT_SOURCE_LABELS: Record<string, string> = {
+  github: 'on a GitHub webhook',
+  slack_message: 'on new messages',
+  slack_reaction: 'on reactions',
+  webhook: 'on a webhook call',
+};
+
 function describeReminderSchedule(reminder: Reminder): string {
+  if (reminder.recurrence === 'event') {
+    const trigger = reminder.trigger;
+    const where =
+      trigger && 'channel' in trigger ? ` in <#${trigger.channel}>` : '';
+    return `${EVENT_SOURCE_LABELS[trigger?.source ?? ''] ?? 'on an event'}${where}`;
+  }
   if (reminder.recurrence === 'cron') {
     return `cron ${reminder.cronExpression} (${reminder.timezone ?? 'UTC'})`;
   }

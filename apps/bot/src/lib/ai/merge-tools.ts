@@ -173,15 +173,16 @@ export const TOOL_FAMILIES = {
       cancel: 'cancelReminder',
       edit: 'editReminder',
       list: 'listReminders',
+      on_event: 'scheduleEventReminder',
       once: 'scheduleReminder',
       pause: 'pauseReminder',
       recurring: 'scheduleRecurringReminder',
       resume: 'resumeReminder',
     },
     description:
-      'Reminders and scheduled jobs: a one-time DM reminder, or a recurring message / URL fetch / bash command / headless agent run.',
+      'Reminders and scheduled jobs: a one-time DM reminder, a recurring message / URL fetch / bash command / headless agent run, or one that fires on an event (a Slack message or reaction, a webhook, a GitHub webhook).',
     summary:
-      'reminders and scheduled jobs: one-time, recurring (interval, daily, weekly, cron), list, edit, pause, resume, cancel',
+      'reminders and scheduled jobs: one-time, recurring (interval, daily, weekly, cron), on an event (Slack message/reaction, webhook, GitHub), list, edit, pause, resume, cancel',
   },
   sites: {
     actions: {

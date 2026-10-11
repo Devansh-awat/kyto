@@ -102,6 +102,7 @@ import {
   listRemindersTool,
   pauseReminderTool,
   resumeReminderTool,
+  scheduleEventReminderTool,
   scheduleRecurringReminderTool,
 } from './tools/reminders';
 import { runJsTool } from './tools/run-js';
@@ -539,6 +540,11 @@ export async function buildTools({
       summary:
         'repeating reminder/task (interval, daily, weekly): a message, url fetch, bash command or headless agent',
       tool: scheduleRecurringReminderTool({ message }),
+    },
+    scheduleEventReminder: {
+      summary:
+        'reminder/task that fires on an event: a Slack message or reaction in a channel, a webhook call, or a GitHub webhook',
+      tool: scheduleEventReminderTool({ message }),
     },
     listReminders: {
       summary: 'list the reminders this user may act on',

@@ -93,6 +93,8 @@ CREATE TABLE IF NOT EXISTS turn_timings (id serial PRIMARY KEY, thread_id text N
 CREATE INDEX IF NOT EXISTS turn_timings_thread_idx ON turn_timings (thread_id, created_at); -- 2026-10-11
 CREATE TABLE IF NOT EXISTS debug_snapshots (id text PRIMARY KEY, thread_id text NOT NULL, created_by text NOT NULL, body jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now()); -- 2026-10-11
 ALTER TABLE inflight_turns ADD COLUMN IF NOT EXISTS effects jsonb NOT NULL DEFAULT '[]'::jsonb; -- 2026-10-11
+ALTER TYPE reminder_recurrence ADD VALUE IF NOT EXISTS 'event'; -- 2026-10-11
+ALTER TABLE reminders ADD COLUMN IF NOT EXISTS trigger jsonb; ALTER TABLE reminders ADD COLUMN IF NOT EXISTS webhook_secret text; ALTER TABLE reminders ADD COLUMN IF NOT EXISTS last_fired_at timestamptz; -- 2026-10-11
 ```
 
 The anti-coding gate's ledger: the last catch and how many in a row (each

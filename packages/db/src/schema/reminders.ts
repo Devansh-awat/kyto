@@ -14,6 +14,9 @@ export const reminderRecurrence = pgEnum('reminder_recurrence', [
   'daily',
   'weekly',
   'cron',
+  // Fires on something happening rather than at a time (`trigger` below); its
+  // `nextRunAt` sits in the far future so the time scheduler never picks it.
+  'event',
 ]);
 
 export type ReminderRecurrence = (typeof reminderRecurrence.enumValues)[number];
@@ -28,6 +31,37 @@ export type ReminderRecurrence = (typeof reminderRecurrence.enumValues)[number];
 //            pinned model, and posts whatever it decides to say.
 // Label order matches the live `reminder_kind` type, which predates this code
 // (an earlier branch created it). Drizzle matches on label, not ordinal.
+/**
+ * What an 'event' reminder fires on (apps/bot/src/lib/reminders/events.ts).
+ * Slack triggers need kyto in the channel; webhook ones are a secret URL kyto
+ * hands back, and a GitHub one also checks GitHub's signature with the secret.
+ */
+export type ReminderTrigger =
+  | {
+      source: 'slack_message';
+      channel: string;
+      /** Only messages from this user (or bot user). */
+      fromUser?: string;
+      /** Case-insensitive substring, or a regex when `regex` is set. */
+      pattern?: string;
+      regex?: boolean;
+    }
+  | {
+      source: 'slack_reaction';
+      channel: string;
+      /** Emoji name without colons. */
+      emoji?: string;
+      fromUser?: string;
+      /** Only reactions on this one message. */
+      messageTs?: string;
+    }
+  | { source: 'webhook' }
+  | {
+      source: 'github';
+      /** `push`, `pull_request`, or `pull_request.opened`; empty = any. */
+      events?: string[];
+    };
+
 export const reminderKind = pgEnum('reminder_kind', [
   'message',
   'script',
@@ -73,6 +107,11 @@ export const reminders = pgTable(
     cronExpression: text('cron_expression'),
     timezone: text('timezone'),
     nextRunAt: timestamp('next_run_at', { withTimezone: true }).notNull(),
+    // 'event' reminders only.
+    trigger: jsonb('trigger').$type<ReminderTrigger>(),
+    webhookSecret: text('webhook_secret'),
+    // The cooldown's clock: two events a second apart fire once.
+    lastFiredAt: timestamp('last_fired_at', { withTimezone: true }),
     active: boolean('active').notNull().default(true),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()

@@ -7,6 +7,7 @@ import { handleDashboard } from '@/lib/dashboard';
 import { ensureEmbedAssets, LIVE_EMBED_PREFIX } from '@/lib/embeds';
 import { handleGithubProxy } from '@/lib/github-proxy';
 import logger from '@/lib/logger';
+import { handleReminderWebhook } from '@/lib/reminders/events';
 import { recordSiteHit, recordSiteView } from '@/lib/sites/analytics';
 import {
   handleSlackViewRequest,
@@ -200,6 +201,13 @@ export async function startSitesServer(): Promise<void> {
         const github = await handleGithubProxy(request, pathname);
         if (github) {
           return github;
+        }
+
+        // An event reminder's webhook (lib/reminders/events): POST only, and
+        // a 404 for anything it doesn't recognise.
+        const hook = await handleReminderWebhook(request, pathname);
+        if (hook) {
+          return hook;
         }
 
         // "Connect your Slack account" OAuth callback (lib/slack-oauth).

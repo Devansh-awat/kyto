@@ -1,14 +1,20 @@
-import { and, eq, lte, or, sql } from 'drizzle-orm';
+import { and, eq, isNull, lte, or, sql } from 'drizzle-orm';
 import { db } from '../client';
 import {
   type NewReminder,
   type Reminder,
   type ReminderKind,
+  type ReminderTrigger,
   reminders,
 } from '../schema';
 import { computeNextRun, type ReminderSchedule } from './reminder-schedule';
 
-export type { Reminder, ReminderKind, ReminderRecurrence } from '../schema';
+export type {
+  Reminder,
+  ReminderKind,
+  ReminderRecurrence,
+  ReminderTrigger,
+} from '../schema';
 
 const MINUTES_PER_DAY = 24 * 60;
 export async function createReminder(input: {
@@ -22,6 +28,8 @@ export async function createReminder(input: {
   command?: string | null;
   url?: string | null;
   threadId?: string | null;
+  trigger?: ReminderTrigger | null;
+  webhookSecret?: string | null;
 }): Promise<Reminder> {
   const nextRunAt = computeNextRun(input.schedule, new Date());
   const values: NewReminder = {
@@ -34,6 +42,8 @@ export async function createReminder(input: {
     command: input.command ?? null,
     url: input.url ?? null,
     threadId: input.threadId ?? null,
+    trigger: input.trigger ?? null,
+    webhookSecret: input.webhookSecret ?? null,
     nextRunAt,
     ...scheduleColumns(input.schedule),
   };
@@ -256,6 +266,9 @@ function scheduleColumns(schedule: ReminderSchedule) {
 }
 
 function scheduleOf(reminder: Reminder): ReminderSchedule {
+  if (reminder.recurrence === 'event') {
+    return { recurrence: 'event' };
+  }
   if (reminder.recurrence === 'cron') {
     return {
       cronExpression: reminder.cronExpression ?? '0 0 * * *',
@@ -280,4 +293,49 @@ function scheduleOf(reminder: Reminder): ReminderSchedule {
     recurrence: 'daily',
     timeOfDayMinutes: reminder.timeOfDayMinutes ?? 0,
   };
+}
+
+/** Every active event reminder, for matching incoming events against. */
+export async function listActiveEventReminders(): Promise<Reminder[]> {
+  return await db
+    .select()
+    .from(reminders)
+    .where(and(eq(reminders.active, true), eq(reminders.recurrence, 'event')));
+}
+
+/**
+ * Claim one fire of an event reminder: only if it is still active and its
+ * cooldown has passed. Like `advanceReminder`, the conditional update is the
+ * claim, so two instances (or two events in the same second) fire it once.
+ * Deactivates it when a run cap is reached.
+ */
+export async function claimEventFire({
+  cooldownMs,
+  reminder,
+}: {
+  cooldownMs: number;
+  reminder: Reminder;
+}): Promise<boolean> {
+  const now = new Date();
+  const runCount = (reminder.runCount ?? 0) + 1;
+  const capReached = reminder.maxRuns !== null && runCount >= reminder.maxRuns;
+  const claimed = await db
+    .update(reminders)
+    .set({
+      lastFiredAt: now,
+      runCount,
+      ...(capReached ? { active: false } : {}),
+    })
+    .where(
+      and(
+        eq(reminders.id, reminder.id),
+        eq(reminders.active, true),
+        or(
+          isNull(reminders.lastFiredAt),
+          lte(reminders.lastFiredAt, new Date(now.getTime() - cooldownMs))
+        )
+      )
+    )
+    .returning({ id: reminders.id });
+  return claimed.length > 0;
 }

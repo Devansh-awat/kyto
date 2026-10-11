@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import {
   cancelReminder as cancelReminderRow,
   computeNextRun,
@@ -9,6 +10,7 @@ import {
   type Reminder,
   type ReminderKind,
   type ReminderSchedule,
+  type ReminderTrigger,
   resumeReminder as resumeReminderRow,
   updateReminder as updateReminderRow,
 } from '@repo/db/queries';
@@ -16,6 +18,16 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { env } from '@/env';
 import type { Message } from '@/harness/types';
+import { slack } from '@/lib/chat';
+import {
+  EVENT_COOLDOWN_SECONDS_BY_KIND,
+  refreshEventReminders,
+  webhookUrl,
+} from '@/lib/reminders/events';
+import {
+  mayReadChannel,
+  PRIVATE_CHANNEL_REFUSAL,
+} from '@/lib/slack/channel-access';
 import { toRawSlackChannelId } from '@/lib/slack/ids';
 import { errorMessage } from '@/lib/utils/error';
 import { editorsSchema, parseEditors } from './editors';
@@ -63,6 +75,9 @@ function formatTimeOfDay(minutes: number): string {
 }
 
 function describeSchedule(row: Reminder): string {
+  if (row.recurrence === 'event') {
+    return describeTrigger(row.trigger);
+  }
   if (row.recurrence === 'cron') {
     return `cron "${row.cronExpression}" (${row.timezone ?? 'UTC'})`;
   }
@@ -74,6 +89,278 @@ function describeSchedule(row: Reminder): string {
     return `daily at ${time}`;
   }
   return `weekly on ${WEEKDAY_NAMES[row.weekday ?? 0]} at ${time}`;
+}
+
+function describeTrigger(trigger: ReminderTrigger | null): string {
+  if (!trigger) {
+    return 'on an event';
+  }
+  if (trigger.source === 'slack_message') {
+    const from = trigger.fromUser ? ` from <@${trigger.fromUser}>` : '';
+    const matching = trigger.pattern
+      ? ` matching ${trigger.regex ? `/${trigger.pattern}/i` : `"${trigger.pattern}"`}`
+      : '';
+    return `on each new message${from} in <#${trigger.channel}>${matching}`;
+  }
+  if (trigger.source === 'slack_reaction') {
+    const emoji = trigger.emoji ? `:${trigger.emoji}:` : 'any reaction';
+    const from = trigger.fromUser ? ` from <@${trigger.fromUser}>` : '';
+    const on = trigger.messageTs ? ' on one message' : '';
+    return `on ${emoji}${from}${on} in <#${trigger.channel}>`;
+  }
+  if (trigger.source === 'github') {
+    return `on GitHub webhook events${trigger.events?.length ? ` (${trigger.events.join(', ')})` : ''}`;
+  }
+  return 'on a call to its webhook URL';
+}
+
+const SLACK_ID = /^[A-Z0-9]{6,}$/;
+
+export function scheduleEventReminderTool({ message }: { message: Message }) {
+  const isOwner = isOwnerOf(message);
+  return tool({
+    description: `Set up a reminder that fires when something HAPPENS rather than at a time. It does the same four kinds of thing a recurring reminder does ('message', 'script', 'bash', 'agent' — see action recurring), once per event, and by default DMs the person who asked (the owner may target a channel).
+
+Triggers (\`on\`):
+- 'slack_message': a new message in \`watchChannel\`, optionally only \`fromUser\` and only matching \`pattern\` (case-insensitive text, or a regex with \`regex: true\`). kyto must be in that channel, and the asker must be able to read it.
+- 'slack_reaction': a reaction added in \`watchChannel\`, optionally only \`emoji\` (name, no colons), \`fromUser\`, or on one message (\`messageTs\`).
+- 'webhook': you get back a secret URL; anything that POSTs to it fires the reminder. Give the URL ONLY to the person who asked, in this thread — anyone holding it can fire it.
+- 'github': you get back a URL and a secret for the repo's Settings → Webhooks (content type application/json); only GitHub-signed calls fire it. \`githubEvents\` narrows it ("push", "pull_request.opened", "issues", "release.published").
+
+An 'agent' reminder receives the event (the message text, the reaction, the webhook body) as untrusted data to act on. Fires are spaced at least a minute apart (10 minutes for 'agent', 5 for 'bash'); a burst of events fires once. Cancel, pause, resume and list work as for any reminder.`,
+    inputSchema: z.object({
+      on: z
+        .enum(['slack_message', 'slack_reaction', 'webhook', 'github'])
+        .describe('What fires it.'),
+      text: z
+        .string()
+        .min(1)
+        .max(3000)
+        .describe(
+          "The message to post, or for kind 'agent' the instructions to follow."
+        ),
+      kind: z
+        .enum(['message', 'script', 'bash', 'agent'])
+        .optional()
+        .describe("What runs each fire. Defaults to 'message'."),
+      command: z
+        .string()
+        .min(1)
+        .optional()
+        .describe("Required when kind is 'bash'. The shell command to run."),
+      url: z
+        .string()
+        .url()
+        .optional()
+        .describe("Required when kind is 'script'. The URL to fetch."),
+      channelId: z
+        .string()
+        .optional()
+        .describe(
+          'Owner only: post into this channel (id or #name) instead of DMing. Ignored for non-owners.'
+        ),
+      editors: editorsSchema,
+      maxRuns: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe('Optional: stop after firing this many times.'),
+      watchChannel: z
+        .string()
+        .optional()
+        .describe(
+          'Slack triggers: the channel to watch (id like C0123ABCD, or <#C…>).'
+        ),
+      fromUser: z
+        .string()
+        .optional()
+        .describe(
+          'Slack triggers: only events from this user or bot user id (U…/W…/B…).'
+        ),
+      pattern: z
+        .string()
+        .min(1)
+        .max(200)
+        .optional()
+        .describe("'slack_message': only messages containing this text."),
+      regex: z
+        .boolean()
+        .optional()
+        .describe("'slack_message': treat pattern as a regular expression."),
+      emoji: z
+        .string()
+        .optional()
+        .describe("'slack_reaction': only this emoji, e.g. white_check_mark."),
+      messageTs: z
+        .string()
+        .optional()
+        .describe("'slack_reaction': only reactions on this message's ts."),
+      githubEvents: z
+        .array(z.string().min(1).max(60))
+        .max(20)
+        .optional()
+        .describe("'github': event names, optionally .action; empty = any."),
+    }),
+    execute: async (input) => {
+      const kind = input.kind ?? 'message';
+      if (kind === 'bash' && !input.command) {
+        return { error: "kind 'bash' requires a command.", success: false };
+      }
+      if (kind === 'script' && !input.url) {
+        return { error: "kind 'script' requires a url.", success: false };
+      }
+      const parsedEditors = parseEditors(input.editors);
+      if (!parsedEditors.ok) {
+        return { error: parsedEditors.error, success: false };
+      }
+      const built = await buildTrigger({ input, message });
+      if ('error' in built) {
+        return { error: built.error, success: false };
+      }
+      const targetChannel =
+        isOwner && input.channelId
+          ? toRawSlackChannelId(input.channelId)
+          : null;
+      const needsSecret =
+        built.trigger.source === 'webhook' || built.trigger.source === 'github';
+      try {
+        const reminder = await createReminder({
+          channelId: targetChannel,
+          command: input.command ?? null,
+          editorUserIds: parsedEditors.editors,
+          kind,
+          maxRuns: input.maxRuns ?? null,
+          schedule: { recurrence: 'event' },
+          text: input.text,
+          threadId:
+            kind === 'bash' || kind === 'agent' ? message.threadId : null,
+          trigger: built.trigger,
+          url: input.url ?? null,
+          userId: message.author.userId,
+          webhookSecret: needsSecret ? randomBytes(24).toString('hex') : null,
+        });
+        await refreshEventReminders();
+        const where = targetChannel ? `in <#${targetChannel}>` : 'via DM';
+        const summary = `Set up a ${kind} reminder ${describeTrigger(built.trigger)}, posting ${where}. Fires at most once every ${EVENT_COOLDOWN_SECONDS_BY_KIND[kind] / 60} min.`;
+        if (!needsSecret) {
+          return { id: reminder.id, success: true, summary };
+        }
+        const setup =
+          built.trigger.source === 'github'
+            ? `In the repo: Settings → Webhooks → Add webhook. Payload URL: ${webhookUrl(reminder)} · Content type: application/json · Secret: ${reminder.webhookSecret}`
+            : `POST anything to ${webhookUrl(reminder)} and the body reaches the reminder. Keep the URL private: it is the only key.`;
+        // The plan card shows tool results to everyone in the conversation,
+        // so outside a DM the key goes to the asker alone.
+        const { channel, threadTs } = slack.decodeThreadId(message.threadId);
+        if (channel.startsWith('D')) {
+          return { id: reminder.id, setup, success: true, summary };
+        }
+        const sent = await slack.webClient.chat
+          .postEphemeral({
+            channel,
+            text: `Your event reminder's webhook. ${setup}`,
+            user: message.author.userId,
+            ...(threadTs ? { thread_ts: threadTs } : {}),
+          })
+          .then(() => true)
+          .catch(() => false);
+        return {
+          id: reminder.id,
+          success: true,
+          summary: sent
+            ? `${summary} The webhook URL${built.trigger.source === 'github' ? ' and secret were' : ' was'} sent to the asker privately (only they can see it); don't repeat it here.`
+            : `${summary} I couldn't send its URL privately here; ask them to DM me "list my reminders" to get it.`,
+        };
+      } catch (error) {
+        return { error: errorMessage(error), success: false };
+      }
+    },
+  });
+}
+
+async function buildTrigger({
+  input,
+  message,
+}: {
+  input: {
+    emoji?: string;
+    fromUser?: string;
+    githubEvents?: string[];
+    messageTs?: string;
+    on: ReminderTrigger['source'];
+    pattern?: string;
+    regex?: boolean;
+    watchChannel?: string;
+  };
+  message: Message;
+}): Promise<{ trigger: ReminderTrigger } | { error: string }> {
+  if (input.on === 'webhook') {
+    return { trigger: { source: 'webhook' } };
+  }
+  if (input.on === 'github') {
+    return {
+      trigger: {
+        events: (input.githubEvents ?? []).map((name) =>
+          name.trim().toLowerCase()
+        ),
+        source: 'github',
+      },
+    };
+  }
+  if (!input.watchChannel) {
+    return { error: 'A Slack trigger needs watchChannel.' };
+  }
+  const channel = toRawSlackChannelId(input.watchChannel);
+  const fromUser = input.fromUser?.replace(/^<@|>$/g, '');
+  if (fromUser && !SLACK_ID.test(fromUser)) {
+    return { error: 'fromUser must be a Slack user or bot id.' };
+  }
+  const readable = await mayReadChannel({
+    askerUserId: message.author.userId,
+    channelId: channel,
+    currentChannelId: slack.decodeThreadId(message.threadId).channel,
+  });
+  if (!readable) {
+    return { error: PRIVATE_CHANNEL_REFUSAL };
+  }
+  const info = await slack.webClient.conversations
+    .info({ channel })
+    .catch(() => undefined);
+  if (!info?.channel?.is_member) {
+    return {
+      error: `kyto isn't in <#${channel}>, so Slack sends it nothing from there. Invite kyto to the channel first, then set this up again.`,
+    };
+  }
+  if (input.on === 'slack_message') {
+    if (input.regex && input.pattern) {
+      try {
+        new RegExp(input.pattern, 'i');
+      } catch (error) {
+        return {
+          error: `pattern is not a valid regex: ${errorMessage(error)}`,
+        };
+      }
+    }
+    return {
+      trigger: {
+        channel,
+        source: 'slack_message',
+        ...(fromUser ? { fromUser } : {}),
+        ...(input.pattern ? { pattern: input.pattern } : {}),
+        ...(input.regex ? { regex: true } : {}),
+      },
+    };
+  }
+  return {
+    trigger: {
+      channel,
+      source: 'slack_reaction',
+      ...(input.emoji ? { emoji: input.emoji.replaceAll(':', '') } : {}),
+      ...(fromUser ? { fromUser } : {}),
+      ...(input.messageTs ? { messageTs: input.messageTs } : {}),
+    },
+  };
 }
 
 type Recurrence = 'interval' | 'daily' | 'weekly' | 'cron';
@@ -562,6 +849,12 @@ export function listRemindersTool({ message }: { message: Message }) {
           schedule: describeSchedule(row),
           target: row.channelId ? `<#${row.channelId}>` : 'DM',
           text: row.text,
+          // A webhook's URL is its key: only to its creator, only in a DM.
+          ...(row.webhookSecret &&
+          row.userId === message.author.userId &&
+          slack.decodeThreadId(message.threadId).channel.startsWith('D')
+            ? { webhookUrl: webhookUrl(row) }
+            : {}),
         })),
         success: true,
       };

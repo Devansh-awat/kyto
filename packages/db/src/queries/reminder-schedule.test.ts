@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { computeNextRun } from './reminder-schedule';
+import { computeNextRun, EVENT_REMINDER_NEXT_RUN } from './reminder-schedule';
 
 describe('computeNextRun cron', () => {
   test('reads the expression in its timezone', () => {
@@ -40,5 +40,13 @@ describe('computeNextRun cron', () => {
         new Date()
       )
     ).toThrow();
+  });
+});
+
+describe('event reminders', () => {
+  test('never come due on the time scheduler', () => {
+    expect(computeNextRun({ recurrence: 'event' }, new Date())).toEqual(
+      EVENT_REMINDER_NEXT_RUN
+    );
   });
 });
