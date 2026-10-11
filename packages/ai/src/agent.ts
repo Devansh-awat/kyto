@@ -708,11 +708,13 @@ export const REASONING_EFFORTS = ['none', 'low', 'medium', 'high'] as const;
  * 2026-10-10 for haiku), logged with the turn so speed and quality can be
  * compared per model and effort from thread_logs. Every other model: medium.
  *
- * On haiku, `none` is drawn once per THREAD (a third of them) and kept, and the
- * rest draw low/medium per attempt (owner's call 2026-10-11). Anthropic keeps
- * thinking-on and thinking-off requests in separate caches, while low and
- * medium share one (both measured through the proxy): a thread switching
- * between `none` and the others re-read nothing from cache on 66% of turns.
+ * Drawn per THREAD where the cache needs it (owner's calls 2026-10-11), both
+ * measured through the proxy. On haiku, `none` is drawn once per thread (a third
+ * of them) and kept, and the rest draw low/medium per attempt: Anthropic keeps
+ * thinking-on and thinking-off requests in separate caches, but low and medium
+ * share one; a thread switching between `none` and the others re-read nothing
+ * on 66% of turns. On luna EVERY effort has its own cache, so a luna thread
+ * keeps one effort, whichever it drew.
  */
 export function pickReasoningEffort({
   attempt,
@@ -728,13 +730,18 @@ export function pickReasoningEffort({
     return { effort: 'medium', random: false };
   }
   let efforts = EXPERIMENT_EFFORTS;
-  if (attempt.model === PRIMARY_MODEL && threadId) {
+  if (threadId) {
     // Salted, so it doesn't line up with the haiku/luna split, which hashes
     // the bare thread id.
     const byte =
       createHash('sha256').update(`effort:${threadId}`).digest()[0] ?? 0;
-    efforts =
-      byte % EXPERIMENT_EFFORTS.length === 0 ? ['none'] : THINKING_EFFORTS;
+    const pinned =
+      EXPERIMENT_EFFORTS[byte % EXPERIMENT_EFFORTS.length] ?? 'medium';
+    if (attempt.model === LUNA_MODEL) {
+      efforts = [pinned];
+    } else {
+      efforts = pinned === 'none' ? ['none'] : THINKING_EFFORTS;
+    }
   }
   return {
     effort: efforts[Math.floor(Math.random() * efforts.length)] ?? 'medium',
