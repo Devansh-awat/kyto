@@ -25,6 +25,7 @@ import { addressedState, isAddressedToKyto } from '@/lib/agent/addressed';
 import { createAttemptRouter } from '@/lib/agent/attempt-router';
 import {
   type GatheredResult,
+  isPrivateObservation,
   renderCarryover,
   renderContinuation,
   renderObservations,
@@ -1810,6 +1811,9 @@ async function executeTurn(
           await rememberThinking({
             blocks: attemptThinking,
             observations: renderObservations(gatheredResults),
+            ...(gatheredResults.some(isPrivateObservation)
+              ? { privateTo: message.author.userId }
+              : {}),
             threadId,
           });
         }

@@ -1,6 +1,7 @@
 import {
   getThreadThinking,
   pruneThreadThinking,
+  type StoredThinkingTurn,
   saveThreadThinking,
 } from '@repo/db/queries';
 import {
@@ -66,11 +67,14 @@ const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export async function rememberThinking({
   blocks,
   observations,
+  privateTo,
   threadId,
 }: {
   blocks: string[];
   /** Pre-rendered, already-clamped summary of the turn's tool results. */
   observations?: string;
+  /** The speaker, when the turn read their private data (see recallThinking). */
+  privateTo?: string;
   threadId: string;
 }): Promise<void> {
   const reasoning = blocks
@@ -91,19 +95,43 @@ export async function rememberThinking({
   }
   try {
     const existing = await getThreadThinking(threadId, RETENTION_MS);
-    const turns = [...existing, tail(text, MAX_TURN_CHARS)].slice(
-      -MAX_STORED_TURNS
-    );
+    const clamped = tail(text, MAX_TURN_CHARS);
+    const turns = [
+      ...existing,
+      privateTo ? { privateTo, text: clamped } : clamped,
+    ].slice(-MAX_STORED_TURNS);
     await saveThreadThinking(threadId, turns);
   } catch (error) {
     logger.warn({ err: error, threadId }, '[thinking] failed to persist');
   }
 }
 
-/** The stored reasoning of this thread's turns, oldest first (render trims to
- * the char budget). */
-export async function recallThinking(threadId: string): Promise<string[]> {
-  return await getThreadThinking(threadId, RETENTION_MS).catch(() => []);
+/**
+ * The stored reasoning of this thread's turns, oldest first (render trims to
+ * the char budget), as `speakerId` may see it. A turn that read someone's
+ * private data — their DMs, a private channel, their email or MCP servers —
+ * is shown in full only on that person's own turns: in a shared thread the
+ * next speaker would otherwise get the raw text of someone else's DMs.
+ */
+export async function recallThinking({
+  speakerId,
+  threadId,
+}: {
+  speakerId: string;
+  threadId: string;
+}): Promise<string[]> {
+  const turns: StoredThinkingTurn[] = await getThreadThinking(
+    threadId,
+    RETENTION_MS
+  ).catch(() => []);
+  return turns.map((turn) => {
+    if (typeof turn === 'string') {
+      return turn;
+    }
+    return turn.privateTo === speakerId
+      ? turn.text
+      : `[An earlier turn here, for <@${turn.privateTo}>, read their private data (DMs, a private channel, email or their own connected tools). Its reasoning and tool results are kept to their own turns, so they are not shown to you now. If you need what it found, ask them, or look it up yourself with the current speaker's access.]`;
+  });
 }
 
 // Reap reasoning older than the retention window, on startup and daily after.

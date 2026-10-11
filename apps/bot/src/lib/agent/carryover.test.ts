@@ -3,6 +3,7 @@ import {
   CARRYOVER_MAX_RESULTS,
   CARRYOVER_OUTPUT_MAX,
   type GatheredResult,
+  isPrivateObservation,
   OBSERVATION_MAX_RESULTS,
   renderCarryover,
   renderContinuation,
@@ -124,5 +125,46 @@ describe('stableInput', () => {
   test('is stable — the same input dedupes to the same key', () => {
     // gatheredResults dedupes on `${toolName}:${stableInput(input)}`.
     expect(stableInput({ a: 1, b: 2 })).toBe(stableInput({ a: 1, b: 2 }));
+  });
+});
+
+describe('isPrivateObservation', () => {
+  const result = (toolName: string, output: unknown, input: unknown = {}) => ({
+    input,
+    output,
+    toolName,
+  });
+
+  test('the open web is public', () => {
+    expect(isPrivateObservation(result('searchWeb', 'D0123456789'))).toBe(
+      false
+    );
+  });
+
+  test('email, memory and MCP tools are private whatever they return', () => {
+    expect(isPrivateObservation(result('email', 'nothing'))).toBe(true);
+    expect(isPrivateObservation(result('memory', []))).toBe(true);
+    expect(isPrivateObservation(result('mcp_linear_list', 'ok'))).toBe(true);
+  });
+
+  test('a read of a DM or private channel is private', () => {
+    expect(
+      isPrivateObservation(
+        result('readConversationHistory', 'hi', { channel: 'D0BCA6D6GAV' })
+      )
+    ).toBe(true);
+    expect(
+      isPrivateObservation(result('getChannelInfo', { is_private: true }))
+    ).toBe(true);
+  });
+
+  test('a public channel read and shouted words are not', () => {
+    expect(
+      isPrivateObservation(
+        result('readConversationHistory', 'DEPRECATED GITHUBTOKEN', {
+          channel: 'C0266FRGT',
+        })
+      )
+    ).toBe(false);
   });
 });

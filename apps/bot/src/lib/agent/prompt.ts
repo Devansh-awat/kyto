@@ -217,7 +217,12 @@ export async function buildPrompt(
       // What kyto was THINKING on this thread's last few turns. Slack replayed
       // above only records what it said, so without this each turn re-derives
       // the reasoning (and the dead ends) of the one before it.
-      thread ? recallThinking(thread.id).then(renderThinking) : '',
+      thread
+        ? recallThinking({
+            speakerId: message.author.userId,
+            threadId: thread.id,
+          }).then(renderThinking)
+        : '',
       // The user account reads the global notebook too; the app, only the
       // channel's (lib/notebooks.ts). A failed read costs the notes, not the turn.
       thread

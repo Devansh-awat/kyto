@@ -93,3 +93,63 @@ export function renderCarryover(results: GatheredResult[]): string {
     ...lines,
   ].join('\n');
 }
+
+// Tools whose result is public by nature: the open web, kyto's own computing.
+const PUBLIC_TOOLS = new Set([
+  'askQuestion',
+  'browser',
+  'deploySite',
+  'fetchUrl',
+  'generateImage',
+  'getUser',
+  'loadSkill',
+  'loadTools',
+  'mermaid',
+  'poll',
+  'react',
+  'runJs',
+  'searchWeb',
+  'skip',
+  'unreact',
+  'upgradeModel',
+]);
+
+// Tools that read with someone's OWN access or hold their own data: private
+// whatever came back.
+const PRIVATE_TOOLS = new Set([
+  'deleteMemory',
+  'editMemory',
+  'email',
+  'fetchMemory',
+  'getFile',
+  'memory',
+  'saveMemory',
+  'slackBrowser',
+  'slackScript',
+]);
+
+// A DM, a group DM or a private channel named in a result: Slack ids starting
+// D or G (with a digit, so a shouted word like DEPRECATED isn't one), or
+// Slack's own privacy flags.
+const PRIVATE_CONVERSATION =
+  /"(?:is_private|isPrivate|is_im|is_mpim)"\s*:\s*true|\b[DG](?=[A-Z0-9]*\d)[A-Z0-9]{8,}\b/;
+
+/**
+ * Did this tool result carry someone's private data? Fails closed: anything
+ * not known public is private when it names a non-public conversation, and the
+ * tools that read with the asker's own access are private regardless.
+ */
+export function isPrivateObservation(result: GatheredResult): boolean {
+  if (PUBLIC_TOOLS.has(result.toolName)) {
+    return false;
+  }
+  if (
+    PRIVATE_TOOLS.has(result.toolName) ||
+    result.toolName.startsWith('mcp_')
+  ) {
+    return true;
+  }
+  return PRIVATE_CONVERSATION.test(
+    `${stableInput(result.input)} ${stableInput(result.output)}`
+  );
+}

@@ -1,9 +1,9 @@
 import { eq, lt } from 'drizzle-orm';
 import { db } from '../client';
-import { threadThinking } from '../schema';
+import { type StoredThinkingTurn, threadThinking } from '../schema';
 import { threadsInChannel } from './thread-ids';
 
-export type { ThreadThinking } from '../schema';
+export type { StoredThinkingTurn, ThreadThinking } from '../schema';
 
 /**
  * The stored reasoning turns for a thread, or [] if none or the row is older
@@ -12,7 +12,7 @@ export type { ThreadThinking } from '../schema';
 export async function getThreadThinking(
   threadId: string,
   maxAgeMs: number
-): Promise<string[]> {
+): Promise<StoredThinkingTurn[]> {
   const [row] = await db
     .select()
     .from(threadThinking)
@@ -29,7 +29,7 @@ export async function getThreadThinking(
 
 export async function saveThreadThinking(
   threadId: string,
-  turns: string[]
+  turns: StoredThinkingTurn[]
 ): Promise<void> {
   await db
     .insert(threadThinking)
