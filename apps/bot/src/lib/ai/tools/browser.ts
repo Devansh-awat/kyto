@@ -15,6 +15,12 @@ import { errorMessage, toLogError } from '@/lib/utils/error';
 // browser session (the sandbox lives for the turn). The CLI serves its own,
 // always-current usage docs — run `skills get core` first to learn commands.
 const MAX_OUTPUT_CHARS = 8000;
+// A page that never finishes loading used to hold `agent-browser open` until
+// the 5-minute attempt watchdog killed the whole attempt and forced a model
+// fallback (#55). Killed in the sandbox instead, so the model can move on.
+const COMMAND_TIMEOUT_SECONDS = 90;
+// What coreutils `timeout` exits with when it had to kill the command.
+const TIMED_OUT_EXIT_CODE = 124;
 
 function truncate(text: string): string {
   return text.length > MAX_OUTPUT_CHARS
@@ -120,10 +126,14 @@ export function browserTool({
         // loop stays blocked awaiting this tool and the whole turn freezes.
         const result = await context.session.run({
           abortSignal,
-          command: `agent-browser ${command}`,
+          command: `timeout -k 5 ${COMMAND_TIMEOUT_SECONDS} agent-browser ${command}`,
           workingDirectory: context.sessionWorkDir,
         });
         const view = await liveView;
+        if (result.exitCode === TIMED_OUT_EXIT_CODE) {
+          const error = `browser ${command} timed out after ${COMMAND_TIMEOUT_SECONDS}s and was stopped. The page is probably stuck loading: try another URL, or snapshot what did load.`;
+          return { error, success: false, summary: error };
+        }
         return {
           exitCode: result.exitCode,
           ...(view
