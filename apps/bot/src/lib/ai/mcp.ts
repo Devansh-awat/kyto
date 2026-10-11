@@ -22,10 +22,14 @@ import {
 export const AGENTMAIL_BUILTIN_ID = 'builtin:agentmail';
 
 // Minimal MCP client over the Streamable HTTP transport (JSON-RPC 2.0 via
-// POST). Hand-rolled on purpose: it is ~150 lines, has zero dependencies, and
-// only needs initialize / tools/list / tools/call. Legacy SSE-only servers are
-// not supported — Slack gives the bot no channel to a user's local machine
-// anyway, so only remote HTTP(S) servers can ever work here.
+// POST), hand-rolled on purpose: it has zero dependencies and only needs
+// initialize / tools/list / tools/call. A Streamable-HTTP initialize that is
+// refused (404/405) or answered with non-JSON is taken to be a legacy SSE-only
+// server, and the same calls are then retried over the 2024-11-05 HTTP+SSE
+// transport: one GET stream that hands over a POST endpoint, with replies
+// arriving as `message` events on that same stream. Slack gives the bot no
+// channel to a user's local machine anyway, so only remote HTTP(S) servers can
+// ever work here.
 
 const PROTOCOL_VERSION = '2025-06-18';
 const CONNECT_TIMEOUT_MS = 8000;
@@ -133,17 +137,64 @@ export function forgetMcpFailure(serverId: string): void {
   failures.delete(failureKey(serverId));
 }
 
+// A Streamable-HTTP probe that failed in the shape of an SSE-only server: the
+// POST is refused (404/405) or answered with something that is not JSON. Only
+// initialization acts on it — the SAME failure on a later call is a genuine
+// error, not a signal to switch transports. Not exported: transport is decided
+// here, not by a caller.
+class LegacySseFallbackError extends Error {}
+
+interface PendingSseRequest {
+  reject: (error: unknown) => void;
+  resolve: (value: unknown) => void;
+}
+
 class McpConnection {
   private readonly server: UserMcpServer;
   private sessionId: string | undefined;
   private initialized: Promise<void> | undefined;
   private nextId = 1;
+  private transport: 'http' | 'sse' = 'http';
+  private sseEndpoint: string | undefined;
+  private sseController: AbortController | undefined;
+  private ssePump: Promise<void> | undefined;
+  private sseReady: Promise<void> | undefined;
+  private resolveSseEndpoint: (() => void) | undefined;
+  private rejectSseEndpoint: ((error: unknown) => void) | undefined;
+  private readonly ssePending = new Map<number, PendingSseRequest>();
 
   constructor({ server }: { server: UserMcpServer }) {
     this.server = server;
   }
 
-  private async rpc(
+  private rpc(
+    method: string,
+    params: unknown,
+    {
+      abortSignal,
+      notification = false,
+      timeoutMs = CALL_TIMEOUT_MS,
+    }: {
+      abortSignal?: AbortSignal;
+      notification?: boolean;
+      timeoutMs?: number;
+    } = {}
+  ): Promise<unknown> {
+    if (this.transport === 'sse') {
+      return this.rpcOverSse(method, params, {
+        abortSignal,
+        notification,
+        timeoutMs,
+      });
+    }
+    return this.rpcOverHttp(method, params, {
+      abortSignal,
+      notification,
+      timeoutMs,
+    });
+  }
+
+  private async rpcOverHttp(
     method: string,
     params: unknown,
     {
@@ -193,6 +244,14 @@ class McpConnection {
       this.sessionId = session;
     }
     if (!response.ok) {
+      // 404/405 is the shape of an SSE-only server with no POST endpoint at its
+      // root; mark it so initialization can retry over the legacy transport.
+      if (response.status === 404 || response.status === 405) {
+        await response.body?.cancel().catch(() => undefined);
+        throw new LegacySseFallbackError(
+          `MCP server responded ${response.status} for ${method}.`
+        );
+      }
       throw new Error(`MCP server responded ${response.status} for ${method}.`);
     }
     if (notification) {
@@ -200,9 +259,25 @@ class McpConnection {
       return;
     }
     const contentType = response.headers.get('content-type') ?? '';
-    const payload = contentType.includes('text/event-stream')
-      ? await readSseResponse(response, id as number)
-      : await response.json();
+    let payload: unknown;
+    if (contentType.includes('text/event-stream')) {
+      payload = await readSseResponse(response, id as number);
+    } else if (contentType && !contentType.includes('json')) {
+      // An HTML error page (or similar) is not a JSON-RPC reply — the shape of
+      // an SSE-only server answering a POST it does not implement.
+      await response.body?.cancel().catch(() => undefined);
+      throw new LegacySseFallbackError(
+        `MCP server replied to ${method} with ${contentType}, which is not JSON.`
+      );
+    } else {
+      try {
+        payload = await response.json();
+      } catch {
+        throw new LegacySseFallbackError(
+          `MCP server's reply to ${method} was not valid JSON.`
+        );
+      }
+    }
     const message = payload as {
       error?: { code?: number; message?: string };
       result?: unknown;
@@ -217,16 +292,21 @@ class McpConnection {
 
   private ensureInitialized(): Promise<void> {
     this.initialized ??= (async () => {
-      await this.rpc(
-        'initialize',
-        {
-          capabilities: {},
-          clientInfo: { name: 'kyto', version: '1.0.0' },
-          protocolVersion: PROTOCOL_VERSION,
-        },
-        { timeoutMs: CONNECT_TIMEOUT_MS }
-      );
-      await this.rpc('notifications/initialized', {}, { notification: true });
+      try {
+        await this.initialize();
+      } catch (error) {
+        // Only initialization falls back, and only from the Streamable-HTTP
+        // attempt: a later call failing this way is a real error, and there is
+        // no second legacy path to try.
+        if (
+          !(error instanceof LegacySseFallbackError) ||
+          this.transport !== 'http'
+        ) {
+          throw error;
+        }
+        await this.connectLegacySse();
+        await this.initialize();
+      }
     })().catch((error: unknown) => {
       // Not cached: one transient failure used to fail every later call on
       // this connection for the rest of the turn.
@@ -234,6 +314,286 @@ class McpConnection {
       throw error;
     });
     return this.initialized;
+  }
+
+  private async initialize(): Promise<void> {
+    await this.rpc(
+      'initialize',
+      {
+        capabilities: {},
+        clientInfo: { name: 'kyto', version: '1.0.0' },
+        protocolVersion: PROTOCOL_VERSION,
+      },
+      { timeoutMs: CONNECT_TIMEOUT_MS }
+    );
+    await this.rpc('notifications/initialized', {}, { notification: true });
+  }
+
+  private connectLegacySse(): Promise<void> {
+    this.sseReady ??= this.openLegacySse().catch((error: unknown) => {
+      // Not cached, like a failed initialize: one dropped stream must not
+      // condemn the server for the rest of the connection.
+      this.sseReady = undefined;
+      throw error;
+    });
+    return this.sseReady;
+  }
+
+  /**
+   * Open the legacy transport: one long-lived GET stream whose first
+   * `endpoint` event names where JSON-RPC POSTs go. The stream must stay open
+   * for the session's life — every reply arrives on it as a `message` event.
+   */
+  private async openLegacySse(): Promise<void> {
+    // The stream URL is user-supplied and fetched from kyto's own network, so
+    // it gets the same public-host check as the Streamable-HTTP path.
+    await assertPublicHost(this.server.url);
+    const controller = new AbortController();
+    this.sseController = controller;
+    // A manual deadline for the GET's *headers* only, cleared once they arrive.
+    // `AbortSignal.timeout` cannot be used here: it stays attached to the
+    // response and would abort this long-lived body when it fired, killing the
+    // session mid-turn. The endpoint wait below has its own deadline.
+    const headerTimeout = setTimeout(() => {
+      controller.abort(new Error('MCP SSE stream headers timed out.'));
+    }, CONNECT_TIMEOUT_MS);
+    let response: Response;
+    try {
+      response = await fetch(this.server.url, {
+        headers: {
+          accept: 'text/event-stream',
+          ...(this.server.authorization
+            ? { authorization: this.server.authorization }
+            : {}),
+        },
+        method: 'GET',
+        redirect: 'manual',
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(headerTimeout);
+    }
+    if (!response.ok) {
+      throw new Error(
+        `MCP server responded ${response.status} for the SSE stream.`
+      );
+    }
+    const contentType = response.headers.get('content-type') ?? '';
+    const body = response.body;
+    if (!(contentType.includes('text/event-stream') && body)) {
+      await body?.cancel().catch(() => undefined);
+      throw new Error('MCP server did not open an event stream.');
+    }
+    const endpointReady = new Promise<void>((resolve, reject) => {
+      this.resolveSseEndpoint = resolve;
+      this.rejectSseEndpoint = reject;
+    });
+    this.ssePump = this.pumpLegacySse(body);
+    const timer = setTimeout(() => {
+      this.failSse(
+        new Error('MCP server did not send its SSE endpoint in time.')
+      );
+    }, CONNECT_TIMEOUT_MS);
+    try {
+      await endpointReady;
+    } finally {
+      clearTimeout(timer);
+    }
+    this.transport = 'sse';
+  }
+
+  private async pumpLegacySse(body: ReadableStream<Uint8Array>): Promise<void> {
+    try {
+      for await (const event of sseEvents(body)) {
+        if (event.event === 'endpoint') {
+          await this.acceptSseEndpoint(event.data);
+          continue;
+        }
+        if (event.event === 'message') {
+          this.dispatchSseMessage(event.data);
+        }
+      }
+    } catch (error) {
+      this.failSse(error instanceof Error ? error : new Error(String(error)));
+      return;
+    }
+    this.failSse(new Error('MCP SSE stream ended.'));
+  }
+
+  private async acceptSseEndpoint(data: string): Promise<void> {
+    let endpoint: string;
+    try {
+      // The server usually sends a relative path (`/messages?sessionId=…`); it
+      // resolves against the stream's own URL, per the 2024-11-05 transport.
+      endpoint = new URL(data, this.server.url).toString();
+    } catch {
+      this.failSse(new Error('MCP server sent an unparseable SSE endpoint.'));
+      return;
+    }
+    try {
+      // The endpoint is fetched with the credential, so it is checked too.
+      await assertPublicHost(endpoint);
+    } catch (error) {
+      this.failSse(error instanceof Error ? error : new Error(String(error)));
+      return;
+    }
+    this.sseEndpoint = endpoint;
+    this.resolveSseEndpoint?.();
+    this.resolveSseEndpoint = undefined;
+    this.rejectSseEndpoint = undefined;
+  }
+
+  private dispatchSseMessage(data: string): void {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(data);
+    } catch {
+      return; // a keepalive or other non-JSON event, not a JSON-RPC reply
+    }
+    if (typeof parsed !== 'object' || parsed === null || !('id' in parsed)) {
+      return; // server-initiated notification; kyto has no request to match it
+    }
+    const message = parsed as {
+      error?: { code?: number; message?: string };
+      id: number;
+      result?: unknown;
+    };
+    const pending = this.ssePending.get(message.id);
+    if (!pending) {
+      return;
+    }
+    if (message.error) {
+      pending.reject(
+        new Error(
+          `MCP call failed: ${message.error.message ?? 'unknown error'}`
+        )
+      );
+      return;
+    }
+    pending.resolve(message.result);
+  }
+
+  private failSse(error: Error): void {
+    this.rejectSseEndpoint?.(error);
+    this.resolveSseEndpoint = undefined;
+    this.rejectSseEndpoint = undefined;
+    for (const pending of this.ssePending.values()) {
+      pending.reject(error);
+    }
+    this.ssePending.clear();
+    // The session is gone; dropping the endpoint makes a later call fail at
+    // once instead of POSTing into a dead stream and waiting out its timeout.
+    this.sseEndpoint = undefined;
+    this.sseController?.abort(error);
+  }
+
+  private async rpcOverSse(
+    method: string,
+    params: unknown,
+    {
+      abortSignal,
+      notification = false,
+      timeoutMs = CALL_TIMEOUT_MS,
+    }: {
+      abortSignal?: AbortSignal;
+      notification?: boolean;
+      timeoutMs?: number;
+    } = {}
+  ): Promise<unknown> {
+    const endpoint = this.sseEndpoint;
+    if (!endpoint) {
+      throw new Error('MCP SSE session has no message endpoint.');
+    }
+    const id = notification ? undefined : this.nextId++;
+    await assertPublicHost(endpoint);
+    // Register the reply slot BEFORE the POST. A legacy server acks with 202 and
+    // pushes the reply as a `message` event on the GET stream, and that event can
+    // beat the POST's response back to the client — a slot registered afterwards
+    // would miss the only copy of the reply and hang to its timeout.
+    const reply = notification
+      ? undefined
+      : this.awaitSseReply(id as number, { abortSignal, method, timeoutMs });
+    try {
+      const response = await fetch(endpoint, {
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          method,
+          params,
+          ...(notification ? {} : { id }),
+        }),
+        headers: {
+          accept: 'application/json, text/event-stream',
+          'content-type': 'application/json',
+          ...(this.server.authorization
+            ? { authorization: this.server.authorization }
+            : {}),
+          'mcp-protocol-version': PROTOCOL_VERSION,
+        },
+        method: 'POST',
+        redirect: 'manual',
+        signal: abortSignal
+          ? AbortSignal.any([abortSignal, AbortSignal.timeout(timeoutMs)])
+          : AbortSignal.timeout(timeoutMs),
+      });
+      if (!response.ok) {
+        const error = new Error(
+          `MCP server responded ${response.status} for ${method}.`
+        );
+        this.ssePending.get(id as number)?.reject(error);
+        await reply?.catch(() => undefined);
+        throw error;
+      }
+      // A legacy server acks a POST with 202 and no body; the reply, if any,
+      // had better already be registered above — it comes as a `message` event.
+      await response.body?.cancel().catch(() => undefined);
+    } catch (error) {
+      // The POST went nowhere: settle the reply slot too, so the awaited promise
+      // neither leaks a pending entry nor trips an unhandled rejection.
+      this.ssePending.get(id as number)?.reject(error);
+      await reply?.catch(() => undefined);
+      throw error;
+    }
+    if (notification) {
+      return;
+    }
+    return reply;
+  }
+
+  private awaitSseReply(
+    id: number,
+    {
+      abortSignal,
+      method,
+      timeoutMs,
+    }: { abortSignal?: AbortSignal; method: string; timeoutMs: number }
+  ): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      const finish = (error: unknown, value?: unknown) => {
+        clearTimeout(timer);
+        abortSignal?.removeEventListener('abort', onAbort);
+        this.ssePending.delete(id);
+        if (error) {
+          reject(error);
+        } else {
+          resolve(value);
+        }
+      };
+      const onAbort = () =>
+        finish(abortSignal?.reason ?? new Error('MCP call aborted.'));
+      const timer = setTimeout(
+        () => finish(new Error(`MCP ${method} timed out.`)),
+        timeoutMs
+      );
+      if (abortSignal?.aborted) {
+        finish(abortSignal.reason ?? new Error('MCP call aborted.'));
+        return;
+      }
+      abortSignal?.addEventListener('abort', onAbort, { once: true });
+      this.ssePending.set(id, {
+        reject: (error) => finish(error),
+        resolve: (value) => finish(undefined, value),
+      });
+    });
   }
 
   async listTools(): Promise<McpToolInfo[]> {
@@ -287,6 +647,17 @@ class McpConnection {
   }
 
   async close(): Promise<void> {
+    // Legacy SSE has no session to DELETE — the long-lived GET stream IS the
+    // session, so closing it means aborting the stream, letting the pump settle
+    // (which cancels the reader), and failing anything still waiting on a reply.
+    this.resolveSseEndpoint = undefined;
+    this.rejectSseEndpoint = undefined;
+    for (const pending of this.ssePending.values()) {
+      pending.reject(new Error('MCP connection closed.'));
+    }
+    this.ssePending.clear();
+    this.sseController?.abort();
+    await this.ssePump?.catch(() => undefined);
     if (!this.sessionId) {
       return;
     }
@@ -311,6 +682,62 @@ class McpConnection {
   }
 }
 
+interface SseEvent {
+  data: string;
+  /** The `event:` field; `message` when the server omits it, per the SSE spec. */
+  event: string;
+}
+
+function parseSseEvent(block: string): SseEvent | undefined {
+  let event = 'message';
+  const data: string[] = [];
+  for (const line of block.split('\n')) {
+    if (line.startsWith('event:')) {
+      event = line.slice(6).trim();
+    } else if (line.startsWith('data:')) {
+      data.push(line.slice(5).trim());
+    }
+  }
+  return data.length > 0 ? { data: data.join('\n'), event } : undefined;
+}
+
+/**
+ * Parse `text/event-stream` frames out of a fetch body. Shared by the
+ * Streamable-HTTP reply reader (one POST, one reply, then the stream ends) and
+ * the legacy transport (one long-lived GET stream carrying many replies).
+ */
+async function* sseEvents(
+  body: ReadableStream<Uint8Array>
+): AsyncGenerator<SseEvent> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        return;
+      }
+      // SSE allows CRLF line endings; normalized so `\n\n` finds every event.
+      buffer += decoder
+        .decode(value, { stream: true })
+        .replaceAll('\r\n', '\n');
+      let boundary = buffer.indexOf('\n\n');
+      while (boundary !== -1) {
+        const block = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const event = parseSseEvent(block);
+        if (event) {
+          yield event;
+        }
+        boundary = buffer.indexOf('\n\n');
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+}
+
 async function readSseResponse(
   response: Response,
   id: number
@@ -319,47 +746,21 @@ async function readSseResponse(
   if (!body) {
     throw new Error('MCP SSE response had no body.');
   }
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      // SSE allows CRLF line endings; normalized so `\n\n` finds every event.
-      buffer += decoder
-        .decode(value, { stream: true })
-        .replaceAll('\r\n', '\n');
-      for (const event of buffer.split('\n\n').slice(0, -1)) {
-        const data = event
-          .split('\n')
-          .filter((line) => line.startsWith('data:'))
-          .map((line) => line.slice(5).trim())
-          .join('\n');
-        if (!data) {
-          continue;
-        }
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(data);
-        } catch {
-          continue; // a keepalive or other non-JSON event, not our reply
-        }
-        if (
-          typeof parsed === 'object' &&
-          parsed !== null &&
-          'id' in parsed &&
-          parsed.id === id
-        ) {
-          return parsed;
-        }
-      }
-      buffer = buffer.slice(buffer.lastIndexOf('\n\n') + 2);
+  for await (const event of sseEvents(body)) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(event.data);
+    } catch {
+      continue; // a keepalive or other non-JSON event, not our reply
     }
-  } finally {
-    await reader.cancel().catch(() => undefined);
+    if (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      'id' in parsed &&
+      parsed.id === id
+    ) {
+      return parsed;
+    }
   }
   throw new Error('MCP SSE response ended without a matching reply.');
 }
