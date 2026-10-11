@@ -34,6 +34,11 @@ const CONFIG = JSON.stringify(
   {
     $schema: 'https://opencode.ai/config.json',
     autoupdate: false,
+    // The sandbox has 1 GB. A run that was OOM-killed (exit 137) lost 16
+    // minutes of work (#61); TypeScript's language server alone can grow past
+    // that indexing node_modules, and the git snapshots that only feed the
+    // TUI's undo copy the worktree. Formatters stay: they are short-lived.
+    lsp: false,
     permission: {
       // Last match wins, so the denies come after the catch-all allow. `run` is
       // non-interactive: an `ask` would simply hang.
@@ -46,6 +51,7 @@ const CONFIG = JSON.stringify(
       },
     },
     share: 'disabled',
+    snapshot: false,
   },
   null,
   2
@@ -56,6 +62,9 @@ const RULES = `# Rules for this environment
 - You have NO access to Slack and must never try to get it: do not run the
   \`slack\` command, do not call any Slack API, do not look for Slack tokens.
 - Work only on the task you were given and the files in this sandbox.
+- The machine has only 1 GB of memory, and running out kills you and loses the
+  work. Typecheck or test only what you changed (one package, \`bun test <file>\`),
+  never a whole large repo at once, and never leave a dev server running.
 - When you finish, say briefly what you built or changed, where the files are,
   and how to run it.
 `;
