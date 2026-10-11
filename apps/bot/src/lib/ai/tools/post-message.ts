@@ -15,6 +15,10 @@ import { requestPostConfirmation } from '@/lib/confirm-post/request';
 import { type ResolvedIdentity, resolveIdentity } from '@/lib/identity';
 import { resolvePostIdentity } from '@/lib/post-identity';
 import {
+  blockKitProblems,
+  describeBlockKitProblems,
+} from '@/lib/slack/block-kit';
+import {
   isRawSlackChannelId,
   toRawSlackChannelId,
   toRawSlackUserId,
@@ -323,6 +327,16 @@ export function postMessageTool({
         const parsed = parseBlocks(rawBlocks);
         if (parsed.error) {
           return { error: parsed.error };
+        }
+        // Checked before anything is queued or posted: Slack's own refusal is
+        // a bare `invalid_blocks`, and an approval card for blocks that can't
+        // be sent would be approved for nothing.
+        const { problems } = await blockKitProblems({
+          blocks: parsed.blocks ?? [],
+          surface: 'message',
+        });
+        if (problems.length > 0) {
+          return { error: describeBlockKitProblems(problems) };
         }
         rawParsedBlocks = parsed.blocks;
         blocks = allowBroadcast

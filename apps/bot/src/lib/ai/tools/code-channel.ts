@@ -13,6 +13,10 @@ import {
   rememberCanvasView,
 } from '@/lib/code-channels';
 import logger from '@/lib/logger';
+import {
+  blockKitProblems,
+  describeBlockKitProblems,
+} from '@/lib/slack/block-kit';
 import { callAgents, refusalText } from '@/lib/slack/code-channel-api';
 import { errorMessage } from '@/lib/utils/error';
 
@@ -493,6 +497,14 @@ export function codeChannelTool({
       const parsed = parseBlocks(input.blocks ?? '');
       if (parsed.error) {
         return { error: parsed.error, success: false };
+      }
+      // setView answers a bad tab with a bare `invalid_blocks`; this says where.
+      const { problems } = await blockKitProblems({
+        blocks: parsed.blocks ?? [],
+        surface: 'tab',
+      });
+      if (problems.length > 0) {
+        return { error: describeBlockKitProblems(problems), success: false };
       }
       params.blocks = parsed.blocks;
     }
