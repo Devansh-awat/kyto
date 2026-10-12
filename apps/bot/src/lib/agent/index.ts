@@ -33,6 +33,7 @@ import {
   renderObservations,
   stableInput,
 } from '@/lib/agent/carryover';
+import { summarizeToolResults } from '@/lib/agent/compaction';
 import {
   createRepetitionGuard,
   stripRepeatedLines,
@@ -65,6 +66,7 @@ import {
   isPromptConstructionError,
 } from '@/lib/agent/routing';
 import { createSegmenter, isVisibleText } from '@/lib/agent/segmentation';
+import { createSideChunks } from '@/lib/agent/side-chunks';
 import { isBareSkipText } from '@/lib/agent/skip-text';
 import {
   abortReasonOf,
@@ -1338,6 +1340,10 @@ async function executeTurn(
           type: 'task_update',
         };
         const attemptStart = Date.now();
+        // Mid-turn compaction reports into the plan from inside prepareStep,
+        // while the model's stream is idle between steps.
+        const side = createSideChunks<string | StreamChunk>();
+        let compactions = 0;
         const result = streamAttempt({
           abortSignal: AbortSignal.any([
             controller.signal,
@@ -1358,6 +1364,45 @@ async function executeTurn(
           // An image the SDK's schema would reject is dropped rather than
           // allowed to invalidate the whole prompt. Log it: silently ignoring
           // someone's screenshot is confusing enough to be worth a line.
+          summarizeToolResults: async (picks) => {
+            compactions += 1;
+            const id = `compact-${attempts.length}-${truncationRetries}-${compactions}`;
+            const title = 'Compacting context';
+            const visible = cards.show({ id, kind: 'tool', title });
+            if (visible) {
+              side.push({
+                id,
+                status: 'in_progress',
+                title,
+                type: 'task_update',
+              });
+            }
+            const summary = await summarizeToolResults({
+              abortSignal: AbortSignal.any([
+                controller.signal,
+                attemptAbort.signal,
+              ]),
+              picks,
+            });
+            cards.finish(id);
+            if (visible) {
+              side.push({
+                id,
+                output: `Folded ${picks.length} earlier tool result${picks.length === 1 ? '' : 's'} into ${summary ? 'a summary' : 'short excerpts'} to keep the request under the model's long-context price step.`,
+                status: 'complete',
+                title,
+                type: 'task_update',
+              });
+            }
+            armWatchdog(ATTEMPT_TIMEOUT_MS);
+            return summary;
+          },
+          onContextTrimmed: (info) => {
+            logger.info(
+              { attempt: attemptLog(currentAttempt), ...info, threadId },
+              '[agent] trimmed old tool results under the long-context price step'
+            );
+          },
           onDroppedImages: (dropped) => {
             logger.warn(
               {
@@ -1467,78 +1512,80 @@ async function executeTurn(
           toolOrder: built.toolOrder,
           tools: built.tools,
         });
-        for await (const chunk of renderStream({
-          budget: cards,
-          context: {
-            ...attemptLog(currentAttempt),
-            threadId,
-          },
-          // Reply text is yielded as strings (the message body) so streamSegmented
-          // can split the plan on text→tool boundaries; onTextDelta only tracks
-          // flags now — the actual posting happens in streamSegmented.
-          emitText: true,
-          secret,
-          knownTools,
-          onSkip: () => {
-            // A skip is a deliberate, successful "no reply".
-            skipped = true;
-          },
-          onTally: recordTiming,
-          onTextDelta: (text) => {
-            producedText = true;
-            attemptText = true;
-            errorStage = 'after_text';
-            attemptRawText += text;
-            lastOutputWasText = true;
-            moderationReply += text;
-            streamedText = appendStreamedText(streamedText, text);
-            // Progress: reset the stall watchdog (see armWatchdog).
-            armWatchdog(ATTEMPT_TIMEOUT_MS);
-          },
-          onReasoning: (text) => {
-            attemptThinking.push(text);
-          },
-          onToolActivity: () => {
-            attemptToolActivity = true;
-            lastOutputWasText = false;
-            armWatchdog(ATTEMPT_TIMEOUT_MS);
-          },
-          onToolInputStart: () => {
-            lastOutputWasText = false;
-          },
-          onToolResult: (info) => {
-            armWatchdog(ATTEMPT_TIMEOUT_MS);
-            lastOutputWasText = false;
-            codingMonitor.recordResult(info);
-            const key = `${info.toolName}:${stableInput(info.input)}`;
-            if (gatheredKeys.has(key)) {
-              return;
-            }
-            gatheredKeys.add(key);
-            gatheredResults.push(info);
-            moderationTools.push({
-              source: 'tool result',
-              text:
-                typeof info.output === 'string'
-                  ? info.output
-                  : (JSON.stringify(info.output) ?? ''),
-            });
-          },
-          onFinish: (reason) => {
-            attemptFinishReason = reason;
-          },
-          onError: (info) => {
-            attemptStreamError ??= info;
-            // A HackClub daily-spend-limit 429 dooms every HackClub rung.
-            if (
-              currentAttempt.provider === HACKCLUB_PROVIDER &&
-              SPEND_LIMIT_PATTERN.test(info.message)
-            ) {
-              router.markSpendLimit(info.message);
-            }
-          },
-          stream: result.fullStream,
-        })) {
+        for await (const chunk of side.merge(
+          renderStream({
+            budget: cards,
+            context: {
+              ...attemptLog(currentAttempt),
+              threadId,
+            },
+            // Reply text is yielded as strings (the message body) so streamSegmented
+            // can split the plan on text→tool boundaries; onTextDelta only tracks
+            // flags now — the actual posting happens in streamSegmented.
+            emitText: true,
+            secret,
+            knownTools,
+            onSkip: () => {
+              // A skip is a deliberate, successful "no reply".
+              skipped = true;
+            },
+            onTally: recordTiming,
+            onTextDelta: (text) => {
+              producedText = true;
+              attemptText = true;
+              errorStage = 'after_text';
+              attemptRawText += text;
+              lastOutputWasText = true;
+              moderationReply += text;
+              streamedText = appendStreamedText(streamedText, text);
+              // Progress: reset the stall watchdog (see armWatchdog).
+              armWatchdog(ATTEMPT_TIMEOUT_MS);
+            },
+            onReasoning: (text) => {
+              attemptThinking.push(text);
+            },
+            onToolActivity: () => {
+              attemptToolActivity = true;
+              lastOutputWasText = false;
+              armWatchdog(ATTEMPT_TIMEOUT_MS);
+            },
+            onToolInputStart: () => {
+              lastOutputWasText = false;
+            },
+            onToolResult: (info) => {
+              armWatchdog(ATTEMPT_TIMEOUT_MS);
+              lastOutputWasText = false;
+              codingMonitor.recordResult(info);
+              const key = `${info.toolName}:${stableInput(info.input)}`;
+              if (gatheredKeys.has(key)) {
+                return;
+              }
+              gatheredKeys.add(key);
+              gatheredResults.push(info);
+              moderationTools.push({
+                source: 'tool result',
+                text:
+                  typeof info.output === 'string'
+                    ? info.output
+                    : (JSON.stringify(info.output) ?? ''),
+              });
+            },
+            onFinish: (reason) => {
+              attemptFinishReason = reason;
+            },
+            onError: (info) => {
+              attemptStreamError ??= info;
+              // A HackClub daily-spend-limit 429 dooms every HackClub rung.
+              if (
+                currentAttempt.provider === HACKCLUB_PROVIDER &&
+                SPEND_LIMIT_PATTERN.test(info.message)
+              ) {
+                router.markSpendLimit(info.message);
+              }
+            },
+            stream: result.fullStream,
+          })
+        )) {
           if (typeof chunk === 'string') {
             // The model has stopped answering and started looping. Cut it off
             // here, BEFORE this chunk is yielded on to streamSegmented — that is

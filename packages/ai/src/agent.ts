@@ -16,6 +16,15 @@ import {
   type PrefixUnit,
   prefixUnits,
 } from './cache-probe';
+import {
+  applyTrim,
+  estimateMessageTokens,
+  LONG_CONTEXT_PRICE_STEP,
+  planTrim,
+  TRIM_TARGET,
+  TRIM_TRIGGER,
+  type TrimPick,
+} from './context-trim';
 import { fetchWithGatewayRetry, type GatewayRetryInfo } from './gateway-retry';
 import { capContextImages } from './image-cap';
 import {
@@ -162,6 +171,7 @@ export function streamAttempt({
   getFreshImages,
   history = [],
   onCachePrefix,
+  onContextTrimmed,
   onDroppedImages,
   onFirstRequest,
   onError,
@@ -171,6 +181,7 @@ export function streamAttempt({
   requireToolFirst,
   serviceTier,
   source = 'turn',
+  summarizeToolResults,
   system,
   toolOrder,
   tools,
@@ -216,6 +227,23 @@ export function streamAttempt({
    * reports that: the turn succeeds either way and only the invoice differs.
    */
   onCachePrefix?: (info: PrefixDivergence) => void;
+  /**
+   * Called when old tool results were trimmed to keep a request under the
+   * model's long-context price step (see context-trim.ts).
+   */
+  onContextTrimmed?: (info: {
+    after: number;
+    before: number;
+    step: number;
+    summarized: boolean;
+    trimmed: number;
+  }) => void;
+  /**
+   * Mid-turn compaction: summarizes the tool results about to be folded, so
+   * the model keeps what they said rather than just their first lines.
+   * Undefined → each folded result keeps its own head instead.
+   */
+  summarizeToolResults?: (picks: TrimPick[]) => Promise<string | undefined>;
   /**
    * Called with the prefix units of the attempt's FIRST request, so the caller
    * can compare it with the previous turn's — the cross-turn half of the probe
@@ -331,6 +359,10 @@ export function streamAttempt({
       source,
       steps,
     });
+  const priceStep = LONG_CONTEXT_PRICE_STEP[attempt.model];
+  // How many messages the previous step's request carried, so the next step
+  // can tell what that step appended.
+  let sentLength = 0;
   return streamText({
     ...promptInput,
     abortSignal,
@@ -367,13 +399,18 @@ export function streamAttempt({
         }
       : {}),
     ...(onError ? { onError: ({ error }) => onError(error) } : {}),
-    ...(activeTools || getFreshImages || requireToolFirst
+    ...(activeTools || getFreshImages || requireToolFirst || priceStep
       ? {
           // Gate deferred tools per step AND inject any images the model asked to
           // view: the SDK renders images only in a user message, so a screenshot
           // the model loaded mid-turn is appended as a user turn here (the
           // override carries forward, so it stays visible on later steps).
-          prepareStep: ({ messages, stepNumber }) => {
+          prepareStep: async ({
+            initialMessages,
+            messages,
+            stepNumber,
+            steps,
+          }) => {
             const result: {
               activeTools?: never[];
               messages?: ModelMessage[];
@@ -393,12 +430,48 @@ export function streamAttempt({
               onDroppedImages
             );
             let stepMessages = messages;
+            // The last step's REAL input size plus an estimate of what it
+            // appended (its reply and tool results). Step 0 is the replayed
+            // thread, which compaction bounds; nothing here can trim it
+            // without throwing away the cached history.
+            const lastInput = steps.at(-1)?.usage.inputTokens;
+            if (priceStep && lastInput !== undefined) {
+              const before =
+                lastInput + estimateMessageTokens(messages.slice(sentLength));
+              const plan =
+                before > priceStep * TRIM_TRIGGER
+                  ? planTrim({
+                      fromIndex: initialMessages.length,
+                      messages,
+                      target: priceStep * TRIM_TARGET,
+                      tokens: before,
+                    })
+                  : undefined;
+              if (plan && plan.picks.length > 0) {
+                const summary = await summarizeToolResults?.(plan.picks);
+                stepMessages = applyTrim({
+                  messages,
+                  picks: plan.picks,
+                  summary,
+                });
+                onContextTrimmed?.({
+                  after:
+                    before -
+                    estimateMessageTokens(messages) +
+                    estimateMessageTokens(stepMessages),
+                  before,
+                  step: stepNumber,
+                  summarized: summary !== undefined,
+                  trimmed: plan.picks.length,
+                });
+              }
+            }
             if (fresh.length > 0) {
               const label = fresh
                 .map((image) => image.path ?? 'image')
                 .join(', ');
               stepMessages = [
-                ...messages,
+                ...stepMessages,
                 {
                   content: [
                     ...fresh.map(imagePart),
@@ -415,6 +488,7 @@ export function streamAttempt({
             if (capped !== messages) {
               result.messages = capped;
             }
+            sentLength = capped.length;
             return result;
           },
         }
