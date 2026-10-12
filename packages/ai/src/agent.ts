@@ -878,8 +878,7 @@ const OPENROUTER_FORMAT_BYOK = new Set(['byok-hackclub', 'byok-openrouter']);
 
 // Each accepted by luna (2026-10-09) and haiku (2026-10-10) through the proxy;
 // `high` is left out because the experiment is about speed.
-const EXPERIMENT_EFFORTS = ['none', 'low', 'medium'];
-const THINKING_EFFORTS = ['low', 'medium'];
+const EXPERIMENT_EFFORTS = ['low', 'medium'];
 
 /** What `--reasoning` accepts — all four passed the proxy on both models. */
 export const REASONING_EFFORTS = ['none', 'low', 'medium', 'high'] as const;
@@ -889,13 +888,9 @@ export const REASONING_EFFORTS = ['none', 'low', 'medium', 'high'] as const;
  * 2026-10-10 for haiku), logged with the turn so speed and quality can be
  * compared per model and effort from thread_logs. Every other model: medium.
  *
- * Drawn per THREAD where the cache needs it (owner's calls 2026-10-11), both
- * measured through the proxy. On haiku, `none` is drawn once per thread (a third
- * of them) and kept, and the rest draw low/medium per attempt: Anthropic keeps
- * thinking-on and thinking-off requests in separate caches, but low and medium
- * share one; a thread switching between `none` and the others re-read nothing
- * on 66% of turns. On luna EVERY effort has its own cache, so a luna thread
- * keeps one effort, whichever it drew.
+ * `none` left the draw (owner's call 2026-10-12). Haiku draws low/medium per
+ * attempt: Anthropic caches those two together. On luna EVERY effort has its
+ * own cache, so a luna thread keeps the one effort it drew.
  */
 export function pickReasoningEffort({
   attempt,
@@ -911,18 +906,14 @@ export function pickReasoningEffort({
     return { effort: 'medium', random: false };
   }
   let efforts = EXPERIMENT_EFFORTS;
-  if (threadId) {
+  if (threadId && attempt.model === LUNA_MODEL) {
     // Salted, so it doesn't line up with the haiku/luna split, which hashes
     // the bare thread id.
     const byte =
       createHash('sha256').update(`effort:${threadId}`).digest()[0] ?? 0;
     const pinned =
       EXPERIMENT_EFFORTS[byte % EXPERIMENT_EFFORTS.length] ?? 'medium';
-    if (attempt.model === LUNA_MODEL) {
-      efforts = [pinned];
-    } else {
-      efforts = pinned === 'none' ? ['none'] : THINKING_EFFORTS;
-    }
+    efforts = [pinned];
   }
   return {
     effort: efforts[Math.floor(Math.random() * efforts.length)] ?? 'medium',

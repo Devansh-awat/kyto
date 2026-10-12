@@ -8,34 +8,23 @@ import {
 
 const LUNA_ATTEMPT = catalogAttempt(LUNA_MODEL);
 
-// Anthropic caches thinking-on and thinking-off requests apart, so a haiku
-// thread that flipped between `none` and low/medium re-read nothing.
 describe('pickReasoningEffort on haiku', () => {
-  test('a thread is either always none or never none', () => {
-    const arms = new Set<string>();
+  test('draws only low or medium, never none', () => {
+    const seen = new Set<string>();
     for (let thread = 0; thread < 60; thread++) {
       const threadId = `slack:C0TEST:${thread}`;
-      const picks = new Set(
-        Array.from(
-          { length: 12 },
-          () =>
-            pickReasoningEffort({ attempt: PRIMARY_ATTEMPT, threadId }).effort
-        )
-      );
-      const none = picks.has('none');
-      if (none) {
-        expect([...picks]).toEqual(['none']);
-      } else {
-        for (const pick of picks) {
-          expect(['low', 'medium']).toContain(pick);
-        }
+      for (let i = 0; i < 12; i++) {
+        seen.add(
+          pickReasoningEffort({ attempt: PRIMARY_ATTEMPT, threadId }).effort
+        );
       }
-      arms.add(none ? 'none' : 'thinking');
     }
-    expect(arms).toEqual(new Set(['none', 'thinking']));
+    expect(seen).toEqual(new Set(['low', 'medium']));
   });
+});
 
-  test('a luna thread keeps one effort, and threads cover all three', () => {
+describe('pickReasoningEffort on luna', () => {
+  test('a luna thread keeps one effort, and threads cover both', () => {
     const seen = new Set<string>();
     for (let thread = 0; thread < 60; thread++) {
       const threadId = `slack:C0TEST:${thread}`;
@@ -50,6 +39,6 @@ describe('pickReasoningEffort on haiku', () => {
         seen.add(pick);
       }
     }
-    expect(seen).toEqual(new Set(['none', 'low', 'medium']));
+    expect(seen).toEqual(new Set(['low', 'medium']));
   });
 });
