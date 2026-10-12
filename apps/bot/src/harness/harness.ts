@@ -250,6 +250,8 @@ export class SlackHarness {
    * as a `bot_message` carrying only this, not the user id. */
   botId: string | undefined;
   teamId: string | undefined;
+  // The workspace's own URL (`https://<domain>.slack.com/`), from auth.test.
+  teamUrl: string | undefined;
   /**
    * A channel that is ONE conversation (a native code channel,
    * lib/code-channels): its top-level messages share the channel-level thread
@@ -314,6 +316,7 @@ export class SlackHarness {
     this.botUserId = auth.user_id ?? undefined;
     this.botId = auth.bot_id ?? undefined;
     this.teamId = auth.team_id ?? undefined;
+    this.teamUrl = auth.url ?? undefined;
     if (!this.userAccountClient) {
       return;
     }

@@ -86,13 +86,22 @@ async function canvasLink(canvasId: string): Promise<string | undefined> {
     const info = filesInfoSchema.parse(
       await slack.webClient.apiCall('files.info', { file: canvasId })
     );
-    return info.ok ? info.file?.permalink : undefined;
+    return (info.ok ? info.file?.permalink : undefined) ?? workspaceLink();
   } catch (error) {
     logger.warn(
       { error: errorMessage(error) },
       '[canvas] permalink lookup failed'
     );
-    return;
+    return workspaceLink();
+  }
+
+  // files.info right after a create can come back without the permalink, and
+  // the model then told the owner it had no link (issue #72). This is the
+  // shape Slack's own permalink takes, built from the workspace's URL.
+  function workspaceLink(): string | undefined {
+    return slack.teamUrl && slack.teamId
+      ? new URL(`docs/${slack.teamId}/${canvasId}`, slack.teamUrl).toString()
+      : undefined;
   }
 }
 
