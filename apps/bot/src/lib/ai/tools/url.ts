@@ -18,6 +18,12 @@ const MAX_CONTENT_CHARS = 20_000;
 // Read at most this much of the body: an unbounded read of a multi-gigabyte URL
 // would OOM the bot.
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
+// A bot wall (Cloudflare 401/403) or a JavaScript shell with almost no text is
+// refetched through Jina's reader, which renders the page: OpenAI's policy pages
+// came back as a 403 or a ~10 KB script shell to every route but that one
+// (issue #70). Only the URL goes to Jina, never anything from Slack.
+const READER_PREFIX = 'https://r.jina.ai/';
+const SHELL_MAX_TEXT_CHARS = 2000;
 
 // Slack workspace/message/file URLs (e.g. foo.slack.com, files.slack.com) —
 // these require an authenticated session, so fetchUrl can't read them.
@@ -120,6 +126,7 @@ export async function fetchUrlText({
   nextOffset?: number;
   totalChars: number;
   truncated: boolean;
+  via: 'direct' | 'r.jina.ai';
 }> {
   // Slack message/file links aren't publicly fetchable (they 302 to a login
   // wall), so callers get pointed at the Slack read tools instead of markup.
@@ -135,28 +142,54 @@ export async function fetchUrlText({
     headers: { 'User-Agent': 'kyto-slack-bot' },
     signal: AbortSignal.timeout(15_000),
   });
-  if (!response.ok) {
+  const botWall = response.status === 401 || response.status === 403;
+  if (!(response.ok || botWall)) {
     await response.body?.cancel();
-    // 401/403 on a public page is a bot wall (Cloudflare, a "security
-    // verification" page), not a permissions problem: retrying with curl or
-    // other headers just burns steps.
-    const hint =
-      response.status === 401 || response.status === 403
-        ? ' — the site blocks automated fetches; a real browser may get through, or ask the user to paste or attach the page'
-        : '';
-    throw new Error(`Fetch failed: ${response.status}${hint}`);
+    throw new Error(`Fetch failed: ${response.status}`);
   }
-  const contentType = response.headers.get('content-type') ?? '';
-  const raw = await readCapped(response);
-  // Strip tags for HTML so the reader gets readable text, not markup.
-  const text = contentType.includes('text/html')
-    ? raw
-        .replace(/<script[\s\S]*?<\/script>/gi, '')
-        .replace(/<style[\s\S]*?<\/style>/gi, '')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-    : raw;
+  let contentType = response.headers.get('content-type') ?? '';
+  let text = '';
+  if (response.ok) {
+    const raw = await readCapped(response);
+    // Strip tags for HTML so the reader gets readable text, not markup.
+    text = contentType.includes('text/html')
+      ? raw
+          .replace(/<script[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[\s\S]*?<\/style>/gi, '')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+      : raw;
+  } else {
+    await response.body?.cancel();
+  }
+  let via: 'direct' | 'r.jina.ai' = 'direct';
+  const shell =
+    contentType.includes('text/html') && text.length < SHELL_MAX_TEXT_CHARS;
+  if (botWall || shell) {
+    const reader = await publicFetch(`${READER_PREFIX}${url}`, {
+      headers: { 'User-Agent': 'kyto-slack-bot' },
+      signal: AbortSignal.timeout(30_000),
+    }).catch(() => undefined);
+    let readerText = '';
+    if (reader?.ok) {
+      readerText = (await readCapped(reader)).trim();
+    } else {
+      await reader?.body?.cancel();
+    }
+    if (readerText.length > text.length) {
+      text = readerText;
+      contentType = 'text/markdown';
+      via = 'r.jina.ai';
+    } else if (botWall) {
+      // 401/403 on a public page is a bot wall (Cloudflare, a "security
+      // verification" page), not a permissions problem: retrying with curl or
+      // other headers just burns steps.
+      throw new Error(
+        `Fetch failed: ${response.status} — the site blocks automated fetches, through a reader too; a real browser may get through, or ask the user to paste or attach the page`
+      );
+    }
+  }
   const end = offset + MAX_CONTENT_CHARS;
   const truncated = text.length > end;
   return {
@@ -165,6 +198,7 @@ export async function fetchUrlText({
     ...(truncated ? { nextOffset: end } : {}),
     totalChars: text.length,
     truncated,
+    via,
   };
 }
 
@@ -197,7 +231,7 @@ async function readCapped(response: Response): Promise<string> {
 export function fetchUrlTool() {
   return tool({
     description:
-      "Fetch the text content of a specific URL the user pasted or referenced. Use this instead of a web search when you already have the exact link. A page longer than 20,000 characters comes in parts: the result's `totalChars` is the whole page and `nextOffset` is where the next part starts — call again with `offset: nextOffset` (several offsets in parallel is fine) until there is no `nextOffset`. Read every part before summarising or quoting a whole page; never present a summary of part of a page as the page's.",
+      "Fetch the text content of a specific URL the user pasted or referenced. Use this instead of a web search when you already have the exact link. A bot-walled or JavaScript-only page is read through a rendering reader automatically (`via` says which route worked). A page longer than 20,000 characters comes in parts: the result's `totalChars` is the whole page and `nextOffset` is where the next part starts — call again with `offset: nextOffset` (several offsets in parallel is fine) until there is no `nextOffset`. Read every part before summarising or quoting a whole page; never present a summary of part of a page as the page's.",
     inputSchema: z.object({
       offset: z
         .number()
