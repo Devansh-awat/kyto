@@ -33,6 +33,8 @@ export interface ModelAttempt {
    * header the ChatGPT backend expects; unset for every other attempt.
    */
   headers?: Record<string, string>;
+  /** A BYOK key owner's own output cap; unset = MAX_OUTPUT_TOKENS. */
+  maxOutputTokens?: number;
   model: string;
   provider: string;
 }

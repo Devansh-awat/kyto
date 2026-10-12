@@ -21,6 +21,7 @@ const publicColumns = {
   createdAt: userModelCredentials.createdAt,
   keyPreview: userModelCredentials.keyPreview,
   lastUsedAt: userModelCredentials.lastUsedAt,
+  maxOutputTokens: userModelCredentials.maxOutputTokens,
   model: userModelCredentials.model,
   provider: userModelCredentials.provider,
   serviceFallback: userModelCredentials.serviceFallback,
@@ -60,6 +61,7 @@ export async function upsertUserModelCredential(input: {
   baseUrl?: string | null;
   encryptedKey: string;
   keyPreview: string;
+  maxOutputTokens?: number | null;
   model: string;
   provider: string;
   serviceFallback?: boolean;
@@ -71,6 +73,7 @@ export async function upsertUserModelCredential(input: {
       baseUrl: input.baseUrl ?? null,
       encryptedKey: input.encryptedKey,
       keyPreview: input.keyPreview,
+      maxOutputTokens: input.maxOutputTokens ?? null,
       model: input.model,
       provider: input.provider,
       serviceFallback: input.serviceFallback ?? false,
@@ -84,6 +87,7 @@ export async function upsertUserModelCredential(input: {
         baseUrl: input.baseUrl ?? null,
         encryptedKey: input.encryptedKey,
         keyPreview: input.keyPreview,
+        maxOutputTokens: input.maxOutputTokens ?? null,
         model: input.model,
         ...(input.serviceFallback === undefined
           ? {}
@@ -101,13 +105,18 @@ export async function upsertUserModelCredential(input: {
  */
 export async function updateUserModelCredentialConfig(input: {
   baseUrl?: string | null;
+  maxOutputTokens?: number | null;
   model: string;
   provider: string;
   userId: string;
 }): Promise<void> {
   await db
     .update(userModelCredentials)
-    .set({ baseUrl: input.baseUrl ?? null, model: input.model })
+    .set({
+      baseUrl: input.baseUrl ?? null,
+      maxOutputTokens: input.maxOutputTokens ?? null,
+      model: input.model,
+    })
     .where(
       and(
         eq(userModelCredentials.userId, input.userId),

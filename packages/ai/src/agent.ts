@@ -410,7 +410,7 @@ export function streamAttempt({
     // models otherwise burn unbounded thinking tokens on someone's bill.
     ...(attempt.provider === HACKCLUB_PROVIDER ||
     attempt.byokProvider !== undefined
-      ? { maxOutputTokens: MAX_OUTPUT_TOKENS }
+      ? { maxOutputTokens: attempt.maxOutputTokens ?? MAX_OUTPUT_TOKENS }
       : {}),
     // We run our own fallback chain across providers, so the SDK's default of 3
     // internal tries per attempt just triples the wait before we can route
@@ -790,7 +790,12 @@ function tunedFetch({
           ? { onCachePrefix, onFirstRequest, state: cacheProbe }
           : undefined,
         toolOrder,
-        { flex, historyMessages, reasoningEffort }
+        {
+          explicitEffort: effort !== undefined,
+          flex,
+          historyMessages,
+          reasoningEffort,
+        }
       );
       if (tuned) {
         const source =
@@ -867,6 +872,9 @@ const REQUIRED_TOP_P: Record<string, number> = {};
 
 // OpenRouter's upstream precision labels kyto accepts — see tuneBody.
 const ALLOWED_QUANTIZATIONS = ['fp8', 'fp16', 'bf16', 'fp32', 'unknown'];
+// BYOK endpoints that speak OpenRouter's `reasoning: { effort }`; OpenAI's own
+// API calls it `reasoning_effort` and rejects the unknown field.
+const OPENROUTER_FORMAT_BYOK = new Set(['byok-hackclub', 'byok-openrouter']);
 
 // Each accepted by luna (2026-10-09) and haiku (2026-10-10) through the proxy;
 // `high` is left out because the experiment is about speed.
@@ -922,7 +930,7 @@ export function pickReasoningEffort({
   };
 }
 
-function tuneBody(
+export function tuneBody(
   raw: string | undefined,
   attempt: ModelAttempt,
   thoughtSignatures?: Map<string, string>,
@@ -933,10 +941,16 @@ function tuneBody(
   },
   toolOrder?: { names: string[] },
   {
+    explicitEffort = false,
     flex,
     historyMessages,
     reasoningEffort,
-  }: { flex: boolean; historyMessages: number; reasoningEffort: string } = {
+  }: {
+    explicitEffort?: boolean;
+    flex: boolean;
+    historyMessages: number;
+    reasoningEffort: string;
+  } = {
     flex: false,
     historyMessages: 0,
     reasoningEffort: 'medium',
@@ -1002,10 +1016,13 @@ function tuneBody(
         : { quantizations: ALLOWED_QUANTIZATIONS };
       changed = true;
     }
-    if (
-      attempt.provider === HACKCLUB_PROVIDER &&
-      payload.reasoning === undefined
-    ) {
+    // A BYOK key on an OpenRouter-format endpoint gets an effort only when the
+    // caller chose one: unset, GLM thinks at its own default until the output
+    // cap and returns no text at all (issue #73).
+    const takesReasoning =
+      attempt.provider === HACKCLUB_PROVIDER ||
+      (explicitEffort && OPENROUTER_FORMAT_BYOK.has(attempt.provider));
+    if (takesReasoning && payload.reasoning === undefined) {
       payload.reasoning = { effort: reasoningEffort };
       changed = true;
     }

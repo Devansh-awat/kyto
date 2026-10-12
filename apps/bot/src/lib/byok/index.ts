@@ -129,6 +129,7 @@ export async function resolveUserRouting({
     const attempt = byokAttempt({
       apiKey,
       baseUrl: credential.baseUrl,
+      maxOutputTokens: credential.maxOutputTokens,
       model: credential.model,
       provider: credential.provider,
     });

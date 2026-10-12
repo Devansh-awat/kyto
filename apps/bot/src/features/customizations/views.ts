@@ -1,4 +1,11 @@
-import { BYOK_PROVIDER_IDS, BYOK_PROVIDERS, personas } from '@repo/ai';
+import {
+  BYOK_MAX_OUTPUT_TOKENS,
+  BYOK_MIN_OUTPUT_TOKENS,
+  BYOK_PROVIDER_IDS,
+  BYOK_PROVIDERS,
+  MAX_OUTPUT_TOKENS,
+  personas,
+} from '@repo/ai';
 import type {
   ChannelInstructions,
   ChatgptAccount,
@@ -188,7 +195,7 @@ function modelKeyBlocks(credentials: UserModelCredential[]): SlackBlock[] {
           value: credential.provider,
         },
         text: mrkdwn(
-          `*${escapeSlackText(label)}* — \`${escapeSlackText(credential.model)}\` · key ${escapeSlackText(credential.keyPreview)} · ${badge}`
+          `*${escapeSlackText(label)}* — \`${escapeSlackText(credential.model)}\` · key ${escapeSlackText(credential.keyPreview)}${credential.maxOutputTokens ? ` · max ${credential.maxOutputTokens} tokens` : ''} · ${badge}`
         ),
         type: 'section',
       },
@@ -1111,6 +1118,23 @@ export function buildModelKeyModal(
           'Optional. Required for Custom; otherwise only to point at a proxy.'
         ),
         label: plainText('Base URL'),
+        optional: true,
+        type: 'input',
+      },
+      {
+        block_id: 'byok_max_tokens',
+        element: {
+          action_id: 'max_tokens',
+          ...(credential?.maxOutputTokens
+            ? { initial_value: String(credential.maxOutputTokens) }
+            : {}),
+          placeholder: plainText(String(MAX_OUTPUT_TOKENS)),
+          type: 'plain_text_input',
+        },
+        hint: plainText(
+          `Optional. The most a reply may use, thinking included (${BYOK_MIN_OUTPUT_TOKENS}-${BYOK_MAX_OUTPUT_TOKENS}; blank = ${MAX_OUTPUT_TOKENS}). Raise it if a reasoning model thinks until it runs out and answers nothing. It is billed to your key.`
+        ),
+        label: plainText('Max output tokens'),
         optional: true,
         type: 'input',
       },

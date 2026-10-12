@@ -1,4 +1,9 @@
-import { isByokProviderId, personas } from '@repo/ai';
+import {
+  BYOK_MAX_OUTPUT_TOKENS,
+  BYOK_MIN_OUTPUT_TOKENS,
+  isByokProviderId,
+  personas,
+} from '@repo/ai';
 import {
   addMcpServer,
   cancelReminder,
@@ -961,6 +966,25 @@ bot.onModalSubmit(
     const model = event.values.byok_model?.trim();
     const key = event.values.byok_key?.trim();
     const baseUrl = event.values.byok_base_url?.trim() || null;
+    const maxTokensText = event.values.byok_max_tokens
+      ?.trim()
+      .replaceAll(',', '');
+    const maxOutputTokens = maxTokensText ? Number(maxTokensText) : null;
+    if (
+      maxOutputTokens !== null &&
+      !(
+        Number.isInteger(maxOutputTokens) &&
+        maxOutputTokens >= BYOK_MIN_OUTPUT_TOKENS &&
+        maxOutputTokens <= BYOK_MAX_OUTPUT_TOKENS
+      )
+    ) {
+      return {
+        action: 'errors',
+        errors: {
+          byok_max_tokens: `A whole number from ${BYOK_MIN_OUTPUT_TOKENS} to ${BYOK_MAX_OUTPUT_TOKENS}, or blank for the default.`,
+        },
+      };
+    }
     if (!(provider && isByokProviderId(provider))) {
       return {
         action: 'errors',
@@ -1007,6 +1031,7 @@ bot.onModalSubmit(
       try {
         await updateUserModelCredentialConfig({
           baseUrl,
+          maxOutputTokens,
           model,
           provider,
           userId: event.user.userId,
@@ -1050,6 +1075,7 @@ bot.onModalSubmit(
         baseUrl,
         encryptedKey: encryptSecret(key),
         keyPreview: keyPreview(key),
+        maxOutputTokens,
         model,
         provider,
         // Preserve the user's existing fallback choice across a rotation.

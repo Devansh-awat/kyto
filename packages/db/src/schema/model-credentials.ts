@@ -1,5 +1,6 @@
 import {
   boolean,
+  integer,
   pgTable,
   primaryKey,
   text,
@@ -39,6 +40,10 @@ export const userModelCredentials = pgTable(
     // fails. Off by default: a user's broken key must not silently spend the
     // shared budget — they opt in per key.
     serviceFallback: boolean('service_fallback').notNull().default(false),
+    // The user's own cap on a reply's output tokens (thinking included); null
+    // = kyto's default. A reasoning model can spend a small cap on thinking
+    // alone and answer nothing (issue #73), so the key's owner picks it.
+    maxOutputTokens: integer('max_output_tokens'),
     lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()

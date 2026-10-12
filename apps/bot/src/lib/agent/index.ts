@@ -1057,6 +1057,10 @@ async function executeTurn(
     // rung — but a provider that truncates every time has to be routed away from
     // eventually, hence the cap.
     let truncationRetries = 0;
+    // The attempt being re-run at low effort because its thinking filled the
+    // output cap before any text (see the `length` retry below). Once per turn.
+    let lowEffortAttempt: ModelAttempt | undefined;
+    let lowEffortRetried = false;
     // An earlier turn in this thread escalated, so this one starts there too
     // (see claimStickyUpgrade for the two bounds). `used` is set with it: the
     // turn is already on the strongest rung kyto has, and letting it ask for
@@ -1190,7 +1194,7 @@ async function executeTurn(
       // Card id per attempt. `truncationRetries` is part of it because a retried
       // attempt does not push onto `attempts` — without it the retry would try to
       // re-open a card it had already completed.
-      const modelTaskId = `model-${attempts.length}-${truncationRetries}`;
+      const modelTaskId = `model-${attempts.length}-${truncationRetries}${currentAttempt === lowEffortAttempt ? '-low' : ''}`;
       const attemptLabel = nextAttemptLabel;
       nextAttemptLabel = undefined;
       const modelTaskTitle = labelledThinking({
@@ -1316,7 +1320,9 @@ async function executeTurn(
         // card can say which one this attempt runs on — and whether it was the
         // random draw (the effort experiment) or the thread's `--reasoning`.
         let effort: { effort: string; random: boolean } | undefined;
-        if (currentAttempt.provider === HACKCLUB_PROVIDER) {
+        if (currentAttempt === lowEffortAttempt) {
+          effort = { effort: 'low', random: false };
+        } else if (currentAttempt.provider === HACKCLUB_PROVIDER) {
           // Haiku's thinking shares the 8000-token output cap, and `high` left
           // it ~1600 tokens to answer in: replies and tool calls were cut off
           // mid-way, and the turns cost ~40x a medium one (owner's call
@@ -1872,6 +1878,28 @@ async function executeTurn(
               threadId,
             },
             '[agent] stream was cut off before the model said anything; retrying the same model'
+          );
+          continue;
+        }
+        // The output cap fell while the model was still THINKING: no text, no
+        // tool call, just a reasoning block. BYOK GLM did this on plain
+        // questions, ~2 min a time, and each one then cost a fallback rung
+        // (issue #73). The model is fine, its effort was too high for the cap,
+        // so run it once more at low effort before giving up on it.
+        if (
+          !(handled || attemptToolActivity || lowEffortRetried) &&
+          attemptFinishReason === 'length'
+        ) {
+          lowEffortRetried = true;
+          lowEffortAttempt = currentAttempt;
+          logger.warn(
+            {
+              attempt: attemptLog(currentAttempt),
+              durationMs: Date.now() - attemptStart,
+              reasoningEffort: effort?.effort,
+              threadId,
+            },
+            '[agent] thinking filled the output cap before any reply; retrying the same model at low effort'
           );
           continue;
         }

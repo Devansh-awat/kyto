@@ -21,6 +21,11 @@ export const BYOK_PROVIDER_IDS = [
   'custom',
 ] as const;
 
+// Bounds on a key owner's own output cap: below ~1k a reply barely fits, and
+// above 128k most providers refuse the request outright.
+export const BYOK_MIN_OUTPUT_TOKENS = 1000;
+export const BYOK_MAX_OUTPUT_TOKENS = 128_000;
+
 export type ByokProviderId = (typeof BYOK_PROVIDER_IDS)[number];
 
 export interface ByokProviderSpec {
@@ -132,6 +137,7 @@ export function isByokAttempt(attempt: ModelAttempt): boolean {
 export function byokAttempt(input: {
   apiKey: string;
   baseUrl?: string | null;
+  maxOutputTokens?: number | null;
   model: string;
   provider: ByokProviderId;
 }): ModelAttempt | undefined {
@@ -144,6 +150,9 @@ export function byokAttempt(input: {
     apiKey: input.apiKey,
     baseURL,
     byokProvider: input.provider,
+    ...(input.maxOutputTokens
+      ? { maxOutputTokens: input.maxOutputTokens }
+      : {}),
     model: input.model,
     provider: byokProviderName(input.provider),
   };
