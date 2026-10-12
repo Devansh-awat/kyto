@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import {
+  generateText,
   hasToolCall,
   type ModelMessage,
   stepCountIs,
@@ -18,12 +19,14 @@ import {
 } from './cache-probe';
 import {
   applyTrim,
+  COMPACT_AT,
+  COMPACT_INSTRUCTION,
+  type CompactionEvent,
+  compactedMessages,
   estimateMessageTokens,
   LONG_CONTEXT_PRICE_STEP,
   planTrim,
   TRIM_TARGET,
-  TRIM_TRIGGER,
-  type TrimPick,
 } from './context-trim';
 import { fetchWithGatewayRetry, type GatewayRetryInfo } from './gateway-retry';
 import { capContextImages } from './image-cap';
@@ -151,6 +154,8 @@ function usableImages(
 const MODEL_FIELD = /"model"\s*:\s*"([^"]+)"/;
 // The resolved slug appears in the first SSE chunk; don't scan forever.
 const MAX_SCAN_BYTES = 16_384;
+// Room for a dense summary of a ~92k-token context; it replaces all of it.
+const COMPACT_SUMMARY_MAX_TOKENS = 8000;
 
 /**
  * Stream one model attempt: the whole multi-step agentic loop on a single
@@ -171,7 +176,7 @@ export function streamAttempt({
   getFreshImages,
   history = [],
   onCachePrefix,
-  onContextTrimmed,
+  onCompaction,
   onDroppedImages,
   onFirstRequest,
   onError,
@@ -181,7 +186,6 @@ export function streamAttempt({
   requireToolFirst,
   serviceTier,
   source = 'turn',
-  summarizeToolResults,
   system,
   toolOrder,
   tools,
@@ -228,22 +232,10 @@ export function streamAttempt({
    */
   onCachePrefix?: (info: PrefixDivergence) => void;
   /**
-   * Called when old tool results were trimmed to keep a request under the
-   * model's long-context price step (see context-trim.ts).
+   * Mid-turn compaction progress (see context-trim.ts): started, done, then the
+   * next request's real size once the provider reports it.
    */
-  onContextTrimmed?: (info: {
-    after: number;
-    before: number;
-    step: number;
-    summarized: boolean;
-    trimmed: number;
-  }) => void;
-  /**
-   * Mid-turn compaction: summarizes the tool results about to be folded, so
-   * the model keeps what they said rather than just their first lines.
-   * Undefined → each folded result keeps its own head instead.
-   */
-  summarizeToolResults?: (picks: TrimPick[]) => Promise<string | undefined>;
+  onCompaction?: (event: CompactionEvent) => void;
   /**
    * Called with the prefix units of the attempt's FIRST request, so the caller
    * can compare it with the previous turn's — the cross-turn half of the probe
@@ -360,9 +352,56 @@ export function streamAttempt({
       steps,
     });
   const priceStep = LONG_CONTEXT_PRICE_STEP[attempt.model];
-  // How many messages the previous step's request carried, so the next step
-  // can tell what that step appended.
+  // How many messages the previous step's request carried: what follows them
+  // is the last step's own output, which compaction keeps verbatim.
   let sentLength = 0;
+  // A compaction whose real effect the next request's usage will show.
+  let pendingMeasure: { before: number; step: number } | undefined;
+  const systemInput =
+    typeof system === 'string'
+      ? system
+      : system.map((content) => ({ content, role: 'system' as const }));
+  // Asked of the SAME model with the SAME system, tools and messages plus one
+  // instruction, so everything up to the instruction reads from cache. Tools
+  // are passed without `execute` (same schemas, so the same cached prefix) and
+  // `toolChoice` is left alone: changing it invalidates Anthropic's message
+  // cache. A tool call instead of text just means no summary.
+  const summarizeContext = async ({
+    activeToolNames,
+    messages,
+  }: {
+    activeToolNames: string[] | undefined;
+    messages: ModelMessage[];
+  }): Promise<string | undefined> => {
+    try {
+      const inert: ToolSet = {};
+      for (const [name, definition] of Object.entries(tools)) {
+        inert[name] = { ...definition, execute: undefined };
+      }
+      const summary = await generateText({
+        abortSignal,
+        ...(activeToolNames ? { activeTools: activeToolNames } : {}),
+        maxOutputTokens: COMPACT_SUMMARY_MAX_TOKENS,
+        maxRetries: 1,
+        messages: [...messages, { content: COMPACT_INSTRUCTION, role: 'user' }],
+        model,
+        system: systemInput,
+        tools: inert,
+      });
+      reportSpend({
+        effort: holder.reasoningEffort ?? reasoningEffort,
+        model: attempt.model,
+        provider: attempt.byokProvider
+          ? `byok:${attempt.byokProvider}`
+          : attempt.provider,
+        source: `${source}-compaction`,
+        steps: summary.steps,
+      });
+      return summary.text.trim() || undefined;
+    } catch {
+      return;
+    }
+  };
   return streamText({
     ...promptInput,
     abortSignal,
@@ -430,41 +469,70 @@ export function streamAttempt({
               onDroppedImages
             );
             let stepMessages = messages;
-            // The last step's REAL input size plus an estimate of what it
-            // appended (its reply and tool results). Step 0 is the replayed
-            // thread, which compaction bounds; nothing here can trim it
-            // without throwing away the cached history.
+            // Past COMPACT_AT of the price step by the provider's own count,
+            // the model summarizes everything but the system prompt and
+            // tools. Step 0 is the replayed thread, which thread compaction
+            // bounds. See context-trim.ts.
             const lastInput = steps.at(-1)?.usage.inputTokens;
-            if (priceStep && lastInput !== undefined) {
-              const before =
+            if (
+              priceStep &&
+              lastInput !== undefined &&
+              lastInput > priceStep * COMPACT_AT
+            ) {
+              onCompaction?.({
+                before: lastInput,
+                phase: 'start',
+                step: stepNumber,
+              });
+              // The summary request is the last one plus what that step
+              // appended. If the appended results would carry it past the
+              // step, they are cut in the summary request only: they are not
+              // cached yet, and they are kept whole after the summary anyway.
+              const appended =
                 lastInput + estimateMessageTokens(messages.slice(sentLength));
-              const plan =
-                before > priceStep * TRIM_TRIGGER
-                  ? planTrim({
-                      fromIndex: initialMessages.length,
-                      messages,
-                      target: priceStep * TRIM_TARGET,
-                      tokens: before,
-                    })
-                  : undefined;
-              if (plan && plan.picks.length > 0) {
-                const summary = await summarizeToolResults?.(plan.picks);
-                stepMessages = applyTrim({
+              const summary = await summarizeContext({
+                activeToolNames: activeTools?.(),
+                messages:
+                  appended > priceStep
+                    ? applyTrim({
+                        messages,
+                        picks: planTrim({
+                          fromIndex: sentLength,
+                          messages,
+                          target: priceStep * COMPACT_AT,
+                          tokens: appended,
+                        }).picks,
+                      })
+                    : messages,
+              });
+              if (summary) {
+                stepMessages = compactedMessages({
+                  lastStepFrom: sentLength,
                   messages,
-                  picks: plan.picks,
+                  request: initialMessages.at(-1),
                   summary,
                 });
-                onContextTrimmed?.({
-                  after:
-                    before -
-                    estimateMessageTokens(messages) +
-                    estimateMessageTokens(stepMessages),
-                  before,
-                  step: stepNumber,
-                  summarized: summary !== undefined,
-                  trimmed: plan.picks.length,
+              } else {
+                const plan = planTrim({
+                  fromIndex: initialMessages.length,
+                  messages,
+                  target: priceStep * TRIM_TARGET,
+                  tokens: appended,
                 });
+                stepMessages = applyTrim({ messages, picks: plan.picks });
               }
+              const estimatedAfter =
+                appended -
+                estimateMessageTokens(messages) +
+                estimateMessageTokens(stepMessages);
+              onCompaction?.({
+                before: lastInput,
+                estimatedAfter,
+                phase: 'done',
+                step: stepNumber,
+                summarized: summary !== undefined,
+              });
+              pendingMeasure = { before: lastInput, step: stepNumber };
             }
             if (fresh.length > 0) {
               const label = fresh
@@ -505,10 +573,17 @@ export function streamAttempt({
     // too, step by step.
     onAbort: ({ steps }) => billSteps(steps),
     onFinish: ({ steps }) => billSteps(steps),
-    system:
-      typeof system === 'string'
-        ? system
-        : system.map((content) => ({ content, role: 'system' as const })),
+    onStepEnd: ({ usage }) => {
+      if (pendingMeasure && usage.inputTokens !== undefined) {
+        onCompaction?.({
+          after: usage.inputTokens,
+          ...pendingMeasure,
+          phase: 'measured',
+        });
+        pendingMeasure = undefined;
+      }
+    },
+    system: systemInput,
     tools,
   });
 }

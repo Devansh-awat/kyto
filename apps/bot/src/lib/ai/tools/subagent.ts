@@ -12,6 +12,7 @@ import { z } from 'zod';
 import type { KytoBot } from '@/harness/bot';
 import type { ThreadHandle } from '@/harness/thread';
 import type { Message, StreamChunk } from '@/harness/types';
+import { createCompactionReporter } from '@/lib/agent/compaction-card';
 import { requestHints } from '@/lib/ai/hints';
 import { renderStream } from '@/lib/ai/stream';
 import { stripToolComplaints } from '@/lib/ai/stream/tool-complaints';
@@ -270,8 +271,12 @@ export function runSubagentTool({
                 const modelTitle = index > 0 ? 'Model · fallback' : 'Model';
                 yield card(modelTaskId, modelTitle, 'in_progress');
                 try {
+                  const compaction = createCompactionReporter({
+                    context: { model: attempt.model, subagent: true },
+                  });
                   const result = streamAttempt({
                     source: 'subagent',
+                    onCompaction: compaction.onCompaction,
                     abortSignal,
                     activeTools: built.activeTools,
                     attempt,
@@ -287,16 +292,18 @@ export function runSubagentTool({
                   // message body — it stays inside the collapsible plan (the
                   // Response card below) and goes to the parent model, which is
                   // the only voice in the thread.
-                  yield* renderStream({
-                    knownTools,
-                    onTextDelta: (text) => {
-                      report += text;
-                    },
-                    onToolActivity: () => {
-                      ranTools = true;
-                    },
-                    stream: result.fullStream,
-                  });
+                  yield* compaction.merge(
+                    renderStream({
+                      knownTools,
+                      onTextDelta: (text) => {
+                        report += text;
+                      },
+                      onToolActivity: () => {
+                        ranTools = true;
+                      },
+                      stream: result.fullStream,
+                    })
+                  );
                   yield card(
                     modelTaskId,
                     modelTitle,

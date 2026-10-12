@@ -16,6 +16,7 @@ import { LazySandbox } from '@repo/sandbox';
 import { type ToolSet, tool } from 'ai';
 import { env } from '@/env';
 import type { Message } from '@/harness/types';
+import { createCompactionReporter } from '@/lib/agent/compaction-card';
 import { buildPrompt } from '@/lib/agent/prompt';
 import { requestHints } from '@/lib/ai/hints';
 import { buildMcpTools } from '@/lib/ai/mcp';
@@ -281,6 +282,11 @@ async function review({
       try {
         const result = streamAttempt({
           source: 'kevinton',
+          // Kevinton never posts: the reporter only logs.
+          onCompaction: createCompactionReporter({
+            context: { kevinton: true, model: attempt.model },
+            show: false,
+          }).onCompaction,
           abortSignal: AbortSignal.timeout(REVIEW_TIMEOUT_MS),
           activeTools: () => names,
           attempt,

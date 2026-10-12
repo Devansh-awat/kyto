@@ -33,7 +33,7 @@ import {
   renderObservations,
   stableInput,
 } from '@/lib/agent/carryover';
-import { summarizeToolResults } from '@/lib/agent/compaction';
+import { createCompactionReporter } from '@/lib/agent/compaction-card';
 import {
   createRepetitionGuard,
   stripRepeatedLines,
@@ -66,7 +66,6 @@ import {
   isPromptConstructionError,
 } from '@/lib/agent/routing';
 import { createSegmenter, isVisibleText } from '@/lib/agent/segmentation';
-import { createSideChunks } from '@/lib/agent/side-chunks';
 import { isBareSkipText } from '@/lib/agent/skip-text';
 import {
   abortReasonOf,
@@ -1340,10 +1339,10 @@ async function executeTurn(
           type: 'task_update',
         };
         const attemptStart = Date.now();
-        // Mid-turn compaction reports into the plan from inside prepareStep,
-        // while the model's stream is idle between steps.
-        const side = createSideChunks<string | StreamChunk>();
-        let compactions = 0;
+        const compaction = createCompactionReporter({
+          budget: cards,
+          context: { attempt: attemptLog(currentAttempt), threadId },
+        });
         const result = streamAttempt({
           abortSignal: AbortSignal.any([
             controller.signal,
@@ -1364,45 +1363,7 @@ async function executeTurn(
           // An image the SDK's schema would reject is dropped rather than
           // allowed to invalidate the whole prompt. Log it: silently ignoring
           // someone's screenshot is confusing enough to be worth a line.
-          summarizeToolResults: async (picks) => {
-            compactions += 1;
-            const id = `compact-${attempts.length}-${truncationRetries}-${compactions}`;
-            const title = 'Compacting context';
-            const visible = cards.show({ id, kind: 'tool', title });
-            if (visible) {
-              side.push({
-                id,
-                status: 'in_progress',
-                title,
-                type: 'task_update',
-              });
-            }
-            const summary = await summarizeToolResults({
-              abortSignal: AbortSignal.any([
-                controller.signal,
-                attemptAbort.signal,
-              ]),
-              picks,
-            });
-            cards.finish(id);
-            if (visible) {
-              side.push({
-                id,
-                output: `Folded ${picks.length} earlier tool result${picks.length === 1 ? '' : 's'} into ${summary ? 'a summary' : 'short excerpts'} to keep the request under the model's long-context price step.`,
-                status: 'complete',
-                title,
-                type: 'task_update',
-              });
-            }
-            armWatchdog(ATTEMPT_TIMEOUT_MS);
-            return summary;
-          },
-          onContextTrimmed: (info) => {
-            logger.info(
-              { attempt: attemptLog(currentAttempt), ...info, threadId },
-              '[agent] trimmed old tool results under the long-context price step'
-            );
-          },
+          onCompaction: compaction.onCompaction,
           onDroppedImages: (dropped) => {
             logger.warn(
               {
@@ -1512,7 +1473,7 @@ async function executeTurn(
           toolOrder: built.toolOrder,
           tools: built.tools,
         });
-        for await (const chunk of side.merge(
+        for await (const chunk of compaction.merge(
           renderStream({
             budget: cards,
             context: {

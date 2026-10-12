@@ -10,15 +10,59 @@ export const LONG_CONTEXT_PRICE_STEP: Record<string, number> = {
   'anthropic/claude-haiku-5.5': 100_000,
 };
 
-// Trim once the next request is estimated past 85% of the step, and then trim
-// down to 55%. The gap is what keeps the cache hit rate up: a trim rewrites the
-// prompt from the first trimmed result onward, so that tail is a cache WRITE
-// once. Trimming a little every step would re-write it every step; trimming a
-// lot rarely pays for one rewrite and then reads from cache again until the
-// turn has grown by ~30% of the step. The 15% headroom absorbs the estimate's
-// error (chars per token varies with content).
-export const TRIM_TRIGGER = 0.85;
+// Compact once a step's ACTUAL input (the provider's count, not an estimate)
+// passes 92% of the step (owner's call 2026-10-12): the model itself summarizes
+// everything but the system prompt and tools. The summary request is the last
+// request plus one instruction, so its whole prefix is a cache READ; after it
+// the prompt is rewritten once from the summary on, then read again.
+export const COMPACT_AT = 0.92;
+// The fallback when the summary fails: fold old tool results down to this.
 export const TRIM_TARGET = 0.55;
+
+export const COMPACT_INSTRUCTION =
+  '[Context compaction] This conversation is about to be replaced by your summary of it, to keep the request small. Summarize EVERYTHING above except the system prompt: the thread so far and all the work done in this task. Keep: what was asked and by whom, decisions and standing instructions (word for word, with who gave them), facts, names, ids, URLs, file paths, numbers, commands run and what they showed, errors and why they happened, what is done and what is left to do. The latest request and your most recent tool calls with their results are kept verbatim after the summary, so be brief about those. Write the summary only — do not call any tool.';
+
+export type CompactionEvent =
+  | { before: number; phase: 'start'; step: number }
+  | {
+      before: number;
+      /** Estimated; `measured` follows with the real figure. */
+      estimatedAfter: number;
+      phase: 'done';
+      step: number;
+      /** False → the summary failed and old tool results were cut instead. */
+      summarized: boolean;
+    }
+  | { after: number; before: number; phase: 'measured'; step: number };
+
+/**
+ * The messages after compaction: the summary, then — verbatim — the request
+ * that started this task and the last step's own messages (the tool calls the
+ * model is about to read the results of).
+ */
+export function compactedMessages({
+  lastStepFrom,
+  messages,
+  request,
+  summary,
+}: {
+  lastStepFrom: number;
+  messages: ModelMessage[];
+  request: ModelMessage | undefined;
+  summary: string;
+}): ModelMessage[] {
+  const lastStep = messages.slice(lastStepFrom);
+  return [
+    {
+      content: `<compacted_context>\nEverything before this point (the thread and the work so far) was compacted into this summary to save tokens. Run a tool again if you need exact output.\n\n${summary}\n</compacted_context>`,
+      role: 'user',
+    },
+    ...(request && messages.slice(0, lastStepFrom).includes(request)
+      ? [request]
+      : []),
+    ...lastStep,
+  ];
+}
 
 // Conservative (few chars per token) so an estimate errs toward trimming early.
 const CHARS_PER_TOKEN = 3;
@@ -91,8 +135,6 @@ export interface TrimPick {
  * already folded, or too small to be worth losing, is never picked, so a later
  * pass leaves earlier folds byte-identical (the cache reads them).
  *
- * Same idea as Anthropic's own context editing (old tool results replaced by a
- * placeholder); a thinking block stays valid because only results change.
  */
 export function planTrim({
   fromIndex,
@@ -136,33 +178,27 @@ export function planTrim({
 }
 
 /**
- * Replace the picked results. With a `summary`, the first carries it and the
- * rest point at it; without one (no summarizer, or it failed), each keeps its
- * own head so the model still knows roughly what it held.
+ * Cut the picked results to their first lines — the fallback when the summary
+ * could not be written, so the request still shrinks.
  */
 export function applyTrim({
   messages,
   picks,
-  summary,
 }: {
   messages: ModelMessage[];
   picks: TrimPick[];
-  summary?: string;
 }): ModelMessage[] {
   if (picks.length === 0) {
     return messages;
   }
-  const first = picks[0];
-  const stub = (pick: TrimPick): string => {
-    if (!summary) {
-      return `${TRIMMED_MARK} this ${pick.toolName} result (${pick.text.length} chars) was cut to keep the request small. It began: ${pick.text.slice(0, KEPT_HEAD_CHARS)}… Run the tool again if you need the rest.]`;
-    }
-    return pick === first
-      ? `${TRIMMED_MARK} the ${picks.length} oldest tool results of this turn were compacted into this summary to keep the request small. Run a tool again if you need exact output.]\n${summary}`
-      : `${TRIMMED_MARK} compacted into the summary in the ${first?.toolName} result above.]`;
-  };
   const replacement = new Map(
-    picks.map((pick) => [pick.toolCallId, stub(pick)] as const)
+    picks.map(
+      (pick) =>
+        [
+          pick.toolCallId,
+          `${TRIMMED_MARK} this ${pick.toolName} result (${pick.text.length} chars) was cut to keep the request small. It began: ${pick.text.slice(0, KEPT_HEAD_CHARS)}… Run the tool again if you need the rest.]`,
+        ] as const
+    )
   );
   const indexes = new Set(picks.map((pick) => pick.index));
   return messages.map((message, index) => {
