@@ -343,7 +343,14 @@ export function backgroundProcessTools({
       }
       const { runTurn } = await import('@/lib/agent');
       logger.info(
-        { finished: result.finished, id, threadId: wake.thread.id },
+        {
+          command: proc.command.slice(0, 200),
+          finished: result.finished,
+          id,
+          stderrChars: result.stderr.length,
+          stdoutChars: result.stdout.length,
+          threadId: wake.thread.id,
+        },
         '[background] waking the thread about a background job'
       );
       await runTurn({
@@ -517,7 +524,7 @@ function processReport({
   const output = `stdout (end):\n\`\`\`\n${tail(result.stdout) || '(empty)'}\n\`\`\`\nstderr (end):\n\`\`\`\n${tail(result.stderr) || '(empty)'}\n\`\`\`\nFull output files in the sandbox: ${proc.outPath} and ${proc.errPath}.`;
   const body = result.finished
     ? `the background command ${id} you started earlier in this thread (\`${command}\`) has FINISHED with exit code ${result.exitCode ?? 'unknown'}.\n\n${output}\n\nCarry on with the task it was part of if there is more to do, or tell the thread what matters from it.`
-    : `the background command ${id} you started earlier in this thread (\`${command}\`) is STILL RUNNING 30 minutes after your turn ended — time's up for keeping the sandbox awake for it. Once the sandbox pauses it freezes, and it resumes the next time this thread uses the sandbox.\n\n${output}\n\nDecide: if it is worth waiting for, check it with the \`process\` tool (action \`output\`, id "${id}"), which keeps watching it for another 30 minutes; if it is stuck or no longer needed, kill it (action \`kill\`). Say briefly where it stands.`;
+    : `the background command ${id} you started earlier in this thread (\`${command}\`) is STILL RUNNING 30 minutes after your turn ended — time's up for keeping the sandbox awake for it. Once the sandbox pauses it freezes, and it resumes the next time this thread uses the sandbox.\n\n${output}\n\nDecide: if it is worth waiting for, check it with the \`process\` tool (action \`output\`, id "${id}"), which keeps watching it for another 30 minutes; if it is stuck or no longer needed, kill it (action \`kill\`). Only post if the thread is waiting on its result or it failed in a way someone needs to know; killing a leftover job nobody asked about is housekeeping, so do it and call skip (an unasked "stopped the leftover job" message was noise, issue #71).`;
   return {
     attachments: [],
     author: wake.message.author,
