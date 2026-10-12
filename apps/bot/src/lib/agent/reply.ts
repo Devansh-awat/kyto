@@ -85,6 +85,16 @@ export function createReply({
         lastPostAt = Date.now();
         posted = true;
       } catch (error) {
+        // The turn archived its own channel (a code channel closed on request,
+        // issue #69): nothing can be posted there any more, so drop the rest
+        // instead of failing every remaining chunk.
+        if (
+          slackErrorSchema.safeParse(error).data?.data?.error === 'is_archived'
+        ) {
+          logger.info({ threadId }, '[agent] channel archived; reply dropped');
+          buffer = '';
+          return;
+        }
         if (fromUserAccount || !isNotInChannel(error)) {
           logger.warn({ err: error, threadId }, '[agent] reply post failed');
           continue;

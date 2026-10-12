@@ -433,7 +433,12 @@ export function codeChannelTool({
       return { error: refusalText(response), success: false };
     }
     await disableCodeChannel(here.channel);
-    return { success: true, summary: 'Archived the code channel.' };
+    // The reply would land in the channel just archived, which Slack refuses.
+    return {
+      success: true,
+      summary:
+        'Archived the code channel. Nothing more can be posted in it, so end the turn with skip instead of a reply.',
+    };
   }
 
   async function setView(input: {
