@@ -117,6 +117,7 @@ import {
   DegenerateOutputError,
   StreamInterruptedError,
 } from '@/lib/errors';
+import { parseFlags } from '@/lib/flags';
 import { scheduleKevinton } from '@/lib/kevinton';
 import logger, { threadLogContext } from '@/lib/logger';
 import { moderateTurn } from '@/lib/moderation';
@@ -132,6 +133,7 @@ import {
   errorMessage,
   errorStatus,
 } from '@/lib/utils/error';
+import { rawText, withoutLeadingMentions } from '@/lib/utils/message';
 import { clamp } from '@/lib/utils/text';
 import type { ActiveTurn, AgentErrorStage } from '@/types/agent';
 import type { AttemptFailure } from '@/types/attempts';
@@ -905,6 +907,9 @@ async function executeTurn(
     // prompt and the Jev checks, which it needs neither of: connecting a
     // person's MCP servers on a cold listing cache was ~2s of dead time in
     // front of the first model call.
+    // `--no-redact` is read off THIS message, never the thread's saved
+    // settings, so it lasts one turn.
+    const turnFlags = parseFlags(withoutLeadingMentions(rawText(turnMessage)));
     const pendingTools = buildTools({
       asUserAccount,
       bot,
@@ -919,6 +924,8 @@ async function executeTurn(
       message: turnMessage,
       secret,
       thread: turnThread,
+      unredactedEmail:
+        turnFlags?.ok === true && turnFlags.flags.noRedact === true,
     });
     // A turn that dies before awaiting the tools must still close them, and a
     // failed build must not surface as an unhandled rejection meanwhile.

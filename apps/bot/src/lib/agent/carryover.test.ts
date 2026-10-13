@@ -168,3 +168,24 @@ describe('isPrivateObservation', () => {
     ).toBe(false);
   });
 });
+
+describe('renderObservations email redaction', () => {
+  test('a stored email result never keeps a login link', () => {
+    const link = 'https://example.com/reset-password?token=abcdefghijklmnop';
+    for (const toolName of [
+      'readEmail',
+      'email',
+      'mcp_agentmail_get_message',
+    ]) {
+      const rendered = renderObservations([
+        { input: {}, output: `click ${link}`, toolName },
+      ]);
+      expect(rendered).not.toContain(link);
+    }
+    expect(
+      renderObservations([
+        { input: {}, output: `see ${link}`, toolName: 'fetchUrl' },
+      ])
+    ).toContain(link);
+  });
+});

@@ -1,7 +1,11 @@
 import { AgentMailClient } from 'agentmail';
 import { tool } from 'ai';
 import { z } from 'zod';
-import { redactionNote, redactSecrets } from '@/lib/email/redact';
+import {
+  emailRedactor,
+  type Redaction,
+  redactionNote,
+} from '@/lib/email/redact';
 import { errorMessage } from '@/lib/utils/error';
 
 // Email runs on the host (not the sandbox): AgentMail is a plain HTTP API, so a
@@ -89,8 +93,15 @@ export function sendEmailTool({ apiKey }: { apiKey: string }) {
   });
 }
 
-export function checkInboxTool({ apiKey }: { apiKey: string }) {
+export function checkInboxTool({
+  apiKey,
+  redact,
+}: {
+  apiKey: string;
+  redact: boolean;
+}) {
   const client = new AgentMailClient({ apiKey });
+  const redactSecrets = emailRedactor(redact);
   return tool({
     description:
       'List recent messages in kyto\'s own email inbox (via AgentMail). This gives you each message\'s sender, recipients (to/cc), arrival time, subject and a short preview — call email (action read) with a message id to get the actual body. Set full:true to fetch the bodies of everything listed in one go, which is usually what someone means by "read my latest email".',
@@ -144,6 +155,7 @@ export function checkInboxTool({ apiKey }: { apiKey: string }) {
               client,
               inboxId: resolvedInbox,
               messageId: message.messageId,
+              redactSecrets,
             }).catch(() => null);
             if (body) {
               redactions += body.redactions;
@@ -174,11 +186,13 @@ async function readBody({
   client,
   inboxId,
   messageId,
+  redactSecrets,
 }: {
   client: AgentMailClient;
   inboxId: string;
   messageId: string;
-}): Promise<{ redactions: number; text: string }> {
+  redactSecrets: (input: string | undefined) => Redaction;
+}): Promise<Redaction> {
   const message = await client.inboxes.messages.get(inboxId, messageId);
   // `text` is the whole message; `extractedText` is just the new content of a
   // reply, without the quoted history. Prefer the full text so kyto can answer
@@ -188,8 +202,15 @@ async function readBody({
   return { redactions, text: clampBody(text) };
 }
 
-export function readEmailTool({ apiKey }: { apiKey: string }) {
+export function readEmailTool({
+  apiKey,
+  redact,
+}: {
+  apiKey: string;
+  redact: boolean;
+}) {
   const client = new AgentMailClient({ apiKey });
+  const redactSecrets = emailRedactor(redact);
   return tool({
     description:
       "Read the full body of one message in kyto's inbox, by the message id from email (action inbox). Use this whenever someone asks what an email actually says — the preview from email (action inbox) is only the first line or so.",

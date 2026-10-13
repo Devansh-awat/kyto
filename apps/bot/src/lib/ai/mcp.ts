@@ -3,10 +3,7 @@ import type { Logger } from '@repo/logging/logger';
 import { jsonSchema, type Tool, tool } from 'ai';
 import { z } from 'zod';
 import type { McpServerForTurn } from '@/lib/ai/mcp-scope';
-import {
-  redactSecrets as redactEmailSecrets,
-  redactionNote,
-} from '@/lib/email/redact';
+import { emailRedactor, redactionNote } from '@/lib/email/redact';
 import { assertPublicHost } from '@/lib/public-url';
 import {
   classifyMcpTool,
@@ -843,13 +840,17 @@ export interface BuiltMcpTools {
  */
 export async function buildMcpTools({
   logger,
+  redactEmail,
   requestPermission,
   servers,
 }: {
   logger: Logger;
+  /** False only on an owner's `--no-redact` turn (lib/email/redact). */
+  redactEmail: boolean;
   requestPermission?: McpPermissionRequest;
   servers: McpServerForTurn[];
 }): Promise<BuiltMcpTools> {
+  const redactEmailSecrets = emailRedactor(redactEmail);
   const connections: McpConnection[] = [];
   const tools: Record<string, Tool> = {};
   const gates: Record<string, McpToolGate> = {};

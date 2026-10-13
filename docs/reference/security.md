@@ -65,8 +65,11 @@ apart from "read me my mail".
 
 So everything read out of the inbox passes through `lib/email/redact.ts` before
 it reaches the model: reset and magic links, URLs carrying a long opaque token,
-and one-time codes are removed. This is **unconditional** — the owner included —
-and deliberately not a check on who is asking. A model holding a token can be
+and one-time codes are removed. This applies to the owner too —
+and is deliberately not a check on who is asking. The one exception is the
+owner's own `--no-redact` flag on a message, which turns it off for that one
+turn; the harness reads it off the message, so neither the model nor an email
+can set it. A model holding a token can be
 talked into repeating it, and what never arrives cannot be leaked. Reset links
 get read in the AgentMail UI, where no model is involved.
 

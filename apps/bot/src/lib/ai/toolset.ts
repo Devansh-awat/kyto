@@ -273,6 +273,7 @@ export async function buildTools({
   thread,
   secret = false,
   unattended = false,
+  unredactedEmail = false,
 }: {
   bot: KytoBot;
   /**
@@ -312,12 +313,19 @@ export async function buildTools({
    * who may be asleep decides, and a silent stall is worse than a clear refusal.
    */
   unattended?: boolean;
+  /**
+   * The owner put `--no-redact` on THIS turn's message: kyto's inbox is read
+   * without stripping login links and codes. Passed only by the main turn —
+   * a subagent gets the parent's message, so this is never derived from it.
+   */
+  unredactedEmail?: boolean;
 }): Promise<BuiltTools> {
   const authorUserId = message.author.userId;
   const isOwner =
     Boolean(env.OWNER_USER_ID) && authorUserId === env.OWNER_USER_ID;
   const canActAsOwner = Boolean(env.SLACK_USER_TOKEN) && isOwner;
   const agentMailKey = env.AGENTMAIL_API_KEY;
+  const redactEmail = !(unredactedEmail && isOwner);
 
   // Where this turn is happening, and which channel groups that channel is in.
   // Both the memory tools and the MCP toolset are scoped by it: a memory the
@@ -764,11 +772,11 @@ export async function buildTools({
           },
           checkInbox: {
             summary: 'check kyto’s email inbox',
-            tool: checkInboxTool({ apiKey: agentMailKey }),
+            tool: checkInboxTool({ apiKey: agentMailKey, redact: redactEmail }),
           },
           readEmail: {
             summary: 'read one email in full',
-            tool: readEmailTool({ apiKey: agentMailKey }),
+            tool: readEmailTool({ apiKey: agentMailKey, redact: redactEmail }),
           },
           replyEmail: {
             summary: 'reply to an email thread',
@@ -882,6 +890,7 @@ export async function buildTools({
   );
   const mcp = await buildMcpTools({
     logger,
+    redactEmail,
     // The person SPEAKING decides an `ask`, even on a server someone else shared
     // into the room — the owner's call (2026-08-21): "if person a adds and say
     // write tool need ask, then person b can call kyto and for a write tool,

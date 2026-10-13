@@ -1,3 +1,4 @@
+import { redactSecrets } from '@/lib/email/redact';
 import { clamp } from '@/lib/utils/text';
 
 // What a fallback model is told about the work the previous attempt already did.
@@ -21,6 +22,7 @@ const CARRYOVER_INPUT_MAX = 400;
 // smaller than the carryover so reasoning + observations both fit the per-turn
 // thinking budget (MAX_TURN_CHARS). Keeps the most recent results.
 export const OBSERVATION_MAX_RESULTS = 14;
+const EMAIL_RESULT = /^(?:email|checkInbox|readEmail|mcp_agentmail)/;
 const OBSERVATION_OUTPUT_MAX = 1000;
 const OBSERVATION_INPUT_MAX = 300;
 
@@ -69,7 +71,11 @@ export function renderObservations(results: GatheredResult[]): string {
     .map((result) => {
       const input = toCompactText(result.input, OBSERVATION_INPUT_MAX);
       const output = toCompactText(result.output, OBSERVATION_OUTPUT_MAX);
-      return `${result.toolName}(${input}) → ${output}`;
+      // Stored and replayed on later turns: a `--no-redact` turn's login
+      // links must not outlive it.
+      return `${result.toolName}(${input}) → ${
+        EMAIL_RESULT.test(result.toolName) ? redactSecrets(output).text : output
+      }`;
     })
     .join('\n');
 }

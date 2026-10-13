@@ -17,6 +17,8 @@ interface MessageFlags {
   /** `stale` = shown but distrusted; `off` = hidden; `null` = back to normal. */
   memory?: 'off' | 'stale' | null;
   model?: string;
+  /** `--no-redact`: this ONE message's turn reads email unredacted (owner only). */
+  noRedact?: true;
   reasoning?: string;
   /** The message with the flags taken off — empty when it was only flags. */
   rest: string;
@@ -105,6 +107,10 @@ function readFlags({
       flags.memory = raw === 'NO-MEMORY' ? 'off' : 'stale';
       continue;
     }
+    if (name === 'no-redact') {
+      flags.noRedact = true;
+      continue;
+    }
     if (name === 'memory') {
       flags.memory = null;
       continue;
@@ -128,7 +134,7 @@ function readFlags({
       return strict
         ? null
         : {
-            error: `i don't know \`--${raw}\`. flags: \`--model\`, \`--reasoning\`, \`--focusmode\`, \`--no-memory\`, \`--NO-MEMORY\`, \`--memory\`.`,
+            error: `i don't know \`--${raw}\`. flags: \`--model\`, \`--reasoning\`, \`--focusmode\`, \`--no-memory\`, \`--NO-MEMORY\`, \`--memory\`, \`--no-redact\`.`,
             ok: false,
           };
     }

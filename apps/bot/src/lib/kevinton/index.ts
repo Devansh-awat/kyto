@@ -153,6 +153,7 @@ async function logTools(): Promise<{
     return none;
   }
   const built = await buildMcpTools({
+    redactEmail: true,
     logger,
     servers: [
       { namespace: 'coolify', server: { ...server, rules: LOGS_RULES } },

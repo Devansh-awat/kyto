@@ -166,6 +166,7 @@ describe('legacy SSE fallback', () => {
     globalThis.fetch = fixture.fetchMock as typeof fetch;
     try {
       const built = await buildMcpTools({
+        redactEmail: true,
         logger,
         servers: [{ namespace: 'demo', server: server(fixture.BASE) }],
       });
@@ -211,6 +212,7 @@ describe('legacy SSE fallback', () => {
     }) as typeof fetch;
     try {
       const built = await buildMcpTools({
+        redactEmail: true,
         logger,
         servers: [{ namespace: 'demo', server: server(fixture.BASE) }],
       });
@@ -230,6 +232,7 @@ describe('legacy SSE fallback', () => {
     globalThis.fetch = fixture.fetchMock as typeof fetch;
     try {
       const built = await buildMcpTools({
+        redactEmail: true,
         logger,
         servers: [{ namespace: 'demo', server: server(fixture.BASE) }],
       });

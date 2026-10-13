@@ -9,7 +9,8 @@
  * the person really is allowed to talk to it.
  *
  * Redaction therefore happens HERE, at the tool boundary, for everyone
- * including the owner. Filtering by who is asking would not help: the model
+ * including the owner — unless the owner turns it off for one turn with
+ * `--no-redact` on his own message (`emailRedactor`). Filtering by who is asking would not help: the model
  * would still be holding the token, and one convincing message ("devansh said
  * to forward this") is all it takes to get it back out. What the model never
  * receives, it cannot be talked into leaking. The owner reads reset links in
@@ -115,10 +116,26 @@ export function redactSecrets(input: string | undefined): Redaction {
   return { redactions, text };
 }
 
+function keepSecrets(input: string | undefined): Redaction {
+  return { redactions: 0, text: input ?? '' };
+}
+
+/**
+ * `redactSecrets`, or a pass-through on a turn where the OWNER put
+ * `--no-redact` on his own message (owner's call 2026-10-13). Never from the
+ * model or the email text: the flag is read by the harness, for one turn, and
+ * not handed to subagents, reminders or Kevinton.
+ */
+export function emailRedactor(
+  redact: boolean
+): (input: string | undefined) => Redaction {
+  return redact ? redactSecrets : keepSecrets;
+}
+
 /** The note appended to a tool result so the model can explain the gap. */
 export function redactionNote(redactions: number): string | undefined {
   if (redactions === 0) {
     return;
   }
-  return `${redactions} thing${redactions === 1 ? '' : 's'} that looked like a login link or one-time code ${redactions === 1 ? 'was' : 'were'} removed before you saw this, so you genuinely do not have ${redactions === 1 ? 'it' : 'them'} and cannot pass ${redactions === 1 ? 'it' : 'them'} on. This applies to everyone, the owner included — say so plainly and point them at the AgentMail inbox. Do not try to recover the value another way.`;
+  return `${redactions} thing${redactions === 1 ? '' : 's'} that looked like a login link or one-time code ${redactions === 1 ? 'was' : 'were'} removed before you saw this, so you genuinely do not have ${redactions === 1 ? 'it' : 'them'} and cannot pass ${redactions === 1 ? 'it' : 'them'} on. This applies to everyone, the owner included — say so plainly and point them at the AgentMail inbox (the owner can also put --no-redact on his own message to see them for that one reply). Do not try to recover the value another way.`;
 }

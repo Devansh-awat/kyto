@@ -115,3 +115,16 @@ describe('flags ending a line', () => {
     );
   });
 });
+
+describe('--no-redact', () => {
+  test('parses at the start and at the end of a line', () => {
+    expect(parseFlags('--no-redact read my latest email')).toEqual({
+      flags: { noRedact: true, rest: 'read my latest email' },
+      ok: true,
+    });
+    expect(parseFlags('read my latest email --no-redact')).toEqual({
+      flags: { noRedact: true, rest: 'read my latest email' },
+      ok: true,
+    });
+  });
+});

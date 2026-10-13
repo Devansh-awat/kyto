@@ -268,6 +268,18 @@ async function runFlags({
   }
   const { flags } = parsed;
   const userId = message.author.userId;
+  if (flags.noRedact) {
+    // Not saved with the thread's settings: the turn reads it off its own
+    // message (lib/agent), so it lasts exactly one reply.
+    if (userId !== env.OWNER_USER_ID) {
+      return await reply("`--no-redact` is the owner's only.");
+    }
+    if (!flags.rest) {
+      return await reply(
+        '`--no-redact` lasts one message — put it on the message that asks about the email.'
+      );
+    }
+  }
   const change: {
     effort?: ReasoningEffort | null;
     memory?: MemoryMode | null;
