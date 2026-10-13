@@ -33,7 +33,7 @@ export function withoutLeadingMentions(text: string): string {
 // which used to silently drop ordinary messages. To use the side-channel, begin
 // the message with `##`.
 //
-// `##lol` arrives as `#<#G3QAGB0NM>` when `#lol` names a channel — Slack links
+// `##lol` arrives as `#<#G0123ABCDE9>` when `#lol` names a channel — Slack links
 // it — and such a message once woke kyto mid-turn and was answered.
 const HIDDEN_PREFIX = /^#(?:#|<#[A-Z0-9]+(?:\|[^>]*)?>)/;
 

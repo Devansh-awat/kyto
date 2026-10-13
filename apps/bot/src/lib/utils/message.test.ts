@@ -22,7 +22,7 @@ describe('isHiddenFromBot', () => {
   });
 
   test('hides ## that Slack turned into a channel link', () => {
-    expect(isHiddenFromBot(message('#<#G3QAGB0NM>'))).toBe(true);
+    expect(isHiddenFromBot(message('#<#G0123ABCDE9>'))).toBe(true);
     expect(isHiddenFromBot(message('#<#C0B7QEK0MQB|general> hi'))).toBe(true);
   });
 
