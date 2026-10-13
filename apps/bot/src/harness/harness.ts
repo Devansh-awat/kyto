@@ -6,6 +6,7 @@ import { mrkdwnToMarkdown } from './markdown';
 import { filterOutbound, filterOutboundDeep } from './outbound';
 import { ThreadCache } from './thread-cache';
 import type { Author, Message, MessageAttachment, StreamChunk } from './types';
+import { hasUnderline, splitUnderlines } from './underline';
 import { UserAccountGateway } from './user-gateway';
 
 // Raw Slack message event fields the harness reads.
@@ -1102,6 +1103,21 @@ export class SlackHarness {
         await rotateIfStale();
         if (typeof chunk === 'string' || chunk.type === 'markdown_text') {
           const text = typeof chunk === 'string' ? chunk : chunk.text;
+          // A line with an underline has to be a rich_text block; streamed
+          // markdown can't draw one (harness/underline).
+          if (text && hasUnderline(text) && structuredSupported) {
+            for (const part of splitUnderlines(text)) {
+              if ('block' in part) {
+                await appendChunk({ blocks: [part.block], type: 'blocks' });
+              } else if (part.markdown) {
+                await streamer.append({
+                  markdown_text: filterOutbound(`${part.markdown}\n`),
+                });
+              }
+            }
+            currentHasContent = true;
+            continue;
+          }
           if (text) {
             const markdownText = filterOutbound(text);
             try {

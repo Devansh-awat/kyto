@@ -19,6 +19,7 @@ import type {
   SentMessage,
   ThreadState,
 } from './types';
+import { splitUnderlines } from './underline';
 
 // Slack's markdown block caps text at 12k; our reply chunker posts well under
 // this, but clamp defensively so an oversized post degrades instead of erroring.
@@ -36,6 +37,20 @@ const CONTROL_MENTION =
 
 function hasControlMention(text: string | undefined): boolean {
   return text !== undefined && CONTROL_MENTION.test(text);
+}
+
+// The blocks a markdown post becomes: one `markdown` block, a `mrkdwn` section
+// when it holds a control mention, and a `rich_text` block for each line with
+// an underline, which markdown cannot draw (harness/underline).
+function markdownBlocks(markdown: string): unknown[] {
+  if (hasControlMention(markdown)) {
+    return [{ text: { text: markdown, type: 'mrkdwn' }, type: 'section' }];
+  }
+  return splitUnderlines(markdown).map((part) =>
+    'block' in part
+      ? part.block
+      : { text: disambiguateBareUrls(part.markdown), type: 'markdown' }
+  );
 }
 
 /**
@@ -165,14 +180,7 @@ export class ThreadHandle {
 
     const markdown = post.markdown?.slice(0, MARKDOWN_BLOCK_MAX);
     const blocks =
-      post.blocks ??
-      (markdown
-        ? [
-            hasControlMention(markdown)
-              ? { text: { text: markdown, type: 'mrkdwn' }, type: 'section' }
-              : { text: disambiguateBareUrls(markdown), type: 'markdown' },
-          ]
-        : undefined);
+      post.blocks ?? (markdown ? markdownBlocks(markdown) : undefined);
     const args = {
       ...(blocks ? { blocks } : {}),
       channel,
@@ -182,7 +190,7 @@ export class ThreadHandle {
       ...(post.iconEmoji ? { icon_emoji: post.iconEmoji } : {}),
       ...(post.iconUrl ? { icon_url: post.iconUrl } : {}),
       ...(post.metadata ? { metadata: post.metadata } : {}),
-      text: post.fallbackText ?? post.markdown ?? '',
+      text: (post.fallbackText ?? post.markdown ?? '').replace(/<\/?u>/gi, ''),
       ...(threadTs ? { thread_ts: threadTs } : {}),
       ...(post.username ? { username: post.username } : {}),
     };
@@ -398,16 +406,10 @@ export class ThreadHandle {
     const post = scrub(raw.allowBroadcast ? raw : stripBroadcasts(raw));
     const markdown = post.markdown?.slice(0, MARKDOWN_BLOCK_MAX);
     await this.adapter.webClient.chat.scheduleMessage({
-      ...(markdown
-        ? {
-            blocks: [
-              { text: disambiguateBareUrls(markdown), type: 'markdown' },
-            ] as never,
-          }
-        : {}),
+      ...(markdown ? { blocks: markdownBlocks(markdown) as never } : {}),
       channel,
       post_at: Math.floor(postAt.getTime() / 1000),
-      text: post.fallbackText ?? post.markdown ?? '',
+      text: (post.fallbackText ?? post.markdown ?? '').replace(/<\/?u>/gi, ''),
       ...(threadTs ? { thread_ts: threadTs } : {}),
     });
   }

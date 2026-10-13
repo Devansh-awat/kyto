@@ -52,7 +52,9 @@ export type StreamChunk =
       title: string;
       type: 'task_update';
     }
-  | { text: string; type: 'markdown_text' };
+  | { text: string; type: 'markdown_text' }
+  /** Block Kit inside a streamed message (an underlined line's rich_text). */
+  | { blocks: unknown[]; type: 'blocks' };
 
 interface PostFile {
   data: Uint8Array;
