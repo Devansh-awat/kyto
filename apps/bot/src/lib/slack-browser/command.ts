@@ -144,9 +144,47 @@ function slackUrl(raw: string | undefined): string | undefined {
   }
 }
 
+// No shell runs the command, so these reached agent-browser as arguments: the
+// model kept piping `snapshot -i | grep …` and reading the garbage back.
+const SHELL_OPERATORS = new Set(['|', '||', '&&', ';', '>', '>>', '<']);
+
+/** A Slack client URL without its workspace id, which Slack rewrites (T… → E…). */
+function pageKey(raw: string): string | undefined {
+  try {
+    const url = new URL(raw);
+    const path = url.pathname.replace(/\/+$/, '');
+    const client = /^\/client\/[^/]+(\/.*)?$/.exec(path);
+    return url.hostname === 'app.slack.com' && client
+      ? `client${client[1] ?? ''}${url.search}`
+      : `${url.host}${path}${url.search}`;
+  } catch {
+    return;
+  }
+}
+
+/**
+ * Is `target` the page the browser is already on? Every `open` reboots the
+ * whole Slack client (~5-10 s, the live view blanks), and the model re-opened
+ * the same channel URL over and over to "refresh" it.
+ */
+export function isSamePage({
+  current,
+  target,
+}: {
+  current: string;
+  target: string;
+}): boolean {
+  const key = pageKey(target);
+  return key !== undefined && key === pageKey(current);
+}
+
 /** Why `args` may not run, or undefined when it may. */
 function refusal(args: string[]): string | undefined {
   const [verb, first] = args;
+  const operator = args.find((arg) => SHELL_OPERATORS.has(arg));
+  if (operator) {
+    return `There is no shell here, so "${operator}" doesn't work: run one command per call and read its output (a snapshot can be scoped with -s <css selector> or -d <depth>).`;
+  }
   if (!(verb && VERBS.has(verb))) {
     return `"${verb ?? ''}" is not available in the Slack browser. Allowed: ${[...VERBS].join(', ')}.`;
   }

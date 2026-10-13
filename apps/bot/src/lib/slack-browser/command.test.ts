@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { parseCommand, splitCommand } from '@/lib/slack-browser/command';
+import {
+  isSamePage,
+  parseCommand,
+  splitCommand,
+} from '@/lib/slack-browser/command';
 
 describe('splitCommand', () => {
   test('groups quoted words and never expands anything', () => {
@@ -85,6 +89,30 @@ describe('parseCommand', () => {
       expect(parseCommand(`tab new ${url}`).ok).toBe(false);
     }
     expect(parseCommand('open').ok).toBe(false);
+  });
+
+  test('refuses shell operators, which never reach a shell', () => {
+    expect(parseCommand('snapshot -i | grep robot').ok).toBe(false);
+    expect(parseCommand('fill @e1 "a" && click @e2').ok).toBe(false);
+    expect(parseCommand('fill @e1 "a | b"').ok).toBe(true);
+  });
+
+  test('knows when an open would only reload the same page', () => {
+    const current = 'https://app.slack.com/client/E09V59WQY1E/C0B7QEK0MQB';
+    expect(
+      isSamePage({
+        current,
+        target: 'https://app.slack.com/client/T0266FRGM/C0B7QEK0MQB/',
+      })
+    ).toBe(true);
+    expect(
+      isSamePage({
+        current,
+        target:
+          'https://app.slack.com/client/E09V59WQY1E/C0B7QEK0MQB/thread/C0B7QEK0MQB-1.2',
+      })
+    ).toBe(false);
+    expect(isSamePage({ current, target: 'not a url' })).toBe(false);
   });
 
   test('refuses a channel id where the workspace id goes', () => {

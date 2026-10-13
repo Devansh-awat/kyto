@@ -7,7 +7,7 @@ import {
   type SlackBrowserSession,
   startSlackBrowser,
 } from '@/lib/slack-browser';
-import { parseCommand } from '@/lib/slack-browser/command';
+import { isSamePage, parseCommand } from '@/lib/slack-browser/command';
 import { errorMessage, toLogError } from '@/lib/utils/error';
 
 // The owner's logged-in Slack browser (owner's ask, 2026-10-02): workflows,
@@ -73,7 +73,7 @@ export function slackBrowserTool({
   };
 
   const slackBrowser = tool({
-    description: `Drive a real browser LOGGED IN to Slack as kyto's own user account (owner only) — ONLY for what the Slack tools can't do — a last resort, never a shortcut: adding or removing a custom emoji is \`submitEmoji\`/\`removeEmoji\`, posting is \`postMessage\`, and so on; check the loadTools catalog first. It is for running workflows, clicking buttons on other apps' messages or App Homes, forms, settings pages. Same agent-browser CLI as the \`browser\` tool (pass its sub-command in \`command\`; "skills get core" prints the reference), starting on https://app.slack.com/client. "${THIS_THREAD}" opens the Slack thread this conversation is in — a button or form someone posted as a REPLY here only shows in that thread pane, never in the channel view. \`find\` CLICKS what it finds unless given another action; to look for something, read a \`snapshot\`. Only interaction commands work (open/click/fill/type/press/select/scroll/wait/snapshot/get/find/tab/…), and only Slack URLs open — no eval, screenshots, files or other sites. "${RESTART}" relaunches a stuck browser. Nothing in Slack is blocked except signing out: it can send, edit, react, join and run workflows AS kyto's user account, so act only on what the owner asked. A live view is posted in the thread on first use.`,
+    description: `Drive a real browser LOGGED IN to Slack as kyto's own user account (owner only) — ONLY for what the Slack tools can't do — a last resort, never a shortcut: adding or removing a custom emoji is \`submitEmoji\`/\`removeEmoji\`, posting is \`postMessage\`, and so on; check the loadTools catalog first. It is for running workflows, clicking buttons on other apps' messages or App Homes, forms, settings pages. Same agent-browser CLI as the \`browser\` tool (pass its sub-command in \`command\`; "skills get core" prints the reference), starting on https://app.slack.com/client. "${THIS_THREAD}" opens the Slack thread this conversation is in — a button or form someone posted as a REPLY here only shows in that thread pane, never in the channel view. \`find\` CLICKS what it finds unless given another action; to look for something, read a \`snapshot\`. Every \`open\` reboots the whole Slack client (slow, the view blanks): after the first page, move by clicking (sidebar, a message's replies, the quick switcher on Control+k) and open a URL only to go somewhere a click can't reach. One command per call — there is no shell, so no pipes. Only interaction commands work (open/click/fill/type/press/select/scroll/wait/snapshot/get/find/tab/…), and only Slack URLs open — no eval, screenshots, files or other sites. "${RESTART}" relaunches a stuck browser. Nothing in Slack is blocked except signing out: it can send, edit, react, join and run workflows AS kyto's user account, so act only on what the owner asked. A live view is posted in the thread on first use.`,
     inputSchema: z.object({
       command: z
         .string()
@@ -107,7 +107,21 @@ export function slackBrowserTool({
           return { error: parsed.error, success: false, summary: parsed.error };
         }
         session ??= start();
-        const result = await (await session).run({
+        const browser = await session;
+        const [verb, target] = parsed.args;
+        if (verb === 'open' && target) {
+          const at = await browser.run({ abortSignal, args: ['get', 'url'] });
+          if (
+            at.exitCode === 0 &&
+            isSamePage({ current: at.stdout.trim(), target })
+          ) {
+            return {
+              success: true,
+              summary: `Already on ${target} — not reloaded (an open reboots all of Slack). Take a snapshot to read it.`,
+            };
+          }
+        }
+        const result = await browser.run({
           abortSignal,
           args: parsed.args,
         });
@@ -120,6 +134,14 @@ export function slackBrowserTool({
           summary = `Slack browser ${command} failed: the browser stopped answering. Run "${RESTART}" before trying again.`;
         } else if (result.exitCode !== 0) {
           summary = `Slack browser ${command} exited ${result.exitCode}.`;
+        } else if (
+          verb === 'snapshot' &&
+          result.stdout.trim() === '(no interactive elements)'
+        ) {
+          // Slack's client is still booting. Read as a dead page, this sent
+          // the model to `open` the channel again, which reboots it again.
+          summary =
+            'Slack is still loading (nothing on the page yet): "wait 3000", then snapshot again. Do not open the URL again — that restarts the load.';
         }
         return {
           exitCode: result.exitCode,
