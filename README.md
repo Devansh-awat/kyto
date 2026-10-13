@@ -148,9 +148,11 @@ bun run docs:preview
 ## License
 
 Kyto is licensed under the GNU Affero General Public License v3.0 — see
-[LICENSE](LICENSE), and [NOTICE](NOTICE) for copyright and attributions. Code
-derived from gorkie stays under its original MIT terms
-([LICENSE-gorkie-MIT](LICENSE-gorkie-MIT)).
+[LICENSE](LICENSE), and [NOTICE](NOTICE) for copyright and attributions. Kyto
+is built on [gorkie](https://github.com/techwithanirudh/gorkie) and
+[coolton](https://github.com/itzmetanjim/coolton), both AGPL-3.0, and we thank
+their authors. Code that was MIT-licensed in gorkie when Kyto forked stays
+available under those terms ([LICENSE-gorkie-MIT](LICENSE-gorkie-MIT)).
 
 [git]: https://git-scm.com/
 [bun]: https://bun.sh/

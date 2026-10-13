@@ -13,11 +13,18 @@ those users the complete corresponding source of your modified version.
 Third-party components
 ----------------------
 
-- Gorkie-derived portions. Kyto began as a private fork of gorkie, which was
-  MIT-licensed. Code that originated in gorkie, and this repository's history
-  from before the rewrite, remain available under the MIT licence — see
-  LICENSE-gorkie-MIT. That grant cannot be withdrawn; the AGPL applies to the
-  combined work and to Kyto's own code.
+- Gorkie (https://github.com/techwithanirudh/gorkie), Copyright (c) Anirudh
+  Sriram and Devarsh (webdev03), licensed under the GNU Affero General Public
+  License v3.0. Kyto began as a private fork of gorkie and contains code and
+  ideas derived from it. The code that was MIT-licensed when Kyto forked, and
+  this repository's history from before the rewrite, remain available under the
+  MIT licence (LICENSE-gorkie-MIT); that grant cannot be withdrawn. The AGPL
+  applies to the combined work and to Kyto's own code.
+
+- Coolton (https://github.com/itzmetanjim/coolton), Copyright (c) Tanjim Kamal
+  and the Coolton contributors, licensed under the GNU Affero General Public
+  License v3.0. Kyto contains code, skills and ideas derived from or adapted
+  from coolton.
 
 - Vercel AI SDK. This software contains components from Vercel's AI SDK,
   licensed under the Apache License 2.0. Copyright 2023 Vercel, Inc.
