@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  conversationUrl,
   isSamePage,
   parseCommand,
   splitCommand,
@@ -89,6 +90,51 @@ describe('parseCommand', () => {
       expect(parseCommand(`tab new ${url}`).ok).toBe(false);
     }
     expect(parseCommand('open').ok).toBe(false);
+  });
+
+  test('builds client URLs from ids and message links', () => {
+    const team = 'T0266FRGM';
+    expect(conversationUrl({ target: 'C0B7QEK0MQB', team })).toBe(
+      'https://app.slack.com/client/T0266FRGM/C0B7QEK0MQB'
+    );
+    expect(
+      conversationUrl({
+        target: 'C0B7QEK0MQB',
+        team,
+        threadTs: '1791903295.656479',
+      })
+    ).toBe(
+      'https://app.slack.com/client/T0266FRGM/C0B7QEK0MQB/thread/C0B7QEK0MQB-1791903295.656479'
+    );
+    // A reply's link opens its parent's thread; a top-level one, its own.
+    expect(
+      conversationUrl({
+        target:
+          'https://hackclub.slack.com/archives/C0B7QEK0MQB/p1791903453922089?thread_ts=1791903295.656479&cid=C0B7QEK0MQB',
+        team,
+      })
+    ).toBe(
+      'https://app.slack.com/client/T0266FRGM/C0B7QEK0MQB/thread/C0B7QEK0MQB-1791903295.656479'
+    );
+    expect(
+      conversationUrl({
+        target:
+          'https://hackclub.slack.com/archives/C0B7QEK0MQB/p1791903352264749',
+        team,
+      })
+    ).toBe(
+      'https://app.slack.com/client/T0266FRGM/C0B7QEK0MQB/thread/C0B7QEK0MQB-1791903352.264749'
+    );
+    for (const target of [
+      'https://app.slack.com/client/T0266FRGM/C0B7QEK0MQB',
+      'https://evil.example/archives/C0B7QEK0MQB/p1791903352264749',
+      'general',
+    ]) {
+      expect(conversationUrl({ target, team })).toBeUndefined();
+    }
+    expect(
+      conversationUrl({ target: 'C0B7QEK0MQB', team, threadTs: 'soon' })
+    ).toBeUndefined();
   });
 
   test('refuses shell operators, which never reach a shell', () => {

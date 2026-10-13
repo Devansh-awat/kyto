@@ -99,7 +99,12 @@ export interface SlackBrowserSession {
   viewUrl: string;
 }
 
-export async function startSlackBrowser(): Promise<SlackBrowserSession> {
+export async function startSlackBrowser({
+  startUrl = START_URL,
+}: {
+  /** An https Slack URL to land on; the client's home by default. */
+  startUrl?: string;
+} = {}): Promise<SlackBrowserSession> {
   const chromium = chromiumPath();
   if (!chromium) {
     throw new Error('Chromium is not installed on this host.');
@@ -130,7 +135,7 @@ export async function startSlackBrowser(): Promise<SlackBrowserSession> {
       `--window-size=${WINDOW_SIZE}`,
       `--host-resolver-rules=${resolverRules(proxy.port)}`,
       `--ignore-certificate-errors-spki-list=${proxy.spki}`,
-      START_URL,
+      startUrl,
     ],
     { env: childEnv(stateDir), stderr: 'ignore', stdout: 'ignore' }
   );

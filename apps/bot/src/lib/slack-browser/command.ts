@@ -178,6 +178,69 @@ export function isSamePage({
   return key !== undefined && key === pageKey(current);
 }
 
+const CONVERSATION_ID = /^[CDG][A-Z0-9]{8,}$/;
+const MESSAGE_TS = /^\d{10}\.\d{6}$/;
+const PERMALINK_PATH = /^\/archives\/([CDG][A-Z0-9]{8,})\/p(\d{10})(\d{6})\/?$/;
+
+/** The web client's own URL for a conversation, or a thread in it. */
+export function clientUrl({
+  channel,
+  team,
+  threadTs,
+}: {
+  channel: string;
+  team: string;
+  threadTs?: string;
+}): string {
+  const base = `https://app.slack.com/client/${team}/${channel}`;
+  return threadTs ? `${base}/thread/${channel}-${threadTs}` : base;
+}
+
+/**
+ * `open C…`, `open C… 1791903295.656479` or `open <message permalink>` as the
+ * client URL, built here: a permalink goes through a "Redirecting…" page that
+ * boots Slack twice, and a hand-written client URL once put a channel id where
+ * the workspace id goes. A permalink opens its message's thread. Undefined when
+ * `target` is none of those (a plain URL is opened as given).
+ */
+export function conversationUrl({
+  target,
+  team,
+  threadTs,
+}: {
+  target: string;
+  team: string;
+  threadTs?: string;
+}): string | undefined {
+  if (CONVERSATION_ID.test(target)) {
+    if (threadTs !== undefined && !MESSAGE_TS.test(threadTs)) {
+      return;
+    }
+    return clientUrl({ channel: target, team, threadTs });
+  }
+  if (threadTs !== undefined) {
+    return;
+  }
+  let url: URL;
+  try {
+    url = new URL(target);
+  } catch {
+    return;
+  }
+  const permalink = PERMALINK_PATH.exec(url.pathname);
+  if (!(url.protocol === 'https:' && isSlackHost(url.hostname) && permalink)) {
+    return;
+  }
+  const [, channel = '', seconds, micros] = permalink;
+  const replyTo = url.searchParams.get('thread_ts');
+  return clientUrl({
+    channel,
+    team,
+    threadTs:
+      replyTo && MESSAGE_TS.test(replyTo) ? replyTo : `${seconds}.${micros}`,
+  });
+}
+
 /** Why `args` may not run, or undefined when it may. */
 function refusal(args: string[]): string | undefined {
   const [verb, first] = args;

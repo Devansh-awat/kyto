@@ -7,7 +7,13 @@ import {
   type SlackBrowserSession,
   startSlackBrowser,
 } from '@/lib/slack-browser';
-import { isSamePage, parseCommand } from '@/lib/slack-browser/command';
+import {
+  clientUrl,
+  conversationUrl,
+  isSamePage,
+  parseCommand,
+  splitCommand,
+} from '@/lib/slack-browser/command';
 import { errorMessage, toLogError } from '@/lib/utils/error';
 
 // The owner's logged-in Slack browser (owner's ask, 2026-10-02): workflows,
@@ -37,9 +43,20 @@ export function slackBrowserTool({
   thread: ThreadHandle;
 }) {
   let session: Promise<SlackBrowserSession> | undefined;
+  // Built here, not by the model: it glued a channel id where the workspace id
+  // goes and landed on Slack's "There's been a glitch" page.
+  const team = thread.adapter.teamId ?? '';
+  const here = thread.adapter.decodeThreadId(thread.id);
+  // It starts in the thread it was asked from (owner's ask, 2026-10-13) — the
+  // button it is usually there for is a reply in it. Not in the APP's DM:
+  // kyto's user account isn't in that conversation, so it opens Slack's home.
+  const startUrl =
+    team && (asUserAccount || !here.channel.startsWith('D'))
+      ? clientUrl({ ...here, team })
+      : undefined;
 
   const start = (): Promise<SlackBrowserSession> => {
-    const started = startSlackBrowser().then(async (opened) => {
+    const started = startSlackBrowser({ startUrl }).then(async (opened) => {
       // In the thread, like the plain browser's (owner's call, 2026-10-02) —
       // anyone there can watch kyto's Slack, DMs included, while it runs.
       await postLiveView({
@@ -73,7 +90,7 @@ export function slackBrowserTool({
   };
 
   const slackBrowser = tool({
-    description: `Drive a real browser LOGGED IN to Slack as kyto's own user account (owner only) — ONLY for what the Slack tools can't do — a last resort, never a shortcut: adding or removing a custom emoji is \`submitEmoji\`/\`removeEmoji\`, posting is \`postMessage\`, and so on; check the loadTools catalog first. It is for running workflows, clicking buttons on other apps' messages or App Homes, forms, settings pages. Same agent-browser CLI as the \`browser\` tool (pass its sub-command in \`command\`; "skills get core" prints the reference), starting on https://app.slack.com/client. "${THIS_THREAD}" opens the Slack thread this conversation is in — a button or form someone posted as a REPLY here only shows in that thread pane, never in the channel view. \`find\` CLICKS what it finds unless given another action; to look for something, read a \`snapshot\`. Every \`open\` reboots the whole Slack client (slow, the view blanks): after the first page, move by clicking (sidebar, a message's replies, the quick switcher on Control+k) and open a URL only to go somewhere a click can't reach. One command per call — there is no shell, so no pipes. Only interaction commands work (open/click/fill/type/press/select/scroll/wait/snapshot/get/find/tab/…), and only Slack URLs open — no eval, screenshots, files or other sites. "${RESTART}" relaunches a stuck browser. Nothing in Slack is blocked except signing out: it can send, edit, react, join and run workflows AS kyto's user account, so act only on what the owner asked. A live view is posted in the thread on first use.`,
+    description: `Drive a real browser LOGGED IN to Slack as kyto's own user account (owner only) — ONLY for what the Slack tools can't do — a last resort, never a shortcut: adding or removing a custom emoji is \`submitEmoji\`/\`removeEmoji\`, posting is \`postMessage\`, and so on; check the loadTools catalog first. It is for running workflows, clicking buttons on other apps' messages or App Homes, forms, settings pages. Same agent-browser CLI as the \`browser\` tool (pass its sub-command in \`command\`; "skills get core" prints the reference), starting IN the Slack thread this conversation is in (Slack's home for a DM with the app) — a button or form someone posted as a REPLY here only shows in that thread pane, never in the channel view; "${THIS_THREAD}" goes back to it. For another conversation, \`open <channel id>\`, \`open <channel id> <thread ts>\` or \`open <message link>\` (opens that message's thread) — never hand-build an app.slack.com URL. \`find\` CLICKS what it finds unless given another action; to look for something, read a \`snapshot\`. Every \`open\` reboots the whole Slack client (slow, the view blanks): after the first page, move by clicking (sidebar, a message's replies, the quick switcher on Control+k) and open a URL only to go somewhere a click can't reach. One command per call — there is no shell, so no pipes. Only interaction commands work (open/click/fill/type/press/select/scroll/wait/snapshot/get/find/tab/…), and only Slack URLs open — no eval, screenshots, files or other sites. "${RESTART}" relaunches a stuck browser. Nothing in Slack is blocked except signing out: it can send, edit, react, join and run workflows AS kyto's user account, so act only on what the owner asked. A live view is posted in the thread on first use.`,
     inputSchema: z.object({
       command: z
         .string()
@@ -85,11 +102,20 @@ export function slackBrowserTool({
     execute: async ({ command: requested }, { abortSignal }) => {
       let command = requested.trim();
       if (command === THIS_THREAD) {
-        // Built here, not by the model: it glued a channel id where the
-        // workspace id goes and landed on Slack's "There's been a glitch" page.
-        const { channel, threadTs } = thread.adapter.decodeThreadId(thread.id);
-        const team = thread.adapter.teamId ?? '';
-        command = `open https://app.slack.com/client/${team}/${channel}${threadTs ? `/thread/${channel}-${threadTs}` : ''}`;
+        command = `open ${clientUrl({ ...here, team })}`;
+      } else if (command.startsWith('open ')) {
+        let words: string[] = [];
+        try {
+          words = splitCommand(command);
+        } catch {
+          // An unclosed quote: parseCommand below says so.
+        }
+        const [, target, threadTs, ...extra] = words;
+        const url =
+          target && extra.length === 0
+            ? conversationUrl({ target, team, threadTs })
+            : undefined;
+        command = url ? `open ${url}` : command;
       }
       try {
         if (command === RESTART) {
@@ -98,8 +124,7 @@ export function slackBrowserTool({
           await session;
           return {
             success: true,
-            summary:
-              'Restarted the Slack browser on https://app.slack.com/client.',
+            summary: `Restarted the Slack browser ${startUrl ? "in this conversation's thread" : "on Slack's home"}.`,
           };
         }
         const parsed = parseCommand(command);
