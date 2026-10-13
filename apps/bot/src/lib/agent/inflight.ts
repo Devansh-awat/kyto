@@ -168,17 +168,40 @@ const EFFECT_STATE: Record<InflightEffect['status'], string> = {
     'STARTED, result UNKNOWN — the restart cut it before or after it happened; check (read the thread, the channel, the inbox, the site) before doing it again',
 };
 
+/**
+ * A `wait` the restart cut short (#77): "wait 5 minutes, then grade" was
+ * re-run from the top after a deploy, the elapsed time forgotten. Its start
+ * and length are in the ledger, so the resumed turn is told when it was due
+ * to end and to wait out only what is left.
+ */
+function describeCutWait(effect: InflightEffect, now: Date): string {
+  const seconds = Number(/"seconds":(\d+)/.exec(effect.input)?.[1] ?? 0);
+  const dueAt = new Date(Date.parse(effect.at) + seconds * 1000);
+  const left = Math.ceil((dueAt.getTime() - now.getTime()) / 1000);
+  return left > 0
+    ? `- You were in the middle of a ${seconds}s wait (started ${effect.at}, due to end ${dueAt.toISOString()}) when kyto restarted. It is now ${now.toISOString()}: call wait for the ${left}s still left, then carry on with what the wait was for. Don't restart the wait from the beginning.`
+    : `- You were in the middle of a ${seconds}s wait (started ${effect.at}) when kyto restarted, and it has already run its course (it was due to end ${dueAt.toISOString()}; it is now ${now.toISOString()}). Don't wait again — carry on with what the wait was for.`;
+}
+
 /** For a resumed turn: what the cut turn did, told plainly. */
-export function describePriorEffects(effects: InflightEffect[]): string {
-  if (effects.length === 0) {
-    return 'Before the restart this turn had taken no outward action (no post, DM, email, deploy or reminder), so nothing will be repeated by doing the work.';
+export function describePriorEffects(
+  effects: InflightEffect[],
+  now: Date = new Date()
+): string {
+  const cutWaits = effects
+    .filter((effect) => effect.tool === 'wait' && effect.status === 'started')
+    .map((effect) => describeCutWait(effect, now));
+  const outward = effects.filter((effect) => effect.tool !== 'wait');
+  const waits = cutWaits.length > 0 ? `\n${cutWaits.join('\n')}` : '';
+  if (outward.length === 0) {
+    return `Before the restart this turn had taken no outward action (no post, DM, email, deploy or reminder), so nothing will be repeated by doing the work.${waits}`;
   }
-  const lines = effects.map((effect) => {
+  const lines = outward.map((effect) => {
     const state = EFFECT_STATE[effect.status];
     const result = effect.result ? ` → ${effect.result}` : '';
     return `- ${effect.tool}(${effect.input}) at ${effect.at}: ${state}${result}`;
   });
-  return `Outward actions this turn took before the restart:\n${lines.join('\n')}`;
+  return `Outward actions this turn took before the restart:\n${lines.join('\n')}${waits}`;
 }
 
 /** Called first thing on SIGTERM: everything running here becomes resumable. */

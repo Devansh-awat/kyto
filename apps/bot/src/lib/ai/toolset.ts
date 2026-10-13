@@ -200,6 +200,9 @@ const CODE_TOOLS = new Set([
 // not do twice (lib/agent/inflight `startEffect`). Reads, the sandbox and
 // reactions are left out: redoing those is harmless.
 const EFFECT_TOOLS = new Set([
+  // Not outward, but a restart mid-wait must not start the wait over (#77);
+  // describePriorEffects tells the resumed turn how much of it is left.
+  'wait',
   'bookmarkLink',
   'canvasDelete',
   'canvasWrite',
