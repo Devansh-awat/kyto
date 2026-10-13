@@ -8,6 +8,7 @@ function server(id: string, name: string, userId: string): UserMcpServer {
     createdAt: new Date(0),
     id,
     name,
+    oauth: null,
     rules: null,
     url: `https://example.com/${id}`,
     userId,

@@ -32,6 +32,7 @@ import {
   setCredentialServiceFallback,
   setCredentialValidation,
   setIdentityProfile,
+  setMcpServerOauth,
   setMcpServerShares,
   setModelMode,
   setUsageFooter,
@@ -46,6 +47,7 @@ import { env } from '@/env';
 import type { ModalSubmitEvent, ModalSubmitResult } from '@/harness/types';
 import { mrkdwn, plainText } from '@/harness/views';
 import { forgetMcpFailure, normalizeMcpAuthorization } from '@/lib/ai/mcp';
+import { startMcpOauth } from '@/lib/ai/mcp-oauth';
 import {
   DEFAULT_MCP_RULES,
   MCP_CATEGORIES,
@@ -85,6 +87,7 @@ import {
   buildPresetModal,
   buildPromptModal,
   buildShareMcpModal,
+  escapeSlackText,
   MODEL_MODE_ACTION,
 } from './views';
 
@@ -692,6 +695,79 @@ async function forgetSavedMcpFailure(input: {
     forgetMcpFailure(saved.id);
   }
 }
+
+// OAuth sign-in (lib/ai/mcp-oauth). The link is shown only here, to the
+// server's own owner: it carries an encrypted state bound to them.
+bot.onAction('home_oauth_mcp', async (event) => {
+  const name = event.value;
+  const userId = event.user.userId;
+  if (!(name && event.triggerId)) {
+    return;
+  }
+  const server = await getMcpServer({ name, userId }).catch(() => null);
+  if (!server) {
+    return;
+  }
+  const started = await startMcpOauth({ server, userId });
+  const body =
+    'url' in started
+      ? {
+          accessory: {
+            action_id: 'home_oauth_mcp_open',
+            style: 'primary',
+            text: plainText('Sign in'),
+            type: 'button',
+            url: started.url,
+          },
+          text: mrkdwn(
+            `Sign in to \`${escapeSlackText(name)}\` in your browser. The link is only for you and works for 15 minutes; when it says you're signed in, come back here.`
+          ),
+          type: 'section',
+        }
+      : {
+          text: mrkdwn(`:warning: ${escapeSlackText(started.error)}`),
+          type: 'section',
+        };
+  await slack.webClient.views
+    .open({
+      trigger_id: event.triggerId,
+      view: {
+        blocks: [body],
+        close: plainText('Close'),
+        title: plainText('MCP sign-in'),
+        type: 'modal',
+      } as never,
+    })
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), name, userId },
+        'Failed to open MCP sign-in modal'
+      );
+    });
+});
+
+bot.onAction('home_oauth_signout_mcp', async (event) => {
+  const name = event.value;
+  const userId = event.user.userId;
+  if (!name) {
+    return;
+  }
+  const server = await getMcpServer({ name, userId }).catch(() => null);
+  if (!server) {
+    return;
+  }
+  await setMcpServerOauth({ id: server.id, oauth: null })
+    .then(() => {
+      forgetMcpFailure(server.id);
+      return publishHome({ userId });
+    })
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), name, userId },
+        'Failed to sign out of an MCP server'
+      );
+    });
+});
 
 bot.onAction('home_remove_mcp', async (event) => {
   const name = event.value;

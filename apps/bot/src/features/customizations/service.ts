@@ -13,6 +13,7 @@ import {
 } from '@repo/db/queries';
 import { env } from '@/env';
 import { getMcpFailure } from '@/lib/ai/mcp';
+import { hasMcpOauth, mcpOauthConfigured } from '@/lib/ai/mcp-oauth';
 import { byokConfigured } from '@/lib/byok/crypto';
 import { slack } from '@/lib/chat';
 import { slackOauthConfigured } from '@/lib/slack-oauth';
@@ -93,9 +94,15 @@ export async function publishHome({
       mcpFailures: Object.fromEntries(
         mcpServers.flatMap((server) => {
           const failure = getMcpFailure(server.id);
-          return failure ? [[server.name, failure.message]] : [];
+          // Keyed by id: the view reads `mcpFailures[server.id]`, and keyed
+          // by name the warning never showed.
+          return failure ? [[server.id, failure.message]] : [];
         })
       ),
+      mcpOauth: Object.fromEntries(
+        mcpServers.map((server) => [server.id, hasMcpOauth(server)])
+      ),
+      mcpOauthAvailable: mcpOauthConfigured(),
       mcpServers,
       mcpShares: Object.fromEntries(
         shareEntries.filter(([, names]) => names.length > 0)

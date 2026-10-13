@@ -100,6 +100,17 @@ export async function updateMcpServer(input: {
     );
 }
 
+/** Store (or, with null, drop) a server's encrypted OAuth sign-in. */
+export async function setMcpServerOauth(input: {
+  id: string;
+  oauth: string | null;
+}): Promise<void> {
+  await db
+    .update(userMcpServers)
+    .set({ oauth: input.oauth })
+    .where(eq(userMcpServers.id, input.id));
+}
+
 /** Returns the removed row's id, so the caller can drop its cached failure. */
 export async function removeMcpServer(input: {
   name: string;

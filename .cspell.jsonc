@@ -2,6 +2,12 @@
   "$schema": "https://raw.githubusercontent.com/streetsidesoftware/cspell/main/cspell.schema.json",
   "import": ["@repo/cspell-config"],
   "words": [
+    "mcpauth",
+    "xhigh",
+    "FLWAHLM",
+    "jina",
+    "Jina",
+    "haikue",
     "emscripten",
     "quickjs",
     "antml",

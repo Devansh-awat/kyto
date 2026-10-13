@@ -25,6 +25,7 @@ function context7(): UserMcpServer {
     createdAt: new Date(0),
     id: 'builtin:context7',
     name: CONTEXT7_NAMESPACE,
+    oauth: null,
     rules: {
       read: 'allow',
       sensitive: 'never',
@@ -50,6 +51,7 @@ function agentmail(apiKey: string): UserMcpServer {
     createdAt: new Date(0),
     id: AGENTMAIL_BUILTIN_ID,
     name: AGENTMAIL_NAMESPACE,
+    oauth: null,
     rules: {
       read: 'allow',
       sensitive: 'allow',

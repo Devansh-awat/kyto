@@ -154,6 +154,7 @@ describe('legacy SSE fallback', () => {
     createdAt: new Date(),
     id: 'server-1',
     name: 'demo',
+    oauth: null,
     rules: null,
     url,
     userId: 'user-1',

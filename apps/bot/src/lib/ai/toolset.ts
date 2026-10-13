@@ -21,6 +21,7 @@ import { startEffect } from '@/lib/agent/inflight';
 import { threadModelChoice } from '@/lib/agent/model-choice';
 import { buildMcpTools } from '@/lib/ai/mcp';
 import { withBuiltinMcpServers } from '@/lib/ai/mcp-builtin';
+import { withMcpOauth } from '@/lib/ai/mcp-oauth';
 import { resolveTurnMcpServers } from '@/lib/ai/mcp-scope';
 import { FAMILY_OF, mergeTools, TOOL_FAMILIES } from '@/lib/ai/merge-tools';
 import { slack } from '@/lib/chat';
@@ -863,11 +864,18 @@ export async function buildTools({
       }
     ),
   ]);
+  // A server signed in with OAuth gets its (refreshed) access token here; a
+  // shared one runs on its owner's sign-in, as with a pasted token.
   const servers = withBuiltinMcpServers(
-    resolveTurnMcpServers({
-      own: ownServers,
-      shared: sharedServers,
-    })
+    await Promise.all(
+      resolveTurnMcpServers({
+        own: ownServers,
+        shared: sharedServers,
+      }).map(async (entry) => ({
+        ...entry,
+        server: await withMcpOauth(entry.server),
+      }))
+    )
   );
   const mcp = await buildMcpTools({
     logger,

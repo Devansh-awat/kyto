@@ -99,6 +99,7 @@ ALTER TYPE reminder_recurrence ADD VALUE IF NOT EXISTS 'event'; -- 2026-10-11
 ALTER TABLE reminders ADD COLUMN IF NOT EXISTS trigger jsonb; ALTER TABLE reminders ADD COLUMN IF NOT EXISTS webhook_secret text; ALTER TABLE reminders ADD COLUMN IF NOT EXISTS last_fired_at timestamptz; -- 2026-10-11
 ALTER TABLE thread_model_choices ADD COLUMN IF NOT EXISTS memory_mode text; -- 2026-10-11
 ALTER TABLE user_model_credentials ADD COLUMN IF NOT EXISTS max_output_tokens integer; -- 2026-10-12
+ALTER TABLE user_mcp_servers ADD COLUMN IF NOT EXISTS oauth text; -- 2026-10-13 (applied)
 ```
 
 The anti-coding gate's ledger: the last catch and how many in a row (each

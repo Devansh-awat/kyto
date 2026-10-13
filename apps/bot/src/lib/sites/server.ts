@@ -3,6 +3,7 @@ import { mkdir, readFile, stat } from 'node:fs/promises';
 import nodePath from 'node:path';
 import { promisify } from 'node:util';
 import { env } from '@/env';
+import { handleMcpOauth } from '@/lib/ai/mcp-oauth';
 import { handleDashboard } from '@/lib/dashboard';
 import { ensureEmbedAssets, LIVE_EMBED_PREFIX } from '@/lib/embeds';
 import { handleGithubProxy } from '@/lib/github-proxy';
@@ -214,6 +215,12 @@ export async function startSitesServer(): Promise<void> {
         const slackAuth = await handleSlackOauth(request, pathname);
         if (slackAuth) {
           return slackAuth;
+        }
+
+        // MCP server OAuth sign-in callback (lib/ai/mcp-oauth).
+        const mcpAuth = await handleMcpOauth(request, pathname);
+        if (mcpAuth) {
+          return mcpAuth;
         }
 
         // Owner dashboard (memory promotion, GitHub trust). Password-gated, and

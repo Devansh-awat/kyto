@@ -22,6 +22,10 @@ export const userMcpServers = pgTable(
     // for an unreadable value is the SAFE shape, not an open gate. Null means
     // "never configured", which reads as the defaults.
     rules: jsonb('rules'),
+    // OAuth sign-in (apps/bot lib/ai/mcp-oauth): the client registration and
+    // tokens as ONE encrypted blob (BYOK_ENCRYPTION_KEY). Wins over
+    // `authorization` when set.
+    oauth: text('oauth'),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),

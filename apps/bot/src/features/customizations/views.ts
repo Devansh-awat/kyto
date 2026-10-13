@@ -80,7 +80,7 @@ function describeReminderSchedule(reminder: Reminder): string {
   return `${WEEKDAYS[reminder.weekday ?? 0]} at ${time}`;
 }
 
-function escapeSlackText(text: string): string {
+export function escapeSlackText(text: string): string {
   return text
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
@@ -516,6 +516,8 @@ export function buildHomeView({
   identityProfiles = [],
   isOwner = false,
   mcpFailures = {},
+  mcpOauth = {},
+  mcpOauthAvailable = false,
   mcpServers = [],
   mcpShares = {},
   modelCredentials = [],
@@ -542,6 +544,10 @@ export function buildHomeView({
   isOwner?: boolean;
   /** Server id → why its last listing failed, so a dead entry says so. */
   mcpFailures?: Record<string, string>;
+  /** Per server id: signed in with OAuth. */
+  mcpOauth?: Record<string, boolean>;
+  /** OAuth sign-in can be stored (an encryption key is set). */
+  mcpOauthAvailable?: boolean;
   mcpServers?: UserMcpServer[];
   /** Server id → human-readable list of where the user has shared it. */
   mcpShares?: Record<string, string[]>;
@@ -655,7 +661,11 @@ export function buildHomeView({
       {
         text: mrkdwn(
           `\`${escapeSlackText(server.name)}\` — ${escapeSlackText(server.url)}${
-            server.authorization ? ' · :key: token saved' : ''
+            mcpOauth[server.id] ? ' · :lock: signed in (OAuth)' : ''
+          }${
+            server.authorization && !mcpOauth[server.id]
+              ? ' · :key: token saved'
+              : ''
           }\n_${escapeSlackText(formatMcpRules(rules))}_${
             shares.length > 0
               ? `\n:busts_in_silhouette: shared with ${shares.map((share) => escapeSlackText(share)).join(', ')}`
@@ -676,6 +686,23 @@ export function buildHomeView({
             type: 'button',
             value: server.name,
           },
+          ...(mcpOauthAvailable
+            ? [
+                mcpOauth[server.id]
+                  ? {
+                      action_id: 'home_oauth_signout_mcp',
+                      text: plainText('Sign out'),
+                      type: 'button' as const,
+                      value: server.name,
+                    }
+                  : {
+                      action_id: 'home_oauth_mcp',
+                      text: plainText('Sign in (OAuth)'),
+                      type: 'button' as const,
+                      value: server.name,
+                    },
+              ]
+            : []),
           {
             action_id: 'home_share_mcp',
             text: plainText(shares.length > 0 ? 'Sharing' : 'Share'),
