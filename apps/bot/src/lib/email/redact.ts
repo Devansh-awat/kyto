@@ -75,6 +75,13 @@ const LABELLED_CODE = new RegExp(
   'gi'
 );
 
+// The same, label AFTER the code: "600-162 is your Hack Club login code" — a
+// subject line in that shape handed a non-owner's turn a live login code.
+const CODE_THEN_LABEL = new RegExp(
+  `\\b(${CODE.source})\\b(?=[^\\n]{0,40}?\\b(?:code|otp|pin|passcode|password|token)\\b)`,
+  'gi'
+);
+
 // A code on a line of its own, which is how most providers present them.
 // The hyphenated form (XXX-XXX) is the Slack convention.
 // [ \t], not \s: \s spans newlines, which would swallow the blank lines
@@ -98,6 +105,10 @@ export function redactSecrets(input: string | undefined): Redaction {
   text = text.replace(LABELLED_CODE, (match, code: string) => {
     redactions += 1;
     return match.replace(code, REDACTED_CODE);
+  });
+  text = text.replace(CODE_THEN_LABEL, () => {
+    redactions += 1;
+    return REDACTED_CODE;
   });
   text = text.replace(LONE_CODE, () => {
     redactions += 1;

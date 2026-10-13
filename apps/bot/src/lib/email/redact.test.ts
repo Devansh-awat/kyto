@@ -14,6 +14,20 @@ describe('redactSecrets', () => {
     expect(text).not.toMatch(/https?:\/\//);
   });
 
+  it('redacts a code that comes before its label (a subject line)', () => {
+    // This exact subject leaked a live code into a non-owner's turn.
+    for (const subject of [
+      '600-162 is your Hack Club login code',
+      '84213 is your verification code',
+      'G-482915 is your Google verification code',
+    ]) {
+      const { redactions, text } = redactSecrets(subject);
+      expect(redactions).toBe(1);
+      expect(text).toContain('[redacted: possible auth code]');
+      expect(text).not.toMatch(/\d{3}/);
+    }
+  });
+
   it('redacts a bare hyphenated code on its own line', () => {
     const mail = 'Enter this code:\n\n482-915\n\nThanks!';
     const { redactions, text } = redactSecrets(mail);
