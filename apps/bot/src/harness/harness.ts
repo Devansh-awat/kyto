@@ -194,7 +194,7 @@ class TopLevelStreamer {
     }
   }
 
-  async stop(): Promise<void> {
+  async stop({ blocks }: { blocks?: unknown[] } = {}): Promise<void> {
     if (!this.streamTs) {
       await this.flush();
     }
@@ -202,6 +202,7 @@ class TopLevelStreamer {
       return;
     }
     await this.client.apiCall('chat.stopStream', {
+      ...(blocks ? { blocks } : {}),
       channel: this.args.channel,
       chunks: this.takeBuffer(),
       ts: this.streamTs,
@@ -952,6 +953,10 @@ export class SlackHarness {
       // a task card only exists inside the stream it was appended to, so
       // anything still mid-flight has to be finished here or it spins forever.
       onRotate?: () => StreamChunk[];
+      // Blocks to put under the LAST message when the stream ends (the reply
+      // footer). Asked for only if that message has content; a caller whose
+      // callback was never called has to post them some other way.
+      finalBlocks?: () => Promise<unknown[] | undefined>;
       // Per-message identity override (needs chat:write.customize). Used so a
       // subagent's own streamed message posts as "kyto subagent" + its icon.
       username?: string;
@@ -1025,13 +1030,20 @@ export class SlackHarness {
         );
       }
     };
-    const stopStreamer = async (): Promise<void> => {
+    const stopStreamer = async ({
+      final,
+    }: {
+      final: boolean;
+    }): Promise<void> => {
       if (!currentHasContent) {
         return;
       }
-      await streamer.stop().catch((error: unknown) => {
-        this.logger.warn({ err: error }, '[harness] stream stop failed');
-      });
+      const blocks = final ? await options.finalBlocks?.() : undefined;
+      await streamer
+        .stop(blocks ? { blocks: blocks as never } : undefined)
+        .catch((error: unknown) => {
+          this.logger.warn({ err: error }, '[harness] stream stop failed');
+        });
       // After stop: a short message is buffered until then, so before it the
       // stream may not have started and has no ts to take back.
       if (streamer.ts) {
@@ -1051,7 +1063,7 @@ export class SlackHarness {
       for (const chunk of options.onRotate?.() ?? []) {
         await appendChunk(chunk);
       }
-      await stopStreamer();
+      await stopStreamer({ final: false });
       streamer = startStreamer();
       streamStartedAt = Date.now();
       currentHasContent = false;
@@ -1091,7 +1103,27 @@ export class SlackHarness {
         if (typeof chunk === 'string' || chunk.type === 'markdown_text') {
           const text = typeof chunk === 'string' ? chunk : chunk.text;
           if (text) {
-            await streamer.append({ markdown_text: filterOutbound(text) });
+            const markdownText = filterOutbound(text);
+            try {
+              await streamer.append({ markdown_text: markdownText });
+            } catch (error) {
+              // Reply text now streams too: an expired message must not take
+              // the rest of the answer down with it.
+              if (!String(error).includes(STREAM_EXPIRED)) {
+                throw error;
+              }
+              this.logger.warn(
+                { err: error },
+                '[harness] stream expired; text continues in a new message'
+              );
+              options.onRotate?.();
+              if (streamer.ts) {
+                posted.push(streamer.ts);
+              }
+              streamer = startStreamer();
+              streamStartedAt = Date.now();
+              await streamer.append({ markdown_text: markdownText });
+            }
             currentHasContent = true;
           }
           continue;
@@ -1105,7 +1137,7 @@ export class SlackHarness {
       }
       throw error;
     } finally {
-      await stopStreamer();
+      await stopStreamer({ final: true });
     }
     return posted;
   }

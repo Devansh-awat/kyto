@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import {
+  createFenceNormalizer,
+  disambiguateBareUrls,
   healMarkdown,
   neutralizeBroadcast,
   restoreAnnotatedMentions,
@@ -10,15 +12,22 @@ import { resolveIdentity } from '@/lib/identity';
 import logger from '@/lib/logger';
 import { linkChannelNames } from '@/lib/slack/channel-links';
 
-// Slack rejects oversized messages (`msg_blocks_too_long`), so streamed prose is
-// posted in pieces. We cut on blank-line boundaries; tables, lists and
-// paragraphs never contain a blank line, so they stay intact; only fenced code
-// can, which `openFence` guards. Each piece is healed through the SDK's
-// `StreamingMarkdownRenderer` so a forced mid-paragraph cut still closes any
-// dangling inline markers. See vercel/chat#408: once the Slack adapter owns
-// length splitting, this whole module collapses into `thread.post(stream)`.
-// Slack caps a section block's text near 3000 chars, so keep each post under it.
-const MAX_POST = 2900;
+// Reply text reaches Slack two ways. The app's turns STREAM it into the turn's
+// own messages (see streamSegmented): `release` hands over whole lines as they
+// come and `endMessage` closes a code block left open when a message ends. The
+// user account cannot stream, so its replies are POSTED by `flush` — one
+// message per run of text, cut only past Slack's limit. Each cut used to be
+// made at every blank line as the text streamed in, which put one reply into
+// several messages and a code block into a message of its own (#78).
+//
+// Slack's markdown block caps text at 12k characters.
+const MAX_POST = 11_000;
+// A streamed message is cut a little earlier: its text arrives in pieces, so
+// the closing fence still has to fit after the cut.
+const MAX_STREAMED = 10_000;
+// Held back until there is this much or the model goes quiet: a degenerate
+// loop is caught within a few short lines and a bare `skip` is one word, and
+// both are dropped from the buffer before Slack sees them.
 const MIN_CHUNK = 280;
 const SOFT_FLUSH = 900;
 const IDLE_MS = 1500;
@@ -50,24 +59,58 @@ export function createReply({
   fromUserAccount?: boolean;
   threadId: string;
 }) {
+  // What the model wrote and nobody has seen yet.
   let buffer = '';
-  let lastPostAt = Date.now();
+  let lastReleaseAt = Date.now();
   let posted = false;
+  const fences = createFenceNormalizer({ slack: false });
+  // The streamed message being written: its text so far, and the fence a cut
+  // closed, to reopen at the top of the next one.
+  let streamed = '';
+  let reopenFence: string | null = null;
 
-  async function drain({
-    force,
+  // Take `raw` off the front of the buffer with its fences normalized. Only
+  // ever whole lines, except for the end of the text.
+  function takeLines(index: number): string {
+    const raw = buffer.slice(0, index);
+    buffer = buffer.slice(index);
+    return raw
+      .split('\n')
+      .map((line) => fences.line(line))
+      .join('\n');
+  }
+
+  function sanitize(text: string): string {
+    // restoreAnnotatedMentions first: the model writes mentions in the
+    // annotated form it was SHOWN (`@name (Uxxx)`), which Slack renders as inert
+    // text. Turning it back into `<@Uxxx>` here is what makes a mention ping.
+    // Broadcast neutralization still runs after, so this cannot smuggle one in
+    // (it only ever produces `<@ID>`, never a `<!channel>` control token).
+    // …and the same for channels: the model writes `#some-channel` because
+    // that is how channels read everywhere else, and Slack renders that as
+    // plain text. Resolved off the cached name→id index; an unknown name is
+    // left exactly as written. Channels only — a person or user group is never
+    // auto-resolved, because guessing which `@name` is whom is how you ping the
+    // wrong person or a whole group nobody asked for.
+    const restored = linkChannelNames(restoreAnnotatedMentions(text));
+    return allowBroadcast ? restored : neutralizeBroadcast(restored);
+  }
+
+  async function postChunks({
+    text,
     thread,
   }: {
-    force: boolean;
+    text: string;
     thread: Thread;
   }): Promise<void> {
-    while (buffer.trim()) {
-      const index = nextCut(force);
-      if (index === undefined) {
-        return;
-      }
-      const chunk = take(index);
-      if (!chunk) {
+    let rest = text;
+    while (rest.trim()) {
+      const index =
+        rest.length > MAX_POST ? hardCut(rest.slice(0, MAX_POST)) : rest.length;
+      const { chunk, remainder } = cutChunk({ index, text: rest });
+      rest = remainder;
+      const markdown = healMarkdown(sanitize(chunk)).trim();
+      if (!markdown) {
         continue;
       }
       // The normal identity profile can restyle kyto's avatar on ordinary
@@ -77,12 +120,11 @@ export function createReply({
         ? { fromUserAccount }
         : await resolveIdentity('normal');
       try {
-        // `post` denies broadcasts by default; the owner's streamed reply is
-        // one of the two paths allowed to opt in (this thread IS the channel
-        // kyto was invoked in). `take` has already neutralized the chunk when
+        // `post` denies broadcasts by default; the owner's reply is one of the
+        // two paths allowed to opt in (this thread IS the channel kyto was
+        // invoked in). `sanitize` has already neutralized the chunk when
         // allowBroadcast is false, so this is belt and braces either way.
-        await thread.post({ allowBroadcast, ...identity, markdown: chunk });
-        lastPostAt = Date.now();
+        await thread.post({ allowBroadcast, ...identity, markdown });
         posted = true;
       } catch (error) {
         // The turn archived its own channel (a code channel closed on request,
@@ -92,14 +134,13 @@ export function createReply({
           slackErrorSchema.safeParse(error).data?.data?.error === 'is_archived'
         ) {
           logger.info({ threadId }, '[agent] channel archived; reply dropped');
-          buffer = '';
           return;
         }
         if (fromUserAccount || !isNotInChannel(error)) {
           logger.warn({ err: error, threadId }, '[agent] reply post failed');
           continue;
         }
-        await postOutsideChannel({ chunk, identity, thread });
+        await postOutsideChannel({ chunk: markdown, identity, thread });
       }
     }
   }
@@ -123,7 +164,6 @@ export function createReply({
     try {
       await slack.webClient.conversations.join({ channel });
       await thread.post({ allowBroadcast, ...identity, markdown: chunk });
-      lastPostAt = Date.now();
       posted = true;
       return;
     } catch (error) {
@@ -137,7 +177,6 @@ export function createReply({
     }
     try {
       await thread.post({ fromUserAccount: true, markdown: chunk });
-      lastPostAt = Date.now();
       posted = true;
     } catch (error) {
       logger.error(
@@ -147,82 +186,14 @@ export function createReply({
     }
   }
 
-  function nextCut(force: boolean): number | undefined {
-    if (buffer.length > MAX_POST) {
-      return hardCut(buffer.slice(0, MAX_POST));
-    }
-    if (
-      !force &&
-      buffer.length < SOFT_FLUSH &&
-      Date.now() - lastPostAt < IDLE_MS
-    ) {
-      return;
-    }
-    return (
-      boundaryCut(force ? 0 : MIN_CHUNK) ?? (force ? buffer.length : undefined)
-    );
-  }
-
-  // Blank lines are the only split boundary: tables, lists, paragraphs and code
-  // never contain one, so they stay intact. Anything with no blank line rides
-  // along until the MAX_POST hard cut.
-  function boundaryCut(threshold: number): number | undefined {
-    const paragraph = buffer.lastIndexOf('\n\n') + 2;
-    if (
-      paragraph - 2 >= 0 &&
-      paragraph >= threshold &&
-      outsideFence(paragraph)
-    ) {
-      return paragraph;
-    }
-    return;
-  }
-
-  function outsideFence(index: number): boolean {
-    return openFence(buffer.slice(0, index)) === null;
-  }
-
-  function take(index: number): string {
-    const raw = buffer.slice(0, index);
-    let rest = buffer.slice(index).replace(/^\n+/, '');
-    const fence = openFence(raw);
-    let chunk = raw;
-    if (fence === null) {
-      // A table cut between rows loses its header; repeat it so the remainder
-      // still renders as a table instead of loose rows.
-      const header = continuedTableHeader({ chunk: raw, remainder: rest });
-      if (header) {
-        rest = `${header}\n${rest}`;
-      }
-    } else {
-      chunk = `${raw.replace(/\s+$/, '')}\n\`\`\``;
-      rest = rest ? `\`\`\`${fence}\n${rest}` : '';
-    }
-    buffer = rest;
-    // restoreAnnotatedMentions first: the model writes mentions in the
-    // annotated form it was SHOWN (`@name (Uxxx)`), which Slack renders as inert
-    // text. Turning it back into `<@Uxxx>` here is what makes a mention ping.
-    // Broadcast neutralization still runs after, so this cannot smuggle one in
-    // (it only ever produces `<@ID>`, never a `<!channel>` control token).
-    // …and the same for channels: the model writes `#some-channel` because
-    // that is how channels read everywhere else, and Slack renders that as
-    // plain text. Resolved off the cached name→id index; an unknown name is
-    // left exactly as written. Channels only — a person or user group is never
-    // auto-resolved, because guessing which `@name` is whom is how you ping the
-    // wrong person or a whole group nobody asked for.
-    const restored = linkChannelNames(restoreAnnotatedMentions(chunk));
-    return heal(allowBroadcast ? restored : neutralizeBroadcast(restored));
-  }
-
   return {
-    append({ text, thread }: { text: string; thread: Thread }): Promise<void> {
+    append(text: string): void {
       buffer += text;
-      return drain({ force: false, thread });
     },
     // Throw away everything still buffered, i.e. everything not yet posted. Used
     // when an attempt degenerates into a token loop: the loop is caught within a
-    // few short lines, which is well under the flush thresholds above, so this is
-    // what actually keeps it out of the thread.
+    // few short lines, which is well under the release thresholds above, so this
+    // is what actually keeps it out of the thread.
     drop(): void {
       buffer = '';
     },
@@ -238,14 +209,98 @@ export function createReply({
       buffer = buffer.slice(0, -text.length);
       return true;
     },
-    flush({ thread }: { thread: Thread }): Promise<void> {
-      return drain({ force: true, thread });
+    /**
+     * Text for the streamed message, in whole lines — or all of it when
+     * `force`d (a card is next, or the stream ended). Empty while it is still
+     * being held back.
+     */
+    release({ force }: { force: boolean }): string {
+      let index: number;
+      if (force) {
+        index = buffer.length;
+      } else {
+        const ready =
+          buffer.length >= SOFT_FLUSH ||
+          (buffer.length >= MIN_CHUNK && Date.now() - lastReleaseAt >= IDLE_MS);
+        index = ready ? buffer.lastIndexOf('\n') + 1 : 0;
+      }
+      if (!buffer.slice(0, index).trim()) {
+        return '';
+      }
+      let text = takeLines(index);
+      lastReleaseAt = Date.now();
+      // A message never opens on blank lines (the model's "\n" between tool
+      // calls ends up here).
+      if (!streamed) {
+        text = text.replace(/^\s*\n/, '');
+        if (reopenFence !== null) {
+          text = `\`\`\`${reopenFence}\n${text}`;
+          reopenFence = null;
+        }
+      }
+      text = disambiguateBareUrls(sanitize(text));
+      streamed += text;
+      posted = true;
+      return text;
+    },
+    /** The streamed message is long enough that the next text needs a new one. */
+    streamedFull(): boolean {
+      return streamed.length >= MAX_STREAMED;
+    },
+    /**
+     * The streamed message is ending: what still has to go into it so it
+     * renders whole — the close of a code block it leaves open, which is then
+     * reopened at the top of the next message.
+     */
+    endMessage(): string {
+      const fence = openFence(streamed);
+      streamed = '';
+      if (fence === null) {
+        return '';
+      }
+      reopenFence = fence;
+      return '\n```';
+    },
+    /** Post everything still buffered (the user account, or what a failed or
+     * interrupted stream left behind). */
+    async flush({ thread }: { thread: Thread }): Promise<void> {
+      const text = takeLines(buffer.length);
+      const reopened =
+        reopenFence !== null && text.trim()
+          ? `\`\`\`${reopenFence}\n${text}`
+          : text;
+      reopenFence = null;
+      await postChunks({ text: reopened, thread });
     },
     /** Whether any reply text reached the thread this turn. */
     hasPosted(): boolean {
       return posted;
     },
   };
+}
+
+// Split `text` at `index` without breaking a code block or a table: an open
+// fence is closed here and reopened in the remainder, a table's header row is
+// repeated so the rest still renders as a table.
+function cutChunk({ index, text }: { index: number; text: string }): {
+  chunk: string;
+  remainder: string;
+} {
+  const raw = text.slice(0, index);
+  let remainder = text.slice(index).replace(/^\n+/, '');
+  if (!remainder) {
+    return { chunk: raw, remainder: '' };
+  }
+  const fence = openFence(raw);
+  if (fence === null) {
+    const header = continuedTableHeader({ chunk: raw, remainder });
+    return {
+      chunk: raw,
+      remainder: header ? `${header}\n${remainder}` : remainder,
+    };
+  }
+  remainder = `\`\`\`${fence}\n${remainder}`;
+  return { chunk: `${raw.replace(/\s+$/, '')}\n\`\`\``, remainder };
 }
 
 function hardCut(text: string): number {
@@ -256,10 +311,6 @@ function hardCut(text: string): number {
   }
   const line = text.lastIndexOf('\n');
   return line >= floor ? line + 1 : text.length;
-}
-
-function heal(markdown: string): string {
-  return healMarkdown(markdown).trim();
 }
 
 function openFence(text: string): string | null {

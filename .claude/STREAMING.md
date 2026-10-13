@@ -5,20 +5,45 @@ Not loaded automatically (same convention as MODELS.md / TOOLS.md / OPS.md).
 `lib/agent/reply.ts`, or `harness.stream`.** Every rule here is one that broke in
 a way users saw.
 
-## Multi-block turns — `streamSegmented`
+## Message layout — `streamSegmented`
 
-`agent/index.ts`. A turn is a SEQUENCE of plan messages, not one. A new block is
-cut whenever a task card arrives AFTER reply text has streamed
-(`[plan] text [plan] text`), so the model can post an update and keep working.
-`renderStream`'s `emitText: true` yields reply text inline with task chunks in
-stream order; `createReply` posts it (length-splitting, fence/table healing).
+`agent/index.ts` + `agent/segmentation.ts` (tested). Owner's call 2026-10-13:
+**reply text OPENS a message, and the cards after it go into that same message,
+under the text.** Visible text after a card ends the message and opens the
+next. So a turn reads `[Thinking]`, `update [cards]`, `answer` + footer — one
+message per thing said. It used to be a plan message, then the text posted as a
+separate message PER PARAGRAPH (cut at every blank line as it streamed), then a
+new plan, then a footer message: one answer became a pile of messages and a code
+block landed in a message of its own (#78).
 
-- **Only VISIBLE text splits a block** (`isVisibleText`): whitespace-only
-  fragments between tool calls don't count, else every stretch of tools would
-  open an empty collapsible block.
-- The attempt's **Thinking card completes at first visible reply text**, so it
-  finishes inside its own block instead of a later one where its id doesn't
-  exist (else a perpetually spinning Thinking).
+- **Text streams into the message** as `markdown_text` (`createReply.release`):
+  whole lines, held until 900 chars or 1.5s idle with ≥280 — a degenerate loop
+  and a bare `skip` are still dropped before Slack sees them. A card forces out
+  the text written before it, so it sits above the card.
+- **A message is only cut** at visible text after cards, at ~10k chars of text
+  (`streamedFull`; Slack caps ~12k), at stream rotation/expiry, or for an owner
+  broadcast (a `<!here>` only pings from a posted `mrkdwn` section, so that text
+  is posted on its own). A cut inside a code block closes it (`endMessage`) and
+  reopens it at the top of the next message.
+- **Fences are normalized on the way out and in** (`createFenceNormalizer`,
+  `harness/markdown.ts`): text after an opening fence that isn't a known
+  language goes on its own line, and a closing fence glued to a line gets its own.
+  Slack's composer writes "```some text\nmore```"; a markdown block read "some
+  text" as the language and dropped it, and the glued close left a stray "```".
+- **Only VISIBLE text splits** (`isVisibleText`): models emit `"\n"` between
+  tool calls; counting it opened an empty message per stretch of tools.
+- **An update to a card from an EARLIER message is dropped** (GLM writes "let me
+  check" after the call, so its result lands after the split): that message
+  already settled the card via `cards.endMessage`, and in the new one it would be
+  a row Slack renders as failed.
+- The attempt's **Thinking card completes at first visible reply text**, inside
+  its own message.
+- **The footer rides on the LAST message** (`finalBlocks` → `chat.stopStream`
+  `blocks`, like coolton), with the "shaped by this user's instructions" note
+  above it. Posted on its own only when that message had no content.
+- **The user account cannot stream**: `flush` posts each run of text as ONE
+  message (at the next tool, or the end), cut only past 11k with fences/tables
+  carried over.
 - **The Thinking card's title names WHY this attempt is running**: plain
   `Thinking` for the first, `Thinking · upgraded` when `upgradeModel` routed the
   turn onto a stronger rung, `Thinking · fallback` for an actual failure. They
@@ -26,6 +51,9 @@ stream order; `createReply` posts it (length-splitting, fence/table healing).
   asked for is not kyto recovering from a broken provider. A fallback's title and the footer's weaker-model note also carry Hack Club AI's
   own outage reason when `ai.hackclub.com/up` reports one (`lib/ai/hackclub-status.ts`,
   cached 60s, only looked up once an attempt has failed).
+- **An MCP tool's card never shows its result** (`renderTask`): "Done." or
+  "Something went wrong." — the plan is public and an MCP read returned a
+  database password (#75).
 
 ## The visible-card budget is PER PLAN MESSAGE
 
@@ -173,8 +201,8 @@ latching text-only for the rest of the turn.
 - **Hallucinated tool calls are hidden.** Weak models sometimes call an
   unregistered tool; `renderStream`'s `knownTools` drops any such call (and its
   result/error) instead of surfacing "Tool X not found".
-- **Reply footer** (`postReplyFooter`, `lib/feedback/footer.ts`, tested): one
-  message under the reply — `_done in 12.3s_` (the whole turn, not the model's
+- **Reply footer** (`replyFooter`, `lib/feedback/footer.ts`, tested): blocks on
+  the reply's last message — `_done in 12.3s_` (the whole turn, not the model's
   tokens/sec: owner's call 2026-09-29, tok/s measured the provider and read as
   noise) plus Slack's native `feedback_buttons` in a `context_actions` block —
   two small thumb icons, like Coolton's; the old full-size `actions` buttons

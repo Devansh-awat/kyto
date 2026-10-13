@@ -1,5 +1,4 @@
 import { type ModelAttempt, PRIMARY_ATTEMPT, UPGRADE_ATTEMPTS } from '@repo/ai';
-import type { ThreadHandle } from '@/harness/thread';
 import { attemptKey } from '@/lib/agent/routing';
 import { hackclubOutage } from '@/lib/ai/hackclub-status';
 import { buildReplyFooter } from '@/lib/feedback/footer';
@@ -9,36 +8,34 @@ import { buildReplyFooter } from '@/lib/feedback/footer';
 const PRIMARY_LABEL = 'claude haiku 5.5 on hack club ai';
 
 /**
- * The footer under a reply (lib/feedback/footer). Best-effort — a failure here
- * never affects the answer.
+ * The footer under a reply (lib/feedback/footer): the blocks the turn's last
+ * streamed message ends with, or null when there is nothing to show.
  *
  * The weaker-model note is for an answer that came from anywhere other than the
  * primary on kyto's own chain: not for a person's own key (their choice, their
  * model), not for the thread's `--model` (also their choice), and not for
  * an upgrade (a step UP, which the Thinking card already says).
  */
-export async function postReplyFooter({
+export async function replyFooter({
   answeredBy,
   durationMs,
   isChosen,
   isOwnAttempt,
   showFooter,
-  thread,
 }: {
   answeredBy: ModelAttempt;
   durationMs: number;
   isChosen: boolean;
   isOwnAttempt: boolean;
   showFooter: boolean;
-  thread: ThreadHandle;
-}): Promise<void> {
+}): Promise<ReturnType<typeof buildReplyFooter>> {
   const key = attemptKey(answeredBy);
   const outage = await hackclubOutage();
   const steppedDown =
     !(isOwnAttempt || isChosen) &&
     key !== attemptKey(PRIMARY_ATTEMPT) &&
     !UPGRADE_ATTEMPTS.some((candidate) => attemptKey(candidate) === key);
-  const footer = buildReplyFooter({
+  return buildReplyFooter({
     durationMs,
     fallback: steppedDown
       ? { model: answeredBy.model, outage, primaryLabel: PRIMARY_LABEL }
@@ -46,8 +43,4 @@ export async function postReplyFooter({
     model: answeredBy.model,
     showFooter,
   });
-  if (!footer) {
-    return;
-  }
-  await thread.post(footer).catch(() => undefined);
 }

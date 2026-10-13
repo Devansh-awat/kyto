@@ -20,7 +20,10 @@ import { stepsCacheWrites, stepsCostUsd } from '@repo/ai/usage-cost';
 import type { InflightEffect } from '@repo/db/queries';
 import { LazySandbox } from '@repo/sandbox';
 import { env } from '@/env';
-import { restoreAnnotatedMentions } from '@/harness/markdown';
+import {
+  hasBroadcastToken,
+  restoreAnnotatedMentions,
+} from '@/harness/markdown';
 import type { ThreadHandle } from '@/harness/thread';
 import type { Message, StreamChunk } from '@/harness/types';
 import { addressedState, isAddressedToKyto } from '@/lib/agent/addressed';
@@ -59,7 +62,7 @@ import {
   synthesizeFinalAnswer,
 } from '@/lib/agent/recovery';
 import { createReply } from '@/lib/agent/reply';
-import { postReplyFooter } from '@/lib/agent/reply-footer';
+import { replyFooter } from '@/lib/agent/reply-footer';
 import {
   attemptKey,
   condemnsHackclub,
@@ -558,6 +561,8 @@ async function executeTurn(
   // a skip that never said anything takes its plan back (below).
   let turnSkipped = false;
   const planMessages: string[] = [];
+  // Whether the footer went out on the turn's last streamed message.
+  let footerAttached = false;
   // What the turn read and wrote, for the moderation check once it is over.
   const moderationTools: ModerationItem[] = [];
   let moderationReply = '';
@@ -665,9 +670,8 @@ async function executeTurn(
   try {
     // Slack's native streaming API renders the thinking/task-card UI. Every
     // message threads (a top-level message roots its own thread), so a valid
-    // threadTs always exists. The turn is driven as a SEQUENCE of plan messages
-    // (see streamSegmented) so that reply text splits the plan into separate
-    // collapsible blocks: [plan] text [plan] text.
+    // threadTs always exists. The turn is driven as a SEQUENCE of streamed
+    // messages (see streamSegmented): [plan], text [plan], text [plan], …
     if (secret) {
       // A secret turn takes the SAME model loop and throws away its public
       // half: no plan message, no streamed reply, no footer. Everything the
@@ -696,16 +700,15 @@ async function executeTurn(
         }
       }
     }
-    if (
-      !(secret || asUserAccount) &&
-      hints.customization?.prompt &&
-      !slack.isDM(thread.id)
-    ) {
-      await thread
-        .post({
-          markdown: "_kyto's responses are shaped by this user's instructions_",
-        })
-        .catch(() => undefined);
+    // Normally these rode on the last streamed message (see turnFooter); a
+    // turn whose last message had nothing in it posts them on their own.
+    if (!(secret || asUserAccount || footerAttached)) {
+      const blocks = await turnFooter();
+      if (blocks) {
+        await thread
+          .post({ blocks, fallbackText: 'feedback' })
+          .catch(() => undefined);
+      }
     }
     // Not awaited: the reply is already out, and a flag only pings the owner.
     moderateTurn({
@@ -723,18 +726,6 @@ async function executeTurn(
       secret,
       thread,
     });
-    if (!(secret || asUserAccount) && answeredBy) {
-      await postReplyFooter({
-        answeredBy,
-        durationMs: Date.now() - turnStart,
-        // The experiment's luna is no step down either: it was drawn, not
-        // fallen back to.
-        isChosen: answeredBy === chosenAttempt || answeredBy === experimentArm,
-        isOwnAttempt: routing.own.includes(answeredBy),
-        showFooter: hints.customization?.showUsageFooter !== false,
-        thread,
-      });
-    }
     await cleanup();
     logger.info(
       {
@@ -2138,13 +2129,6 @@ async function executeTurn(
     }
   }
 
-  // Drive the turn as a SEQUENCE of streamed plan messages instead of one. A
-  // "segment" is one collapsible plan block (its task cards) followed by any
-  // reply text; the FIRST task card that arrives AFTER text has streamed opens a
-  // NEW plan block below that text. So a turn that writes some text, runs more
-  // tools, then writes more renders as [plan] text [plan] text — the model can
-  // post an in-between update and keep working in a fresh block, instead of
-  // every tool of the whole turn piling into one plan pinned above all the text.
   /**
    * Drive the turn with NO public output: drop every plan/task chunk, keep the
    * reply text, and deliver it once as an ephemeral message only the asker can
@@ -2235,7 +2219,7 @@ async function executeTurn(
         thread: turnThread,
       })) {
         if (typeof part === 'string') {
-          await reply?.append({ text: part, thread: turnThread });
+          reply?.append(part);
           sinceFlush += part;
           // Past the length a bare `skip` (backticks, parens and all) can
           // reach, so a skip streamed a few letters at a time never starts it.
@@ -2256,6 +2240,47 @@ async function executeTurn(
     }
   }
 
+  /**
+   * The blocks under the turn's answer: whose instructions shaped it, then the
+   * footer (time, feedback, a weaker model's note). Nothing on a skip that said
+   * nothing, a failed turn, or with neither to show.
+   */
+  async function turnFooter(): Promise<unknown[] | undefined> {
+    if (turnSkipped && !reply?.hasPosted()) {
+      return;
+    }
+    const blocks: unknown[] = [];
+    if (hints.customization?.prompt && !slack.isDM(threadId)) {
+      blocks.push({
+        elements: [
+          {
+            text: "_kyto's responses are shaped by this user's instructions_",
+            type: 'mrkdwn',
+          },
+        ],
+        type: 'context',
+      });
+    }
+    if (answeredBy) {
+      const footer = await replyFooter({
+        answeredBy,
+        durationMs: Date.now() - turnStart,
+        // The experiment's luna is no step down either: it was drawn, not
+        // fallen back to.
+        isChosen: answeredBy === chosenAttempt || answeredBy === experimentArm,
+        isOwnAttempt: routing.own.includes(answeredBy),
+        showFooter: hints.customization?.showUsageFooter !== false,
+      });
+      blocks.push(...(footer?.blocks ?? []));
+    }
+    return blocks.length > 0 ? blocks : undefined;
+  }
+
+  // Drive the turn as a SEQUENCE of streamed messages. Reply text streams INTO
+  // a message, and the cards after it collapse under it in the same message;
+  // visible text after those cards opens the next one. So a turn reads
+  // [Thinking], then `update [cards]`, then `answer` with the footer on it —
+  // one message per thing said, cut only at Slack's length limit otherwise.
   async function streamSegmented({
     message: turnMessage,
     thread: turnThread,
@@ -2272,47 +2297,86 @@ async function executeTurn(
     // against this iterator.
     const nextRendered = (): Promise<IteratorResult<string | StreamChunk>> =>
       source.next();
+    // The rule for where each item goes lives in lib/agent/segmentation, where
+    // it has tests: text opens a message, the cards after it join it.
+    const segmenter = createSegmenter();
     let pending = await nextRendered();
     while (!pending.done) {
-      // Reply text before any plan block of this segment (a pure-text turn, or
-      // text trailing the previous block) is just posted — no empty plan.
-      if (typeof pending.value === 'string') {
-        await reply?.append({ text: pending.value, thread: turnThread });
-        pending = await nextRendered();
-        continue;
-      }
-      // One plan block: task cards until reply text streams, then the next task
-      // card ends this block (left on `pending` for the next iteration). The
-      // rule itself lives in lib/agent/segmentation, where it has tests.
-      const segmenter = createSegmenter();
-      const segment = async function* (): AsyncGenerator<StreamChunk> {
+      segmenter.newMessage();
+      // What a broadcast ping in the owner's reply has to be posted as, since
+      // only a posted `mrkdwn` section resolves one (see harness/thread.ts).
+      let broadcast = '';
+      const segment = async function* (): AsyncGenerator<string | StreamChunk> {
         while (!pending.done) {
           const value = pending.value;
           const action = segmenter.next(value);
-          if (action === 'append') {
-            await reply?.append({ text: value as string, thread: turnThread });
+          if (action === 'split') {
+            // Visible text after this message's cards: it opens the next
+            // message. Settle up first, or a card mid-flight stays spinning in
+            // a message nothing can update again.
+            yield* closeMessage();
+            return;
+          }
+          if (action === 'drop') {
             pending = await nextRendered();
             continue;
           }
-          if (action === 'split') {
-            // This message is done and the next card belongs to the one after
-            // it. Settle up first, or a card mid-flight stays spinning in a
-            // message nothing can update again.
-            yield* cards.endMessage({
-              carry:
-                typeof value !== 'string' && value.type === 'task_update'
-                  ? value.id
-                  : undefined,
-            });
+          if (typeof value === 'string') {
+            reply?.append(value);
+            const text = reply?.release({ force: false }) ?? '';
+            pending = await nextRendered();
+            if (hasBroadcastToken(text)) {
+              broadcast = text;
+              yield* closeMessage();
+              return;
+            }
+            if (text) {
+              yield text;
+            }
+            if (reply?.streamedFull()) {
+              yield* closeMessage();
+              return;
+            }
+            continue;
+          }
+          // Text written before this card goes above it.
+          const text = reply?.release({ force: true }) ?? '';
+          if (hasBroadcastToken(text)) {
+            broadcast = text;
+            yield* closeMessage();
             return;
           }
-          yield value as StreamChunk;
+          if (text) {
+            yield text;
+          }
+          yield value;
           pending = await nextRendered();
         }
-        // The stream ended inside this segment; renderStream has already
-        // yielded its own closers, so there is nothing left to settle here.
+        // The stream ended inside this message; renderStream has already
+        // yielded its own closers. A bare `skip` was dropped from the buffer
+        // before the stream ended, so what is left here is real reply text.
+        const rest = reply?.release({ force: true }) ?? '';
+        if (hasBroadcastToken(rest)) {
+          broadcast = rest;
+        } else if (rest) {
+          yield rest;
+        }
+        const close = reply?.endMessage();
+        if (close) {
+          yield close;
+        }
       };
       const posted = await slack.stream(threadId, segment(), {
+        // Only the turn's LAST message gets the footer, and only when that
+        // message has content; otherwise it is posted on its own afterwards.
+        finalBlocks: async () => {
+          if (!pending.done || broadcast) {
+            return;
+          }
+          const footer = await turnFooter();
+          footerAttached = footer !== undefined;
+          return footer;
+        },
         // A rotation cuts a new plan message just like a split does, but from
         // inside the harness, where the budget is not visible.
         onRotate: () => cards.endMessage(),
@@ -2321,9 +2385,24 @@ async function executeTurn(
         taskDisplayMode: 'plan',
       });
       planMessages.push(...posted);
-      // Post any buffered text before the next plan block is created, so the
-      // ordering (plan → text → plan) holds.
-      await reply?.flush({ thread: turnThread });
+      if (broadcast) {
+        await turnThread
+          .post({ allowBroadcast: isOwner, markdown: broadcast })
+          .catch((error: unknown) => {
+            logger.warn(
+              { err: error, threadId },
+              '[agent] broadcast reply post failed'
+            );
+          });
+      }
+    }
+
+    function* closeMessage(): Generator<StreamChunk | string> {
+      const close = reply?.endMessage();
+      if (close) {
+        yield close;
+      }
+      yield* cards.endMessage();
     }
   }
 }

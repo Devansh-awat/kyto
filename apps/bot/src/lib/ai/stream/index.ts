@@ -108,9 +108,8 @@ export async function* renderStream({
   /** A `!secret` turn: tool calls are logged by name only, never their I/O. */
   secret?: boolean;
   // When true, reply text is ALSO yielded as plain strings (the message body),
-  // not only routed through onTextDelta. The main turn keeps this off (its text
-  // is posted as separate messages via createReply); the subagent turns it on so
-  // its streamed message shows the response in-body, alongside the plan cards.
+  // not only routed through onTextDelta, so a streamed message shows the
+  // response in-body, alongside the plan cards.
   emitText?: boolean;
   knownTools?: ReadonlySet<string>;
   onTextDelta?: (text: string) => PromiseLike<void> | void;

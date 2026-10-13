@@ -1,14 +1,13 @@
-// When a turn cuts a new plan block. Split out of streamSegmented so the rule
-// has tests: the IO around it (opening a Slack stream, flushing buffered reply
-// text) is untestable without Slack, but the DECISION is a two-state machine and
-// it has been wrong twice in ways users saw.
+// When a turn cuts a new message. Split out of streamSegmented so the rule has
+// tests: the IO around it (opening a Slack stream) is untestable without Slack,
+// but the DECISION is a small state machine and it has been wrong in ways users
+// saw.
 
 /**
  * Does this text fragment produce anything the user will actually see?
  *
- * Reply text is buffered by `createReply` and posted on blank-line boundaries,
- * and a whitespace-only buffer is never posted at all — so a whitespace fragment
- * must not count as "the model has replied". Models routinely emit `"\n"`
+ * A whitespace-only buffer is never posted at all (`createReply`), so a
+ * whitespace fragment must not count as "the model has replied". Models routinely emit `"\n"`
  * between tool calls, and treating those as text opened a new, empty
  * collapsible plan block for every stretch of tools: the "three plan blocks,
  * nothing written between them" bug.
@@ -18,56 +17,61 @@ export function isVisibleText(text: string): boolean {
 }
 
 export type SegmentAction =
-  /** Reply text: append it and keep the block open. */
+  /** Reply text that belongs in the message currently open. */
   | 'append'
-  /** A task card belonging to the block currently open. */
+  /** A task card for the message currently open. */
   | 'emit'
-  /** A NEW task card arriving after visible reply text — end the block first. */
-  | 'split';
+  /** Visible text after this message's cards — it opens the next message. */
+  | 'split'
+  /** An update to a card that lived in an EARLIER message. */
+  | 'drop';
 
 /**
- * The per-block rule: task cards accumulate until visible reply text streams,
- * and the next task card after that ends the block. That is what produces
- * `[plan] text [plan] text` — the model can post an update and keep working in a
- * fresh block instead of one block growing all turn.
+ * Where a turn's output goes (owner's call 2026-10-13): reply text OPENS a
+ * message, and the thinking and tool cards that follow it go into that same
+ * message, under the text. Visible text arriving after a card ends the message
+ * and starts the next one. So a turn reads `[Thinking]`, `text [cards]`,
+ * `text [cards]`, … — not a plan message and a text message per step, which put
+ * one answer into a pile of messages.
  *
- * An UPDATE to a card already in this block stays in it, text or not: a tool
- * called before the text and finishing after it (GLM writes its "let me check"
- * after the call) must finish HERE. Sent to the next block, it lands in a
- * `chatStream` with no such task, which Slack renders as a failed row under
- * "Something went wrong" — on every such turn in #kyto, 2026-09-30, while the
- * tools had all succeeded.
+ * Whitespace never splits: models emit `"\n"` between tool calls, and counting
+ * that as text opened an empty message per stretch of tools.
  *
- * "Already in this block" means an id THIS segmenter emitted. It was once asked
- * of the card budget instead, but renderStream claims a budget slot before it
- * yields a new card, so every new card looked like an update: no split ever
- * fired and a whole turn's status lines piled into one plan message.
+ * A card id only exists inside the message it was appended to, and the message
+ * left behind has already settled its open cards (`cards.endMessage`). An update
+ * for one of them arriving later (GLM writes its "let me check" after the call,
+ * so the result lands after the split) is DROPPED: sent to the new message, it
+ * becomes a row Slack renders as failed under "Something went wrong".
  *
- * Create one per block; `next` reports what the caller should do with each item.
+ * One per turn; `newMessage` is called whenever a message is cut.
  */
 export function createSegmenter(): {
+  newMessage(): void;
   next(value: string | { id?: string; type?: string }): SegmentAction;
-  sawText(): boolean;
 } {
-  let sawVisibleText = false;
-  const emitted = new Set<string>();
+  let sawCard = false;
+  const thisMessage = new Set<string>();
+  const earlier = new Set<string>();
   return {
+    newMessage() {
+      for (const id of thisMessage) {
+        earlier.add(id);
+      }
+      thisMessage.clear();
+      sawCard = false;
+    },
     next(value) {
       if (typeof value === 'string') {
-        sawVisibleText ||= isVisibleText(value);
-        return 'append';
-      }
-      const inThisBlock = value.id !== undefined && emitted.has(value.id);
-      if (sawVisibleText && !inThisBlock) {
-        return 'split';
+        return sawCard && isVisibleText(value) ? 'split' : 'append';
       }
       if (value.id !== undefined) {
-        emitted.add(value.id);
+        if (earlier.has(value.id) && !thisMessage.has(value.id)) {
+          return 'drop';
+        }
+        thisMessage.add(value.id);
       }
+      sawCard = true;
       return 'emit';
-    },
-    sawText() {
-      return sawVisibleText;
     },
   };
 }

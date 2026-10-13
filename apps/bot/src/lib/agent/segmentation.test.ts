@@ -10,7 +10,7 @@ describe('isVisibleText', () => {
 
   test('whitespace-only fragments are not', () => {
     // createReply never posts these, so treating them as "the model replied"
-    // opened an empty collapsible plan block for every stretch of tools.
+    // opened an empty message for every stretch of tools.
     for (const fragment of ['', '\n', '  ', '\n\n', '\t']) {
       expect(isVisibleText(fragment)).toBe(false);
     }
@@ -18,68 +18,60 @@ describe('isVisibleText', () => {
 });
 
 describe('createSegmenter', () => {
-  test('task cards accumulate in one block before any text', () => {
+  test('cards accumulate in one message before any text', () => {
     const segmenter = createSegmenter();
-    expect(segmenter.next(card)).toBe('emit');
     expect(segmenter.next(card)).toBe('emit');
     expect(segmenter.next(card)).toBe('emit');
   });
 
-  test('the first card after visible text splits the block', () => {
+  test('text after the cards opens a new message', () => {
     const segmenter = createSegmenter();
     expect(segmenter.next(card)).toBe('emit');
+    expect(segmenter.next('here is what i found')).toBe('split');
+    segmenter.newMessage();
     expect(segmenter.next('here is what i found')).toBe('append');
-    expect(segmenter.next(card)).toBe('split');
   });
 
-  test('whitespace between tool calls does NOT split the block', () => {
-    // The "three plan blocks, nothing written between them" bug.
+  test("cards after text stay in the text's message", () => {
+    const segmenter = createSegmenter();
+    expect(segmenter.next('checking the repo')).toBe('append');
+    expect(segmenter.next(card)).toBe('emit');
+    expect(segmenter.next(card)).toBe('emit');
+    expect(segmenter.next('found it')).toBe('split');
+  });
+
+  test('whitespace between tool calls does NOT split', () => {
+    // The "messages with nothing written in them" bug.
     const segmenter = createSegmenter();
     expect(segmenter.next(card)).toBe('emit');
     expect(segmenter.next('\n')).toBe('append');
     expect(segmenter.next('  ')).toBe('append');
     expect(segmenter.next(card)).toBe('emit');
-    expect(segmenter.sawText()).toBe(false);
   });
 
-  test('whitespace after real text does not un-set the split', () => {
+  test('a new message starts clean', () => {
     const segmenter = createSegmenter();
-    expect(segmenter.next('done')).toBe('append');
-    expect(segmenter.next('\n')).toBe('append');
-    expect(segmenter.next(card)).toBe('split');
+    segmenter.next(card);
+    segmenter.newMessage();
+    expect(segmenter.next('text')).toBe('append');
   });
 
-  test('text is always appended, never dropped', () => {
-    const segmenter = createSegmenter();
-    for (const value of ['a', '\n', 'b', '   ']) {
-      expect(segmenter.next(value)).toBe('append');
-    }
-  });
-
-  test('a fresh segmenter starts a new block clean', () => {
-    // Each block gets its own, so the previous block's text must not make the
-    // next one split on its very first card.
-    const first = createSegmenter();
-    first.next('text');
-    expect(first.next(card)).toBe('split');
-    const second = createSegmenter();
-    expect(second.next(card)).toBe('emit');
-  });
-
-  test('an update to a card already in the block stays in it after text', () => {
-    const segmenter = createSegmenter();
-    const started = { id: 'call-1', type: 'task_update' };
-    expect(segmenter.next(started)).toBe('emit');
-    expect(segmenter.next('let me check that channel')).toBe('append');
-    expect(segmenter.next({ id: 'call-1', type: 'task_update' })).toBe('emit');
-  });
-
-  test('a NEW card after text splits even though it is an update shape', () => {
-    // The budget marks a card visible before renderStream yields it; asking it
-    // "is this in the block?" kept every turn in one plan message.
+  test('an update to a card from an earlier message is dropped', () => {
+    // GLM writes "let me check" after the call: the result arrives after the
+    // split, and in the new message it would render as a failed row.
     const segmenter = createSegmenter();
     expect(segmenter.next({ id: 'call-1', type: 'task_update' })).toBe('emit');
-    expect(segmenter.next('found it, checking one more thing')).toBe('append');
-    expect(segmenter.next({ id: 'call-2', type: 'task_update' })).toBe('split');
+    expect(segmenter.next('let me check')).toBe('split');
+    segmenter.newMessage();
+    expect(segmenter.next('let me check')).toBe('append');
+    expect(segmenter.next({ id: 'call-1', type: 'task_update' })).toBe('drop');
+    expect(segmenter.next({ id: 'call-2', type: 'task_update' })).toBe('emit');
+  });
+
+  test('an update to a card in this message stays in it', () => {
+    const segmenter = createSegmenter();
+    expect(segmenter.next('reading')).toBe('append');
+    expect(segmenter.next({ id: 'call-1', type: 'task_update' })).toBe('emit');
+    expect(segmenter.next({ id: 'call-1', type: 'task_update' })).toBe('emit');
   });
 });

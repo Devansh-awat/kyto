@@ -1,6 +1,9 @@
 import { originalToolName } from '@/lib/ai/merge-tools';
 import { clamp } from '@/lib/utils/text';
-import type { TaskRendererEntry } from '@/types/task-renderers';
+import type {
+  DefaultTaskRenderer,
+  TaskRendererEntry,
+} from '@/types/task-renderers';
 import {
   fetchMessages,
   getChannelInfo,
@@ -59,6 +62,12 @@ const renderers: Record<string, TaskRendererEntry> = {
   write: { ...file, title: 'Writing file' },
 };
 
+const mcpTool: DefaultTaskRenderer = {
+  error: () => ({ output: 'Something went wrong.' }),
+  request: defaultTool.request,
+  response: () => ({ output: 'Done.' }),
+};
+
 export function renderTask({
   input,
   output,
@@ -74,10 +83,14 @@ export function renderTask({
   // stands for, so its card keeps the verb's own title and details.
   const verb = originalToolName({ input, toolName });
   const entry = renderers[verb];
+  // An MCP tool reads whatever the server returns — a database password came
+  // back from a "read" tool (#75) — and the plan is public. Its card says
+  // that it ran, never what came back.
+  const fallback = verb.startsWith('mcp_') ? mcpTool : defaultTool;
   const renderer =
     phase === 'error'
-      ? (entry?.error ?? defaultTool.error)
-      : (entry?.[phase] ?? defaultTool[phase]);
+      ? (entry?.error ?? fallback.error)
+      : (entry?.[phase] ?? fallback[phase]);
   const rendered = renderer({ input, output, toolName: verb });
   const title = entry?.title ?? rendered.title ?? verb;
   if (phase === 'request') {
@@ -88,7 +101,7 @@ export function renderTask({
   }
   return {
     output: clamp(
-      phase === 'response'
+      phase === 'response' && !verb.startsWith('mcp_')
         ? (resultErrorOutput(output) ?? rendered.output)
         : rendered.output,
       96

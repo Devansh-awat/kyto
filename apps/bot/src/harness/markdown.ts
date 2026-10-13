@@ -47,8 +47,71 @@ function convertInlineStyles(line: string): string {
     .join('');
 }
 
+// The info strings a model tags a fence with. Anything else after an opening
+// fence is the first line of the code: Slack's composer writes
+// "```some text\nmore```", and a markdown block reads "some text" as the
+// language and drops it — a reply that echoed a message lost its first line,
+// and the closing fence glued to the last line left a stray "```" (#78).
+const FENCE_LANGUAGES = new Set(
+  'bash c cpp c++ cs csharp css csv diff dockerfile go graphql html http ini java javascript js json json5 jsonc jsx kotlin lua makefile markdown md nginx php plaintext powershell ps1 py python rb regex ruby rust scss sh shell sql svelte swift text toml ts tsx txt typescript vue xml yaml yml zsh'.split(
+    ' '
+  )
+);
+const FENCE_OPEN = /^(\s*)(```|~~~)(.*)$/;
+const FENCE_ONLY = /^\s*(?:```|~~~)\s*$/;
+
+/**
+ * A line-by-line rewriter of code fences into the shape a CommonMark parser
+ * reads the way Slack's own mrkdwn does: text after an opening fence goes on its
+ * own line (unless it is a known language and `slack` is off — Slack mrkdwn has
+ * no languages at all), and a closing fence glued to the end of a line gets a
+ * line of its own. Stateful, so a caller can feed it complete lines as they
+ * arrive.
+ */
+export function createFenceNormalizer({ slack }: { slack: boolean }): {
+  line(line: string): string;
+} {
+  let open = false;
+  return {
+    line(line) {
+      if (open) {
+        if (FENCE_ONLY.test(line)) {
+          open = false;
+          return line;
+        }
+        const glued = /^(.*\S)\s*(?:```|~~~)\s*$/.exec(line);
+        if (glued) {
+          open = false;
+          return `${glued[1]}\n\`\`\``;
+        }
+        return line;
+      }
+      const match = FENCE_OPEN.exec(line);
+      if (!match) {
+        return line;
+      }
+      const [, indent = '', fence = '```', rest = ''] = match;
+      const info = rest.trim();
+      const oneLine = /^(.*\S)\s*(?:```|~~~)$/.exec(info);
+      if (oneLine) {
+        return `${indent}${fence}\n${oneLine[1]}\n${fence}`;
+      }
+      open = true;
+      if (!info || (!slack && FENCE_LANGUAGES.has(info.toLowerCase()))) {
+        return line;
+      }
+      return `${indent}${fence}\n${info}`;
+    },
+  };
+}
+
 export function mrkdwnToMarkdown(text: string): string {
-  const lines = decodeEntities(text).split('\n');
+  const fences = createFenceNormalizer({ slack: true });
+  const lines = decodeEntities(text)
+    .split('\n')
+    .map((line) => fences.line(line))
+    .join('\n')
+    .split('\n');
   let inFence = false;
   const out = lines.map((line) => {
     if (FENCE.test(line)) {

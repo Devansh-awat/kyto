@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  createFenceNormalizer,
   disambiguateBareUrls,
+  mrkdwnToMarkdown,
   neutralizeBroadcast,
   restoreAnnotatedMentions,
 } from './markdown';
@@ -115,5 +117,54 @@ describe('disambiguateBareUrls', () => {
     expect(disambiguateBareUrls('`https://example.com/a*`')).toBe(
       '`https://example.com/a*`'
     );
+  });
+});
+
+function normalize(text: string, slack = false): string {
+  const fences = createFenceNormalizer({ slack });
+  return text
+    .split('\n')
+    .map((line) => fences.line(line))
+    .join('\n');
+}
+
+describe('createFenceNormalizer', () => {
+  // #78: an echoed "```example codeblock\nmarkdown is cool```" lost its first
+  // line (read as the language) and got a stray "```" glued to the end.
+  test('text after an opening fence is code, not a language', () => {
+    expect(normalize('```example codeblock\nmarkdown is cool```')).toBe(
+      '```\nexample codeblock\nmarkdown is cool\n```'
+    );
+  });
+
+  test('a real language tag stays', () => {
+    expect(normalize('```ts\nconst a = 1;\n```')).toBe(
+      '```ts\nconst a = 1;\n```'
+    );
+  });
+
+  test('Slack mrkdwn has no languages', () => {
+    expect(normalize('```ts\nconst a = 1;```', true)).toBe(
+      '```\nts\nconst a = 1;\n```'
+    );
+  });
+
+  test('a one-line block gets lines of its own', () => {
+    expect(normalize('```hi```')).toBe('```\nhi\n```');
+  });
+
+  test('prose and well-formed blocks pass through untouched', () => {
+    const text = 'hello\n\n```\nsudo apt install\n```\n\n*bold*';
+    expect(normalize(text)).toBe(text);
+  });
+});
+
+describe('mrkdwnToMarkdown', () => {
+  test('a Slack code block reaches the model as a fenced block', () => {
+    expect(
+      mrkdwnToMarkdown(
+        '```sudo apt install viruses\nsudo apt remove antivirus```'
+      )
+    ).toBe('```\nsudo apt install viruses\nsudo apt remove antivirus\n```');
   });
 });
