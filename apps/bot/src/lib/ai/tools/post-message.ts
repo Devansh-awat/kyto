@@ -229,6 +229,20 @@ export function postMessageTool({
       // posts defaulting to the app split one conversation across two senders.
       const fromUserAccount =
         requestedUserAccount ?? (asUserAccount && userAccountConfigured);
+      // kyto's user account asked the APP something (an exam it posted, with
+      // the app as a candidate): an answer sent from the account is the asker
+      // answering itself. The app answered Exam 1 that way and it was graded
+      // as no submission.
+      if (
+        fromUserAccount &&
+        !asUserAccount &&
+        authorUserId === slack.userAccountId
+      ) {
+        return {
+          error:
+            "This message came from kyto's user account and you are answering as the kyto app, so posting from the user account would be the account answering itself. Reply as the app: write the answer as your reply (or post without fromUserAccount).",
+        };
+      }
       if (fromUserAccount && !userAccountConfigured) {
         return {
           error:
