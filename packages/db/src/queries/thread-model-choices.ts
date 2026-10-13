@@ -20,6 +20,7 @@ export async function saveThreadModelChoice({
   model,
   modelSetBy,
   reasoningEffort,
+  showReasoning,
   threadId,
   updatedBy,
 }: {
@@ -27,6 +28,7 @@ export async function saveThreadModelChoice({
   model: string | null;
   modelSetBy: string | null;
   reasoningEffort: string | null;
+  showReasoning: boolean | null;
   threadId: string;
   updatedBy: string;
 }): Promise<void> {
@@ -37,6 +39,7 @@ export async function saveThreadModelChoice({
       model,
       modelSetBy,
       reasoningEffort,
+      showReasoning,
       threadId,
       updatedBy,
     })
@@ -46,6 +49,7 @@ export async function saveThreadModelChoice({
         model,
         modelSetBy,
         reasoningEffort,
+        showReasoning,
         updatedAt: new Date(),
         updatedBy,
       },

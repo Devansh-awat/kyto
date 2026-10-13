@@ -873,14 +873,14 @@ const REQUIRED_TOP_P: Record<string, number> = {};
 
 // OpenRouter's upstream precision labels kyto accepts — see tuneBody.
 const ALLOWED_QUANTIZATIONS = ['fp8', 'fp16', 'bf16', 'fp32', 'unknown'];
-// GLM 5.3 Flash, fastest host first (owner's ask 2026-10-13). Left to
-// OpenRouter's price-weighted spread, kyto landed on the slower hosts at
-// 15-85 tok/s while the two fastest same-price hosts ran 100-120;
-// measured per host 2026-10-13. The price cap is the hosts kyto already used
-// ($0.15 in / $0.50 out per M), so "fastest" can't mean dearer: the fastest (314
-// tok/s) charges $1.60 out and is left out by it. Hosts: MODELS.md.
+// GLM 5.3 Flash: the fastest host at or under the cheap tier's price (owner's
+// call 2026-10-13, on a $3/day cap). Cached reads are ~90% of kyto's GLM bill,
+// and the $0.084 in / $0.28 out tier caches at $0.017/M against $0.03 at the
+// $0.15/$0.50 tier — ~44% less for ~1/3 less speed (81 vs 122 tok/s,
+// measured per host 2026-10-13). Unsorted, OpenRouter's price-weighted spread
+// landed on 15-85 tok/s hosts. fp4 stays out. Hosts: MODELS.md.
 const GLM_FLASH_ROUTING = {
-  max_price: { completion: 0.5, prompt: 0.15 },
+  max_price: { completion: 0.28, prompt: 0.084 },
   quantizations: ALLOWED_QUANTIZATIONS,
   sort: 'throughput',
 };

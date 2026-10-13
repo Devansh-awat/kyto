@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import { boolean, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
 
 // A thread's `--model` / `--reasoning` / `--no-memory` choice (lib/flags), sticky until
 // cleared. Kept apart from thread_subscriptions because a row there means
@@ -16,6 +16,8 @@ export const threadModelChoices = pgTable('thread_model_choices', {
   reasoningEffort: text('reasoning_effort'),
   /** `stale` (--no-memory) / `off` (--NO-MEMORY); null = memories as usual. */
   memoryMode: text('memory_mode'),
+  /** `--show-reasoning`: the user account posts its reasoning cards too. */
+  showReasoning: boolean('show_reasoning'),
   updatedBy: text('updated_by').notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true })
     .notNull()

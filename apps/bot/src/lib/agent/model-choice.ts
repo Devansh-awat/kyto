@@ -63,6 +63,8 @@ export interface ThreadModelChoice {
   memory?: MemoryMode;
   model?: string;
   modelSetBy?: string;
+  /** `--show-reasoning`: the user account posts its reasoning cards. */
+  showReasoning?: boolean;
 }
 
 export function isSharedModel(name: string): boolean {
@@ -101,6 +103,7 @@ function choices(): Promise<Map<string, ThreadModelChoice>> {
               : undefined,
           model: row.model ?? undefined,
           modelSetBy: row.modelSetBy ?? undefined,
+          showReasoning: row.showReasoning ?? undefined,
         });
       }
       return map;
@@ -140,6 +143,7 @@ export async function updateThreadModelChoice({
     effort?: ReasoningEffort | null;
     memory?: MemoryMode | null;
     model?: string | null;
+    showReasoning?: boolean;
   };
   threadId: string;
   userId: string;
@@ -153,6 +157,9 @@ export async function updateThreadModelChoice({
   if (change.memory !== undefined) {
     next.memory = change.memory ?? undefined;
   }
+  if (change.showReasoning !== undefined) {
+    next.showReasoning = change.showReasoning || undefined;
+  }
   if (change.model !== undefined) {
     next.model = change.model ?? undefined;
     next.modelSetBy = change.model ? userId : undefined;
@@ -162,6 +169,7 @@ export async function updateThreadModelChoice({
     model: next.model ?? null,
     modelSetBy: next.modelSetBy ?? null,
     reasoningEffort: next.effort ?? null,
+    showReasoning: next.showReasoning ?? null,
     threadId,
     updatedBy: userId,
   });

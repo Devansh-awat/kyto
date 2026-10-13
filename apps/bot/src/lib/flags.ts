@@ -22,12 +22,16 @@ interface MessageFlags {
   reasoning?: string;
   /** The message with the flags taken off — empty when it was only flags. */
   rest: string;
+  /** `--show-reasoning` (true) / `--show-reasoning off` (false). */
+  showReasoning?: boolean;
 }
 
 const FLAG = /^--([a-z][a-z-]*)(?:=(\S*))?(?:\s+|$)/i;
 const NEXT_TOKEN = /^(\S+)(?:\s+|$)/;
 const MENTION = /^<@([UW][A-Z0-9]{6,})(?:\|[^>]+)?>(?:\s+|$)/;
 const FOCUS_OFF = /^(?:off|clear|none|stop)(?:\s+|$)/i;
+// Only on/off: "--show-reasoning no idea why" must keep its question.
+const SHOW_TOGGLE = /^(on|off)(?:\s+|$)/i;
 
 export type ParsedFlags =
   | { error: string; ok: false }
@@ -107,6 +111,12 @@ function readFlags({
       flags.memory = raw === 'NO-MEMORY' ? 'off' : 'stale';
       continue;
     }
+    if (name === 'show-reasoning') {
+      const toggle = SHOW_TOGGLE.exec(text);
+      flags.showReasoning = toggle?.[1]?.toLowerCase() !== 'off';
+      text = toggle ? text.slice(toggle[0].length) : text;
+      continue;
+    }
     if (name === 'no-redact') {
       flags.noRedact = true;
       continue;
@@ -134,7 +144,7 @@ function readFlags({
       return strict
         ? null
         : {
-            error: `i don't know \`--${raw}\`. flags: \`--model\`, \`--reasoning\`, \`--focusmode\`, \`--no-memory\`, \`--NO-MEMORY\`, \`--memory\`, \`--no-redact\`.`,
+            error: `i don't know \`--${raw}\`. flags: \`--model\`, \`--reasoning\`, \`--focusmode\`, \`--no-memory\`, \`--NO-MEMORY\`, \`--memory\`, \`--no-redact\`, \`--show-reasoning [off]\`.`,
             ok: false,
           };
     }

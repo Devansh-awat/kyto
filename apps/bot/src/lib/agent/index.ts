@@ -164,6 +164,9 @@ const MAX_TRUNCATION_RETRIES = 2;
 // the thread history above it).
 const MAX_CARRIED_UNANSWERED = 3;
 const SLOWEST_TOOLS_LOGGED = 5;
+// `--show-reasoning` cards per message from the user account (Slack allows 50
+// blocks; a thought is up to 2800 chars).
+const MAX_THOUGHT_CARDS = 10;
 const MAX_FIRST_TOKENS_LOGGED = 50;
 const UNANSWERED_PREVIEW_LENGTH = 300;
 
@@ -2220,6 +2223,33 @@ async function executeTurn(
     if (turnMessage.isMention || slack.isDM(turnThread.id)) {
       startTyping();
     }
+    // `--show-reasoning` (owner's ask 2026-10-13): the app's "Thinking" cards
+    // are streamed plan UI only the app can open, so the account posts each
+    // finished thought as a task_card block — Slack takes those from a user
+    // token (checked 2026-10-13) — just before the text it led to. The bot
+    // token posts them only if the account's post is refused.
+    const showReasoning = (await pendingChoice).showReasoning === true;
+    const thoughts: unknown[] = [];
+    const postThoughts = async (): Promise<void> => {
+      while (thoughts.length > 0) {
+        const blocks = thoughts.splice(0, MAX_THOUGHT_CARDS);
+        await turnThread
+          .post({ blocks, fallbackText: 'reasoning', fromUserAccount: true })
+          .catch(async (error: unknown) => {
+            logger.warn(
+              { err: error, threadId },
+              '[agent] account could not post reasoning; using the app'
+            );
+            await turnThread.post({ blocks, fallbackText: 'reasoning' });
+          })
+          .catch((error: unknown) =>
+            logger.warn(
+              { err: error, threadId },
+              '[agent] could not post reasoning'
+            )
+          );
+      }
+    };
     try {
       for await (const part of renderTurn({
         message: turnMessage,
@@ -2235,10 +2265,38 @@ async function executeTurn(
           }
           continue;
         }
+        if (
+          showReasoning &&
+          part.type === 'task_update' &&
+          part.title === 'Thinking' &&
+          part.status === 'complete' &&
+          part.output
+        ) {
+          thoughts.push({
+            output: {
+              elements: [
+                {
+                  elements: [{ text: part.output, type: 'text' }],
+                  type: 'rich_text_section',
+                },
+              ],
+              type: 'rich_text',
+            },
+            status: 'complete',
+            task_id: part.id,
+            title: 'Thinking',
+            type: 'task_card',
+          });
+        }
         if (sinceFlush.trim() && !isBareSkipText(sinceFlush)) {
+          await postThoughts();
           await reply?.flush({ thread: turnThread });
           sinceFlush = '';
         }
+      }
+      // A skip that said nothing shows nothing, its thinking included.
+      if (!turnSkipped || reply?.hasPosted()) {
+        await postThoughts();
       }
     } finally {
       // Before the final flush: a pulse landing after the answer would show

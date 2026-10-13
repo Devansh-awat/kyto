@@ -128,3 +128,20 @@ describe('--no-redact', () => {
     });
   });
 });
+
+describe('--show-reasoning', () => {
+  test('on by default, off with off, and keeps the question', () => {
+    expect(parseFlags('--show-reasoning why is the sky blue')).toEqual({
+      flags: { rest: 'why is the sky blue', showReasoning: true },
+      ok: true,
+    });
+    expect(parseFlags('--show-reasoning off')).toEqual({
+      flags: { rest: '', showReasoning: false },
+      ok: true,
+    });
+    expect(parseFlags('hi there --show-reasoning')).toEqual({
+      flags: { rest: 'hi there', showReasoning: true },
+      ok: true,
+    });
+  });
+});

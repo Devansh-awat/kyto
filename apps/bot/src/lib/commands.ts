@@ -284,6 +284,7 @@ async function runFlags({
     effort?: ReasoningEffort | null;
     memory?: MemoryMode | null;
     model?: string | null;
+    showReasoning?: boolean;
   } = {};
   const said: string[] = [];
   if (flags.model !== undefined) {
@@ -344,11 +345,20 @@ async function runFlags({
       said.push('memories back to normal');
     }
   }
+  if (flags.showReasoning !== undefined) {
+    change.showReasoning = flags.showReasoning;
+    said.push(
+      flags.showReasoning
+        ? "kyto's user account shows its reasoning cards"
+        : "kyto's user account hides its reasoning again"
+    );
+  }
   try {
     if (
       change.model !== undefined ||
       change.effort !== undefined ||
-      change.memory !== undefined
+      change.memory !== undefined ||
+      change.showReasoning !== undefined
     ) {
       await updateThreadModelChoice({ change, threadId: thread.id, userId });
     }
