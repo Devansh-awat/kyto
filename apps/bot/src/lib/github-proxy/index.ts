@@ -659,6 +659,7 @@ async function forward({
         : `Bearer ${token}`
     );
   }
+  const startedAt = Date.now();
   try {
     const upstream = await fetch(target.upstream, {
       body:
@@ -680,7 +681,34 @@ async function forward({
         out.set(key, value);
       }
     }
-    return new Response(upstream.body, {
+    // A sandbox `git clone` of a 17 MB public repo hung for minutes while a
+    // direct clone took 1.5s (#79), and nothing said whether GitHub had even
+    // answered. Every git transfer now leaves a line when GitHub answers and
+    // one when the body has finished streaming back.
+    let responseBody = upstream.body;
+    if (responseBody && GIT_PATH.test(new URL(target.upstream).pathname)) {
+      const log = { status: upstream.status, upstream: target.upstream };
+      logger.info(
+        { ...log, headersMs: Date.now() - startedAt },
+        '[github-proxy] git transfer answered'
+      );
+      let bytes = 0;
+      responseBody = responseBody.pipeThrough(
+        new TransformStream<Uint8Array, Uint8Array>({
+          flush: () => {
+            logger.info(
+              { ...log, bytes, totalMs: Date.now() - startedAt },
+              '[github-proxy] git transfer done'
+            );
+          },
+          transform: (chunk, controller) => {
+            bytes += chunk.byteLength;
+            controller.enqueue(chunk);
+          },
+        })
+      );
+    }
+    return new Response(responseBody, {
       headers: out,
       status: upstream.status,
     });
