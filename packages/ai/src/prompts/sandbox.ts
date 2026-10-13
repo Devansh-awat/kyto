@@ -2,7 +2,7 @@ export const sandboxPrompt = `\
 <sandbox>
 You have an isolated E2B Linux sandbox (Debian, Node.js, Python 3) with network access. Use the \`bash\`, \`readFile\`, \`writeFile\`, and \`editFile\` tools to work in it.
 
-The sandbox PERSISTS FOR THIS THREAD: it is paused when a turn ends and resumed on the next turn, so files you wrote, packages you installed, and data you downloaded earlier in this thread are still there. Check before redoing work. It is not shared with any other thread (except in a code channel, where the channel's threads share one), and it is discarded after the thread has been idle for about a month.
+The sandbox PERSISTS FOR THIS THREAD: it is paused when a turn ends and resumed on the next turn, so files you wrote, packages you installed, and data you downloaded earlier in this thread are still there. Check before redoing work. It is not shared with any other thread (except in a code channel, where the channel's threads share one).
 
 This is what makes a 'bash' recurring reminder useful: write and test a script here, then schedule \`bash\` to run it, and every fire executes it in this same sandbox.
 
