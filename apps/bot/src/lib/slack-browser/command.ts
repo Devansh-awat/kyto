@@ -180,6 +180,7 @@ export function isSamePage({
 
 const CONVERSATION_ID = /^[CDG][A-Z0-9]{8,}$/;
 const MESSAGE_TS = /^\d{10}\.\d{6}$/;
+const THREAD_ID = /^slack:([CDG][A-Z0-9]{8,})(?::(\d{10}\.\d{6}))?$/;
 const PERMALINK_PATH = /^\/archives\/([CDG][A-Z0-9]{8,})\/p(\d{10})(\d{6})\/?$/;
 
 /** The web client's own URL for a conversation, or a thread in it. */
@@ -197,7 +198,8 @@ export function clientUrl({
 }
 
 /**
- * `open C…`, `open C… 1791903295.656479` or `open <message permalink>` as the
+ * `open C…`, `open C… 1791903295.656479`, `open slack:C…:<ts>` or
+ * `open <message permalink>` as the
  * client URL, built here: a permalink goes through a "Redirecting…" page that
  * boots Slack twice, and a hand-written client URL once put a channel id where
  * the workspace id goes. A permalink opens its message's thread. Undefined when
@@ -220,6 +222,11 @@ export function conversationUrl({
   }
   if (threadTs !== undefined) {
     return;
+  }
+  // kyto's own thread id, which the model passes straight from its tools.
+  const own = THREAD_ID.exec(target);
+  if (own) {
+    return clientUrl({ channel: own[1] ?? '', team, threadTs: own[2] });
   }
   let url: URL;
   try {
@@ -289,10 +296,27 @@ export type ParsedCommand =
   | { args: string[]; ok: true }
   | { error: string; ok: false };
 
+// agent-browser's `wait` takes milliseconds or a selector: `wait 3s` waited 25 s
+// for an element called "3s", and `wait 5` waited 5 ms.
+const WAIT_SECONDS = /^(\d{1,3})s?$/;
+const MAX_SECONDS_GUESS = 60;
+
+function waitInMs(args: string[]): string[] {
+  const [verb, amount] = args;
+  const seconds = verb === 'wait' && amount ? WAIT_SECONDS.exec(amount) : null;
+  if (!(seconds && args.length === 2)) {
+    return args;
+  }
+  const value = Number(seconds[1]);
+  return amount?.endsWith('s') || value <= MAX_SECONDS_GUESS
+    ? ['wait', String(value * 1000)]
+    : args;
+}
+
 export function parseCommand(command: string): ParsedCommand {
   let args: string[];
   try {
-    args = splitCommand(command.trim());
+    args = waitInMs(splitCommand(command.trim()));
   } catch (error) {
     return { error: errorMessage(error), ok: false };
   }

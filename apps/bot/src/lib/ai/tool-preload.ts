@@ -30,7 +30,7 @@ const GROUPS = {
   },
   browser: {
     question:
-      'Will the assistant need to open and interact with a website in a real browser — clicking, filling forms, logging in, screenshots, or a page that needs JavaScript?',
+      'Will the assistant need to open and interact with a website OUTSIDE Slack in a real browser — clicking, filling forms, logging in, screenshots, or a page that needs JavaScript?',
     tools: ['browser'],
   },
   canvases: {
@@ -110,6 +110,14 @@ const GROUPS = {
     question:
       'Will the assistant need to publish a website at a public URL, or list or take down one it published?',
     tools: ['deploySite', 'listSites', 'removeSite'],
+  },
+  // Owner-only, so it preloads nothing for anyone else (`preload` keeps only
+  // registered tools). Without it, "use the slack browser" preloaded the plain
+  // `browser`, which isn't logged in, and the model landed on Slack's sign-in.
+  slackBrowser: {
+    question:
+      "Will the assistant need to click or fill something inside Slack's own app as a person would — another app's button or form on a Slack message, a workflow, an App Home or a Slack settings page — or was it asked to use the Slack browser?",
+    tools: ['slackBrowser'],
   },
   slackReference: {
     question:

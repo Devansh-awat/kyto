@@ -106,6 +106,11 @@ describe('parseCommand', () => {
     ).toBe(
       'https://app.slack.com/client/T0266FRGM/C0B7QEK0MQB/thread/C0B7QEK0MQB-1791903295.656479'
     );
+    expect(
+      conversationUrl({ target: 'slack:C0B7QEK0MQB:1791904674.465549', team })
+    ).toBe(
+      'https://app.slack.com/client/T0266FRGM/C0B7QEK0MQB/thread/C0B7QEK0MQB-1791904674.465549'
+    );
     // A reply's link opens its parent's thread; a top-level one, its own.
     expect(
       conversationUrl({
@@ -135,6 +140,22 @@ describe('parseCommand', () => {
     expect(
       conversationUrl({ target: 'C0B7QEK0MQB', team, threadTs: 'soon' })
     ).toBeUndefined();
+  });
+
+  test('reads a wait as seconds, not a selector or milliseconds', () => {
+    expect(parseCommand('wait 3s')).toEqual({
+      args: ['wait', '3000'],
+      ok: true,
+    });
+    expect(parseCommand('wait 5')).toEqual({
+      args: ['wait', '5000'],
+      ok: true,
+    });
+    expect(parseCommand('wait 2000')).toEqual({
+      args: ['wait', '2000'],
+      ok: true,
+    });
+    expect(parseCommand('wait @e3').ok).toBe(true);
   });
 
   test('refuses shell operators, which never reach a shell', () => {
