@@ -12,6 +12,7 @@ import {
   saveThreadModelChoice,
 } from '@repo/db/queries/thread-model-choices';
 import { byokConfigured } from '@/lib/byok/crypto';
+import type { SHARED_MODEL_NAMES } from '@/lib/flags';
 import logger from '@/lib/logger';
 import { toLogError } from '@/lib/utils/error';
 
@@ -26,10 +27,12 @@ import { toLogError } from '@/lib/utils/error';
 // shaved off. Written through to the table so a deploy (every push restarts
 // kyto) doesn't silently drop someone's choice mid-thread.
 
+// Keyed by lib/flags' names, so a flag ending a line knows them without
+// importing this module's provider chain.
 export const MODEL_CHOICES: Record<string, ModelAttempt> = {
   haiku: PRIMARY_ATTEMPT,
   luna: catalogAttempt(LUNA_MODEL),
-};
+} satisfies Record<(typeof SHARED_MODEL_NAMES)[number], ModelAttempt>;
 
 /**
  * The model experiment (owner's call 2026-10-11): a thread with no `--model`

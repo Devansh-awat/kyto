@@ -2,8 +2,11 @@ import { describe, expect, test } from 'bun:test';
 import { parseFlags, withoutFlags } from '@/lib/flags';
 
 describe('parseFlags', () => {
-  test('a message without a leading flag is not flags', () => {
+  test('a question that quotes a flag is not flags', () => {
     expect(parseFlags('what does --model do?')).toBeNull();
+    expect(parseFlags('what does --model do')).toBeNull();
+    expect(parseFlags('try `--reasoning high` sometime')).toBeNull();
+    expect(parseFlags('pass --verbose to it')).toBeNull();
     expect(parseFlags('--- a divider')).toBeNull();
   });
 
@@ -75,5 +78,40 @@ describe('withoutFlags', () => {
   test('leaves ordinary text and unparseable flags alone', () => {
     expect(withoutFlags('what does --model do?')).toBe('what does --model do?');
     expect(withoutFlags('--temperature 2 hi')).toBe('--temperature 2 hi');
+  });
+});
+
+describe('flags ending a line', () => {
+  // Lily's message: the flag ended the first line, and the turn ran on the
+  // randomly drawn effort instead.
+  test('a flag at the end of a line counts', () => {
+    expect(
+      parseFlags(
+        'output just this codeblock on a new message --reasoning high\n\n```\nhi\n```'
+      )
+    ).toEqual({
+      flags: {
+        reasoning: 'high',
+        rest: 'output just this codeblock on a new message\n\n```\nhi\n```',
+      },
+      ok: true,
+    });
+  });
+
+  test('several at the end of the message', () => {
+    expect(parseFlags('why is the sky blue --model luna --no-memory')).toEqual({
+      flags: { memory: 'stale', model: 'luna', rest: 'why is the sky blue' },
+      ok: true,
+    });
+  });
+
+  test('never inside a code block', () => {
+    expect(parseFlags('look:\n```\nrun it --reasoning high\n```')).toBeNull();
+  });
+
+  test('withoutFlags takes a trailing flag off what the model reads', () => {
+    expect(withoutFlags('<@U0BD3555UCQ> hi there --reasoning low')).toBe(
+      '<@U0BD3555UCQ> hi there'
+    );
   });
 });

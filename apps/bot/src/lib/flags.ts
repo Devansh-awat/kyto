@@ -6,8 +6,10 @@
 // 2026-10-11): lowercase keeps the memories in the prompt but says they may be
 // stale, capitals hide every kind of memory. `--memory` turns either off.
 //
-// Only LEADING flags count, so a question that quotes `--model` halfway through
-// is never read as one. Pure on purpose: lib/commands applies the result.
+// Flags may also END a line (owner's call 2026-10-13: "… on a new message
+// --reasoning high" was ignored). There only KNOWN flags with a valid value
+// count, outside code, so a question that quotes `--model` ("what does --model
+// do?") is never read as one. Pure on purpose: lib/commands applies the result.
 
 interface MessageFlags {
   /** `[]` = focus on the author; `null` = clear; absent = untouched. */
@@ -29,12 +31,71 @@ export type ParsedFlags =
   | { error: string; ok: false }
   | { flags: MessageFlags; ok: true };
 
-/** Null when the message doesn't open with a `--flag`. */
+// kyto's own model names; `MODEL_CHOICES` is keyed by exactly these.
+export const SHARED_MODEL_NAMES = ['haiku', 'luna'] as const;
+// What `--model`/`--reasoning` may say when the flag ends a line rather than
+// opening the message: a value that reads like prose is prose.
+const TRAILING_MODEL = new RegExp(
+  `^(?:${SHARED_MODEL_NAMES.join('|')}|default|random|reset|clear|off|[\\w.-]+\\/[\\w.:@-]+)$`,
+  'i'
+);
+const TRAILING_REASONING =
+  /^(?:none|minimal|low|medium|high|xhigh|default|random|reset|clear|off)$/i;
+const FLAG_START = /(?:^|\s)--[a-z]/gi;
+
+/** Null when the message has no `--flag` at its start or ending a line. */
 export function parseFlags(body: string): ParsedFlags | null {
-  let text = body.trim();
-  if (!FLAG.test(text)) {
-    return null;
+  const text = body.trim();
+  if (FLAG.test(text)) {
+    return readFlags({ strict: false, text });
   }
+  return trailingFlags(text);
+}
+
+// Flags ending a line, outside code: the first line whose tail is nothing but
+// known, valid flags. Never an error — anything doubtful is left as text.
+function trailingFlags(text: string): ParsedFlags | null {
+  const lines = text.split('\n');
+  let inFence = false;
+  for (const [index, line] of lines.entries()) {
+    if (/^\s*(?:```|~~~)/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) {
+      continue;
+    }
+    for (const match of line.matchAll(FLAG_START)) {
+      const start = match.index + match[0].indexOf('--');
+      // Inside inline code: an odd number of backticks before it.
+      if ((line.slice(0, start).match(/`/g)?.length ?? 0) % 2 === 1) {
+        continue;
+      }
+      const parsed = readFlags({ strict: true, text: line.slice(start) });
+      if (!parsed?.ok || parsed.flags.rest) {
+        continue;
+      }
+      const kept = [
+        ...lines.slice(0, index),
+        line.slice(0, start).trimEnd(),
+        ...lines.slice(index + 1),
+      ];
+      parsed.flags.rest = kept.join('\n').trim();
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function readFlags({
+  strict,
+  text: input,
+}: {
+  /** A flag ending a line: unknown or doubtful means "not flags", not an error. */
+  strict: boolean;
+  text: string;
+}): ParsedFlags | null {
+  let text = input.trim();
   const flags: MessageFlags = { rest: '' };
   for (let match = FLAG.exec(text); match; match = FLAG.exec(text)) {
     const raw = match[1] ?? '';
@@ -64,10 +125,12 @@ export function parseFlags(body: string): ParsedFlags | null {
       continue;
     }
     if (name !== 'model' && name !== 'reasoning') {
-      return {
-        error: `i don't know \`--${raw}\`. flags: \`--model\`, \`--reasoning\`, \`--focusmode\`, \`--no-memory\`, \`--NO-MEMORY\`, \`--memory\`.`,
-        ok: false,
-      };
+      return strict
+        ? null
+        : {
+            error: `i don't know \`--${raw}\`. flags: \`--model\`, \`--reasoning\`, \`--focusmode\`, \`--no-memory\`, \`--NO-MEMORY\`, \`--memory\`.`,
+            ok: false,
+          };
     }
     let value = match[2];
     if (value === undefined) {
@@ -76,7 +139,15 @@ export function parseFlags(body: string): ParsedFlags | null {
       text = next ? text.slice(next[0].length) : text;
     }
     if (!value || value.startsWith('--')) {
-      return { error: `\`--${name}\` needs a value.`, ok: false };
+      return strict
+        ? null
+        : { error: `\`--${name}\` needs a value.`, ok: false };
+    }
+    const plausible = (
+      name === 'model' ? TRAILING_MODEL : TRAILING_REASONING
+    ).test(value);
+    if (strict && !plausible) {
+      return null;
     }
     flags[name] = value;
   }
