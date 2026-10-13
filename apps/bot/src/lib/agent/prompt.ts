@@ -15,6 +15,7 @@ import { parseFlags, withoutFlags } from '@/lib/flags';
 import logger from '@/lib/logger';
 import { threadRevisions } from '@/lib/message-revisions';
 import { renderNotebooks } from '@/lib/notebooks';
+import { renderLinkedCanvases } from '@/lib/slack/linked-canvases';
 import {
   isHiddenFromBot,
   rawSlackText,
@@ -220,7 +221,7 @@ export async function buildPrompt(
   // Everything below is independent, so it is read at once: the Slack thread
   // read is the slow part (~0.5s), and awaiting the rest in front of it put
   // every one of their round trips between the ping and the model request.
-  const [current, thinking, notebooks, threadRead, revisions] =
+  const [current, thinking, notebooks, threadRead, revisions, canvases] =
     await Promise.all([
       renderMessage(message),
       // What kyto was THINKING on this thread's last few turns. Slack replayed
@@ -268,6 +269,18 @@ export async function buildPrompt(
       thread
         ? threadRevisions(thread.id)
         : new Map<string, MessageRevision[]>(),
+      // A canvas the message links ("rubric: [canvas]") is read for it (#76).
+      renderLinkedCanvases({
+        askerUserId: message.author.userId,
+        attachments: message.attachments,
+        currentChannelId: thread
+          ? slack.decodeThreadId(thread.id).channel
+          : undefined,
+        text: rawSlackText(message) ?? message.text,
+      }).catch((error: unknown) => {
+        logger.warn({ err: error }, '[prompt] could not read linked canvases');
+        return '';
+      }),
     ]);
 
   // A native code channel's one conversation, not a thread (lib/code-channels).
@@ -529,6 +542,6 @@ export async function buildPrompt(
       compacted,
       ...history,
     ].filter(Boolean),
-    tail: [thinking, nowLine, latest].filter(Boolean).join('\n\n'),
+    tail: [thinking, nowLine, latest, canvases].filter(Boolean).join('\n\n'),
   };
 }
