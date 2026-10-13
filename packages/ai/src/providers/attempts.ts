@@ -65,7 +65,7 @@ export const LUNA_MODEL = 'openai/gpt-6-luna';
 export const ANTHROPIC_ONLY_MODELS = new Set<string>([PRIMARY_MODEL]);
 
 /** The primary before luna — smart but slow — and now the second fallback. */
-const GLM_FLASH_MODEL = 'z-ai/glm-5.3-flash';
+export const GLM_FLASH_MODEL = 'z-ai/glm-5.3-flash';
 
 /** The primary before GLM, now the second fallback rung: proven and cheap. */
 const FORMER_PRIMARY_MODEL = 'deepseek/deepseek-v4-flash-0731';

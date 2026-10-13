@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
   catalogAttempt,
+  GLM_FLASH_MODEL,
   LUNA_MODEL,
   type ModelAttempt,
   PRIMARY_ATTEMPT,
@@ -31,6 +32,7 @@ import { toLogError } from '@/lib/utils/error';
 // importing this module's provider chain.
 export const MODEL_CHOICES: Record<string, ModelAttempt> = {
   haiku: PRIMARY_ATTEMPT,
+  glm: catalogAttempt(GLM_FLASH_MODEL),
   luna: catalogAttempt(LUNA_MODEL),
 } satisfies Record<(typeof SHARED_MODEL_NAMES)[number], ModelAttempt>;
 

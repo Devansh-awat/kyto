@@ -243,7 +243,7 @@ async function runStop({
  * `--model`, `--reasoning`, `--focusmode`, `--no-memory`/`--NO-MEMORY`/`--memory` (lib/flags). Everything is checked
  * before anything is saved, so one bad flag changes nothing.
  *
- * `--model luna|haiku` is open to anyone (both are on kyto's cheap Hack Club
+ * `--model luna|haiku|glm` is open to anyone (all are on kyto's cheap Hack Club
  * key); any other slug only for someone with their own key or ChatGPT account,
  * and it then runs on their turns only (lib/agent/model-choice).
  *

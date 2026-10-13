@@ -18,6 +18,7 @@ export {
   catalogAttempt,
   compactionAttempt,
   GEMINI_PROVIDER,
+  GLM_FLASH_MODEL,
   HACKCLUB_PROVIDER,
   LEADERBOARD_FALLBACK,
   LUNA_MODEL,

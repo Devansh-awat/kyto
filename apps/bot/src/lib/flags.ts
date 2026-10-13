@@ -32,7 +32,7 @@ export type ParsedFlags =
   | { flags: MessageFlags; ok: true };
 
 // kyto's own model names; `MODEL_CHOICES` is keyed by exactly these.
-export const SHARED_MODEL_NAMES = ['haiku', 'luna'] as const;
+export const SHARED_MODEL_NAMES = ['glm', 'haiku', 'luna'] as const;
 // What `--model`/`--reasoning` may say when the flag ends a line rather than
 // opening the message: a value that reads like prose is prose.
 const TRAILING_MODEL = new RegExp(
