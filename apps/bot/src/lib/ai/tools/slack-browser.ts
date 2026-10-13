@@ -31,6 +31,11 @@ function truncate(text: string): string {
     : text;
 }
 
+// Slack's thread pane. agent-browser's `wait <selector>` holds until it is
+// drawn, so the model's first look is at a loaded thread, not an empty shell.
+const THREAD_PANE = "[aria-label^='Thread in']";
+const PANE_WAIT_MS = 20_000;
+
 const WEDGED =
   /CDP command timed out|not responding|os error 11|daemon may be busy/i;
 
@@ -43,6 +48,34 @@ export function slackBrowserTool({
   thread: ThreadHandle;
 }) {
   let session: Promise<SlackBrowserSession> | undefined;
+  let paneAwaited = false;
+
+  // The open thread's buttons and fields with their refs. Without it glm spent
+  // ~10 minutes and dozens of calls finding a button that was in the thread:
+  // whole-page snapshots taken mid-load came back empty, guessed CSS selectors
+  // missed, and `find text` clicked the message's words ("click i'm not a
+  // robot") instead of the button under them.
+  const threadPane = async ({
+    abortSignal,
+    browser,
+  }: {
+    abortSignal?: AbortSignal;
+    browser: SlackBrowserSession;
+  }): Promise<string | undefined> => {
+    const ready = await browser.run({
+      abortSignal,
+      args: ['wait', THREAD_PANE],
+      timeoutMs: PANE_WAIT_MS,
+    });
+    if (ready.exitCode !== 0 || ready.timedOut) {
+      return;
+    }
+    const pane = await browser.run({
+      abortSignal,
+      args: ['snapshot', '-i', '-c', '-s', THREAD_PANE],
+    });
+    return pane.exitCode === 0 ? truncate(pane.stdout) : undefined;
+  };
   // Built here, not by the model: it glued a channel id where the workspace id
   // goes and landed on Slack's "There's been a glitch" page.
   const team = thread.adapter.teamId ?? '';
@@ -90,7 +123,7 @@ export function slackBrowserTool({
   };
 
   const slackBrowser = tool({
-    description: `Drive a real browser LOGGED IN to Slack as kyto's own user account (owner only) — ONLY for what the Slack tools can't do — a last resort, never a shortcut: adding or removing a custom emoji is \`submitEmoji\`/\`removeEmoji\`, posting is \`postMessage\`, and so on; check the loadTools catalog first. It is for running workflows, clicking buttons on other apps' messages or App Homes, forms, settings pages. Same agent-browser CLI as the \`browser\` tool (pass its sub-command in \`command\`; "skills get core" prints the reference), starting IN the Slack thread this conversation is in (Slack's home for a DM with the app) — a button or form someone posted as a REPLY here only shows in that thread pane, never in the channel view; "${THIS_THREAD}" goes back to it. For another conversation, \`open <channel id>\`, \`open <channel id> <thread ts>\`, \`open slack:C…:<ts>\` or \`open <message link>\` (opens that message's thread) — never hand-build an app.slack.com URL. \`find\` CLICKS what it finds unless given another action; to look for something, read a \`snapshot\`. Every \`open\` reboots the whole Slack client (slow, the view blanks): after the first page, move by clicking (sidebar, a message's replies, the quick switcher on Control+k) and open a URL only to go somewhere a click can't reach. One command per call — there is no shell, so no pipes. Only interaction commands work (open/click/fill/type/press/select/scroll/wait/snapshot/get/find/tab/…), and only Slack URLs open — no eval, screenshots, files or other sites. "${RESTART}" relaunches a stuck browser. Nothing in Slack is blocked except signing out: it can send, edit, react, join and run workflows AS kyto's user account, so act only on what the owner asked. A live view is posted in the thread on first use.`,
+    description: `Drive a real browser LOGGED IN to Slack as kyto's own user account (owner only) — ONLY for what the Slack tools can't do — a last resort, never a shortcut: adding or removing a custom emoji is \`submitEmoji\`/\`removeEmoji\`, posting is \`postMessage\`, and so on; check the loadTools catalog first. It is for running workflows, clicking buttons on other apps' messages or App Homes, forms, settings pages. Same agent-browser CLI as the \`browser\` tool (pass its sub-command in \`command\`; "skills get core" prints the reference), starting IN the Slack thread this conversation is in (Slack's home for a DM with the app) — a button or form someone posted as a REPLY here only shows in that thread pane, never in the channel view; "${THIS_THREAD}" goes back to it. For another conversation, \`open <channel id>\`, \`open <channel id> <thread ts>\`, \`open slack:C…:<ts>\` or \`open <message link>\` (opens that message's thread) — never hand-build an app.slack.com URL. Opening a thread returns \`threadPane\`: its messages, buttons and fields with refs — click a button by its ref. \`find text\` CLICKS the first match, which is often a message's words rather than the button; to look for something, read a \`snapshot\` (\`snapshot -i -c -s "${THREAD_PANE}"\` re-reads the thread). A dropdown that lacks the exact value usually accepts typing it. Every \`open\` reboots the whole Slack client (slow, the view blanks): after the first page, move by clicking (sidebar, a message's replies, the quick switcher on Control+k) and open a URL only to go somewhere a click can't reach. One command per call — there is no shell, so no pipes. Only interaction commands work (open/click/fill/type/press/select/scroll/wait/snapshot/get/find/tab/…), and only Slack URLs open — no eval, screenshots, files or other sites. "${RESTART}" relaunches a stuck browser. Nothing in Slack is blocked except signing out: it can send, edit, react, join and run workflows AS kyto's user account, so act only on what the owner asked. A live view is posted in the thread on first use.`,
     inputSchema: z.object({
       command: z
         .string()
@@ -134,6 +167,10 @@ export function slackBrowserTool({
         session ??= start();
         const browser = await session;
         const [verb, target] = parsed.args;
+        if (!paneAwaited && startUrl?.includes('/thread/')) {
+          paneAwaited = true;
+          await threadPane({ abortSignal, browser });
+        }
         if (verb === 'open' && target) {
           const at = await browser.run({ abortSignal, args: ['get', 'url'] });
           if (
@@ -142,7 +179,10 @@ export function slackBrowserTool({
           ) {
             return {
               success: true,
-              summary: `Already on ${target} — not reloaded (an open reboots all of Slack). Take a snapshot to read it.`,
+              summary: `Already on ${target} — not reloaded (an open reboots all of Slack).`,
+              ...(target.includes('/thread/')
+                ? { threadPane: await threadPane({ abortSignal, browser }) }
+                : {}),
             };
           }
         }
@@ -168,8 +208,16 @@ export function slackBrowserTool({
           summary =
             'Slack is still loading (nothing on the page yet): "wait 3000", then snapshot again. Do not open the URL again — that restarts the load.';
         }
+        const opensThread =
+          verb === 'open' &&
+          target?.includes('/thread/') &&
+          result.exitCode === 0 &&
+          !result.timedOut;
         return {
           exitCode: result.exitCode,
+          ...(opensThread
+            ? { threadPane: await threadPane({ abortSignal, browser }) }
+            : {}),
           liveView:
             'A watch-only live view is already posted in the thread; no need to share it again.',
           stderr: truncate(result.stderr),

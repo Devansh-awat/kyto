@@ -95,6 +95,7 @@ export interface SlackBrowserSession {
   run: (options: {
     abortSignal?: AbortSignal;
     args: string[];
+    timeoutMs?: number;
   }) => Promise<CommandResult>;
   viewUrl: string;
 }

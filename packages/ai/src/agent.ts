@@ -33,6 +33,7 @@ import { capContextImages } from './image-cap';
 import {
   ANTHROPIC_ONLY_MODELS,
   GEMINI_PROVIDER,
+  GLM_FLASH_MODEL,
   HACKCLUB_PROVIDER,
   LUNA_MODEL,
   MAX_OUTPUT_TOKENS,
@@ -872,6 +873,17 @@ const REQUIRED_TOP_P: Record<string, number> = {};
 
 // OpenRouter's upstream precision labels kyto accepts — see tuneBody.
 const ALLOWED_QUANTIZATIONS = ['fp8', 'fp16', 'bf16', 'fp32', 'unknown'];
+// GLM 5.3 Flash, fastest host first (owner's ask 2026-10-13). Left to
+// OpenRouter's price-weighted spread, kyto landed on the slower hosts at
+// 15-85 tok/s while the two fastest same-price hosts ran 100-120;
+// measured per host 2026-10-13. The price cap is the hosts kyto already used
+// ($0.15 in / $0.50 out per M), so "fastest" can't mean dearer: the fastest (314
+// tok/s) charges $1.60 out and is left out by it. Hosts: MODELS.md.
+const GLM_FLASH_ROUTING = {
+  max_price: { completion: 0.5, prompt: 0.15 },
+  quantizations: ALLOWED_QUANTIZATIONS,
+  sort: 'throughput',
+};
 // BYOK endpoints that speak OpenRouter's `reasoning: { effort }`; OpenAI's own
 // API calls it `reasoning_effort` and rejects the unknown field.
 const OPENROUTER_FORMAT_BYOK = new Set(['byok-hackclub', 'byok-openrouter']);
@@ -1002,9 +1014,13 @@ export function tuneBody(
       attempt.provider === HACKCLUB_PROVIDER &&
       payload.provider === undefined
     ) {
-      payload.provider = ANTHROPIC_ONLY_MODELS.has(attempt.model)
-        ? { allow_fallbacks: false, only: ['anthropic'] }
-        : { quantizations: ALLOWED_QUANTIZATIONS };
+      if (ANTHROPIC_ONLY_MODELS.has(attempt.model)) {
+        payload.provider = { allow_fallbacks: false, only: ['anthropic'] };
+      } else if (attempt.model === GLM_FLASH_MODEL) {
+        payload.provider = GLM_FLASH_ROUTING;
+      } else {
+        payload.provider = { quantizations: ALLOWED_QUANTIZATIONS };
+      }
       changed = true;
     }
     // A BYOK key on an OpenRouter-format endpoint gets an effort only when the
