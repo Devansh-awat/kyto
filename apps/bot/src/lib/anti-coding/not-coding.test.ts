@@ -118,4 +118,32 @@ describe('isNotCodingCall', () => {
       isNotCodingCall({ input: { script: 'true' }, toolName: 'bash' })
     ).toBe(false);
   });
+
+  test('cloning a repo to read it skips Jev', () => {
+    for (const command of [
+      'git clone --depth 1 https://github.com/Yinsongxu/LLM2Jev',
+      'cd /tmp && git clone -q --depth 1 https://github.com/o/r t1 2>&1 | tail -3',
+      'git -C repo fetch origin',
+      'gh repo clone o/r',
+    ]) {
+      expect(isNotCodingCall({ input: { command }, toolName: 'bash' })).toBe(
+        true
+      );
+    }
+  });
+
+  test('a clone that could run a program still goes to Jev', () => {
+    for (const command of [
+      'git clone --upload-pack=evil https://github.com/o/r',
+      'git clone --template=/tmp/hooks https://github.com/o/r',
+      'git clone ext::sh -c evil',
+      'git -c core.hooksPath=/x clone https://github.com/o/r',
+      'gh repo clone o/r -- --template=/tmp/hooks',
+      'git clone https://github.com/o/r && cd r && npm install',
+    ]) {
+      expect(isNotCodingCall({ input: { command }, toolName: 'bash' })).toBe(
+        false
+      );
+    }
+  });
 });

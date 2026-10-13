@@ -85,6 +85,12 @@ const GIT_BRANCH_LISTS = new Set([
   '-v',
   '-vv',
 ]);
+// Fetching a repo to READ it (a malware check, an answer from its source) is
+// not building code (owner's call 2026-10-13: a clone for a review scored 0.92).
+// Only https remotes, and none of the flags that make git run a program:
+// `--upload-pack`/`-u`, a hooks `--template`, `-c`/`--config`.
+const GIT_FETCH = new Set(['clone', 'fetch']);
+const GIT_FETCH_RUNS = /^(?:--upload-pack|-u|--template|-c|--config)(?:=|$)/;
 const GIT_PUBLISH = new Set(['push']);
 const GIT_PUSH_RUNS = /^--(?:receive-pack|exec)(?:=|$)/;
 // `git diff --output=f` and `git log -o f` write a file.
@@ -96,7 +102,7 @@ const GH_READ: Record<string, Set<string>> = {
   label: new Set(['list']),
   pr: new Set(['checks', 'diff', 'list', 'status', 'view']),
   release: new Set(['list', 'view']),
-  repo: new Set(['list', 'view']),
+  repo: new Set(['clone', 'list', 'view']),
   run: new Set(['list', 'view']),
   search: new Set(['code', 'commits', 'issues', 'prs', 'repos']),
   workflow: new Set(['list', 'view']),
@@ -237,6 +243,10 @@ function isNotCodingGh(args: string[]): boolean {
       GH_PUBLISH_UNSAFE_FLAGS.has(arg.split('=')[0] ?? arg)
     );
   }
+  // `gh repo clone o/r -- <git flags>`: anything after `--` goes to git.
+  if (group === 'repo' && verb === 'clone' && args.includes('--')) {
+    return false;
+  }
   if (group === 'status') {
     return args.length === 1;
   }
@@ -273,6 +283,13 @@ function isNotCodingArgv([head, ...args]: string[]): boolean {
     const [sub, ...rest] = args[0] === '-C' ? args.slice(2) : args;
     if (sub === 'branch') {
       return rest.every((arg) => GIT_BRANCH_LISTS.has(arg));
+    }
+    if (sub !== undefined && GIT_FETCH.has(sub)) {
+      const urls = rest.filter((arg) => /^[a-z][\w+.-]*:/i.test(arg));
+      return (
+        !rest.some((arg) => GIT_FETCH_RUNS.test(arg)) &&
+        urls.every((url) => url.startsWith('https://'))
+      );
     }
     if (sub !== undefined && GIT_PUBLISH.has(sub)) {
       // `--receive-pack`/`--exec` name a program to RUN for a local remote.
