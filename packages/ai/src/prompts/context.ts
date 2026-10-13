@@ -11,9 +11,16 @@ import type { RequestHints } from './hints';
 // Keep this block to facts that are stable for the life of a thread.
 export function contextPrompt(hints: RequestHints): string {
   const lines: string[] = [];
-  if (hints.botUserId) {
+  // Shared by the app's and the user account's turns (one cached prefix), so
+  // it names both and leaves "which one are you" to the volatile tail: when it
+  // called the app's id "your own", the account skipped a ping to itself.
+  if (hints.botUserId && hints.userAccountId) {
     lines.push(
-      `Your own Slack user id is ${hints.botUserId}. A message that mentions <@${hints.botUserId}> (or @kyto) is addressed to YOU — never mistake it for another bot like gorkie. Never look this id up as a user.`
+      `kyto is on Slack as two identities: the kyto app (id ${hints.botUserId}, shown as "kyto [app]") and kyto's own user account (id ${hints.userAccountId}, shown as "kyto [user account]"). Each turn is answered by ONE of them, and the end of the prompt says which one you are in THIS turn. A message that mentions that identity's id is addressed to YOU; one that mentions only the other id is for your other half. Never mistake either for another bot like gorkie. Never look these ids up as users.`
+    );
+  } else if (hints.botUserId) {
+    lines.push(
+      `Your own Slack user id is ${hints.botUserId}. A message that mentions <@${hints.botUserId}> is addressed to YOU — never mistake it for another bot like gorkie. Never look this id up as a user.`
     );
   }
   if (hints.ownerUserId) {

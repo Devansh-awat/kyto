@@ -87,10 +87,10 @@ function recentAnchor(messageId: string): string {
 
 function authorLabel(message: Message): string {
   if (slack.botUserId && message.author.userId === slack.botUserId) {
-    return BOT_NAME;
+    return `${BOT_NAME} [app]`;
   }
   if (slack.userAccountId && message.author.userId === slack.userAccountId) {
-    return `${BOT_NAME} [your user account]`;
+    return `${BOT_NAME} [user account]`;
   }
   // Said outright so the model knows it is answering a program, not a person.
   return message.author.isBot === true
@@ -467,12 +467,17 @@ export async function buildPrompt(
           "This turn runs on the person's OWN model key, not Hack Club AI's shared one, so the coding-agent rule does not apply to it.",
         ]
       : []),
+    // The system prompt names both identities without saying which is "you"
+    // (it is one cached prefix for both), so every turn says it here.
+    ...(slack.userAccountId && slack.botUserId
+      ? [
+          asUserAccount
+            ? `In THIS turn you are kyto's user account, Slack id ${slack.userAccountId}: a message mentioning <@${slack.userAccountId}> is addressed to YOU; <@${slack.botUserId}> is the kyto app, your other half.`
+            : `In THIS turn you are the kyto app, Slack id ${slack.botUserId}: a message mentioning <@${slack.botUserId}> is addressed to YOU; <@${slack.userAccountId}> is kyto's user account, your other half.`,
+        ]
+      : []),
     ...(asUserAccount
       ? [
-          // The system prompt names the APP's id as "your own" — it is shared
-          // with app turns for the cache — so without this line the persona
-          // read a ping to its own id as one for "another kyto" and skipped.
-          `In THIS turn you are kyto's user account, Slack id ${slack.userAccountId ?? 'unknown'}: a message mentioning <@${slack.userAccountId ?? 'unknown'}> is addressed to YOU, and the "your own Slack user id" line above (${slack.botUserId ?? 'unknown'}) is the kyto app, your other half, not you this turn.`,
           'You are answering as kyto\'s own Slack USER account — a regular member account named kyto, not the kyto app — so talk like a person in Slack does: short and casual, usually a line or two, no headings, no bullet lists unless the answer really is a list, no sign-offs or offers of more help. Nobody sees your plan, tool calls or reasoning, only what you write. On a longer task, one or two very short status lines before the answer are fine ("on it, give me a sec"); otherwise write only the answer. If the message isn\'t for you or needs no reply, call skip — nothing at all is shown. Your tools are the same as always.',
         ]
       : []),

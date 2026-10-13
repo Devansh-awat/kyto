@@ -20,12 +20,13 @@ export async function annotateMentions(text: string): Promise<string> {
     if (!userId || mentionNames.has(userId)) {
       continue;
     }
+    // Both identities are display-named kyto; tell them apart in the text so
+    // neither persona mistakes a ping for the other one as its own. Neutral,
+    // not "you": history renders the same for both, or the cache misses.
     if (botUserId && userId === botUserId) {
-      mentionNames.set(userId, BOT_NAME);
+      mentionNames.set(userId, `${BOT_NAME} [app]`);
       continue;
     }
-    // Both identities are display-named kyto; tell them apart in the text so
-    // neither persona mistakes a ping for the other one as its own.
     if (slack.userAccountId && userId === slack.userAccountId) {
       mentionNames.set(userId, `${BOT_NAME} [user account]`);
       continue;

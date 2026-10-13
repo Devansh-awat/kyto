@@ -38,5 +38,7 @@ export interface RequestHints {
   memoryMode?: 'off' | 'stale';
   ownerUserId?: string;
   threadId: string;
+  /** kyto's own Slack USER account, the second identity kyto answers as. */
+  userAccountId?: string;
   workspace?: string;
 }

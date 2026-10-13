@@ -67,6 +67,7 @@ export async function requestHints({
   const changes = curations.flatMap((pass) => pass.changes);
   return {
     botUserId: slack.botUserId,
+    userAccountId: slack.userAccountId,
     channel: {
       id: channelId,
       name: channel,
