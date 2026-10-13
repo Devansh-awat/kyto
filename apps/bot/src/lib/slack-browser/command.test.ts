@@ -86,4 +86,17 @@ describe('parseCommand', () => {
     }
     expect(parseCommand('open').ok).toBe(false);
   });
+
+  test('refuses a channel id where the workspace id goes', () => {
+    expect(
+      parseCommand('open https://app.slack.com/client/C0B7QEK0MQB/C0B7QEK0MQB')
+        .ok
+    ).toBe(false);
+    expect(
+      parseCommand(
+        'open https://app.slack.com/client/E09V59WQY1E/C0B7QEK0MQB/thread/C0B7QEK0MQB-1791903295.656479'
+      ).ok
+    ).toBe(true);
+    expect(parseCommand('open https://app.slack.com/client').ok).toBe(true);
+  });
 });

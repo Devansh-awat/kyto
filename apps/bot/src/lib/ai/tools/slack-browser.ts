@@ -17,6 +17,7 @@ import { errorMessage, toLogError } from '@/lib/utils/error';
 
 const MAX_OUTPUT_CHARS = 8000;
 const RESTART = 'restart';
+const THIS_THREAD = 'thread';
 
 function truncate(text: string): string {
   return text.length > MAX_OUTPUT_CHARS
@@ -72,7 +73,7 @@ export function slackBrowserTool({
   };
 
   const slackBrowser = tool({
-    description: `Drive a real browser LOGGED IN to Slack as kyto's own user account (owner only) — ONLY for what the Slack tools can't do — a last resort, never a shortcut: adding or removing a custom emoji is \`submitEmoji\`/\`removeEmoji\`, posting is \`postMessage\`, and so on; check the loadTools catalog first. It is for running workflows, clicking buttons on other apps' messages or App Homes, forms, settings pages. Same agent-browser CLI as the \`browser\` tool (pass its sub-command in \`command\`; "skills get core" prints the reference), starting on https://app.slack.com/client. Only interaction commands work (open/click/fill/type/press/select/scroll/wait/snapshot/get/find/tab/…), and only Slack URLs open — no eval, screenshots, files or other sites. "${RESTART}" relaunches a stuck browser. Nothing in Slack is blocked except signing out: it can send, edit, react, join and run workflows AS kyto's user account, so act only on what the owner asked. A live view is posted in the thread on first use.`,
+    description: `Drive a real browser LOGGED IN to Slack as kyto's own user account (owner only) — ONLY for what the Slack tools can't do — a last resort, never a shortcut: adding or removing a custom emoji is \`submitEmoji\`/\`removeEmoji\`, posting is \`postMessage\`, and so on; check the loadTools catalog first. It is for running workflows, clicking buttons on other apps' messages or App Homes, forms, settings pages. Same agent-browser CLI as the \`browser\` tool (pass its sub-command in \`command\`; "skills get core" prints the reference), starting on https://app.slack.com/client. "${THIS_THREAD}" opens the Slack thread this conversation is in — a button or form someone posted as a REPLY here only shows in that thread pane, never in the channel view. \`find\` CLICKS what it finds unless given another action; to look for something, read a \`snapshot\`. Only interaction commands work (open/click/fill/type/press/select/scroll/wait/snapshot/get/find/tab/…), and only Slack URLs open — no eval, screenshots, files or other sites. "${RESTART}" relaunches a stuck browser. Nothing in Slack is blocked except signing out: it can send, edit, react, join and run workflows AS kyto's user account, so act only on what the owner asked. A live view is posted in the thread on first use.`,
     inputSchema: z.object({
       command: z
         .string()
@@ -81,9 +82,17 @@ export function slackBrowserTool({
           'Arguments for agent-browser, e.g. "snapshot -i", "open https://app.slack.com/client/T0266FRGM/C0B7QEK0MQB", "click @e12", or "restart".'
         ),
     }),
-    execute: async ({ command }, { abortSignal }) => {
+    execute: async ({ command: requested }, { abortSignal }) => {
+      let command = requested.trim();
+      if (command === THIS_THREAD) {
+        // Built here, not by the model: it glued a channel id where the
+        // workspace id goes and landed on Slack's "There's been a glitch" page.
+        const { channel, threadTs } = thread.adapter.decodeThreadId(thread.id);
+        const team = thread.adapter.teamId ?? '';
+        command = `open https://app.slack.com/client/${team}/${channel}${threadTs ? `/thread/${channel}-${threadTs}` : ''}`;
+      }
       try {
-        if (command.trim() === RESTART) {
+        if (command === RESTART) {
           await close();
           session = start();
           await session;

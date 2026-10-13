@@ -32,8 +32,15 @@ export function withoutLeadingMentions(text: string): string {
 // that happens to contain a markdown `## heading`) does NOT hide the message,
 // which used to silently drop ordinary messages. To use the side-channel, begin
 // the message with `##`.
+//
+// `##lol` arrives as `#<#G3QAGB0NM>` when `#lol` names a channel — Slack links
+// it — and such a message once woke kyto mid-turn and was answered.
+const HIDDEN_PREFIX = /^#(?:#|<#[A-Z0-9]+(?:\|[^>]*)?>)/;
+
 export function isHiddenFromBot(message: Message): boolean {
-  return withoutLeadingMentions(rawText(message)).trimStart().startsWith('##');
+  return HIDDEN_PREFIX.test(
+    withoutLeadingMentions(rawText(message)).trimStart()
+  );
 }
 
 // Slack escapes `<`, `>` and `&` in the message text it delivers, so a person

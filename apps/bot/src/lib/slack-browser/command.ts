@@ -75,6 +75,7 @@ const FLAGS = new Set([
 ]);
 
 const FLAG = /^--?[a-z]/i;
+const WORKSPACE_ID = /^[TE][A-Z0-9]+$/;
 
 /** Shell-like split: quotes group words, a backslash escapes, nothing expands. */
 export function splitCommand(command: string): string[] {
@@ -126,9 +127,18 @@ function slackUrl(raw: string | undefined): string | undefined {
   }
   try {
     const url = new URL(raw);
-    return url.protocol === 'https:' && isSlackHost(url.hostname)
-      ? undefined
-      : `Only https Slack URLs can be opened, not ${raw}.`;
+    if (!(url.protocol === 'https:' && isSlackHost(url.hostname))) {
+      return `Only https Slack URLs can be opened, not ${raw}.`;
+    }
+    // A channel id where the workspace id belongs opens Slack's "There's been
+    // a glitch" page, which the model then read as the browser being broken.
+    const [section, workspace] = url.pathname.split('/').filter(Boolean);
+    return url.hostname === 'app.slack.com' &&
+      section === 'client' &&
+      workspace &&
+      !WORKSPACE_ID.test(workspace)
+      ? `${workspace} is not a workspace id: the path is /client/<workspace T… or E… id>/<channel>; "thread" opens this conversation's thread.`
+      : undefined;
   } catch {
     return `Only full https Slack URLs can be opened, not ${raw}.`;
   }
