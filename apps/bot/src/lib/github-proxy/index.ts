@@ -686,7 +686,16 @@ async function forward({
     // answered. Every git transfer now leaves a line when GitHub answers and
     // one when the body has finished streaming back.
     let responseBody = upstream.body;
-    if (responseBody && GIT_PATH.test(new URL(target.upstream).pathname)) {
+    const isGitTransfer = GIT_PATH.test(new URL(target.upstream).pathname);
+    if (isGitTransfer) {
+      // Coolify's Traefik gzips responses on the way out, and gzipping a
+      // streamed 17 MB pack over HTTP/2 stalled: a sandbox clone of a public
+      // repo hung for minutes (#79) while the same proxy answered in 2s
+      // without Traefik in front. Traefik leaves alone a response that already
+      // names its encoding, and a pack is compressed already.
+      out.set('content-encoding', 'identity');
+    }
+    if (responseBody && isGitTransfer) {
       const log = { status: upstream.status, upstream: target.upstream };
       logger.info(
         { ...log, headersMs: Date.now() - startedAt },
@@ -753,6 +762,9 @@ export function githubProxyEnv(
 export function githubProxyGitConfig(publicHost: string): string {
   const base = `https://${publicHost}/`;
   return [
+    // HTTP/1.1: over HTTP/2 a large pack through the front proxy stalled
+    // (#79); forced to 1.1 the same clone took 5s.
+    'git config --global http.version HTTP/1.1',
     `git config --global credential.helper '!f() { echo username=kyto; echo "password=\${KYTO_GH_PROXY_TOKEN:-}"; }; f'`,
     `git config --global --unset-all url."${base}".insteadOf || true`,
     `git config --global --add url."${base}".insteadOf https://github.com/`,
