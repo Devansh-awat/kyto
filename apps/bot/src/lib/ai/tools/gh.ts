@@ -32,6 +32,10 @@ function truncate(text: string): string {
     : text;
 }
 
+// `gh`'s own top-level commands, for a command written without the `gh`.
+const GH_SUBCOMMAND =
+  /^\s*(?:alias|api|attestation|auth|browse|cache|codespace|config|extension|gist|gpg-key|issue|label|org|pr|project|release|repo|ruleset|run|search|secret|ssh-key|status|variable|workflow)\s/;
+
 export function ghTool({
   getSandboxContext,
   isOwner,
@@ -53,7 +57,14 @@ export function ghTool({
         .min(1)
         .describe('Shell command using gh and/or pipes to other commands.'),
     }),
-    execute: async ({ command }, { abortSignal }) => {
+    execute: async ({ command: written }, { abortSignal }) => {
+      // Models drop the leading `gh` ("repo create …", "api -X POST …") and
+      // the shell answered "repo: command not found" — read as a refusal,
+      // which sent kyto hunting for another route (#80). Normalized BEFORE the
+      // guard, so the guard checks exactly what runs.
+      const command = GH_SUBCOMMAND.test(written)
+        ? `gh ${written.trim()}`
+        : written;
       if (!env.GH_TOKEN) {
         return {
           error: 'gh requires GH_TOKEN to be configured on the host.',
