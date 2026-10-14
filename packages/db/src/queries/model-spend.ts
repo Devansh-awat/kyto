@@ -1,4 +1,4 @@
-import { gte, sql } from 'drizzle-orm';
+import { and, eq, gte, sql } from 'drizzle-orm';
 import { db } from '../client';
 import { type ModelSpend, modelSpend } from '../schema';
 
@@ -23,8 +23,17 @@ export interface SpendGroup {
   unpriced: number;
 }
 
-/** Spend since `since`, grouped by what spent it, model and effort. */
-export async function summarizeModelSpend(since: Date): Promise<SpendGroup[]> {
+/**
+ * Spend since `since` (all of it when omitted), optionally in one thread only,
+ * grouped by what spent it, model and effort.
+ */
+export async function summarizeModelSpend({
+  since,
+  threadId,
+}: {
+  since?: Date;
+  threadId?: string;
+}): Promise<SpendGroup[]> {
   const rows = await db
     .select({
       cacheReadTokens: sql<string>`sum(${modelSpend.cacheReadTokens})`,
@@ -39,7 +48,12 @@ export async function summarizeModelSpend(since: Date): Promise<SpendGroup[]> {
       unpriced: sql<string>`count(*) filter (where ${modelSpend.costUsd} is null)`,
     })
     .from(modelSpend)
-    .where(gte(modelSpend.createdAt, since))
+    .where(
+      and(
+        since ? gte(modelSpend.createdAt, since) : undefined,
+        threadId ? eq(modelSpend.threadId, threadId) : undefined
+      )
+    )
     .groupBy(modelSpend.source, modelSpend.model, modelSpend.effort);
   // Postgres sums come back as strings.
   return rows.map((row) => ({

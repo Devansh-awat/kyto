@@ -108,9 +108,17 @@ function usd(value: number): string {
 
 /**
  * `!spend [days]` (owner only): the bill since UTC midnight `days - 1` days
- * ago, by what spent it and by model/effort.
+ * ago, by what spent it and by model/effort. Given a `threadId` (the command
+ * was a reply in a thread), that thread's whole bill instead — everything run
+ * in it, subagents, Kevinton's review and compaction included.
  */
-export async function describeSpend(args: string): Promise<string> {
+export async function describeSpend({
+  args,
+  threadId,
+}: {
+  args: string;
+  threadId?: string;
+}): Promise<string> {
   const requested = Number.parseInt(args.trim(), 10);
   const days =
     Number.isFinite(requested) && requested > 0
@@ -118,10 +126,15 @@ export async function describeSpend(args: string): Promise<string> {
       : 1;
   const midnight = new Date();
   midnight.setUTCHours(0, 0, 0, 0);
-  const since = new Date(midnight.getTime() - (days - 1) * DAY_MS);
-  const groups = await summarizeModelSpend(since);
+  const since = threadId
+    ? undefined
+    : new Date(midnight.getTime() - (days - 1) * DAY_MS);
+  const groups = await summarizeModelSpend({ since, threadId });
+  const scope = since
+    ? `since ${since.toISOString().slice(0, 10)} UTC`
+    : 'in this thread';
   if (groups.length === 0) {
-    return `nothing recorded since ${since.toISOString().slice(0, 10)} (the ledger started 2026-10-11).`;
+    return `nothing recorded ${scope} (the ledger started 2026-10-11).`;
   }
   const total = groups.reduce((sum, group) => sum + group.costUsd, 0);
   const bySource = new Map<string, { calls: number; cost: number }>();
@@ -148,7 +161,7 @@ export async function describeSpend(args: string): Promise<string> {
       return `• ${group.source} · ${group.model}${group.effort ? ` · ${group.effort}` : ''}: ${usd(group.costUsd)} — ${group.calls} calls, ${Math.round(group.inputTokens / 1000)}k in (${hit}% cached, ${Math.round(group.cacheWriteTokens / 1000)}k written), ${Math.round(group.outputTokens / 1000)}k out${unpriced}`;
     });
   return [
-    `*${usd(total)}* at list price since ${since.toISOString().slice(0, 10)} UTC (Hack Club's 30% Claude discount is applied on its side and not shown).`,
+    `*${usd(total)}* at list price ${scope} (Hack Club's 30% Claude discount is applied on its side and not shown).`,
     '*by source*',
     ...sources,
     '*by source, model and effort*',

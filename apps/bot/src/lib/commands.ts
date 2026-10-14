@@ -119,10 +119,14 @@ export async function handleCommand({
     return true;
   }
   if (command.type === 'spend') {
+    // A reply inside a thread asks about THAT thread; a top-level message (the
+    // root of its own new thread) asks about the whole bill.
+    const rootTs = thread.id.split(':')[2];
+    const threadId = rootTs && message.id !== rootTs ? thread.id : undefined;
     // Owner only: it is his bill.
     const text =
       env.OWNER_USER_ID && message.author.userId === env.OWNER_USER_ID
-        ? await describeSpend(command.args).catch(
+        ? await describeSpend({ args: command.args, threadId }).catch(
             (error: unknown) =>
               `couldn't read the spend: ${errorMessage(error)}`
           )
