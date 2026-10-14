@@ -40,6 +40,11 @@ function truncate(text: string): string {
 // drawn, so the model's first look is at a loaded thread, not an empty shell.
 const THREAD_PANE = "[aria-label^='Thread in']";
 const PANE_WAIT_MS = 20_000;
+// Slack draws every modal, popup and menu in a portal at the end of <body>,
+// outside the thread pane — so a pane-scoped snapshot right after clicking a
+// button that opened one showed only the now-disabled button, and kyto said
+// "no popup" while the live view showed it (and its own next click hit it).
+const MODAL = '.ReactModal__Content';
 
 const WEDGED =
   /CDP command timed out|not responding|os error 11|daemon may be busy/i;
@@ -83,6 +88,25 @@ export function slackBrowserTool({
       args: ['snapshot', '-i', '-c', '-s', THREAD_PANE],
     });
     return pane.exitCode === 0 ? truncate(pane.stdout) : undefined;
+  };
+  const openModal = async ({
+    abortSignal,
+    browser,
+  }: {
+    abortSignal?: AbortSignal;
+    browser: SlackBrowserSession;
+  }): Promise<string | undefined> => {
+    const found = await browser.run({
+      abortSignal,
+      args: ['snapshot', '-i', '-c', '-s', MODAL],
+    });
+    const text = found.stdout.trim();
+    return found.exitCode === 0 &&
+      !found.timedOut &&
+      text &&
+      text !== '(no interactive elements)'
+      ? truncate(text)
+      : undefined;
   };
   // Built here, not by the model: it glued a channel id where the workspace id
   // goes and landed on Slack's "There's been a glitch" page.
@@ -131,7 +155,7 @@ export function slackBrowserTool({
   };
 
   const slackBrowser = tool({
-    description: `Drive a real browser LOGGED IN to Slack as kyto's own user account (owner only) — ONLY for what the Slack tools can't do — a last resort, never a shortcut: adding or removing a custom emoji is \`submitEmoji\`/\`removeEmoji\`, posting is \`postMessage\`, and so on; check the loadTools catalog first. It is for running workflows, clicking buttons on other apps' messages or App Homes, forms, settings pages. Same agent-browser CLI as the \`browser\` tool (pass its sub-command in \`command\`; "skills get core" prints the reference), starting IN the Slack thread this conversation is in (Slack's home for a DM with the app) — a button or form someone posted as a REPLY here only shows in that thread pane, never in the channel view; "${THIS_THREAD}" goes back to it. For another conversation, \`open <channel id>\`, \`open <channel id> <thread ts>\`, \`open slack:C…:<ts>\` or \`open <message link>\` (opens that message's thread) — never hand-build an app.slack.com URL. Opening a thread returns \`threadPane\`: its messages, buttons and fields with refs — click a button by its ref. \`find text\` CLICKS the first match, which is often a message's words rather than the button; to look for something, read a \`snapshot\` (\`snapshot -i -c -s "${THREAD_PANE}"\` re-reads the thread). Slack's own dropdowns and date/time pickers are not native selects — \`select\` reports done and changes nothing: click the field, then click the option's ref; a value it doesn't list (4:30 PM in an hourly list) is TYPED into the field. An open dropdown covers the fields below it, so pick an option or press Tab before the next click — never Escape inside a modal, which asks to discard the whole form. Every \`open\` reboots the whole Slack client (slow, the view blanks): after the first page, move by clicking (sidebar, a message's replies, the quick switcher on Control+k) and open a URL only to go somewhere a click can't reach. There is no shell, so no pipes; to run several commands in ONE call (filling a form: click, fill, select, then snapshot), put the first in \`command\` and the rest in \`next\` — they run in order, each checked the same way, and stop at the first that fails. \`diff snapshot\` returns only what changed since the last snapshot, far smaller than a fresh one. Only interaction commands work (open/click/fill/type/press/select/scroll/wait/snapshot/get/find/tab/eval/…), and only Slack URLs open — no screenshots, files or other sites. \`eval <js>\` runs JavaScript in the Slack page (reading a long list, checking state), and \`wait --fn <js>\` waits for a condition. "${RESTART}" relaunches a stuck browser. Nothing in Slack is blocked except signing out: it can send, edit, react, join and run workflows AS kyto's user account, so act only on what the owner asked. A live view is posted in the thread on first use.`,
+    description: `Drive a real browser LOGGED IN to Slack as kyto's own user account (owner only) — ONLY for what the Slack tools can't do — a last resort, never a shortcut: adding or removing a custom emoji is \`submitEmoji\`/\`removeEmoji\`, posting is \`postMessage\`, and so on; check the loadTools catalog first. It is for running workflows, clicking buttons on other apps' messages or App Homes, forms, settings pages. Same agent-browser CLI as the \`browser\` tool (pass its sub-command in \`command\`; "skills get core" prints the reference), starting IN the Slack thread this conversation is in (Slack's home for a DM with the app) — a button or form someone posted as a REPLY here only shows in that thread pane, never in the channel view; "${THIS_THREAD}" goes back to it. For another conversation, \`open <channel id>\`, \`open <channel id> <thread ts>\`, \`open slack:C…:<ts>\` or \`open <message link>\` (opens that message's thread) — never hand-build an app.slack.com URL. Opening a thread returns \`threadPane\`: its messages, buttons and fields with refs — click a button by its ref. A modal, popup or menu Slack opens sits OUTSIDE the thread pane: while one is open every result carries it as \`modal\` with its refs, so check \`modal\` before saying nothing opened. \`find text\` CLICKS the first match, which is often a message's words rather than the button; to look for something, read a \`snapshot\` (\`snapshot -i -c -s "${THREAD_PANE}"\` re-reads the thread). Slack's own dropdowns and date/time pickers are not native selects — \`select\` reports done and changes nothing: click the field, then click the option's ref; a value it doesn't list (4:30 PM in an hourly list) is TYPED into the field. An open dropdown covers the fields below it, so pick an option or press Tab before the next click — never Escape inside a modal, which asks to discard the whole form. Every \`open\` reboots the whole Slack client (slow, the view blanks): after the first page, move by clicking (sidebar, a message's replies, the quick switcher on Control+k) and open a URL only to go somewhere a click can't reach. There is no shell, so no pipes; to run several commands in ONE call (filling a form: click, fill, select, then snapshot), put the first in \`command\` and the rest in \`next\` — they run in order, each checked the same way, and stop at the first that fails. \`diff snapshot\` returns only what changed since the last snapshot, far smaller than a fresh one. Only interaction commands work (open/click/fill/type/press/select/scroll/wait/snapshot/get/find/tab/eval/…), and only Slack URLs open — no screenshots, files or other sites. \`eval <js>\` runs JavaScript in the Slack page (reading a long list, checking state), and \`wait --fn <js>\` waits for a condition. "${RESTART}" relaunches a stuck browser. Nothing in Slack is blocked except signing out: it can send, edit, react, join and run workflows AS kyto's user account, so act only on what the owner asked. A live view is posted in the thread on first use.`,
     inputSchema: z.object({
       command: z
         .string()
@@ -264,6 +288,18 @@ export function slackBrowserTool({
         summary =
           'Slack is still loading (nothing on the page yet): "wait 3000", then snapshot again. Do not open the URL again — that restarts the load.';
       }
+      // A whole-page snapshot already holds the modal; anything else, scoped
+      // snapshots included, gets it alongside.
+      const modal =
+        result.timedOut ||
+        (verb === 'snapshot' &&
+          !parsed.args.some((arg) => arg === '-s' || arg === '--selector'))
+          ? undefined
+          : await openModal({ abortSignal, browser });
+      if (modal) {
+        summary +=
+          ' A modal or popup is OPEN on top of Slack (`modal`, with its refs) — act on it there; it is not inside the thread pane.';
+      }
       const opensThread =
         verb === 'open' &&
         target?.includes('/thread/') &&
@@ -274,6 +310,7 @@ export function slackBrowserTool({
         ...(opensThread
           ? { threadPane: await threadPane({ abortSignal, browser }) }
           : {}),
+        ...(modal ? { modal } : {}),
         liveView:
           'A watch-only live view is already posted in the thread; no need to share it again.',
         stderr: truncate(result.stderr),
