@@ -21,6 +21,13 @@ describe('isHiddenFromBot', () => {
     expect(isHiddenFromBot(message('<@U0BD3555UCQ> ##lol'))).toBe(true);
   });
 
+  test('hides ## wrapped in Slack formatting', () => {
+    expect(isHiddenFromBot(message('~## i wonder who did it~'))).toBe(true);
+    expect(isHiddenFromBot(message('*## loud aside*'))).toBe(true);
+    expect(isHiddenFromBot(message('_~##lol~_'))).toBe(true);
+    expect(isHiddenFromBot(message('~not hidden~ ##'))).toBe(false);
+  });
+
   test('hides ## that Slack turned into a channel link', () => {
     expect(isHiddenFromBot(message('#<#G0123ABCDE9>'))).toBe(true);
     expect(isHiddenFromBot(message('#<#C0B7QEK0MQB|general> hi'))).toBe(true);

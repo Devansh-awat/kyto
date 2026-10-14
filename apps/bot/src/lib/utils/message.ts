@@ -35,7 +35,10 @@ export function withoutLeadingMentions(text: string): string {
 //
 // `##lol` arrives as `#<#G0123ABCDE9>` when `#lol` names a channel — Slack links
 // it — and such a message once woke kyto mid-turn and was answered.
-const HIDDEN_PREFIX = /^#(?:#|<#[A-Z0-9]+(?:\|[^>]*)?>)/;
+//
+// Slack's formatting markers (`~strike~`, `*bold*`, `_italic_`) may wrap the
+// `##`: `~## aside~` sits in front of the `##`, and kyto answered one.
+const HIDDEN_PREFIX = /^[~*_]*#(?:#|<#[A-Z0-9]+(?:\|[^>]*)?>)/;
 
 export function isHiddenFromBot(message: Message): boolean {
   return HIDDEN_PREFIX.test(
