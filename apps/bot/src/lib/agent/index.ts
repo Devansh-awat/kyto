@@ -482,10 +482,6 @@ async function executeTurn(
       }),
   ]);
   const setupReadMs = Date.now() - turnStart;
-  // Every rung past the user's own is kyto's shared chain, which is what the
-  // prompt's code-goes-to-OpenCode rule is about.
-  const ownModelsOnly =
-    routing.own.length > 0 && routing.ownFirst && !routing.serviceFallback;
   // Ends whichever attempt is running (set per attempt below).
   let abortCurrentAttempt: ((reason: Error) => void) | undefined;
   // Judges the WORK, not just the message: the thread once the prompt is built,
@@ -928,6 +924,7 @@ async function executeTurn(
     const turnFlags = parseFlags(withoutLeadingMentions(rawText(turnMessage)));
     const pendingTools = buildTools({
       asUserAccount,
+      ownKey: routing.own.length > 0,
       bot,
       escalation,
       extendAttemptDeadline: (extraMs) =>
@@ -970,7 +967,7 @@ async function executeTurn(
       channelInstructions: hints.channelInstructions,
       customizationPrompt: hints.customization?.prompt,
       memoriesOff: hints.memoryMode === 'off',
-      ownModelsOnly,
+      ownKey: routing.own.length > 0,
       thread: turnThread,
     });
     // The per-turn tail; the replayed thread stays in `history` so it can go

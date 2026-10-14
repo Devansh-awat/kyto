@@ -177,10 +177,11 @@ function delegateMessage(probability: number | null): string {
 }
 
 // Their key IS linked — it failed this attempt, and the turn fell back. Told
-// only "runs on the person's own key… answer without it", kyto asked
-// a user to link the key they were already using, and gave up the build.
+// only "runs on the person's own key… answer without it", kyto asked a user to
+// link the key they were already using. No OpenCode here: a key-holder's turn
+// never offers it (owner's call, 2026-10-14).
 const REFUSED_SHARED =
-  "Not run here: the person's own model key IS linked, but it failed on this attempt, so this one is on kyto's shared model, where coding work goes through the `opencode` tool. Do the writing, building, running and debugging there — give it a complete brief in your own words — and deliver the result as your own work. Don't ask them to link a key. If they told you NOT to use OpenCode, don't call it: say their key had a hiccup on this message and to send it again.";
+  "Not run: the person's own model key IS linked, but it failed on this message, so this attempt is on kyto's shared model, where code work can't run. Don't ask them to link a key and don't suggest any other tool: tell them their key had a hiccup on this message and to send it again, with whatever you already found.";
 
 export function createCodingMonitor({
   isOnSharedModel,

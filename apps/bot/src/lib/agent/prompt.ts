@@ -24,13 +24,19 @@ import {
 } from '@/lib/utils/message';
 
 // We never persist a session, so the whole Slack thread is the agent's only
-// memory. Cap how many prior messages we replay VERBATIM to bound prompt size.
-const MAX_THREAD_MESSAGES = 100;
-// …and at most this much text (~60k tokens), so a thread of pasted logs does not
-// replay hundreds of thousands of characters on every turn. What falls out goes
-// to the digest. Moved in steps so the window's start — where the replayed,
-// cached history begins — shifts rarely (see replayWindowStart).
-const MAX_REPLAY_CHARS = 240_000;
+// memory, and it is replayed VERBATIM until the request would pass ~100k
+// tokens (owner's call, 2026-10-14): Haiku bills the WHOLE request ~5x past
+// 100k, and the system prompt, tool schemas and the turn's tail take ~25-30k,
+// so the history gets ~70k. There is no message cap: a 100-message one folded
+// a 449-message working thread into a digest at a fraction of that size, and
+// its user said kyto had "lost a lot of context". Only what falls out of the
+// token budget goes to the digest. Estimated at 3.5 chars a token (pasted
+// logs and code run denser than prose), plus each message's rendered header (author, time), and moved in steps so the window's
+// start — where the replayed, cached history begins — shifts rarely (see
+// replayWindowStart).
+const MAX_REPLAY_TOKENS = 70_000;
+const CHARS_PER_TOKEN = 3.5;
+const MESSAGE_HEADER_CHARS = 80;
 const REPLAY_STEP = 25;
 // How far back we look beyond that cap. Everything between this and the verbatim
 // window is compacted into a summary (see lib/agent/compaction) instead of being
@@ -195,7 +201,7 @@ export async function buildPrompt(
     customizationPrompt,
     includeHidden = false,
     memoriesOff = false,
-    ownModelsOnly = false,
+    ownKey = false,
     thread,
   }: {
     /** Answering as kyto's Slack user account; per turn, so volatile tail. */
@@ -213,8 +219,8 @@ export async function buildPrompt(
     includeHidden?: boolean;
     /** `--NO-MEMORY`: no notebooks and no reasoning replayed from earlier turns. */
     memoriesOff?: boolean;
-    /** Runs only on the asker's own model key, where the no-coding rule lifts. */
-    ownModelsOnly?: boolean;
+    /** The asker has their own model key: code work is theirs to run, no OpenCode. */
+    ownKey?: boolean;
     thread?: Thread;
   } = {}
 ): Promise<{ history: string[]; tail: string }> {
@@ -354,12 +360,15 @@ export async function buildPrompt(
       root.author.userId !== selfId &&
       !(rawSlackText(root) ?? '').includes(`<@${selfId}>`);
     previousMessageId = prior.findLast((entry) => entry.id < message.id)?.id;
-    // Split AFTER filtering, so a focused thread's window is 100 messages kyto
-    // may actually see rather than 100 slots partly spent on hidden ones.
+    // Split AFTER filtering, so a focused thread's budget is spent on messages
+    // kyto may actually see, not on hidden ones.
     const start = replayWindowStart({
-      maxChars: MAX_REPLAY_CHARS,
-      maxMessages: MAX_THREAD_MESSAGES,
-      sizes: prior.map((entry) => (rawSlackText(entry) || entry.text).length),
+      maxChars: MAX_REPLAY_TOKENS * CHARS_PER_TOKEN,
+      maxMessages: Number.POSITIVE_INFINITY,
+      sizes: prior.map(
+        (entry) =>
+          (rawSlackText(entry) || entry.text).length + MESSAGE_HEADER_CHARS
+      ),
       step: REPLAY_STEP,
     });
     const overflow = prior.slice(0, start);
@@ -462,11 +471,12 @@ export async function buildPrompt(
     ...gapLine({ currentId: message.id, previousId: previousMessageId }),
     // Per person, so it lives down here with the clock: in the system prompt it
     // would split the cached prefix between key-holders and everyone else.
-    ...(ownModelsOnly
-      ? [
-          "This turn runs on the person's OWN model key, not Hack Club AI's shared one, so the coding-agent rule does not apply to it.",
-        ]
-      : []),
+    // Per person, like the line above. A key-holder's turn never mentions
+    // OpenCode at all (owner's call, 2026-10-14): one asked, twice, for it
+    // not to be used on her own key.
+    ownKey
+      ? "Coding on this turn: it runs on the person's OWN model key, so do real code work yourself — write, build, run and debug in your own shell."
+      : 'Coding on this turn (a hard rule — Hack Club AI provides your shared model on the condition that it does not do coding-agent work): do real code work through the `opencode` tool, not your own shell. Give it a complete brief in your own words and put nothing from Slack in it: no quoted messages, no names. Then deliver the result as your own work. Don\'t bring up OpenCode, delegating or any coding restriction on your own (if asked how it was done, you may say). A `<coding_work>` note, or a tool call answered "Not run", means exactly this: move that work to `opencode`, without commenting on it. For reading or searching a repo, use bash: OpenCode takes minutes for what grep does in seconds.',
     // The system prompt names both identities without saying which is "you"
     // (it is one cached prefix for both), so every turn says it here.
     ...(slack.userAccountId && slack.botUserId
@@ -517,7 +527,7 @@ export async function buildPrompt(
   //   notebooks           changes when kevinton edits one — ~30 min after a
   //                       turn, by which time the 30-min cache has lapsed anyway
   //   compacted           changes once per COMPACT_BATCH of overflow
-  //   history             append-only until the thread passes MAX_THREAD_MESSAGES
+  //   history             append-only until the thread passes MAX_REPLAY_TOKENS
   //   --- tail (one message, rewritten every turn) ---
   //   thinking            CHANGES EVERY TURN (last turn's reasoning is appended)
   //   nowLine + current   the clock, the message id, and the new message

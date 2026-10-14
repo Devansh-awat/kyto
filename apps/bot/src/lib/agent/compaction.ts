@@ -17,7 +17,7 @@ import { clamp } from '@/lib/utils/text';
 // Compaction: what happens to a Slack thread once it outgrows the replay cap.
 //
 // buildPrompt replays the thread as kyto's only memory of the conversation, and
-// only the most recent MAX_THREAD_MESSAGES fit. Past that the oldest messages
+// only the most recent ~70k tokens (MAX_REPLAY_TOKENS) fit. Past that the oldest messages
 // were simply dropped, silently — the model was never told a conversation it was
 // mid-way through had a beginning it could no longer see, so it confidently
 // contradicted decisions made earlier in the same thread.
