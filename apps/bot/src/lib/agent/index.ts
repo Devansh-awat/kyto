@@ -69,6 +69,7 @@ import {
   isPromptConstructionError,
 } from '@/lib/agent/routing';
 import { createSegmenter, isVisibleText } from '@/lib/agent/segmentation';
+import { createSideChunks } from '@/lib/agent/side-chunks';
 import { isBareSkipText } from '@/lib/agent/skip-text';
 import {
   abortReasonOf,
@@ -192,6 +193,17 @@ const ERROR_LOG_MAX_LENGTH = 800;
 // TAIL matters (the model needs to know where the thought was cut off), and the
 // user's message plus carryover results are already in the prompt.
 const STREAMED_TEXT_MAX = 4000;
+
+// A thread whose model filled its output cap with thinking starts its next
+// turns at low effort: BYOK GLM did it on EVERY turn of one DM, each losing
+// 2-3 minutes before the low-effort retry answered in one (#95). Keyed by
+// thread and attempt; in memory, so a restart only costs one more cutoff.
+const THINKING_CAPPED_TTL_MS = 30 * 60 * 1000;
+// A model thinking for minutes before its first word left the Thinking card
+// unchanged the whole time, which reads as stuck (#74): it is refreshed this
+// often with how long and how much it has thought.
+const THINKING_PROGRESS_MS = 30_000;
+const thinkingCapped = new Map<string, number>();
 
 // Longer than any text isBareSkipText accepts (e.g. "```skip()```.").
 const BARE_SKIP_MAX_CHARS = 16;
@@ -1321,8 +1333,17 @@ async function executeTurn(
         // card can say which one this attempt runs on — and whether it was the
         // random draw (the effort experiment) or the thread's `--reasoning`.
         let effort: { effort: string; random: boolean } | undefined;
+        const cappedKey = `${threadId}|${attemptKey(currentAttempt)}`;
+        const cappedUntil = thinkingCapped.get(cappedKey) ?? 0;
+        if (cappedUntil <= Date.now()) {
+          thinkingCapped.delete(cappedKey);
+        }
         if (currentAttempt === lowEffortAttempt) {
           effort = { effort: 'low', random: false };
+        } else if (cappedUntil > Date.now() && !choice.effort) {
+          effort = { effort: 'low', random: false };
+          // Already as low as the retry would go.
+          lowEffortRetried = true;
         } else if (currentAttempt.provider === HACKCLUB_PROVIDER) {
           // Haiku's thinking shares the 8000-token output cap, and `high` left
           // it ~1600 tokens to answer in: replies and tool calls were cut off
@@ -1336,16 +1357,20 @@ async function executeTurn(
             ? { effort: chosen, random: false }
             : pickReasoningEffort({ attempt: currentAttempt, threadId });
         }
+        const modelDetails = effort
+          ? `${currentAttempt.model} · ${effort.effort} reasoning${effort.random ? ' (random)' : ''}`
+          : currentAttempt.model;
         yield {
-          details: effort
-            ? `${currentAttempt.model} · ${effort.effort} reasoning${effort.random ? ' (random)' : ''}`
-            : currentAttempt.model,
+          details: modelDetails,
           id: modelTaskId,
           status: 'in_progress',
           title: modelTaskTitle,
           type: 'task_update',
         };
         const attemptStart = Date.now();
+        const thinkingProgress = createSideChunks<string | StreamChunk>();
+        let thoughtChars = 0;
+        let progressAt = attemptStart;
         const compaction = createCompactionReporter({
           budget: cards,
           context: { attempt: attemptLog(currentAttempt), threadId },
@@ -1480,79 +1505,98 @@ async function executeTurn(
           toolOrder: built.toolOrder,
           tools: built.tools,
         });
-        for await (const chunk of compaction.merge(
-          renderStream({
-            budget: cards,
-            context: {
-              ...attemptLog(currentAttempt),
-              threadId,
-            },
-            // Reply text is yielded as strings (the message body) so streamSegmented
-            // can split the plan on text→tool boundaries; onTextDelta only tracks
-            // flags now — the actual posting happens in streamSegmented.
-            emitText: true,
-            secret,
-            knownTools,
-            onSkip: () => {
-              // A skip is a deliberate, successful "no reply".
-              skipped = true;
-            },
-            onTally: recordTiming,
-            onTextDelta: (text) => {
-              producedText = true;
-              attemptText = true;
-              errorStage = 'after_text';
-              attemptRawText += text;
-              lastOutputWasText = true;
-              moderationReply += text;
-              streamedText = appendStreamedText(streamedText, text);
-              // Progress: reset the stall watchdog (see armWatchdog).
-              armWatchdog(ATTEMPT_TIMEOUT_MS);
-            },
-            onReasoning: (text) => {
-              attemptThinking.push(text);
-            },
-            onToolActivity: () => {
-              attemptToolActivity = true;
-              lastOutputWasText = false;
-              armWatchdog(ATTEMPT_TIMEOUT_MS);
-            },
-            onToolInputStart: () => {
-              lastOutputWasText = false;
-            },
-            onToolResult: (info) => {
-              armWatchdog(ATTEMPT_TIMEOUT_MS);
-              lastOutputWasText = false;
-              codingMonitor.recordResult(info);
-              const key = `${info.toolName}:${stableInput(info.input)}`;
-              if (gatheredKeys.has(key)) {
-                return;
-              }
-              gatheredKeys.add(key);
-              gatheredResults.push(info);
-              moderationTools.push({
-                source: 'tool result',
-                text:
-                  typeof info.output === 'string'
-                    ? info.output
-                    : (JSON.stringify(info.output) ?? ''),
-              });
-            },
-            onFinish: (reason) => {
-              attemptFinishReason = reason;
-            },
-            onError: (info) => {
-              attemptStreamError ??= info;
-              // A HackClub daily-spend-limit 429 dooms every HackClub rung.
-              if (
-                currentAttempt.provider === HACKCLUB_PROVIDER &&
-                SPEND_LIMIT_PATTERN.test(info.message)
-              ) {
-                router.markSpendLimit(info.message);
-              }
-            },
-            stream: result.fullStream,
-          })
+        for await (const chunk of thinkingProgress.merge(
+          compaction.merge(
+            renderStream({
+              budget: cards,
+              context: {
+                ...attemptLog(currentAttempt),
+                threadId,
+              },
+              // Reply text is yielded as strings (the message body) so streamSegmented
+              // can split the plan on text→tool boundaries; onTextDelta only tracks
+              // flags now — the actual posting happens in streamSegmented.
+              emitText: true,
+              secret,
+              knownTools,
+              onSkip: () => {
+                // A skip is a deliberate, successful "no reply".
+                skipped = true;
+              },
+              onTally: recordTiming,
+              onTextDelta: (text) => {
+                producedText = true;
+                attemptText = true;
+                errorStage = 'after_text';
+                attemptRawText += text;
+                lastOutputWasText = true;
+                moderationReply += text;
+                streamedText = appendStreamedText(streamedText, text);
+                // Progress: reset the stall watchdog (see armWatchdog).
+                armWatchdog(ATTEMPT_TIMEOUT_MS);
+              },
+              onReasoning: (text) => {
+                attemptThinking.push(text);
+                thoughtChars += text.length;
+                const now = Date.now();
+                if (
+                  attemptText ||
+                  attemptToolActivity ||
+                  now - progressAt < THINKING_PROGRESS_MS
+                ) {
+                  return;
+                }
+                progressAt = now;
+                thinkingProgress.push({
+                  details: `${modelDetails} · still thinking, ${Math.round((now - attemptStart) / 1000)}s and ${(thoughtChars / 1000).toFixed(1)}k characters so far`,
+                  id: modelTaskId,
+                  status: 'in_progress',
+                  title: modelTaskTitle,
+                  type: 'task_update',
+                });
+              },
+              onToolActivity: () => {
+                attemptToolActivity = true;
+                lastOutputWasText = false;
+                armWatchdog(ATTEMPT_TIMEOUT_MS);
+              },
+              onToolInputStart: () => {
+                lastOutputWasText = false;
+              },
+              onToolResult: (info) => {
+                armWatchdog(ATTEMPT_TIMEOUT_MS);
+                lastOutputWasText = false;
+                codingMonitor.recordResult(info);
+                const key = `${info.toolName}:${stableInput(info.input)}`;
+                if (gatheredKeys.has(key)) {
+                  return;
+                }
+                gatheredKeys.add(key);
+                gatheredResults.push(info);
+                moderationTools.push({
+                  source: 'tool result',
+                  text:
+                    typeof info.output === 'string'
+                      ? info.output
+                      : (JSON.stringify(info.output) ?? ''),
+                });
+              },
+              onFinish: (reason) => {
+                attemptFinishReason = reason;
+              },
+              onError: (info) => {
+                attemptStreamError ??= info;
+                // A HackClub daily-spend-limit 429 dooms every HackClub rung.
+                if (
+                  currentAttempt.provider === HACKCLUB_PROVIDER &&
+                  SPEND_LIMIT_PATTERN.test(info.message)
+                ) {
+                  router.markSpendLimit(info.message);
+                }
+              },
+              stream: result.fullStream,
+            })
+          )
         )) {
           if (typeof chunk === 'string') {
             // The model has stopped answering and started looping. Cut it off
@@ -1893,6 +1937,10 @@ async function executeTurn(
         ) {
           lowEffortRetried = true;
           lowEffortAttempt = currentAttempt;
+          thinkingCapped.set(
+            `${threadId}|${attemptKey(currentAttempt)}`,
+            Date.now() + THINKING_CAPPED_TTL_MS
+          );
           logger.warn(
             {
               attempt: attemptLog(currentAttempt),
