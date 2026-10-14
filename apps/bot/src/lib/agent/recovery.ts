@@ -26,6 +26,7 @@ export async function* synthesizeFinalAnswer({
   attempt,
   history,
   knownTools,
+  onSkip,
   onTally,
   onText,
   results,
@@ -42,6 +43,8 @@ export async function* synthesizeFinalAnswer({
   cutOff?: boolean;
   history: string[];
   knownTools: Set<string>;
+  /** A skip here is as deliberate as in the attempt it rescues. */
+  onSkip: () => void;
   onTally: (tally: StreamTally) => void;
   onText: (text: string) => void;
   results: GatheredResult[];
@@ -85,6 +88,7 @@ export async function* synthesizeFinalAnswer({
       dropToolComplaints: true,
       emitText: true,
       knownTools,
+      onSkip,
       onTally,
       onTextDelta: onText,
       stream: result.fullStream,

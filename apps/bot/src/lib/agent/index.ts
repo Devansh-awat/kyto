@@ -1812,6 +1812,12 @@ async function executeTurn(
         if ((!(attemptText || skipped) && attemptToolActivity) || cutInWork) {
           yield* synthesizeFinalAnswer({
             cutOff: cutInWork,
+            // Without it a skip in the nudge (the reply was already posted
+            // with postMessage) still failed the attempt, and the next model
+            // ran only to skip again (#81).
+            onSkip: () => {
+              skipped = true;
+            },
             onTally: recordTiming,
             activeTools: built.activeTools,
             attempt: currentAttempt,
