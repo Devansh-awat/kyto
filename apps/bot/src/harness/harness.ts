@@ -57,6 +57,28 @@ const STREAM_EXPIRED = 'message_not_in_streaming_state';
 // Slack's answer when a streamed message can hold no more: a long tool-only run
 // piles every card into one message (#93 hit it at ~25 cards).
 const MESSAGE_FULL = 'msg_too_long';
+const SHRUNK_TITLE_CHARS = 200;
+const SHRUNK_BODY_CHARS = 1500;
+
+/** A card cut down to fit a message on its own. */
+function shrinkChunk(
+  chunk: Extract<StreamChunk, { type: 'task_update' }>
+): StreamChunk {
+  return {
+    ...chunk,
+    title: cut(chunk.title, SHRUNK_TITLE_CHARS),
+    ...(chunk.details === undefined
+      ? {}
+      : { details: cut(chunk.details, SHRUNK_BODY_CHARS) }),
+    ...(chunk.output === undefined
+      ? {}
+      : { output: cut(chunk.output, SHRUNK_BODY_CHARS) }),
+  };
+}
+
+function cut(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
 
 // Recursively pull readable text out of a Slack rich-text node (table cells are
 // rich_text blocks). Collects `text`, link labels/urls, and recurses into
@@ -1008,11 +1030,34 @@ export class SlackHarness {
       if (!structuredSupported) {
         return;
       }
-      const send = async () => {
+      const send = async (sent: StreamChunk = chunk) => {
         await streamer.append({
-          chunks: [filterOutboundDeep(chunk)] as never,
+          chunks: [filterOutboundDeep(sent)] as never,
         });
         currentHasContent = true;
+      };
+      // One card too big for even an empty message (a long heredoc as its
+      // title, a build log as its output) used to latch the whole turn
+      // text-only: three times in one user's day, every card after
+      // it gone. The card goes again with its text cut; failing that, only
+      // it is dropped.
+      const sendShrunk = async (): Promise<void> => {
+        // Reply text is never cut: the text-only path still delivers it.
+        if (chunk.type !== 'task_update') {
+          structuredSupported = false;
+          this.logger.warn(
+            '[harness] structured stream chunk rejected; text-only fallback'
+          );
+          return;
+        }
+        try {
+          await send(shrinkChunk(chunk));
+        } catch (shrunkError) {
+          this.logger.warn(
+            { err: shrunkError },
+            '[harness] a card too large for a message was dropped'
+          );
+        }
       };
       try {
         await send();
@@ -1034,15 +1079,22 @@ export class SlackHarness {
           currentHasContent = false;
           try {
             await send();
-            return;
           } catch (retryError) {
-            structuredSupported = false;
-            this.logger.warn(
-              { err: retryError },
-              '[harness] structured stream chunk rejected; text-only fallback'
-            );
-            return;
+            if (!String(retryError).includes(MESSAGE_FULL)) {
+              structuredSupported = false;
+              this.logger.warn(
+                { err: retryError },
+                '[harness] structured stream chunk rejected; text-only fallback'
+              );
+              return;
+            }
+            await sendShrunk();
           }
+          return;
+        }
+        if (String(error).includes(MESSAGE_FULL)) {
+          await sendShrunk();
+          return;
         }
         // An EXPIRED stream is not a rejected chunk: latching text-only here
         // dropped every later card of the turn, and the card left mid-flight

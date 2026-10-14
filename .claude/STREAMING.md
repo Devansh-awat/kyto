@@ -182,6 +182,9 @@ arrival: a 10-min opencode call sends nothing, so the stream used to expire
 under its in-flight card and render "Something went wrong" (issue #30). A
 `message_not_in_streaming_state` on a card append opens a new message instead of
 latching text-only for the rest of the turn.
+A single card too big even for an empty message (`msg_too_long`) is re-sent
+with its title/details/output cut, else dropped alone — only reply TEXT still
+latches text-only (cutting it would lose words).
 
 ## Skips
 

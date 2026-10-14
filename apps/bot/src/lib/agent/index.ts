@@ -148,6 +148,7 @@ import type { AttemptFailure } from '@/types/attempts';
 // "Rate limit exceeded" 429 is transient, and matching it wrote the whole tier
 // off for 30 minutes for everyone (fallback-cache).
 const SPEND_LIMIT_PATTERN = /spending limit|insufficient credits|daily limit/i;
+const QUOTA_EXHAUSTED = /exceeded your current quota|quota exceeded/i;
 
 // How many times a reply that hit MAX_OUTPUT_TOKENS mid-sentence may be resumed
 // before kyto stops and posts what it has. Three rounds is ~24k tokens of reply,
@@ -1814,6 +1815,7 @@ async function executeTurn(
           !skipped &&
           attemptFinishReason === 'length' &&
           !lastOutputWasText;
+        let nudgeWrote = false;
         if ((!(attemptText || skipped) && attemptToolActivity) || cutInWork) {
           yield* synthesizeFinalAnswer({
             cutOff: cutInWork,
@@ -1828,6 +1830,7 @@ async function executeTurn(
             attempt: currentAttempt,
             knownTools,
             onText: (text) => {
+              nudgeWrote = true;
               producedText = true;
               attemptText = true;
               errorStage = 'after_text';
@@ -1843,6 +1846,16 @@ async function executeTurn(
             toolOrder: built.toolOrder,
             tools: built.tools,
           });
+          // Cut off mid-work and the nudge wrote nothing either (it stalled
+          // 300s, or filled the cap thinking again): the narration from before
+          // made the attempt count as handled and the turn ended on "let me
+          // build it…" — one user asked "conclusion?" / "output?" four
+          // times in one day. The next model carries on from what was shown.
+          if (cutInWork && !(nudgeWrote || skipped)) {
+            throw new StreamInterruptedError(
+              `Model ${currentAttempt.model} was cut off mid-work and its continuation wrote nothing`
+            );
+          }
         }
 
         // The model DID write a reply, but it stops before the thought does —
@@ -2138,7 +2151,13 @@ async function executeTurn(
               reason: (router.spendLimitMessage ?? 'spend limit').slice(0, 200),
             });
           } else if (
-            isHardFailure({ spendLimit: false, status: errorStatus(error) })
+            isHardFailure({
+              // A 429 that says the QUOTA is spent (Gemini's free tier) is
+              // out until it resets, not busy: a BYOK user's turn walked into
+              // the same dead flash-lite again on the next message.
+              spendLimit: QUOTA_EXHAUSTED.test(thrownErrorText(error)),
+              status: errorStatus(error),
+            })
           ) {
             markRungDead({
               key: attemptKey(currentAttempt),

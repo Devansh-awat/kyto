@@ -2,6 +2,12 @@
   "$schema": "https://raw.githubusercontent.com/streetsidesoftware/cspell/main/cspell.schema.json",
   "import": ["@repo/cspell-config"],
   "words": [
+    "Adoptium",
+    "IFML",
+    "javac",
+    "javap",
+    "prefs",
+    "relauncher",
     "FRGM",
     "Kamal",
     "mcpauth",

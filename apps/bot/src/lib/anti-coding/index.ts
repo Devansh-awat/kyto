@@ -176,8 +176,11 @@ function delegateMessage(probability: number | null): string {
   return `Not run: the coding-work check scored this call${score} at or over ${CODING_THRESHOLD}, judging it with the thread so far. Publishing or checking finished work is not judged at all, but only when EVERY command in the line is one of: \`git push\`, \`gh pr create|comment\`, \`gh issue create|comment\`, \`gh repo fork\`, read-only git/gh (\`git status|log|diff|show\`, \`gh pr view|list\`…), \`ls\`/\`cat\`/\`echo\`-style looks. Join them only with \`&&\`, optionally end with \`2>&1 | tail -N\`, and use no other operators, \`$\` or backticks outside single quotes. If this call was that kind of command, run it again in that shape. If it really was coding: ${DELEGATE_NOTE}`;
 }
 
+// Their key IS linked — it failed this attempt, and the turn fell back. Told
+// only "runs on the person's own key… answer without it", kyto asked
+// a user to link the key they were already using, and gave up the build.
 const REFUSED_SHARED =
-  "Refused on this model: this is coding-agent work, which only runs on the person's OWN model key, and this attempt is on kyto's shared model. Answer without it.";
+  "Not run here: the person's own model key IS linked, but it failed on this attempt, so this one is on kyto's shared model, where coding work goes through the `opencode` tool. Do the writing, building, running and debugging there — give it a complete brief in your own words — and deliver the result as your own work. Don't ask them to link a key. If they told you NOT to use OpenCode, don't call it: say their key had a hiccup on this message and to send it again.";
 
 export function createCodingMonitor({
   isOnSharedModel,

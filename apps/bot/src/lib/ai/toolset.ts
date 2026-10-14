@@ -199,6 +199,9 @@ const CODE_TOOLS = new Set([
 // Tools whose call DOES something outside the turn that a resumed turn must
 // not do twice (lib/agent/inflight `startEffect`). Reads, the sandbox and
 // reactions are left out: redoing those is harmless.
+const UPLOAD_WAIT_MS = 20_000;
+const UPLOAD_POLL_MS = 1000;
+
 const EFFECT_TOOLS = new Set([
   // Not outward, but a restart mid-wait must not start the wait over (#77);
   // describePriorEffects tells the resumed turn how much of it is left.
@@ -211,7 +214,7 @@ const EFFECT_TOOLS = new Set([
   'deploySite',
   'editAsUser',
   'editReminder',
-  // Each posts into the thread: re-run after a restart, f4lsereality got the
+  // Each posts into the thread: re-run after a restart, a user got the
   // same jar twice (#99).
   'embed',
   'generateImage',
@@ -484,7 +487,15 @@ export async function buildTools({
             'uploadFile can only upload files from the workspace.'
           );
         }
-        const bytes = await session.readBinaryFile({ path: sandboxPath });
+        // Tool calls in one step run together, so an upload sent alongside
+        // the bash that builds its file read it before it existed (six misses
+        // in one user's threads). Give a sibling call a moment to write it.
+        let bytes = await session.readBinaryFile({ path: sandboxPath });
+        const deadline = Date.now() + UPLOAD_WAIT_MS;
+        while (!bytes && Date.now() < deadline) {
+          await Bun.sleep(UPLOAD_POLL_MS);
+          bytes = await session.readBinaryFile({ path: sandboxPath });
+        }
         if (!bytes) {
           throw new Error(`Could not find file: ${path}`);
         }
