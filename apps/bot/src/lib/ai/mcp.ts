@@ -46,6 +46,14 @@ const AUTH_FAILURE = /\b(401|403)\b/;
 // An auth-scheme token followed by a credential (RFC 7235), e.g. `Bearer x`.
 const HAS_AUTH_SCHEME = /^[A-Za-z][\w-]*\s+\S/;
 const MAX_FAILURE_MESSAGE = 200;
+// A server's error detail (`errors[]`, `data`) is what names the field it
+// rejected; without it the model retried AgentMail's 400 three times blind
+// (#92). Clipped: it goes into the model's context.
+const MAX_ERROR_DETAIL = 1500;
+const errorDetail = (detail: unknown): string =>
+  detail === undefined || detail === null
+    ? ''
+    : ` — ${JSON.stringify(detail).slice(0, MAX_ERROR_DETAIL)}`;
 
 // Providers reject a tool name past 64 characters.
 const MAX_TOOL_NAME_LENGTH = 64;
@@ -75,6 +83,7 @@ const callResultSchema = z.looseObject({
     )
     .optional(),
   isError: z.boolean().optional(),
+  structuredContent: z.unknown().optional(),
 });
 
 interface McpToolInfo {
@@ -276,12 +285,12 @@ class McpConnection {
       }
     }
     const message = payload as {
-      error?: { code?: number; message?: string };
+      error?: { code?: number; data?: unknown; message?: string };
       result?: unknown;
     };
     if (message.error) {
       throw new Error(
-        `MCP ${method} failed: ${message.error.message ?? 'unknown error'}`
+        `MCP ${method} failed: ${message.error.message ?? 'unknown error'}${errorDetail(message.error.data)}`
       );
     }
     return message.result;
@@ -465,7 +474,7 @@ class McpConnection {
       return; // server-initiated notification; kyto has no request to match it
     }
     const message = parsed as {
-      error?: { code?: number; message?: string };
+      error?: { code?: number; data?: unknown; message?: string };
       id: number;
       result?: unknown;
     };
@@ -476,7 +485,7 @@ class McpConnection {
     if (message.error) {
       pending.reject(
         new Error(
-          `MCP call failed: ${message.error.message ?? 'unknown error'}`
+          `MCP call failed: ${message.error.message ?? 'unknown error'}${errorDetail(message.error.data)}`
         )
       );
       return;
@@ -658,7 +667,9 @@ class McpConnection {
       .filter(Boolean)
       .join('\n');
     if (result.isError) {
-      throw new Error(text || 'MCP tool call failed.');
+      throw new Error(
+        `${text || 'MCP tool call failed.'}${errorDetail(result.structuredContent)}`
+      );
     }
     return text || JSON.stringify(result);
   }
@@ -904,6 +915,9 @@ export async function buildMcpTools({
             continue;
           }
           registered += 1;
+          const required = new Set(
+            z.array(z.string()).safeParse(info.inputSchema?.required).data ?? []
+          );
           gates[toolName] = {
             category,
             ownerUserId: server.userId,
@@ -946,9 +960,21 @@ export async function buildMcpTools({
                   return decision.detail;
                 }
               }
+              // Models fill every optional field, an unused one as "" — and
+              // AgentMail rejects `pageToken: ""` with a 400 (#92). An empty
+              // string a server REQUIRES is passed through untouched.
+              const fields = z
+                .record(z.string(), z.unknown())
+                .safeParse(args).data;
               const text = await connection.callTool({
                 abortSignal: options?.abortSignal,
-                args,
+                args: fields
+                  ? Object.fromEntries(
+                      Object.entries(fields).filter(
+                        ([key, value]) => value !== '' || required.has(key)
+                      )
+                    )
+                  : args,
                 name: info.name,
               });
               if (server.id !== AGENTMAIL_BUILTIN_ID) {
