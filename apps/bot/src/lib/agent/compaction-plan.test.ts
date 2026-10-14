@@ -1,12 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  COMPACT_BATCH,
   type CompactableMessage,
   MAX_MESSAGES_PER_PASS,
   planCompaction,
   renderCompactedBlock,
   renderUnreadableBlock,
-  replayWindowStart,
 } from './compaction-plan';
 
 function messages(count: number, offset = 0): CompactableMessage[] {
@@ -43,23 +41,34 @@ describe('planCompaction', () => {
     expect(planCompaction({ overflow: messages(1) })?.passes).toHaveLength(1);
   });
 
-  test('reuses the stored summary until enough new messages accumulate', () => {
+  test('keeps the stored summary when nothing new was folded', () => {
     const plan = planCompaction({
-      overflow: messages(COMPACT_BATCH + 5),
+      overflow: messages(6),
       stored: {
         coveredCount: 6,
         summary: 'earlier stuff',
         throughMessageId: 'm5',
       },
     });
-    // 24 pending (m6..m29) is under the threshold.
     expect(plan?.passes).toEqual([]);
     expect(plan?.previous).toBe('earlier stuff');
-    // The count still moves even though the digest does not.
-    expect(plan?.count).toBe(30);
+    expect(plan?.count).toBe(6);
   });
 
-  test('folds new messages into the stored summary once the batch fills', () => {
+  test('folds even a few new messages: only a measured request folds any', () => {
+    const plan = planCompaction({
+      overflow: messages(9),
+      stored: {
+        coveredCount: 6,
+        summary: 'earlier stuff',
+        throughMessageId: 'm5',
+      },
+    });
+    expect(plan?.passes[0]).toHaveLength(3);
+    expect(plan?.count).toBe(9);
+  });
+
+  test('folds new messages into the stored summary', () => {
     const plan = planCompaction({
       overflow: messages(60),
       stored: {
@@ -185,62 +194,5 @@ describe('renderCompactedBlock', () => {
     expect(renderCompactedBlock({ count: 1 })).toContain(
       'do not treat the replayed history as its beginning'
     );
-  });
-});
-
-describe('replayWindowStart', () => {
-  test('only the count binds for ordinary messages', () => {
-    const sizes = new Array(150).fill(100);
-    expect(
-      replayWindowStart({
-        maxChars: 120_000,
-        maxMessages: 100,
-        sizes,
-        step: 25,
-      })
-    ).toBe(50);
-  });
-
-  test('a size overflow drops the oldest, in steps', () => {
-    // 40 messages of 10k chars: the budget fits 12, so 28 must go — rounded
-    // up to the next step of 10 is 30.
-    const sizes = new Array(40).fill(10_000);
-    expect(
-      replayWindowStart({
-        maxChars: 120_000,
-        maxMessages: 100,
-        sizes,
-        step: 10,
-      })
-    ).toBe(30);
-  });
-
-  test('the start does not move until a whole step has overflowed', () => {
-    const base = new Array(20).fill(10_000);
-    const a = replayWindowStart({
-      maxChars: 120_000,
-      maxMessages: 100,
-      sizes: [...base],
-      step: 10,
-    });
-    const b = replayWindowStart({
-      maxChars: 120_000,
-      maxMessages: 100,
-      sizes: [...base, 10_000],
-      step: 10,
-    });
-    expect(a).toBe(10);
-    expect(b).toBe(10);
-  });
-
-  test('the newest message is kept however long it is', () => {
-    expect(
-      replayWindowStart({
-        maxChars: 1000,
-        maxMessages: 100,
-        sizes: [10, 50_000],
-        step: 25,
-      })
-    ).toBe(1);
   });
 });

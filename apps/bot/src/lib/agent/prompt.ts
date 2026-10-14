@@ -1,12 +1,9 @@
-import type { MessageRevision } from '@repo/db/queries';
+import { getThreadPromptSize, type MessageRevision } from '@repo/db/queries';
 import { mrkdwnToMarkdown } from '@/harness/markdown';
 import type { ThreadHandle as Thread } from '@/harness/thread';
 import type { Message } from '@/harness/types';
 import { compactOverflow, loadThreadSummary } from '@/lib/agent/compaction';
-import {
-  renderUnreadableBlock,
-  replayWindowStart,
-} from '@/lib/agent/compaction-plan';
+import { renderUnreadableBlock } from '@/lib/agent/compaction-plan';
 import { isFocusAllowed } from '@/lib/agent/focus';
 import { annotateMentions } from '@/lib/agent/mentions';
 import { recallThinking, renderThinking } from '@/lib/agent/thinking';
@@ -24,20 +21,24 @@ import {
 } from '@/lib/utils/message';
 
 // We never persist a session, so the whole Slack thread is the agent's only
-// memory, and it is replayed VERBATIM until the request would pass ~100k
-// tokens (owner's call, 2026-10-14): Haiku bills the WHOLE request ~5x past
-// 100k, and the system prompt, tool schemas and the turn's tail take ~25-30k,
-// so the history gets ~70k. There is no message cap: a 100-message one folded
-// a 449-message working thread into a digest at a fraction of that size, and
-// its user said kyto had "lost a lot of context". Only what falls out of the
-// token budget goes to the digest. Estimated at 3.5 chars a token (pasted
-// logs and code run denser than prose), plus each message's rendered header (author, time), and moved in steps so the window's
-// start — where the replayed, cached history begins — shifts rarely (see
-// replayWindowStart).
-const MAX_REPLAY_TOKENS = 70_000;
-const CHARS_PER_TOKEN = 3.5;
-const MESSAGE_HEADER_CHARS = 80;
-const REPLAY_STEP = 25;
+// memory, and all of it is replayed VERBATIM until the provider says the
+// request got big (owner's call, 2026-10-14: measured, never estimated). After
+// every turn the first request's REAL input tokens are stored
+// (thread_prompt_sizes); once they reach COMPACT_AT_TOKENS, the next turn folds
+// just enough of the oldest messages into the digest to come back to about
+// COMPACT_TO_TOKENS, sized by that same request's measured tokens per
+// character. Haiku bills the whole request ~5x past 100k, so 90k leaves room
+// for the new message and the turn's own tool steps; folding to 60k means it
+// happens every ~30k tokens of conversation, not every turn (each fold is a
+// summary call and a cache break). A 100-message cap used to fold a
+// 449-message working thread at a fraction of this, and its user said kyto had
+// "lost a lot of context".
+const COMPACT_AT_TOKENS = 90_000;
+const COMPACT_TO_TOKENS = 60_000;
+// Only for a thread no turn has measured yet (kyto pulled into a huge thread):
+// a ceiling so its FIRST request can't overflow the model's context window
+// and fail before anything is measured. The next turn has a real count.
+const UNMEASURED_MAX_CHARS = 300_000;
 // How far back we look beyond that cap. Everything between this and the verbatim
 // window is compacted into a summary (see lib/agent/compaction) instead of being
 // dropped on the floor, which is what used to happen: the model was handed the
@@ -201,7 +202,6 @@ export async function buildPrompt(
     customizationPrompt,
     includeHidden = false,
     memoriesOff = false,
-    ownKey = false,
     thread,
   }: {
     /** Answering as kyto's Slack user account; per turn, so volatile tail. */
@@ -219,11 +219,14 @@ export async function buildPrompt(
     includeHidden?: boolean;
     /** `--NO-MEMORY`: no notebooks and no reasoning replayed from earlier turns. */
     memoriesOff?: boolean;
-    /** The asker has their own model key: code work is theirs to run, no OpenCode. */
-    ownKey?: boolean;
     thread?: Thread;
   } = {}
-): Promise<{ history: string[]; tail: string }> {
+): Promise<{
+  /** The first message replayed verbatim, stored with the request's size. */
+  firstReplayedId?: string;
+  history: string[];
+  tail: string;
+}> {
   // Everything below is independent, so it is read at once: the Slack thread
   // read is the slow part (~0.5s), and awaiting the rest in front of it put
   // every one of their round trips between the ping and the model request.
@@ -268,6 +271,9 @@ export async function buildPrompt(
                 oldest: stored?.throughMessageId,
                 threadId: thread.id,
               }),
+              measured: await getThreadPromptSize(thread.id).catch(
+                () => undefined
+              ),
               stored,
             })),
           ])
@@ -296,8 +302,9 @@ export async function buildPrompt(
   let compacted = '';
   let pulledInLater = false;
   let previousMessageId: string | undefined;
+  let firstReplayedId: string | undefined;
   if (thread && threadRead) {
-    const [focusState, { stored, fetched: firstRead }] = threadRead;
+    const [focusState, { measured, stored, fetched: firstRead }] = threadRead;
     let fetched = firstRead;
     // A cursor left over means the walk ran out of budget BEFORE the end of the
     // thread — so what we hold is a middle slice, and replaying its last 100
@@ -362,20 +369,46 @@ export async function buildPrompt(
     previousMessageId = prior.findLast((entry) => entry.id < message.id)?.id;
     // Split AFTER filtering, so a focused thread's budget is spent on messages
     // kyto may actually see, not on hidden ones.
-    const start = replayWindowStart({
-      maxChars: MAX_REPLAY_TOKENS * CHARS_PER_TOKEN,
-      maxMessages: Number.POSITIVE_INFINITY,
-      sizes: prior.map(
-        (entry) =>
-          (rawSlackText(entry) || entry.text).length + MESSAGE_HEADER_CHARS
-      ),
-      step: REPLAY_STEP,
-    });
+    // Past whatever the digest already covers, the replay starts at the
+    // oldest message — further on only when the last turn's measured request
+    // says so (see COMPACT_AT_TOKENS).
+    // Never earlier than the last measured window either: a fold bigger than
+    // one pass is digested in the background, and until it is stored, the
+    // digest's boundary still sits behind it.
+    const digested = Number(stored?.throughMessageId ?? 0);
+    const measuredFrom = Number(measured?.firstReplayedId ?? 0);
+    let start = prior.findIndex(
+      (entry) => Number(entry.id) > digested && Number(entry.id) >= measuredFrom
+    );
+    start = start === -1 ? Math.max(prior.length - 1, 0) : start;
+    const sizes = prior.map(
+      (entry) => (rawSlackText(entry) || entry.text).length
+    );
+    let toFold = 0;
+    if (!measured) {
+      const total = sizes.slice(start).reduce((sum, size) => sum + size, 0);
+      toFold = total - UNMEASURED_MAX_CHARS;
+    } else if (
+      measured.inputTokens >= COMPACT_AT_TOKENS &&
+      // A window already cut since that measurement is not cut again on it:
+      // the turn that cut it may have failed before measuring its own request.
+      (measured.firstReplayedId === null ||
+        Number(prior[start]?.id ?? 0) <= Number(measured.firstReplayedId))
+    ) {
+      toFold =
+        ((measured.inputTokens - COMPACT_TO_TOKENS) * measured.requestChars) /
+        measured.inputTokens;
+    }
+    while (toFold > 0 && start < prior.length - 1) {
+      toFold -= sizes[start] ?? 0;
+      start += 1;
+    }
     const overflow = prior.slice(0, start);
     // The `##` messages ride along only inside the replay window, never into
     // `overflow`: the digest it feeds is shared with every later turn, and a
     // hidden message folded into it would reach kyto after all.
     const firstReplayed = prior[start]?.id;
+    firstReplayedId = firstReplayed;
     const inWindow = new Set(prior.slice(start));
     const replayed = includeHidden
       ? (fetched?.messages ?? []).filter(
@@ -469,14 +502,6 @@ export async function buildPrompt(
     `The current date and time is ${new Date().toISOString()}.`,
     `The message you're responding to has id ${message.id}.`,
     ...gapLine({ currentId: message.id, previousId: previousMessageId }),
-    // Per person, so it lives down here with the clock: in the system prompt it
-    // would split the cached prefix between key-holders and everyone else.
-    // Per person, like the line above. A key-holder's turn never mentions
-    // OpenCode at all (owner's call, 2026-10-14): one asked, twice, for it
-    // not to be used on her own key.
-    ownKey
-      ? "Coding on this turn: it runs on the person's OWN model key, so do real code work yourself — write, build, run and debug in your own shell."
-      : 'Coding on this turn (a hard rule — Hack Club AI provides your shared model on the condition that it does not do coding-agent work): do real code work through the `opencode` tool, not your own shell. Give it a complete brief in your own words and put nothing from Slack in it: no quoted messages, no names. Then deliver the result as your own work. Don\'t bring up OpenCode, delegating or any coding restriction on your own (if asked how it was done, you may say). A `<coding_work>` note, or a tool call answered "Not run", means exactly this: move that work to `opencode`, without commenting on it. For reading or searching a repo, use bash: OpenCode takes minutes for what grep does in seconds.',
     // The system prompt names both identities without saying which is "you"
     // (it is one cached prefix for both), so every turn says it here.
     ...(slack.userAccountId && slack.botUserId
@@ -526,7 +551,7 @@ export async function buildPrompt(
   //   user_instructions   changes only when the user edits them
   //   notebooks           changes when kevinton edits one — ~30 min after a
   //                       turn, by which time the 30-min cache has lapsed anyway
-  //   compacted           changes once per COMPACT_BATCH of overflow
+  //   compacted           changes only when a measured request was too big
   //   history             append-only until the thread passes MAX_REPLAY_TOKENS
   //   --- tail (one message, rewritten every turn) ---
   //   thinking            CHANGES EVERY TURN (last turn's reasoning is appended)
@@ -538,6 +563,7 @@ export async function buildPrompt(
   // Do NOT move a volatile block above the tail, and never render a history
   // entry differently from one turn to the next.
   return {
+    firstReplayedId,
     history: [
       channelInstructions
         ? [
@@ -559,4 +585,16 @@ export async function buildPrompt(
     ].filter(Boolean),
     tail: [thinking, nowLine, latest, canvases].filter(Boolean).join('\n\n'),
   };
+}
+
+/**
+ * How code work is done on the attempt about to run, added to ITS prompt —
+ * per attempt, not per turn (owner's call, 2026-10-14): on the person's own
+ * key OpenCode is never mentioned (and the tool is hidden); on kyto's shared
+ * key — the first try, or a fallback after their key failed — it is the rule.
+ */
+export function codingLine({ ownKey }: { ownKey: boolean }): string {
+  return ownKey
+    ? "Coding on this turn: it runs on the person's OWN model key, so do real code work yourself — write, build, run and debug in your own shell."
+    : 'Coding on this turn (a hard rule — Hack Club AI provides your shared model on the condition that it does not do coding-agent work): do real code work through the `opencode` tool, not your own shell. Give it a complete brief in your own words and put nothing from Slack in it: no quoted messages, no names. Then deliver the result as your own work. Don\'t bring up OpenCode, delegating or any coding restriction on your own (if asked how it was done, you may say). A `<coding_work>` note, or a tool call answered "Not run", means exactly this: move that work to `opencode`, without commenting on it. For reading or searching a repo, use bash: OpenCode takes minutes for what grep does in seconds.';
 }

@@ -3,13 +3,6 @@
 // IO — read the stored summary, call a model, write it back — and asks this
 // module what to do.
 
-// How many messages must have newly fallen out of the replay window before the
-// summary is refreshed. Without this, every turn in a thread past the cap pushes
-// exactly one more message into overflow and pays for a whole summarization pass
-// to absorb it. Below the threshold the block still reports the true count, so
-// nothing is hidden — the gap is described rather than digested. A thread
-// crossing the cap for the FIRST time is summarized immediately regardless.
-export const COMPACT_BATCH = 25;
 // Messages folded into ONE model call. A backlog bigger than this is split into
 // several passes that each extend the previous digest, rather than being clamped
 // to the newest slice and having the rest silently dropped.
@@ -105,9 +98,9 @@ export function planCompaction({
   if (count === 0) {
     return;
   }
-  // Below the threshold the digest is left alone: refreshing it for a couple of
-  // messages costs a model call per turn forever. The count still moves.
-  if (stored && pending.length < COMPACT_BATCH) {
+  // buildPrompt folds only when a measured request says to, so whatever is
+  // pending is digested now; with nothing pending the digest stands.
+  if (stored && pending.length === 0) {
     return { count, passes: [], previous: stored.summary };
   }
   return {
@@ -164,44 +157,4 @@ export function renderCompactedBlock({
       ? `\n\nThe ${undigested} most recent of those are not in the digest yet — they are still being folded in. Read them with the Slack history tools if something below refers to them.`
       : '';
   return `${header}\n\n${summary}${gap}\n\nThis is a compacted digest, not a transcript. If you need something it does not cover, read the thread with the Slack history tools.\n</earlier_in_this_thread>`;
-}
-
-/**
- * Where the verbatim replay window starts, given each earlier message's size.
- *
- * Two limits (owner's ask, 2026-09-29, after comparing coolton's compaction,
- * which is sized by tokens): at most `maxMessages`, AND at most `maxChars` of
- * text. The count alone let a thread of pasted logs replay hundreds of thousands
- * of characters verbatim on every turn; everything that falls out of the window
- * goes to the digest like any other overflow.
- *
- * When the SIZE limit is what binds, the start moves in steps of `step`
- * messages rather than one at a time: the window's first message is where the
- * replayed history begins in the prompt, so a start that shifted every turn
- * would throw away the cached prefix from that point on every turn. The newest
- * message is always kept, however long.
- */
-export function replayWindowStart({
-  maxChars,
-  maxMessages,
-  sizes,
-  step,
-}: {
-  maxChars: number;
-  maxMessages: number;
-  sizes: number[];
-  step: number;
-}): number {
-  const byCount = Math.max(0, sizes.length - maxMessages);
-  let start = byCount;
-  let total = sizes.slice(start).reduce((sum, size) => sum + size, 0);
-  while (total > maxChars && start < sizes.length - 1) {
-    total -= sizes[start] ?? 0;
-    start += 1;
-  }
-  if (start === byCount) {
-    return start;
-  }
-  const stepped = byCount + Math.ceil((start - byCount) / step) * step;
-  return Math.min(stepped, sizes.length - 1);
 }

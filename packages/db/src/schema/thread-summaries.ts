@@ -25,3 +25,21 @@ export const threadSummaries = pgTable('thread_summaries', {
 });
 
 export type ThreadSummary = typeof threadSummaries.$inferSelect;
+
+// What the last turn's first request in a thread REALLY cost, as the provider
+// reported it, and how many characters that request was. buildPrompt compacts
+// from this, never from an estimate (owner's call, 2026-10-14): only when the
+// real count reached its threshold, and only as many of the oldest messages as
+// the measured tokens-per-character says will bring it back down.
+export const threadPromptSizes = pgTable('thread_prompt_sizes', {
+  // The first message replayed in that request, so a window that has already
+  // been cut since is not cut again on the same (now stale) measurement.
+  firstReplayedId: text('first_replayed_id'),
+  inputTokens: integer('input_tokens').notNull(),
+  requestChars: integer('request_chars').notNull(),
+  threadId: text('thread_id').primaryKey(),
+  updatedAt: timestamp('updated_at', { withTimezone: true })
+    .notNull()
+    .defaultNow()
+    .$onUpdate(() => new Date()),
+});

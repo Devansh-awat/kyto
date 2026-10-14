@@ -280,15 +280,12 @@ export async function buildTools({
   getSandboxContext,
   guardCodeTool,
   message,
-  ownKey = false,
   thread,
   secret = false,
   unattended = false,
   unredactedEmail = false,
 }: {
   bot: KytoBot;
-  /** The asker has their own model key: no `opencode` (see its entry). */
-  ownKey?: boolean;
   /**
    * The turn's escalation slot. The `upgradeModel` tool writes into it and the
    * agent loop reads it after the attempt ends. Absent for callers with no
@@ -399,13 +396,7 @@ export async function buildTools({
     // Where code work goes instead of kyto's own shells. NOT in CODE_TOOLS: the
     // anti-coding check watches kyto doing the coding, and this is exactly the
     // alternative to that (see tools/opencode.ts).
-    // Not offered at all to someone with their own key (owner's call,
-    // 2026-10-14): their code work runs on their key, in kyto's own shell.
-    ...(ownKey
-      ? {}
-      : {
-          opencode: opencodeTool({ extendAttemptDeadline, getSandboxContext }),
-        }),
+    opencode: opencodeTool({ extendAttemptDeadline, getSandboxContext }),
     readFile: readFileTool({ getSandboxContext }),
     writeFile: writeFileTool({ getSandboxContext }),
     editFile: editFileTool({ getSandboxContext }),

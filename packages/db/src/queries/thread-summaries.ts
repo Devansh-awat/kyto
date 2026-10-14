@@ -1,6 +1,6 @@
 import { eq, lt } from 'drizzle-orm';
 import { db } from '../client';
-import { threadSummaries } from '../schema';
+import { threadPromptSizes, threadSummaries } from '../schema';
 import { threadsInChannel } from './thread-ids';
 
 export type { ThreadSummary } from '../schema';
@@ -64,6 +64,57 @@ export async function clearThreadSummary(threadId: string): Promise<void> {
   await db
     .delete(threadSummaries)
     .where(eq(threadSummaries.threadId, threadId));
+  await db
+    .delete(threadPromptSizes)
+    .where(eq(threadPromptSizes.threadId, threadId));
+}
+
+/** The last measured first request of a thread (see threadPromptSizes). */
+export async function getThreadPromptSize(threadId: string): Promise<
+  | {
+      firstReplayedId: string | null;
+      inputTokens: number;
+      requestChars: number;
+    }
+  | undefined
+> {
+  const [row] = await db
+    .select()
+    .from(threadPromptSizes)
+    .where(eq(threadPromptSizes.threadId, threadId))
+    .limit(1);
+  return row
+    ? {
+        firstReplayedId: row.firstReplayedId,
+        inputTokens: row.inputTokens,
+        requestChars: row.requestChars,
+      }
+    : undefined;
+}
+
+export async function saveThreadPromptSize({
+  firstReplayedId,
+  inputTokens,
+  requestChars,
+  threadId,
+}: {
+  firstReplayedId: string | null;
+  inputTokens: number;
+  requestChars: number;
+  threadId: string;
+}): Promise<void> {
+  await db
+    .insert(threadPromptSizes)
+    .values({ firstReplayedId, inputTokens, requestChars, threadId })
+    .onConflictDoUpdate({
+      set: {
+        firstReplayedId,
+        inputTokens,
+        requestChars,
+        updatedAt: new Date(),
+      },
+      target: threadPromptSizes.threadId,
+    });
 }
 
 /**
@@ -88,4 +139,7 @@ export async function pruneThreadSummaries(olderThan: Date): Promise<void> {
   await db
     .delete(threadSummaries)
     .where(lt(threadSummaries.updatedAt, olderThan));
+  await db
+    .delete(threadPromptSizes)
+    .where(lt(threadPromptSizes.updatedAt, olderThan));
 }

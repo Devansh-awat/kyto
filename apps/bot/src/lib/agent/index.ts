@@ -17,7 +17,7 @@ import {
 } from '@repo/ai';
 import { comparePrefix, type PrefixUnit } from '@repo/ai/cache-probe';
 import { stepsCacheWrites, stepsCostUsd } from '@repo/ai/usage-cost';
-import type { InflightEffect } from '@repo/db/queries';
+import { type InflightEffect, saveThreadPromptSize } from '@repo/db/queries';
 import { LazySandbox } from '@repo/sandbox';
 import { env } from '@/env';
 import {
@@ -56,7 +56,7 @@ import {
   MODEL_CHOICES,
   threadModelChoice,
 } from '@/lib/agent/model-choice';
-import { buildPrompt } from '@/lib/agent/prompt';
+import { buildPrompt, codingLine } from '@/lib/agent/prompt';
 import {
   continueTruncatedReply,
   synthesizeFinalAnswer,
@@ -133,6 +133,7 @@ import {
   describeMalformedPrompt,
   errorMessage,
   errorStatus,
+  toLogError,
 } from '@/lib/utils/error';
 import { rawText, withoutLeadingMentions } from '@/lib/utils/message';
 import { clamp } from '@/lib/utils/text';
@@ -924,7 +925,6 @@ async function executeTurn(
     const turnFlags = parseFlags(withoutLeadingMentions(rawText(turnMessage)));
     const pendingTools = buildTools({
       asUserAccount,
-      ownKey: routing.own.length > 0,
       bot,
       escalation,
       extendAttemptDeadline: (extraMs) =>
@@ -961,13 +961,12 @@ async function executeTurn(
         : pickPreloadTools(`${earlierThread}\n\n${turnMessage.text}`),
     ]);
     const promptStart = Date.now();
-    const { history, tail } = await buildPrompt(turnMessage, {
+    const { firstReplayedId, history, tail } = await buildPrompt(turnMessage, {
       codeChannel,
       asUserAccount,
       channelInstructions: hints.channelInstructions,
       customizationPrompt: hints.customization?.prompt,
       memoriesOff: hints.memoryMode === 'off',
-      ownKey: routing.own.length > 0,
       thread: turnThread,
     });
     // The per-turn tail; the replayed thread stays in `history` so it can go
@@ -1186,8 +1185,14 @@ async function executeTurn(
     // The prompt for the NEXT attempt: the user's message, plus (on a fallback)
     // the tool results already gathered, plus (when the turn was cut off after
     // it had started talking) what the user has already been shown.
-    const attemptPrompt = (isFallback: boolean): string => {
-      const blocks = [messageText];
+    const attemptPrompt = ({
+      isFallback,
+      ownKey,
+    }: {
+      isFallback: boolean;
+      ownKey: boolean;
+    }): string => {
+      const blocks = [messageText, codingLine({ ownKey })];
       if (visionDescription) {
         blocks.push(
           `The user attached image(s). A vision model looked at them and described them for you (you cannot see the raw pixels this turn):\n<attached_image_description>\n${visionDescription}\n</attached_image_description>`
@@ -1301,12 +1306,23 @@ async function executeTurn(
       // takes its thinking down with it — only the attempt that ANSWERS gets to
       // leave its train of thought behind for the next turn (see thinking.ts).
       const attemptThinking: string[] = [];
+      // This attempt's first request, in characters: stored with its real
+      // token count so the next turn compacts from a measurement.
+      let firstRequestChars = 0;
       // Exactly what THIS attempt wrote as reply text, so a reply that turns out
       // to be nothing but a bare `skip` can be recognised and dropped once the
       // stream ends (see isBareSkipText). Kept whole rather than capped: it is
       // only read when it is short enough to be a bare token.
       let attemptRawText = '';
       const isFallback = attempts.length > 0;
+      // OpenCode only on kyto's shared key: hidden while the person's own key
+      // runs, back if the turn falls back to the shared chain (owner's call,
+      // 2026-10-14).
+      const onOwnKey = routing.own.includes(currentAttempt);
+      const attemptTools = () =>
+        onOwnKey
+          ? built.activeTools().filter((name) => name !== 'opencode')
+          : built.activeTools();
       try {
         activeAttempt = currentAttempt;
         reply ??= createReply({
@@ -1383,7 +1399,7 @@ async function executeTurn(
             controller.signal,
             attemptAbort.signal,
           ]),
-          activeTools: built.activeTools,
+          activeTools: attemptTools,
           attempt: currentAttempt,
           holder,
           // Errors the SDK swallows into the stream would otherwise be dumped
@@ -1430,6 +1446,10 @@ async function executeTurn(
           // succeeds either way and only the invoice differs — so log where it
           // broke, and what share of the request could still be cached.
           onFirstRequest: (units) => {
+            firstRequestChars = units.reduce(
+              (sum, unit) => sum + unit.chars,
+              0
+            );
             const previous = turnPrefixes.get(threadId);
             turnPrefixes.delete(threadId);
             turnPrefixes.set(threadId, {
@@ -1503,7 +1523,7 @@ async function executeTurn(
               '[agent] gateway failure, retrying the same request'
             );
           },
-          prompt: attemptPrompt(isFallback),
+          prompt: attemptPrompt({ isFallback, ownKey: onOwnKey }),
           system: systemPrompt({ hints }),
           toolOrder: built.toolOrder,
           tools: built.tools,
@@ -1823,7 +1843,7 @@ async function executeTurn(
               skipped = true;
             },
             onTally: recordTiming,
-            activeTools: built.activeTools,
+            activeTools: attemptTools,
             attempt: currentAttempt,
             knownTools,
             onText: (text) => {
@@ -1839,7 +1859,7 @@ async function executeTurn(
             signal: AbortSignal.any([controller.signal, attemptAbort.signal]),
             history,
             system: systemPrompt({ hints }),
-            task: messageText,
+            task: `${messageText}\n\n${codingLine({ ownKey: onOwnKey })}`,
             toolOrder: built.toolOrder,
             tools: built.tools,
           });
@@ -1874,7 +1894,7 @@ async function executeTurn(
             let continuationFinish: string | undefined;
             yield* continueTruncatedReply({
               onTally: recordTiming,
-              activeTools: built.activeTools,
+              activeTools: attemptTools,
               attempt: currentAttempt,
               knownTools,
               onFinish: (reason) => {
@@ -1892,7 +1912,7 @@ async function executeTurn(
               streamedText,
               history,
               system: systemPrompt({ hints }),
-              task: messageText,
+              task: `${messageText}\n\n${codingLine({ ownKey: onOwnKey })}`,
               toolOrder: built.toolOrder,
               tools: built.tools,
             });
@@ -2072,6 +2092,22 @@ async function executeTurn(
             ]),
             outputTokens: usage?.outputTokens ?? usage?.totalTokens,
           };
+          // What the provider says this turn's first request REALLY was;
+          // buildPrompt compacts from it on the next turn.
+          const firstInput = steps[0]?.usage.inputTokens;
+          if (!secret && firstInput && firstRequestChars > 0) {
+            await saveThreadPromptSize({
+              firstReplayedId: firstReplayedId ?? null,
+              inputTokens: firstInput,
+              requestChars: firstRequestChars,
+              threadId,
+            }).catch((error: unknown) => {
+              logger.warn(
+                { ...toLogError(error), threadId },
+                '[agent] could not store the request size'
+              );
+            });
+          }
         }
         if (attemptText) {
           answeredBy = currentAttempt;
