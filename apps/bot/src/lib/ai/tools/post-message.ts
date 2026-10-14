@@ -496,7 +496,7 @@ export function postMessageTool({
         ? {
             ...sent,
             summary:
-              'Posted in this same thread you are answering — that message IS your reply. Any text you write from here on is ALSO posted in this thread, so do not repeat it or confirm it (no "Posted."/"Done"); if there is nothing to add, call skip.',
+              'Posted in this same thread you are answering. Any text you write from here on is ALSO posted in this thread, so do not repeat it or confirm it (no "Posted."/"Done"). If the request asked for more than this post, carry on with the rest now; call skip only once everything asked is done and there is nothing to add.',
           }
         : sent;
     },
