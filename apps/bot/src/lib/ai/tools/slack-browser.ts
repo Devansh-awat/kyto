@@ -22,6 +22,11 @@ import { errorMessage, toLogError } from '@/lib/utils/error';
 // why and how it is fenced), and neither half of the session is ever in it.
 
 const MAX_OUTPUT_CHARS = 8000;
+// A form is a dozen clicks and fills: one call each cost glm ~4s of thinking
+// per step (#98, 44 steps for one captcha form). Earlier steps of a batch keep
+// only a head of their output, so a batch can't return ten snapshots in full.
+const MAX_BATCH = 12;
+const BATCH_STEP_OUTPUT_CHARS = 600;
 const RESTART = 'restart';
 const THIS_THREAD = 'thread';
 
@@ -38,6 +43,9 @@ const PANE_WAIT_MS = 20_000;
 
 const WEDGED =
   /CDP command timed out|not responding|os error 11|daemon may be busy/i;
+// An open dropdown or modal overlay over the target. Retried blind, the model
+// pressed Escape — which in a Slack modal asks to discard the whole form.
+const COVERED = /covered by (<[^>]+>)/i;
 
 export function slackBrowserTool({
   asUserAccount,
@@ -123,7 +131,7 @@ export function slackBrowserTool({
   };
 
   const slackBrowser = tool({
-    description: `Drive a real browser LOGGED IN to Slack as kyto's own user account (owner only) — ONLY for what the Slack tools can't do — a last resort, never a shortcut: adding or removing a custom emoji is \`submitEmoji\`/\`removeEmoji\`, posting is \`postMessage\`, and so on; check the loadTools catalog first. It is for running workflows, clicking buttons on other apps' messages or App Homes, forms, settings pages. Same agent-browser CLI as the \`browser\` tool (pass its sub-command in \`command\`; "skills get core" prints the reference), starting IN the Slack thread this conversation is in (Slack's home for a DM with the app) — a button or form someone posted as a REPLY here only shows in that thread pane, never in the channel view; "${THIS_THREAD}" goes back to it. For another conversation, \`open <channel id>\`, \`open <channel id> <thread ts>\`, \`open slack:C…:<ts>\` or \`open <message link>\` (opens that message's thread) — never hand-build an app.slack.com URL. Opening a thread returns \`threadPane\`: its messages, buttons and fields with refs — click a button by its ref. \`find text\` CLICKS the first match, which is often a message's words rather than the button; to look for something, read a \`snapshot\` (\`snapshot -i -c -s "${THREAD_PANE}"\` re-reads the thread). Slack's own dropdowns and date/time pickers are not native selects — \`select\` reports done and changes nothing: click the field, then click the option's ref; a value it doesn't list (4:30 PM in an hourly list) is TYPED into the field. An open dropdown covers the fields below it, so pick an option or press Tab before the next click — never Escape inside a modal, which asks to discard the whole form. Every \`open\` reboots the whole Slack client (slow, the view blanks): after the first page, move by clicking (sidebar, a message's replies, the quick switcher on Control+k) and open a URL only to go somewhere a click can't reach. One command per call — there is no shell, so no pipes. Only interaction commands work (open/click/fill/type/press/select/scroll/wait/snapshot/get/find/tab/…), and only Slack URLs open — no eval, screenshots, files or other sites. "${RESTART}" relaunches a stuck browser. Nothing in Slack is blocked except signing out: it can send, edit, react, join and run workflows AS kyto's user account, so act only on what the owner asked. A live view is posted in the thread on first use.`,
+    description: `Drive a real browser LOGGED IN to Slack as kyto's own user account (owner only) — ONLY for what the Slack tools can't do — a last resort, never a shortcut: adding or removing a custom emoji is \`submitEmoji\`/\`removeEmoji\`, posting is \`postMessage\`, and so on; check the loadTools catalog first. It is for running workflows, clicking buttons on other apps' messages or App Homes, forms, settings pages. Same agent-browser CLI as the \`browser\` tool (pass its sub-command in \`command\`; "skills get core" prints the reference), starting IN the Slack thread this conversation is in (Slack's home for a DM with the app) — a button or form someone posted as a REPLY here only shows in that thread pane, never in the channel view; "${THIS_THREAD}" goes back to it. For another conversation, \`open <channel id>\`, \`open <channel id> <thread ts>\`, \`open slack:C…:<ts>\` or \`open <message link>\` (opens that message's thread) — never hand-build an app.slack.com URL. Opening a thread returns \`threadPane\`: its messages, buttons and fields with refs — click a button by its ref. \`find text\` CLICKS the first match, which is often a message's words rather than the button; to look for something, read a \`snapshot\` (\`snapshot -i -c -s "${THREAD_PANE}"\` re-reads the thread). Slack's own dropdowns and date/time pickers are not native selects — \`select\` reports done and changes nothing: click the field, then click the option's ref; a value it doesn't list (4:30 PM in an hourly list) is TYPED into the field. An open dropdown covers the fields below it, so pick an option or press Tab before the next click — never Escape inside a modal, which asks to discard the whole form. Every \`open\` reboots the whole Slack client (slow, the view blanks): after the first page, move by clicking (sidebar, a message's replies, the quick switcher on Control+k) and open a URL only to go somewhere a click can't reach. There is no shell, so no pipes; to run several commands in ONE call (filling a form: click, fill, select, then snapshot), put the first in \`command\` and the rest in \`next\` — they run in order, each checked the same way, and stop at the first that fails. \`diff snapshot\` returns only what changed since the last snapshot, far smaller than a fresh one. Only interaction commands work (open/click/fill/type/press/select/scroll/wait/snapshot/get/find/tab/…), and only Slack URLs open — no eval, screenshots, files or other sites. "${RESTART}" relaunches a stuck browser. Nothing in Slack is blocked except signing out: it can send, edit, react, join and run workflows AS kyto's user account, so act only on what the owner asked. A live view is posted in the thread on first use.`,
     inputSchema: z.object({
       command: z
         .string()
@@ -131,109 +139,156 @@ export function slackBrowserTool({
         .describe(
           'Arguments for agent-browser, e.g. "snapshot -i", "open https://app.slack.com/client/T0266FRGM/C0B7QEK0MQB", "click @e12", or "restart".'
         ),
+      next: z
+        .array(z.string().min(1))
+        .max(MAX_BATCH)
+        .optional()
+        .describe(
+          `More commands to run right after \`command\`, in order, in this same call (at most ${MAX_BATCH}), e.g. ["fill @e4 Lily", "click @e7", "diff snapshot"]. Stops at the first one that fails; only the last one's output comes back in full.`
+        ),
     }),
-    execute: async ({ command: requested }, { abortSignal }) => {
-      let command = requested.trim();
-      if (command === THIS_THREAD) {
-        command = `open ${clientUrl({ ...here, team })}`;
-      } else if (command.startsWith('open ')) {
-        let words: string[] = [];
-        try {
-          words = splitCommand(command);
-        } catch {
-          // An unclosed quote: parseCommand below says so.
+    execute: async ({ command: first, next = [] }, { abortSignal }) => {
+      // Every command of a batch goes through runOne, so through parseCommand's
+      // allowlist — unlike agent-browser's own \`batch\`, which stays refused
+      // because it would hand its inner commands to the browser unchecked.
+      const steps = [first, ...next];
+      const results: Awaited<ReturnType<typeof runOne>>[] = [];
+      for (const step of steps) {
+        const result = await runOne({ abortSignal, requested: step });
+        results.push(result);
+        if (!result.success) {
+          break;
         }
-        const [, target, threadTs, ...extra] = words;
-        const url =
-          target && extra.length === 0
-            ? conversationUrl({ target, team, threadTs })
-            : undefined;
-        command = url ? `open ${url}` : command;
       }
-      try {
-        if (command === RESTART) {
-          await close();
-          session = start();
-          await session;
-          return {
-            success: true,
-            summary: `Restarted the Slack browser ${startUrl ? "in this conversation's thread" : "on Slack's home"}.`,
-          };
-        }
-        const parsed = parseCommand(command);
-        if (!parsed.ok) {
-          return { error: parsed.error, success: false, summary: parsed.error };
-        }
-        session ??= start();
-        const browser = await session;
-        const [verb, target] = parsed.args;
-        if (!paneAwaited && startUrl?.includes('/thread/')) {
-          paneAwaited = true;
-          await threadPane({ abortSignal, browser });
-        }
-        if (verb === 'open' && target) {
-          const at = await browser.run({ abortSignal, args: ['get', 'url'] });
-          if (
-            at.exitCode === 0 &&
-            isSamePage({ current: at.stdout.trim(), target })
-          ) {
-            return {
-              success: true,
-              summary: `Already on ${target} — not reloaded (an open reboots all of Slack).`,
-              ...(target.includes('/thread/')
-                ? { threadPane: await threadPane({ abortSignal, browser }) }
-                : {}),
-            };
-          }
-        }
-        const result = await browser.run({
-          abortSignal,
-          args: parsed.args,
-        });
-        let summary = `Ran Slack browser ${command}.`;
-        if (result.timedOut) {
-          summary = `Slack browser ${command} took too long and was stopped; take a snapshot to see where the page is, or "${RESTART}" if the browser stopped answering.`;
-        } else if (WEDGED.test(result.stderr)) {
-          // A hung tab fails fast like this on EVERY later command too, so
-          // without the hint the model kept retrying a dead browser.
-          summary = `Slack browser ${command} failed: the browser stopped answering. Run "${RESTART}" before trying again.`;
-        } else if (result.exitCode !== 0) {
-          summary = `Slack browser ${command} exited ${result.exitCode}.`;
-        } else if (
-          verb === 'snapshot' &&
-          result.stdout.trim() === '(no interactive elements)'
-        ) {
-          // Slack's client is still booting. Read as a dead page, this sent
-          // the model to `open` the channel again, which reboots it again.
-          summary =
-            'Slack is still loading (nothing on the page yet): "wait 3000", then snapshot again. Do not open the URL again — that restarts the load.';
-        }
-        const opensThread =
-          verb === 'open' &&
-          target?.includes('/thread/') &&
-          result.exitCode === 0 &&
-          !result.timedOut;
-        return {
-          exitCode: result.exitCode,
-          ...(opensThread
-            ? { threadPane: await threadPane({ abortSignal, browser }) }
+      const last = results.at(-1);
+      if (steps.length === 1 || !last) {
+        return last;
+      }
+      const skipped = steps.length - results.length;
+      return {
+        ...last,
+        steps: results.slice(0, -1).map((result, index) => ({
+          command: steps[index],
+          success: result.success,
+          summary: result.summary,
+          ...('stdout' in result && result.stdout
+            ? { stdout: result.stdout.slice(0, BATCH_STEP_OUTPUT_CHARS) }
             : {}),
-          liveView:
-            'A watch-only live view is already posted in the thread; no need to share it again.',
-          stderr: truncate(result.stderr),
-          stdout: truncate(result.stdout),
-          success: result.exitCode === 0 && !result.timedOut,
-          summary,
-        };
-      } catch (error) {
-        return {
-          error: errorMessage(error),
-          success: false,
-          summary: `Slack browser command failed: ${errorMessage(error)}`,
-        };
-      }
+        })),
+        summary: `${skipped > 0 ? `Stopped at step ${results.length} of ${steps.length} (the rest did not run): ` : `Ran all ${steps.length} commands; the last: `}${last.summary}`,
+      };
     },
   });
+
+  const runOne = async ({
+    abortSignal,
+    requested,
+  }: {
+    abortSignal?: AbortSignal;
+    requested: string;
+  }) => {
+    let command = requested.trim();
+    if (command === THIS_THREAD) {
+      command = `open ${clientUrl({ ...here, team })}`;
+    } else if (command.startsWith('open ')) {
+      let words: string[] = [];
+      try {
+        words = splitCommand(command);
+      } catch {
+        // An unclosed quote: parseCommand below says so.
+      }
+      const [, target, threadTs, ...extra] = words;
+      const url =
+        target && extra.length === 0
+          ? conversationUrl({ target, team, threadTs })
+          : undefined;
+      command = url ? `open ${url}` : command;
+    }
+    try {
+      if (command === RESTART) {
+        await close();
+        session = start();
+        await session;
+        return {
+          success: true,
+          summary: `Restarted the Slack browser ${startUrl ? "in this conversation's thread" : "on Slack's home"}.`,
+        };
+      }
+      const parsed = parseCommand(command);
+      if (!parsed.ok) {
+        return { error: parsed.error, success: false, summary: parsed.error };
+      }
+      session ??= start();
+      const browser = await session;
+      const [verb, target] = parsed.args;
+      if (!paneAwaited && startUrl?.includes('/thread/')) {
+        paneAwaited = true;
+        await threadPane({ abortSignal, browser });
+      }
+      if (verb === 'open' && target) {
+        const at = await browser.run({ abortSignal, args: ['get', 'url'] });
+        if (
+          at.exitCode === 0 &&
+          isSamePage({ current: at.stdout.trim(), target })
+        ) {
+          return {
+            success: true,
+            summary: `Already on ${target} — not reloaded (an open reboots all of Slack).`,
+            ...(target.includes('/thread/')
+              ? { threadPane: await threadPane({ abortSignal, browser }) }
+              : {}),
+          };
+        }
+      }
+      const result = await browser.run({
+        abortSignal,
+        args: parsed.args,
+      });
+      let summary = `Ran Slack browser ${command}.`;
+      if (result.timedOut) {
+        summary = `Slack browser ${command} took too long and was stopped; take a snapshot to see where the page is, or "${RESTART}" if the browser stopped answering.`;
+      } else if (WEDGED.test(result.stderr)) {
+        // A hung tab fails fast like this on EVERY later command too, so
+        // without the hint the model kept retrying a dead browser.
+        summary = `Slack browser ${command} failed: the browser stopped answering. Run "${RESTART}" before trying again.`;
+      } else if (COVERED.test(result.stderr)) {
+        summary = `Slack browser ${command} hit something on top of the target (${COVERED.exec(result.stderr)?.[1]}): an open dropdown or another dialog. Pick an option or press Tab to close it (never Escape in a modal — it asks to discard the form), then try again.`;
+      } else if (result.exitCode !== 0) {
+        summary = `Slack browser ${command} exited ${result.exitCode}.`;
+      } else if (
+        verb === 'snapshot' &&
+        result.stdout.trim() === '(no interactive elements)'
+      ) {
+        // Slack's client is still booting. Read as a dead page, this sent
+        // the model to `open` the channel again, which reboots it again.
+        summary =
+          'Slack is still loading (nothing on the page yet): "wait 3000", then snapshot again. Do not open the URL again — that restarts the load.';
+      }
+      const opensThread =
+        verb === 'open' &&
+        target?.includes('/thread/') &&
+        result.exitCode === 0 &&
+        !result.timedOut;
+      return {
+        exitCode: result.exitCode,
+        ...(opensThread
+          ? { threadPane: await threadPane({ abortSignal, browser }) }
+          : {}),
+        liveView:
+          'A watch-only live view is already posted in the thread; no need to share it again.',
+        stderr: truncate(result.stderr),
+        stdout: truncate(result.stdout),
+        success: result.exitCode === 0 && !result.timedOut,
+        summary,
+      };
+    } catch (error) {
+      return {
+        error: errorMessage(error),
+        success: false,
+        summary: `Slack browser command failed: ${errorMessage(error)}`,
+      };
+    }
+  };
 
   return {
     /** End of turn: the browser, its proxy, its profile and the view all go. */
