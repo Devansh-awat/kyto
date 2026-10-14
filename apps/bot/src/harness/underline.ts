@@ -19,7 +19,7 @@ type RichElement =
   | { type: 'user'; user_id: string }
   | { channel_id: string; type: 'channel' };
 
-export interface RichTextBlock {
+interface RichTextBlock {
   elements: (
     | { elements: RichElement[]; type: 'rich_text_section' }
     | {
