@@ -23,6 +23,11 @@ import { clamp } from '@/lib/utils/text';
 // person), but a repo it clones must be disarmed exactly like codeMode's: the
 // commands it ran are invisible from here, so unconditionally.
 const OUTPUT_MAX = 12_000;
+// An absolute path in /tmp, /root, /home or ~ that the brief names.
+const BRIEF_PATH =
+  /(?:^|[\s'"`(=])((?:\/(?:tmp|root|home)|~(?=\/))(?:\/[^\s'"`),;]*)?)/g;
+// The sandbox user's home, what `~` means in a brief.
+const SANDBOX_HOME = '/home/user';
 // Inside the sandbox's own 20-minute command limit, with room to clean up.
 const RUN_TIMEOUT_SECONDS = 18 * 60;
 // How much longer than the run the turn's stall watchdog must wait.
@@ -112,6 +117,29 @@ export function opencodeTool({
       ) {
         return {
           error: 'directory must be inside the sandbox workspace.',
+          success: false,
+        };
+      }
+      // OpenCode auto-rejects every path outside its directory, and found out
+      // only after a 78s run with `cd /tmp` in the brief (#82). Refused up front
+      // so the model moves the files or uses bash instead.
+      const outside = [
+        ...new Set(
+          [...brief.matchAll(BRIEF_PATH)]
+            .map((match) => match[1] ?? '')
+            .map((path) =>
+              path.startsWith('~')
+                ? nodePath.join(SANDBOX_HOME, path.slice(1))
+                : nodePath.normalize(path)
+            )
+            .filter(
+              (path) => path !== workDir && !path.startsWith(`${workDir}/`)
+            )
+        ),
+      ];
+      if (outside.length > 0) {
+        return {
+          error: `OpenCode can only touch files under ${workDir}, and the brief names ${outside.slice(0, 3).join(', ')}. Put the files under ${workDir} (or set \`directory\` to where they are, inside the workspace) and brief it again — or run a one-off command with bash instead.`,
           success: false,
         };
       }
