@@ -93,7 +93,7 @@ function outcomeToResult(
     return {
       denied: true,
       success: false,
-      summary: `${who} denied this — I did NOT ${post.summary}. Do not retry it; acknowledge that they declined.`,
+      summary: `${who} denied this — I did NOT ${post.summary}. Do not retry it or post it another way; tell the person plainly that it was declined, then carry on with the rest of what was asked.`,
     };
   }
   return {

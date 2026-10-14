@@ -518,7 +518,7 @@ export async function handleGithubProxy(
   if (target.write) {
     if (!target.understood) {
       return refusal(
-        'Refused: this write does not name a repository the kyto GitHub proxy can check, so it cannot be authorized. Use the normal `gh`/`git` commands against a specific repo (a REST call under /repos/{owner}/{name}, or a GraphQL mutation that names the repository) instead of a raw call the guard cannot read.',
+        'Refused: this write does not name a repository the kyto GitHub proxy can check, so it cannot be authorized. Use the normal `gh`/`git` commands against a specific repo (a REST call under /repos/{owner}/{name}, or a GraphQL mutation that names the repository) instead of a raw call the guard cannot read. If what you wanted names no repository at all (a gist), it cannot be done from here: say so instead of trying other commands for it.',
         403
       );
     }
