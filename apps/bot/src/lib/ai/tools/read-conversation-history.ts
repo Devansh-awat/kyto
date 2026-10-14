@@ -32,7 +32,19 @@ export function readConversationHistoryTool({
       channelId: z.string().optional(),
       threadId: z.string().optional(),
       threadTs: z.string().optional(),
-      limit: z.number().int().min(1).max(200).default(40),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(200)
+        .default(40)
+        .describe('How many messages, counted back from the NEWEST.'),
+      after: z
+        .string()
+        .optional()
+        .describe(
+          "A message ts: only messages posted after it. To poll for replies to your own post, pass that post's ts — one call per check."
+        ),
       cursor: z
         .string()
         .optional()
@@ -41,7 +53,15 @@ export function readConversationHistoryTool({
         ),
     }),
     execute: rememberRepeatReads(
-      async ({ channelId, cursor, limit, permalink, threadId, threadTs }) => {
+      async ({
+        after,
+        channelId,
+        cursor,
+        limit,
+        permalink,
+        threadId,
+        threadTs,
+      }) => {
         const link = permalink?.trim() ? parseSlackPermalink(permalink) : null;
         if (permalink?.trim() && !link) {
           throw new Error(
@@ -68,6 +88,13 @@ export function readConversationHistoryTool({
         if (cursor && MESSAGE_TS.test(cursor)) {
           throw new Error(
             `cursor ${cursor} is a message timestamp, not a pagination cursor. Pass the nextCursor from the previous response, or omit cursor and pass the thread's ts as threadTs to start from its first page.`
+          );
+        }
+
+        const oldest = after?.trim() || undefined;
+        if (oldest && !MESSAGE_TS.test(oldest)) {
+          throw new Error(
+            `after must be a message ts like 1791695940.351679, not ${oldest}.`
           );
         }
 
@@ -98,6 +125,7 @@ export function readConversationHistoryTool({
             channel: toRawSlackChannelId(chatChannelId),
             cursor,
             limit,
+            oldest,
             threadTs: resolvedThreadTs,
             token,
           });
@@ -109,6 +137,7 @@ export function readConversationHistoryTool({
           ? slack.fetchMessages(`${chatChannelId}:${resolvedThreadTs}`, {
               cursor,
               limit,
+              oldest,
             })
           : slack.fetchChannelMessages(chatChannelId, {
               cursor,
@@ -154,6 +183,10 @@ export function readConversationHistoryTool({
             })),
           })),
           nextCursor: result.nextCursor,
+          // Only messages after `after` are known to be in this read.
+          ...(oldest
+            ? {}
+            : { note: `The newest ${limit} messages, oldest first.` }),
           threadTs: resolvedThreadTs ?? null,
         };
       }
@@ -189,38 +222,96 @@ const askerHistorySchema = z.looseObject({
 const MS_PER_SECOND = 1000;
 // A Slack message ts (`1791695940.351679`); a real cursor is base64.
 const MESSAGE_TS = /^\d+\.\d+$/;
+const ASKER_THREAD_PAGE = 200;
+const ASKER_THREAD_PAGES = 10;
 
 /** A conversation read with the asker's own token: only theirs can be read. */
 async function readAsAsker({
   channel,
   cursor,
   limit,
+  oldest,
   threadTs,
   token,
 }: {
   channel: string;
   cursor?: string;
   limit: number;
+  oldest?: string;
   threadTs?: string;
   token: string;
 }) {
   const client = new WebClient(token);
+  // Slack pages a thread OLDEST first, so without a cursor the asker path walks
+  // to its end and keeps the newest `limit`, as the bot path does — a poll for
+  // fresh replies used to see only the thread's first page (#84). Channel
+  // history comes newest first already.
+  if (threadTs && !cursor) {
+    let messages: z.infer<typeof askerMessageSchema>[] = [];
+    let next: string | undefined;
+    for (let page = 0; page < ASKER_THREAD_PAGES; page += 1) {
+      const raw = await client.conversations.replies({
+        channel,
+        ...(next ? { cursor: next } : {}),
+        limit: ASKER_THREAD_PAGE,
+        ...(oldest ? { oldest } : {}),
+        ts: threadTs,
+      });
+      const parsed = askerHistorySchema.parse(raw);
+      messages = messages.concat(parsed.messages);
+      next = parsed.response_metadata?.next_cursor || undefined;
+      if (!next) {
+        break;
+      }
+    }
+    return askerResult({
+      channel,
+      messages: messages.slice(-limit),
+      nextCursor: undefined,
+      threadTs,
+    });
+  }
   const raw = threadTs
     ? await client.conversations.replies({
         channel,
         cursor,
         limit,
+        ...(oldest ? { oldest } : {}),
         ts: threadTs,
       })
-    : await client.conversations.history({ channel, cursor, limit });
+    : await client.conversations.history({
+        channel,
+        cursor,
+        limit,
+        ...(oldest ? { oldest } : {}),
+      });
   const page = askerHistorySchema.parse(raw);
+  return askerResult({
+    channel,
+    messages: page.messages,
+    nextCursor: page.response_metadata?.next_cursor || undefined,
+    threadTs,
+  });
+}
+
+function askerResult({
+  channel,
+  messages,
+  nextCursor,
+  threadTs,
+}: {
+  channel: string;
+  messages: z.infer<typeof askerMessageSchema>[];
+  nextCursor: string | undefined;
+  threadTs?: string;
+}) {
   logger.info(
-    { channel, count: page.messages.length, threadTs },
+    { channel, count: messages.length, threadTs },
     "[readConversationHistory] read with the asker's own token"
   );
   return {
     channelId: channel,
-    messages: page.messages.map((message) => ({
+    messages: messages.map((message) => ({
       author: {
         isBot: Boolean(message.bot_id),
         userId: message.user,
@@ -237,7 +328,7 @@ async function readAsAsker({
       text: message.text ?? '',
       threadTs: message.thread_ts,
     })),
-    nextCursor: page.response_metadata?.next_cursor || undefined,
+    nextCursor,
     readAs: 'the asker (their own Slack account)',
     threadTs: threadTs ?? null,
   };

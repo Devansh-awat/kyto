@@ -39,6 +39,7 @@ const FAILED_USER_RETRY_MS = 60 * 1000;
 // for more is not an error, it just silently returns fewer — so paging a long
 // thread with a bigger number costs the same calls and looks like it worked.
 const SLACK_MAX_PAGE = 1000;
+const BACKWARD_MIN_PAGE = 200;
 // The page budget of a thread refresh, the same as the prompt's own read.
 const CACHED_THREAD_MAX_PAGES = 20;
 const SLACK_FILE_HOST = 'files.slack.com';
@@ -618,7 +619,13 @@ export class SlackHarness {
   ): Promise<{ messages: Message[]; nextCursor?: string }> {
     const { channel, threadTs } = this.decodeThreadId(threadId);
     const pages = maxPages ?? (direction === 'backward' ? 10 : 1);
-    const pageSize = Math.min(Math.max(limit, 1), SLACK_MAX_PAGE);
+    // A backward walk keeps only the last `limit`, so its page size is not
+    // `limit`: ten pages of 10 stopped 100 messages in, and a poll for the
+    // newest replies of a long thread got the old ones (#84).
+    const pageSize = Math.min(
+      Math.max(limit, direction === 'backward' ? BACKWARD_MIN_PAGE : 1),
+      SLACK_MAX_PAGE
+    );
     let raw: RawSlackMessage[] = [];
     let nextCursor = cursor;
     const client = asUserAccount
