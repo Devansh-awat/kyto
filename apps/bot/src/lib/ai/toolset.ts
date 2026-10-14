@@ -211,6 +211,11 @@ const EFFECT_TOOLS = new Set([
   'deploySite',
   'editAsUser',
   'editReminder',
+  // Each posts into the thread: re-run after a restart, f4lsereality got the
+  // same jar twice (#99).
+  'embed',
+  'generateImage',
+  'mermaid',
   'pinMessage',
   'poll',
   'postMessage',
@@ -222,7 +227,9 @@ const EFFECT_TOOLS = new Set([
   'sendEmail',
   'setChannelTopic',
   'submitEmoji',
+  'textToSpeech',
   'unpinMessage',
+  'uploadFile',
 ]);
 
 const PUBLIC_POSTING_TOOLS = [

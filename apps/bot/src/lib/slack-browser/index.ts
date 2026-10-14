@@ -1,9 +1,13 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import nodePath from 'node:path';
 import { env } from '@/env';
 import logger from '@/lib/logger';
-import { slackWebConfigured, startSlackWebProxy } from '@/lib/slack-web-proxy';
+import {
+  dismissSlackTips,
+  slackWebConfigured,
+  startSlackWebProxy,
+} from '@/lib/slack-web-proxy';
 import { errorMessage } from '@/lib/utils/error';
 import { registerLiveView, SLACK_VIEW_PREFIX } from './live-view';
 
@@ -112,7 +116,18 @@ export async function startSlackBrowser({
   }
   const stateDir = await mkdtemp(nodePath.join(tmpdir(), 'kyto-slack-'));
   const profileDir = nodePath.join(stateDir, 'profile');
-  const proxy = await startSlackWebProxy();
+  // Notifications pre-allowed: with the permission undecided, Slack opened its
+  // "Slack needs your permission to enable notifications" dialog over the page,
+  // and every ping became a banner. Allowed, they go to the headless OS, which
+  // shows nothing.
+  await mkdir(nodePath.join(profileDir, 'Default'), { recursive: true });
+  await writeFile(
+    nodePath.join(profileDir, 'Default', 'Preferences'),
+    JSON.stringify({
+      profile: { default_content_setting_values: { notifications: 1 } },
+    })
+  );
+  const [proxy] = await Promise.all([startSlackWebProxy(), dismissSlackTips()]);
   const browser = Bun.spawn(
     [
       chromium,

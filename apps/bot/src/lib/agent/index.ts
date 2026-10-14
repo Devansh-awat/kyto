@@ -986,7 +986,7 @@ async function executeTurn(
       messageText = `${messageText}\n\n<unanswered_earlier>These earlier messages in the thread were addressed to you, and a newer message interrupted you before you replied to them:\n${lines.join('\n')}\nAnswer them in this reply too, unless the thread has already settled them.</unanswered_earlier>`;
     }
     if (resumed) {
-      messageText = `${messageText}\n\n<resumed_after_restart>kyto restarted while answering this message and is picking it back up. Anything you already posted is in the thread above — continue from there instead of starting over.\n${describePriorEffects(priorEffects)}</resumed_after_restart>`;
+      messageText = `${messageText}\n\n<resumed_after_restart>kyto restarted while answering this message and is picking it back up. Anything you already posted is in the thread above, and what your tools found before the restart is in your earlier reasoning — continue from there instead of starting over.\n${describePriorEffects(priorEffects)}</resumed_after_restart>`;
     }
     const conversation = [...history, messageText].join('\n\n');
     const promptMs = Date.now() - promptStart;
@@ -2170,6 +2170,23 @@ async function executeTurn(
           error instanceof SwitchToOwnModelError ||
           attemptAbort.signal.reason instanceof SwitchToOwnModelError;
         if (controller.signal.aborted || (producedText && !canContinue)) {
+          // A deploy cutting the turn: the next instance resumes it, and
+          // without this it started from nothing — two minutes of builds and
+          // checks redone, and the resumed turn re-posted the same jar (#99).
+          // The resumed turn's prompt replays thread_thinking.
+          if (abortReasonOf(controller.signal) === 'shutdown' && !secret) {
+            await rememberThinking({
+              blocks: [
+                ...attemptThinking,
+                'kyto restarted before this turn finished. The tool results below came before the restart; sandbox files from them are still there.',
+              ],
+              observations: renderObservations(gatheredResults),
+              ...(gatheredResults.some(isPrivateObservation)
+                ? { privateTo: message.author.userId }
+                : {}),
+              threadId,
+            });
+          }
           throw error;
         }
         if (!retryAttempt) {

@@ -54,6 +54,20 @@ const WEDGED =
 // An open dropdown or modal overlay over the target. Retried blind, the model
 // pressed Escape — which in a Slack modal asks to discard the whole form.
 const COVERED = /covered by (<[^>]+>)/i;
+// Closes the top Slack modal by its own Close/Cancel button and prints its
+// title (or "null" if there was none to close). Never Escape: in a form Slack
+// asks whether to discard it, which is one more dialog on top.
+const CLOSE_TOP_MODAL = `(() => {
+  const modal = [...document.querySelectorAll('.ReactModal__Content')].at(-1);
+  if (!modal) return null;
+  const button = [...modal.querySelectorAll('button')].find((b) =>
+    /^(close|cancel|dismiss|not now|no thanks)$/i.test((b.getAttribute('aria-label') || b.textContent || '').trim())
+  );
+  if (!button) return null;
+  const title = (modal.getAttribute('aria-label') || modal.textContent || '').trim().slice(0, 80);
+  button.click();
+  return title || 'untitled';
+})()`;
 
 export function slackBrowserTool({
   asUserAccount,
@@ -147,6 +161,42 @@ export function slackBrowserTool({
       refs: truncate(refs),
       ...(text ? { text: text.slice(0, MODAL_TEXT_CHARS) } : {}),
     };
+  };
+  // Clears what covers a click's target and says what it did, or undefined
+  // if there was nothing it could clear. A modal overlay means the target is
+  // BEHIND the modal, so the modal is closed; anything else is a dropdown,
+  // popover or sticky header — closed with Tab inside a modal (Escape would
+  // ask to discard the form) or Escape outside one, then the target is
+  // scrolled clear of it.
+  const clearCover = async ({
+    abortSignal,
+    browser,
+    cover,
+    target,
+  }: {
+    abortSignal?: AbortSignal;
+    browser: SlackBrowserSession;
+    cover: string;
+    target: string;
+  }): Promise<string | undefined> => {
+    if (cover.includes('ReactModal__Overlay')) {
+      const closed = await browser.run({
+        abortSignal,
+        args: ['eval', CLOSE_TOP_MODAL],
+      });
+      const title = closed.stdout.trim().replace(/^"|"$/g, '');
+      if (closed.exitCode !== 0 || !title || title === 'null') {
+        return;
+      }
+      await browser.run({ abortSignal, args: ['wait', '500'] });
+      return `closed the dialog that was on top of it ("${title}")`;
+    }
+    const inModal =
+      (await countOf({ abortSignal, browser, selector: MODAL })) > 0;
+    const key = inModal ? 'Tab' : 'Escape';
+    await browser.run({ abortSignal, args: ['press', key] });
+    await browser.run({ abortSignal, args: ['scrollintoview', target] });
+    return `pressed ${key} and scrolled the target into view`;
   };
   // Built here, not by the model: it glued a channel id where the workspace id
   // goes and landed on Slack's "There's been a glitch" page.
@@ -318,11 +368,22 @@ export function slackBrowserTool({
           summary: `Nothing on the page matches ${scope}, so the snapshot was not taken — the refs from your earlier snapshots still work. Take an unscoped \`snapshot -i -c\` to see what is there.`,
         };
       }
-      const result = await browser.run({
+      let result = await browser.run({
         abortSignal,
         args: parsed.args,
       });
-      let summary = `Ran Slack browser ${command}.`;
+      // Something on top of the target (#101). Told to clear it itself, the
+      // model ended the turn instead ("the second ping hasn't gone through"),
+      // so it is cleared here and the command retried once.
+      const cover = COVERED.exec(result.stderr)?.[1];
+      const cleared =
+        cover && target
+          ? await clearCover({ abortSignal, browser, cover, target })
+          : undefined;
+      if (cleared) {
+        result = await browser.run({ abortSignal, args: parsed.args });
+      }
+      let summary = `Ran Slack browser ${command}${cleared ? ` after it ${cleared}` : ''}.`;
       if (result.timedOut) {
         summary = `Slack browser ${command} took too long and was stopped; take a snapshot to see where the page is, or "${RESTART}" if the browser stopped answering.`;
       } else if (WEDGED.test(result.stderr)) {
@@ -330,7 +391,7 @@ export function slackBrowserTool({
         // without the hint the model kept retrying a dead browser.
         summary = `Slack browser ${command} failed: the browser stopped answering. Run "${RESTART}" before trying again.`;
       } else if (COVERED.test(result.stderr)) {
-        summary = `Slack browser ${command} hit something on top of the target (${COVERED.exec(result.stderr)?.[1]}): an open dropdown or another dialog. Pick an option or press Tab to close it (never Escape in a modal — it asks to discard the form), then try again.`;
+        summary = `Slack browser ${command} hit something on top of the target (${COVERED.exec(result.stderr)?.[1]})${cleared ? `, even after it ${cleared}` : ''}. Take a snapshot to see what is covering it, close that by its own button, then try again (never Escape in a modal — it asks to discard the form).`;
       } else if (STALE_REF.test(result.stderr)) {
         summary = `Slack browser ${command} failed: that ref is gone — the element was redrawn, or the page changed. Take a fresh snapshot and use the refs it gives.`;
       } else if (result.exitCode !== 0) {

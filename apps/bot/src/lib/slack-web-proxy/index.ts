@@ -5,8 +5,10 @@ import { tmpdir } from 'node:os';
 import nodePath from 'node:path';
 import { promisify } from 'node:util';
 import type { Server, ServerWebSocket } from 'bun';
+import { z } from 'zod';
 import { env } from '@/env';
 import logger from '@/lib/logger';
+import { toLogError } from '@/lib/utils/error';
 
 /**
  * The network half of the owner's logged-in Slack browser (lib/slack-browser).
@@ -94,6 +96,64 @@ function sessionCookie(): string | undefined {
     return;
   }
   return raw.includes('=') ? raw : `d=${raw}`;
+}
+
+// Every onboarding tip, coachmark and "what's new" flag the account hasn't
+// dismissed yet. Slack kept opening them in the Slack browser (150 were unset
+// on 2026-10-14), each one a popup the model read as part of the task, or
+// that covered the button it was about to click.
+const TIP_PREF =
+  /^(seen_|has_seen_)|_seen$|dismissed|clicked_through|^no_\w+_banner$|^welcome_message_hidden$/;
+const TIP_PREFS_TIMEOUT_MS = 5000;
+
+/**
+ * Mark all of the account's tips seen, server-side, before the browser loads
+ * Slack. Best-effort: a failure only means the popups are back.
+ */
+export async function dismissSlackTips(): Promise<void> {
+  const cookie = sessionCookie();
+  if (!(env.KYTO_USER_TOKEN && cookie)) {
+    return;
+  }
+  const call = async (
+    method: string,
+    form?: Record<string, string>
+  ): Promise<Record<string, unknown>> => {
+    const response = await fetch(`https://slack.com/api/${method}`, {
+      body: form ? new URLSearchParams(form) : undefined,
+      headers: {
+        Authorization: `Bearer ${env.KYTO_USER_TOKEN}`,
+        Cookie: cookie,
+      },
+      method: 'POST',
+      signal: AbortSignal.timeout(TIP_PREFS_TIMEOUT_MS),
+    });
+    const body: unknown = await response.json();
+    const parsed = z
+      .object({ error: z.string().optional(), ok: z.boolean() })
+      .passthrough()
+      .parse(body);
+    if (!parsed.ok) {
+      throw new Error(`${method} failed: ${parsed.error ?? 'unknown error'}`);
+    }
+    return parsed;
+  };
+  try {
+    const { prefs } = z
+      .object({ prefs: z.record(z.string(), z.unknown()) })
+      .parse(await call('users.prefs.get'));
+    const unseen = Object.entries(prefs)
+      .filter(([name, value]) => value === false && TIP_PREF.test(name))
+      .map(([name]) => [name, true]);
+    if (unseen.length > 0) {
+      await call('users.prefs.set', {
+        prefs: JSON.stringify(Object.fromEntries(unseen)),
+      });
+      logger.info({ count: unseen.length }, '[slack-web] dismissed Slack tips');
+    }
+  } catch (error) {
+    logger.warn(toLogError(error), '[slack-web] could not dismiss Slack tips');
+  }
 }
 
 /** Every secret value this proxy holds, so none can leave in a response. */
