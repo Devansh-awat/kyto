@@ -54,6 +54,9 @@ const TYPING_PULSE_MS = 3000;
 // here. Task cards from the old stream are finalized as-is when it stops.
 const STREAM_ROTATE_MS = 4.5 * 60 * 1000;
 const STREAM_EXPIRED = 'message_not_in_streaming_state';
+// Slack's answer when a streamed message can hold no more: a long tool-only run
+// piles every card into one message (#93 hit it at ~25 cards).
+const MESSAGE_FULL = 'msg_too_long';
 
 // Recursively pull readable text out of a Slack rich-text node (table cells are
 // rich_text blocks). Collects `text`, link labels/urls, and recurses into
@@ -1005,12 +1008,42 @@ export class SlackHarness {
       if (!structuredSupported) {
         return;
       }
-      try {
+      const send = async () => {
         await streamer.append({
           chunks: [filterOutboundDeep(chunk)] as never,
         });
         currentHasContent = true;
+      };
+      try {
+        await send();
       } catch (error) {
+        // A FULL message is not a rejected chunk either: latching text-only
+        // here dropped every later card of the turn. The chunk never landed,
+        // so it is sent again at the top of a new message. The outgoing
+        // message is full, so what onRotate would settle it with can't go
+        // there; a second rejection is a real one.
+        if (String(error).includes(MESSAGE_FULL) && currentHasContent) {
+          this.logger.warn(
+            { err: error },
+            '[harness] streamed message full; continuing in a new message'
+          );
+          options.onRotate?.();
+          await stopStreamer({ final: false });
+          streamer = startStreamer();
+          streamStartedAt = Date.now();
+          currentHasContent = false;
+          try {
+            await send();
+            return;
+          } catch (retryError) {
+            structuredSupported = false;
+            this.logger.warn(
+              { err: retryError },
+              '[harness] structured stream chunk rejected; text-only fallback'
+            );
+            return;
+          }
+        }
         // An EXPIRED stream is not a rejected chunk: latching text-only here
         // dropped every later card of the turn, and the card left mid-flight
         // in the dead message rendered as "Something went wrong" (issue #30).
