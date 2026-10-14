@@ -19,13 +19,14 @@ export interface SpendGroup {
   inputTokens: number;
   model: string;
   outputTokens: number;
+  provider: string;
   source: string;
   unpriced: number;
 }
 
 /**
  * Spend since `since` (all of it when omitted), optionally in one thread only,
- * grouped by what spent it, model and effort.
+ * grouped by what spent it, whose key paid (provider), model and effort.
  */
 export async function summarizeModelSpend({
   since,
@@ -44,6 +45,7 @@ export async function summarizeModelSpend({
       inputTokens: sql<string>`sum(${modelSpend.inputTokens})`,
       model: modelSpend.model,
       outputTokens: sql<string>`sum(${modelSpend.outputTokens})`,
+      provider: modelSpend.provider,
       source: modelSpend.source,
       unpriced: sql<string>`count(*) filter (where ${modelSpend.costUsd} is null)`,
     })
@@ -54,7 +56,12 @@ export async function summarizeModelSpend({
         threadId ? eq(modelSpend.threadId, threadId) : undefined
       )
     )
-    .groupBy(modelSpend.source, modelSpend.model, modelSpend.effort);
+    .groupBy(
+      modelSpend.source,
+      modelSpend.provider,
+      modelSpend.model,
+      modelSpend.effort
+    );
   // Postgres sums come back as strings.
   return rows.map((row) => ({
     cacheReadTokens: Number(row.cacheReadTokens),
@@ -65,6 +72,7 @@ export async function summarizeModelSpend({
     inputTokens: Number(row.inputTokens),
     model: row.model,
     outputTokens: Number(row.outputTokens),
+    provider: row.provider,
     source: row.source,
     unpriced: Number(row.unpriced),
   }));

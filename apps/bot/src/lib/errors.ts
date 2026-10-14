@@ -69,38 +69,25 @@ export class ByokExhaustedError extends Error {
 
 const SPEND_AMOUNT_PATTERN = /\$\d+(?:\.\d+)?/;
 
-const SECONDS_PER_DAY = 86_400;
-const SECONDS_PER_HOUR = 3600;
-const SECONDS_PER_MINUTE = 60;
+const MINUTES_PER_HOUR = 60;
+const MS_PER_MINUTE = 60_000;
 
-// The HackClub daily spend limit resets at **UK midnight** (Europe/London, so
-// the reset tracks BST/GMT automatically). Compute the time left until the next
-// London midnight purely from the current London wall-clock — independent of the
-// host timezone and of the current UTC offset (correct except across the rare
-// DST-transition night, which is close enough for a "try again in ~Xh Ym" hint).
-function timeUntilUkReset(now: Date = new Date()): {
+// Hack Club's daily spend window is the UTC day (hackclub/ai
+// `startOfUtcDay`, and `timezone DEFAULT 'UTC'` on its billing policies). This
+// used to count to London midnight, an hour late all summer.
+export function timeUntilUtcMidnight(now: Date = new Date()): {
   hours: number;
   minutes: number;
 } {
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    hour: '2-digit',
-    hour12: false,
-    minute: '2-digit',
-    second: '2-digit',
-    timeZone: 'Europe/London',
-  }).formatToParts(now);
-  const partValue = (type: string) =>
-    Number(parts.find((part) => part.type === type)?.value ?? '0');
-  // en-GB renders midnight as "24" in the hour-only slot; normalize to 0.
-  const hour = partValue('hour') % 24;
-  const elapsed =
-    hour * SECONDS_PER_HOUR +
-    partValue('minute') * SECONDS_PER_MINUTE +
-    partValue('second');
-  const remaining = (SECONDS_PER_DAY - elapsed) % SECONDS_PER_DAY;
+  const next = Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate() + 1
+  );
+  const left = Math.ceil((next - now.getTime()) / MS_PER_MINUTE);
   return {
-    hours: Math.floor(remaining / SECONDS_PER_HOUR),
-    minutes: Math.floor((remaining % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE),
+    hours: Math.floor(left / MINUTES_PER_HOUR),
+    minutes: left % MINUTES_PER_HOUR,
   };
 }
 
@@ -132,8 +119,8 @@ export function agentErrorMessage({
   }
   if (error instanceof BudgetExhaustedError) {
     const amount = message.match(SPEND_AMOUNT_PATTERN)?.[0] ?? '$3';
-    const { hours, minutes } = timeUntilUkReset();
-    return `_kyto's daily model budget (${amount}/day) is used up — every model is out of credits for today. it resets at UK midnight, in ${hours}h ${minutes}m._`;
+    const { hours, minutes } = timeUntilUtcMidnight();
+    return `_kyto's daily model budget (${amount}/day) is used up — every model is out of credits for today. it resets at UTC midnight, in ${hours}h ${minutes}m._`;
   }
   // Kyto assembled a prompt the SDK refuses to send. No model ever saw it, so
   // "the provider failed" would be a lie and "try again" is useless advice —
