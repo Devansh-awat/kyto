@@ -5,11 +5,17 @@ import { errorMessage } from '@/lib/utils/error';
  * What the model may ask of the logged-in Slack browser. It runs on kyto's own
  * host, so an agent-browser sub-command that touches files (`upload`,
  * `screenshot <path>`, `state load`), fetches outside the browser (`read`,
- * `vitals <url>`), runs script (`eval`, `wait --fn`), relaunches the browser
- * with other flags, or wraps other commands (`batch`) would reach past the
- * browser into the box — `/app`, the container's environment, its network. So
- * the command is split into argv here (never handed to a shell) and only the
- * interaction verbs below pass, with navigation limited to https Slack URLs.
+ * `vitals <url>`), relaunches the browser with other flags, or wraps other
+ * commands (`batch`) would reach past the browser into the box — `/app`, the
+ * container's environment, its network — and the model driving it reads Slack
+ * messages anyone can write. So the command is split into argv here (never
+ * handed to a shell) and only the verbs below pass, with navigation limited to
+ * https Slack URLs. An allowlist, so a new agent-browser command stays out
+ * until someone looks at it.
+ *
+ * `eval` and `wait --fn` pass (owner's call, 2026-10-14): their script runs IN
+ * the Slack page, which reaches only Slack (and its CDNs) through the
+ * resolver rules and only ever holds the dummy token — nothing a click can't.
  */
 
 const VERBS = new Set([
@@ -21,6 +27,7 @@ const VERBS = new Set([
   'diff',
   'drag',
   'errors',
+  'eval',
   'fill',
   'find',
   'focus',
@@ -65,6 +72,7 @@ const FLAGS = new Set([
   '--compact',
   '--depth',
   '--exact',
+  '--fn',
   '--full',
   '--interactive',
   '--load',

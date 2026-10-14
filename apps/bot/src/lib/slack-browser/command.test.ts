@@ -50,9 +50,18 @@ describe('parseCommand', () => {
     }
   });
 
+  test('runs script in the page, whose network is Slack only', () => {
+    for (const command of [
+      'eval document.title',
+      'eval "[...document.querySelectorAll(\'button\')].length"',
+      'wait --fn "document.readyState === \'complete\'"',
+    ]) {
+      expect(parseCommand(command).ok).toBe(true);
+    }
+  });
+
   test('refuses what reaches past the browser into the host', () => {
     for (const command of [
-      'eval document.cookie',
       'upload @e1 /app/apps/bot/.env',
       'screenshot /app/x.png',
       'pdf /tmp/x.pdf',
@@ -64,7 +73,6 @@ describe('parseCommand', () => {
       'network requests',
       'set headers {}',
       'state load /tmp/s.json',
-      'wait --fn "fetch(1)"',
       'snapshot --executable-path /bin/sh',
       'get cdp-url',
       'diff url https://example.com https://slack.com',
