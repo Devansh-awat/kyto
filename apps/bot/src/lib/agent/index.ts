@@ -1054,6 +1054,11 @@ async function executeTurn(
     // falls through to another model (see the handled check below).
     let producedText = false;
     let skipped = false;
+    // The model that answered with NOTHING (no text, no tool, no skip), if
+    // one did. luna does this on pings meant for another bot, where the next
+    // model's skip shows the silence was right; when the next model ANSWERS
+    // instead, the empty reply was a real miss, and that is logged (#81).
+    let emptyFrom: string | undefined;
     // Everything the user has already been shown this turn. A fallback attempt
     // that CONTINUES an interrupted turn is told about it so it picks up instead
     // of repeating itself (renderContinuation).
@@ -1959,6 +1964,9 @@ async function executeTurn(
           continue;
         }
         if (!handled) {
+          if (!attemptToolActivity) {
+            emptyFrom = currentAttempt.model;
+          }
           throw new Error(
             attemptToolActivity
               ? `Model ${currentAttempt.model} ran tools but ended without a reply (truncated synthesis step).`
@@ -1980,6 +1988,16 @@ async function executeTurn(
           },
           '[agent] attempt handled the turn'
         );
+        if (emptyFrom && !skipped) {
+          logger.warn(
+            {
+              answeredBy: currentAttempt.model,
+              emptyModel: emptyFrom,
+              threadId,
+            },
+            '[agent] a model returned nothing, but the next one answered: the empty reply was a real miss'
+          );
+        }
         turnSkipped = skipped;
         // Leave this turn's train of thought behind for the next one. Only the
         // attempt that actually answered gets to: a failed attempt's reasoning
