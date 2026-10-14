@@ -321,7 +321,36 @@ function waitInMs(args: string[]): string[] {
     : args;
 }
 
+// A script is JavaScript, not shell words: split like one, the quotes went —
+// `eval document.querySelectorAll("button")` ran `querySelectorAll(button)` and
+// threw "button is not defined". It goes through as typed, unless the whole
+// script is one quoted string, which is unwrapped the way a shell would.
+const SCRIPT_COMMAND = /^(eval|wait\s+--fn)\s+([\s\S]+)$/;
+
+function scriptArgs(prefix: string, script: string): string[] {
+  const words = splitCommand(prefix);
+  if (script.startsWith('"') || script.startsWith("'")) {
+    try {
+      const unquoted = splitCommand(script);
+      if (unquoted.length === 1 && unquoted[0]) {
+        return [...words, unquoted[0]];
+      }
+    } catch {
+      // Not one quoted string after all: the script as typed.
+    }
+  }
+  return [...words, script];
+}
+
 export function parseCommand(command: string): ParsedCommand {
+  const script = SCRIPT_COMMAND.exec(command.trim());
+  if (script) {
+    const args = scriptArgs(script[1] ?? '', script[2] ?? '');
+    // The script itself is one argument run in the page — never a flag or a
+    // shell operator, so only the words before it are checked.
+    const error = refusal(args.slice(0, -1));
+    return error ? { error, ok: false } : { args, ok: true };
+  }
   let args: string[];
   try {
     args = waitInMs(splitCommand(command.trim()));

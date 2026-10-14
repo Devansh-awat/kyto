@@ -166,6 +166,40 @@ describe('parseCommand', () => {
     expect(parseCommand('wait @e3').ok).toBe(true);
   });
 
+  test('passes a script through as typed, quotes and all', () => {
+    expect(
+      parseCommand('eval document.querySelectorAll("button").length')
+    ).toEqual({
+      args: ['eval', 'document.querySelectorAll("button").length'],
+      ok: true,
+    });
+    expect(
+      parseCommand(
+        `eval [...document.querySelectorAll('button')].filter(b => b && b.disabled)`
+      )
+    ).toEqual({
+      args: [
+        'eval',
+        "[...document.querySelectorAll('button')].filter(b => b && b.disabled)",
+      ],
+      ok: true,
+    });
+    expect(parseCommand(`eval "document.title + 'x'"`)).toEqual({
+      args: ['eval', "document.title + 'x'"],
+      ok: true,
+    });
+    expect(parseCommand(`eval "a" + "b"`)).toEqual({
+      args: ['eval', '"a" + "b"'],
+      ok: true,
+    });
+    expect(
+      parseCommand('wait --fn document.querySelector(".x") !== null')
+    ).toEqual({
+      args: ['wait', '--fn', 'document.querySelector(".x") !== null'],
+      ok: true,
+    });
+  });
+
   test('refuses shell operators, which never reach a shell', () => {
     expect(parseCommand('snapshot -i | grep robot').ok).toBe(false);
     expect(parseCommand('fill @e1 "a" && click @e2').ok).toBe(false);

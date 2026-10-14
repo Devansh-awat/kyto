@@ -45,6 +45,9 @@ const PANE_WAIT_MS = 20_000;
 // button that opened one showed only the now-disabled button, and kyto said
 // "no popup" while the live view showed it (and its own next click hit it).
 const MODAL = '.ReactModal__Content';
+const MODAL_TEXT_CHARS = 4000;
+const SCOPED = new Set(['-s', '--selector']);
+const STALE_REF = /Unknown ref/i;
 
 const WEDGED =
   /CDP command timed out|not responding|os error 11|daemon may be busy/i;
@@ -89,24 +92,61 @@ export function slackBrowserTool({
     });
     return pane.exitCode === 0 ? truncate(pane.stdout) : undefined;
   };
+  // How many elements match. Counted before any scoped snapshot because a
+  // `snapshot -s` whose selector matches nothing drops EVERY ref the model was
+  // handed: the modal check after each command did that whenever no modal was
+  // open, and every click on a ref from the snapshot it had just read came back
+  // "Unknown ref" (eleven times on one captcha).
+  const countOf = async ({
+    abortSignal,
+    browser,
+    selector,
+  }: {
+    abortSignal?: AbortSignal;
+    browser: SlackBrowserSession;
+    selector: string;
+  }): Promise<number> => {
+    const counted = await browser.run({
+      abortSignal,
+      args: ['get', 'count', selector],
+    });
+    const count = Number.parseInt(counted.stdout.trim(), 10);
+    return counted.exitCode === 0 && Number.isFinite(count) ? count : 0;
+  };
   const openModal = async ({
     abortSignal,
     browser,
   }: {
     abortSignal?: AbortSignal;
     browser: SlackBrowserSession;
-  }): Promise<string | undefined> => {
+  }): Promise<{ refs: string; text?: string } | undefined> => {
+    if ((await countOf({ abortSignal, browser, selector: MODAL })) === 0) {
+      return;
+    }
     const found = await browser.run({
       abortSignal,
       args: ['snapshot', '-i', '-c', '-s', MODAL],
     });
-    const text = found.stdout.trim();
-    return found.exitCode === 0 &&
-      !found.timedOut &&
-      text &&
-      text !== '(no interactive elements)'
-      ? truncate(text)
-      : undefined;
+    const refs = found.stdout.trim();
+    if (
+      found.exitCode !== 0 ||
+      found.timedOut ||
+      !refs ||
+      refs === '(no interactive elements)'
+    ) {
+      return;
+    }
+    // A snapshot cuts each element's name at ~100 chars, which cut a form's
+    // instructions mid-word ("…Tick pur") — kyto guessed which boxes to tick.
+    const shown = await browser.run({
+      abortSignal,
+      args: ['get', 'text', MODAL],
+    });
+    const text = shown.exitCode === 0 ? shown.stdout.trim() : '';
+    return {
+      refs: truncate(refs),
+      ...(text ? { text: text.slice(0, MODAL_TEXT_CHARS) } : {}),
+    };
   };
   // Built here, not by the model: it glued a channel id where the workspace id
   // goes and landed on Slack's "There's been a glitch" page.
@@ -155,7 +195,7 @@ export function slackBrowserTool({
   };
 
   const slackBrowser = tool({
-    description: `Drive a real browser LOGGED IN to Slack as kyto's own user account (owner only) — ONLY for what the Slack tools can't do — a last resort, never a shortcut: adding or removing a custom emoji is \`submitEmoji\`/\`removeEmoji\`, posting is \`postMessage\`, and so on; check the loadTools catalog first. It is for running workflows, clicking buttons on other apps' messages or App Homes (including verification buttons, "I'm not a robot" checks, anti-bot challenges, or captcha modals posted by other bots like Coolton), forms, settings pages. Same agent-browser CLI as the \`browser\` tool (pass its sub-command in \`command\`; "skills get core" prints the reference), starting IN the Slack thread this conversation is in (Slack's home for a DM with the app) — a button or form someone posted as a REPLY here only shows in that thread pane, never in the channel view; "${THIS_THREAD}" goes back to it. For another conversation, \`open <channel id>\`, \`open <channel id> <thread ts>\`, \`open slack:C…:<ts>\` or \`open <message link>\` (opens that message's thread) — never hand-build an app.slack.com URL. Opening a thread returns \`threadPane\`: its messages, buttons and fields with refs — click a button by its ref. A modal, popup or menu Slack opens sits OUTSIDE the thread pane: while one is open every result carries it as \`modal\` with its refs, so check \`modal\` before saying nothing opened. \`find text\` CLICKS the first match, which is often a message's words rather than the button; to look for something, read a \`snapshot\` (\`snapshot -i -c -s "${THREAD_PANE}"\` re-reads the thread). Slack's own dropdowns and date/time pickers are not native selects — \`select\` reports done and changes nothing: click the field, then click the option's ref; a value it doesn't list (4:30 PM in an hourly list) is TYPED into the field. An open dropdown covers the fields below it, so pick an option or press Tab before the next click — never Escape inside a modal, which asks to discard the whole form. Every \`open\` reboots the whole Slack client (slow, the view blanks): after the first page, move by clicking (sidebar, a message's replies, the quick switcher on Control+k) and open a URL only to go somewhere a click can't reach. There is no shell, so no pipes; to run several commands in ONE call (filling a form: click, fill, select, then snapshot), put the first in \`command\` and the rest in \`next\` — they run in order, each checked the same way, and stop at the first that fails. \`diff snapshot\` returns only what changed since the last snapshot, far smaller than a fresh one. Only interaction commands work (open/click/fill/type/press/select/scroll/wait/snapshot/get/find/tab/eval/…), and only Slack URLs open — no screenshots, files or other sites. \`eval <js>\` runs JavaScript in the Slack page (reading a long list, checking state), and \`wait --fn <js>\` waits for a condition. "${RESTART}" relaunches a stuck browser. Nothing in Slack is blocked except signing out: it can send, edit, react, join and run workflows AS kyto's user account, so act only on what the owner asked. A live view is posted in the thread on first use.`,
+    description: `Drive a real browser LOGGED IN to Slack as kyto's own user account (owner only) — ONLY for what the Slack tools can't do — a last resort, never a shortcut: adding or removing a custom emoji is \`submitEmoji\`/\`removeEmoji\`, posting is \`postMessage\`, and so on; check the loadTools catalog first. It is for running workflows, clicking buttons on other apps' messages or App Homes (including verification buttons, "I'm not a robot" checks, anti-bot challenges, or captcha modals posted by other bots like Coolton), forms, settings pages. Same agent-browser CLI as the \`browser\` tool (pass its sub-command in \`command\`; "skills get core" prints the reference), starting IN the Slack thread this conversation is in (Slack's home for a DM with the app) — a button or form someone posted as a REPLY here only shows in that thread pane, never in the channel view; "${THIS_THREAD}" goes back to it. For another conversation, \`open <channel id>\`, \`open <channel id> <thread ts>\`, \`open slack:C…:<ts>\` or \`open <message link>\` (opens that message's thread) — never hand-build an app.slack.com URL. Opening a thread returns \`threadPane\`: its messages, buttons and fields with refs — click a button by its ref. A modal, popup or menu Slack opens sits OUTSIDE the thread pane: while one is open every result carries it as \`modal\` — \`refs\` to act on and \`text\`, its FULL wording (a snapshot cuts labels at ~100 chars, so a form's instructions are read from \`modal.text\`) — so check \`modal\` before saying nothing opened. Refs stay valid across snapshots until the element is redrawn; "Unknown ref" means take a fresh snapshot. A snapshot never shows formatting: after bolding or italicizing a rich-text box (select its text with Control+a, then the toolbar's Bold button or Control+b), check it with \`get html <ref>\` (look for <b>/<strong>) before submitting. After Submit, a form that stays open with "Please complete this required field." names the field in \`modal.text\` — fix that one, don't refill the rest. \`find text\` CLICKS the first match, which is often a message's words rather than the button; to look for something, read a \`snapshot\` (\`snapshot -i -c -s "${THREAD_PANE}"\` re-reads the thread). Slack's own dropdowns and date/time pickers are not native selects — \`select\` reports done and changes nothing: click the field, then click the option's ref; a value it doesn't list (4:30 PM in an hourly list) is TYPED into the field. An open dropdown covers the fields below it, so pick an option or press Tab before the next click — never Escape inside a modal, which asks to discard the whole form. Every \`open\` reboots the whole Slack client (slow, the view blanks): after the first page, move by clicking (sidebar, a message's replies, the quick switcher on Control+k) and open a URL only to go somewhere a click can't reach. There is no shell, so no pipes; to run several commands in ONE call (filling a form: click, fill, select, then snapshot), put the first in \`command\` and the rest in \`next\` — they run in order, each checked the same way, and stop at the first that fails. \`diff snapshot\` returns only what changed since the last snapshot, far smaller than a fresh one. Only interaction commands work (open/click/fill/type/press/select/scroll/wait/snapshot/get/find/tab/eval/…), and only Slack URLs open — no screenshots, files or other sites. \`eval <js>\` runs JavaScript in the Slack page (reading a long list, checking state), and \`wait --fn <js>\` waits for a condition. "${RESTART}" relaunches a stuck browser. Nothing in Slack is blocked except signing out: it can send, edit, react, join and run workflows AS kyto's user account, so act only on what the owner asked. A live view is posted in the thread on first use.`,
     inputSchema: z.object({
       command: z
         .string()
@@ -264,6 +304,20 @@ export function slackBrowserTool({
           };
         }
       }
+      const scope =
+        verb === 'snapshot'
+          ? parsed.args[parsed.args.findIndex((arg) => SCOPED.has(arg)) + 1]
+          : undefined;
+      if (
+        scope &&
+        parsed.args.some((arg) => SCOPED.has(arg)) &&
+        (await countOf({ abortSignal, browser, selector: scope })) === 0
+      ) {
+        return {
+          success: false,
+          summary: `Nothing on the page matches ${scope}, so the snapshot was not taken — the refs from your earlier snapshots still work. Take an unscoped \`snapshot -i -c\` to see what is there.`,
+        };
+      }
       const result = await browser.run({
         abortSignal,
         args: parsed.args,
@@ -277,6 +331,8 @@ export function slackBrowserTool({
         summary = `Slack browser ${command} failed: the browser stopped answering. Run "${RESTART}" before trying again.`;
       } else if (COVERED.test(result.stderr)) {
         summary = `Slack browser ${command} hit something on top of the target (${COVERED.exec(result.stderr)?.[1]}): an open dropdown or another dialog. Pick an option or press Tab to close it (never Escape in a modal — it asks to discard the form), then try again.`;
+      } else if (STALE_REF.test(result.stderr)) {
+        summary = `Slack browser ${command} failed: that ref is gone — the element was redrawn, or the page changed. Take a fresh snapshot and use the refs it gives.`;
       } else if (result.exitCode !== 0) {
         summary = `Slack browser ${command} exited ${result.exitCode}.`;
       } else if (
@@ -288,17 +344,21 @@ export function slackBrowserTool({
         summary =
           'Slack is still loading (nothing on the page yet): "wait 3000", then snapshot again. Do not open the URL again — that restarts the load.';
       }
-      // A whole-page snapshot already holds the modal; anything else, scoped
-      // snapshots included, gets it alongside.
-      const modal =
-        result.timedOut ||
-        (verb === 'snapshot' &&
-          !parsed.args.some((arg) => arg === '-s' || arg === '--selector'))
-          ? undefined
-          : await openModal({ abortSignal, browser });
+      // A whole-page snapshot already holds the modal's refs, so it gets only
+      // the full wording; anything else, scoped snapshots included, gets both.
+      const found = result.timedOut
+        ? undefined
+        : await openModal({ abortSignal, browser });
+      const wholePage =
+        verb === 'snapshot' && !parsed.args.some((arg) => SCOPED.has(arg));
+      let modal: { refs?: string; text?: string } | undefined = found;
+      if (found && wholePage) {
+        modal = found.text ? { text: found.text } : undefined;
+      }
       if (modal) {
-        summary +=
-          ' A modal or popup is OPEN on top of Slack (`modal`, with its refs) — act on it there; it is not inside the thread pane.';
+        summary += wholePage
+          ? ' A modal or popup is open; its refs are in this snapshot and `modal.text` has its full wording — a snapshot cuts long labels, so read the instructions there.'
+          : ' A modal or popup is OPEN on top of Slack (`modal.refs` to act on, `modal.text` with its full wording — read the instructions there, a snapshot cuts long labels) — act on it there; it is not inside the thread pane.';
       }
       const opensThread =
         verb === 'open' &&
