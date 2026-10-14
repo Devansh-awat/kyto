@@ -1,3 +1,5 @@
+import nodePath from 'node:path';
+import type { SandboxContext } from '@repo/ai';
 import { tool } from 'ai';
 import { z } from 'zod';
 import type { ThreadHandle as Thread } from '@/harness/thread';
@@ -24,6 +26,23 @@ const MAX_BODY_BYTES = 5 * 1024 * 1024;
 // (issue #70). Only the URL goes to Jina, never anything from Slack.
 const READER_PREFIX = 'https://r.jina.ai/';
 const SHELL_MAX_TEXT_CHARS = 2000;
+// A wiki or CMS answers a missing page with 200 and a "doesn't exist" body;
+// kyto read DokuWiki's "This topic does not exist yet" as the page (#94). Only
+// a SHORT page saying so counts — a long one is a real page quoting the words.
+const SOFT_404_MAX_CHARS = 3000;
+const SOFT_404 =
+  /\b(?:this (?:topic|page) does not exist yet|page not found|404 not found|the page you requested (?:could not be found|does not exist)|there is currently no text in this page)\b/i;
+// The start of a saved page shown inline, so the model can tell at once
+// whether it got the right document.
+const SAVED_PREVIEW_CHARS = 1500;
+const HTML_ENTITIES: Record<string, string> = {
+  '&#39;': "'",
+  '&amp;': '&',
+  '&gt;': '>',
+  '&lt;': '<',
+  '&nbsp;': ' ',
+  '&quot;': '"',
+};
 
 // Slack workspace/message/file URLs (e.g. foo.slack.com, files.slack.com) —
 // these require an authenticated session, so fetchUrl can't read them.
@@ -117,9 +136,12 @@ export function getPermalinkTool({
 export async function fetchUrlText({
   offset = 0,
   url,
+  whole = false,
 }: {
   offset?: number;
   url: string;
+  /** The whole text, not a part (it is going to a file, not the context). */
+  whole?: boolean;
 }): Promise<{
   content: string;
   contentType: string;
@@ -151,13 +173,28 @@ export async function fetchUrlText({
   let text = '';
   if (response.ok) {
     const raw = await readCapped(response);
-    // Strip tags for HTML so the reader gets readable text, not markup.
+    // Strip tags for HTML so the reader gets readable text, not markup. Block
+    // ends become line breaks (one 124k-char line could not be grepped or
+    // read in parts), and site chrome goes: a legal page's nav menu was read
+    // as its first clause (#85).
     text = contentType.includes('text/html')
       ? raw
-          .replace(/<script[\s\S]*?<\/script>/gi, '')
-          .replace(/<style[\s\S]*?<\/style>/gi, '')
+          .replace(
+            /<(script|style|noscript|svg|nav|header|footer|aside)\b[\s\S]*?<\/\1>/gi,
+            ''
+          )
+          .replace(
+            /<br\s*\/?>|<\/(?:p|div|h[1-6]|li|tr|section|article|blockquote|pre)>/gi,
+            '\n'
+          )
           .replace(/<[^>]+>/g, ' ')
-          .replace(/\s+/g, ' ')
+          .replace(
+            /&(?:#39|amp|gt|lt|nbsp|quot);/g,
+            (entity) => HTML_ENTITIES[entity] ?? entity
+          )
+          .replace(/[ \t\r\f\v]+/g, ' ')
+          .replace(/ ?\n ?/g, '\n')
+          .replace(/\n{3,}/g, '\n\n')
           .trim()
       : raw;
   } else {
@@ -190,7 +227,12 @@ export async function fetchUrlText({
       );
     }
   }
-  const end = offset + MAX_CONTENT_CHARS;
+  if (text.length < SOFT_404_MAX_CHARS && SOFT_404.test(text)) {
+    throw new Error(
+      `Fetch failed: the page does not exist (the site answered ${response.status}, but the page says it isn't there). Don't report its text as the page.`
+    );
+  }
+  const end = whole ? text.length : offset + MAX_CONTENT_CHARS;
   const truncated = text.length > end;
   return {
     content: text.slice(offset, end),
@@ -228,11 +270,21 @@ async function readCapped(response: Response): Promise<string> {
   return text;
 }
 
-export function fetchUrlTool() {
+export function fetchUrlTool({
+  getSandboxContext,
+}: {
+  getSandboxContext: () => SandboxContext | undefined;
+}) {
   return tool({
     description:
-      "Fetch the text content of a specific URL the user pasted or referenced. Use this instead of a web search when you already have the exact link. A bot-walled or JavaScript-only page is read through a rendering reader automatically (`via` says which route worked). A page longer than 20,000 characters comes in parts: the result's `totalChars` is the whole page and `nextOffset` is where the next part starts — call again with `offset: nextOffset` (several offsets in parallel is fine) until there is no `nextOffset`. Read every part before summarising or quoting a whole page; never present a summary of part of a page as the page's.",
+      "Fetch the text content of a specific URL the user pasted or referenced. Use this instead of a web search when you already have the exact link. A bot-walled or JavaScript-only page is read through a rendering reader automatically (`via` says which route worked). A page longer than 20,000 characters comes in parts: the result's `totalChars` is the whole page and `nextOffset` is where the next part starts — call again with `offset: nextOffset` (several offsets in parallel is fine) until there is no `nextOffset`. Read every part before summarising or quoting a whole page; never present a summary of part of a page as the page's. For a long DOCUMENT (a legal page, a story, docs) pass `toFile: true` instead: the whole cleaned text is saved in the sandbox in one call and you get its path, length and opening — then grep it or read it with readFile, in parallel ranges. Don't curl and convert HTML by hand.",
     inputSchema: z.object({
+      toFile: z
+        .boolean()
+        .optional()
+        .describe(
+          'Save the whole page as text in the sandbox instead of returning a part of it.'
+        ),
       offset: z
         .number()
         .int()
@@ -243,9 +295,41 @@ export function fetchUrlTool() {
         ),
       url: z.string().url().describe('The URL to fetch.'),
     }),
-    execute: async ({ offset, url }) => {
+    execute: async ({ offset, toFile, url }) => {
       try {
-        return { ...(await fetchUrlText({ offset, url })), success: true };
+        if (!toFile) {
+          return { ...(await fetchUrlText({ offset, url })), success: true };
+        }
+        const context = getSandboxContext();
+        if (!context) {
+          throw new Error(
+            'No sandbox in this turn, so the page cannot be saved; fetch it without toFile and read it in parts.'
+          );
+        }
+        const page = await fetchUrlText({ offset: 0, url, whole: true });
+        const { hostname, pathname } = new URL(url);
+        const name = `${hostname}${pathname}`
+          .replaceAll(/[^\w.-]+/g, '_')
+          .replace(/_+$/, '')
+          .slice(0, 120);
+        const path = nodePath.join(
+          context.sessionWorkDir,
+          'pages',
+          `${name || 'page'}.txt`
+        );
+        await context.session.writeBinaryFile({
+          content: new TextEncoder().encode(page.content),
+          path,
+        });
+        return {
+          contentType: page.contentType,
+          lines: page.content.split('\n').length,
+          path,
+          preview: page.content.slice(0, SAVED_PREVIEW_CHARS),
+          success: true,
+          totalChars: page.totalChars,
+          via: page.via,
+        };
       } catch (error) {
         logger.warn({ error: errorMessage(error) }, '[fetchUrl] failed');
         return { error: errorMessage(error), success: false };

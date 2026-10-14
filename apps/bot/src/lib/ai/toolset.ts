@@ -410,7 +410,7 @@ export async function buildTools({
     joinThread: joinThreadTool({ thread }),
     leaveThread: leaveThreadTool({ thread }),
     getPermalink: getPermalinkTool({ askerUserId: authorUserId, thread }),
-    fetchUrl: fetchUrlTool(),
+    fetchUrl: fetchUrlTool({ getSandboxContext }),
     // Keyed off the constant: the stop condition that makes a skip terminal
     // matches on this exact name (see streamAttempt).
     [SKIP_TOOL_NAME]: skipTool({ threadId: thread.id }),
