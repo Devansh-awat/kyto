@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test';
+import { readdirSync, readFileSync } from 'node:fs';
+import nodePath from 'node:path';
 import { githubSkillSource, parseSkill } from './parse';
 
 describe('parseSkill', () => {
@@ -70,4 +72,16 @@ describe('githubSkillSource', () => {
       githubSkillSource('https://github.com/o/r/tree/main/../../x')
     ).toBeUndefined();
   });
+});
+
+// A built-in that doesn't parse throws at boot, so kyto crash-loops on deploy;
+// this catches it at `bun test` instead (a frontmatter-less skill was PR'd).
+describe('built-in skills', () => {
+  const dir = nodePath.join(import.meta.dir, '../../skills');
+  for (const file of readdirSync(dir).filter((name) => name.endsWith('.md'))) {
+    test(`${file} parses`, () => {
+      const result = parseSkill(readFileSync(nodePath.join(dir, file), 'utf8'));
+      expect(result.ok ? true : result.error).toBe(true);
+    });
+  }
 });
