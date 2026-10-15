@@ -3,6 +3,12 @@
   "import": ["@repo/cspell-config"],
   "words": [
     "Adoptium",
+    "decompiles",
+    "fabricmc",
+    "unobfuscated",
+    "jvmargs",
+    "modid",
+    "Mojang",
     "IFML",
     "javac",
     "javap",
