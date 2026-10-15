@@ -57,10 +57,10 @@ const PERMISSION_REJECTED = /permission requested: .*auto-rejecting/;
 // biome-ignore lint/suspicious/noControlCharactersInRegex: that is what they are
 const ANSI = /\u001b\[[0-9;]*[A-Za-z]/g;
 
-// Owner's call (2026-09-30): Big Pickle, OpenCode's own free default. Only
-// FREE models work here (no account key in the sandbox); the free DeepSeek
-// (`opencode/deepseek-v4-flash-free`) was answering "Model is unavailable".
-const DEFAULT_MODEL = 'opencode/big-pickle';
+// Owner's call (2026-10-15): DeepSeek V4.1 Flash, now free on Zen. Only FREE
+// models work here (no account key in the sandbox), and Zen serves them only
+// to the OpenCode client — a plain API call gets `FreeTierError`.
+const DEFAULT_MODEL = 'opencode/deepseek-v4.1-flash-free';
 
 export function opencodeTool({
   extendAttemptDeadline,
