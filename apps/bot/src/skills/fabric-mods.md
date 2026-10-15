@@ -13,6 +13,8 @@ Use this when building, patching or debugging a Fabric mod for Minecraft Java Ed
 - Build: `./gradlew build`. Output jar is in `build/libs/`.
 - Dev client: `./gradlew runClient`. Dev server: `./gradlew runServer`.
 - Use Java 21 for current 1.20.5+ versions. Check the version table in the Fabric docs for the matching Java version.
+- Recommended Fabric Loom version: `1.18-SNAPSHOT`, usually set in the `plugins` block of `build.gradle` as `id 'fabric-loom' version '1.18-SNAPSHOT'`. Source: https://fabricmc.net/develop/.
+- Reference: the official template https://github.com/FabricMC/fabric-example-mod — for current 1.21.x versions, its `gradle.properties` is the reference.
 
 ## Code rules
 - Register content in `onInitialize()` using the Registry API, with `Identifier` ids under your mod id.
