@@ -133,6 +133,8 @@ function presentedSecret(request: Request): string | undefined {
 interface Target {
   /** Repos this request would CREATE, for the claim on success. */
   creates: string[];
+  /** A fork request: it changes no refs, even when the fork already exists. */
+  fork?: true;
   /** Repos this request touches, lowercased `owner/name`. */
   repos: string[];
   /** False when a write's target could not be determined at all. */
@@ -167,7 +169,13 @@ function restTarget({
     !(body && /"organization"\s*:/.test(body))
   ) {
     const repo = `${GITHUB_LOGIN}/${third}`.toLowerCase();
-    return { creates: [repo], repos: [repo], understood: true, write };
+    return {
+      creates: [repo],
+      fork: true,
+      repos: [repo],
+      understood: true,
+      write,
+    };
   }
   if (first === 'repos' && second && third) {
     return {
@@ -540,8 +548,11 @@ export async function handleGithubProxy(
       pushBody = peeked.body;
       // Unreadable refs match no prefix, so they only stop a non-claimant.
       forkRefs = peeked.refs ?? ['(unreadable push)'];
-    } else if (isGit) {
-      // The ref advertisement before a push changes nothing.
+    } else if (isGit || target.fork) {
+      // The ref advertisement before a push changes nothing, and neither does
+      // forking a repo kyto already forked: GitHub hands back the existing
+      // fork. Without this, the first person to fork a repo (who claims the
+      // fork) locked everyone else out of `gh repo fork` and so out of PRs.
       forkRefs = [];
     }
     const guard = await guardGithubTargets({

@@ -884,9 +884,14 @@ async function executeTurn(
       // was addressed to kyto and got nothing — not a word, not a skip — is
       // only history to it, and in a busy thread an @mention was dropped for
       // good that way (issue #27). Name it, so the follow-up answers both.
+      // An unpinged reply counts once kyto was already working on it (a tool
+      // ran): the owner's "PR it into Devansh-awat/kyto" was cut off mid-run by
+      // another person's message, and the follow-up never knew it existed.
       const addressed =
         !(secret || answeredBy || moderationReply.trim()) &&
-        (message.isMention || slack.isDM(threadId));
+        (message.isMention ||
+          slack.isDM(threadId) ||
+          turnTiming.slowestTools.length > 0);
       const carried = [...unanswered, ...(addressed ? [message] : [])]
         .filter(({ id }) => id !== resume.message.id)
         .slice(-MAX_CARRIED_UNANSWERED);
