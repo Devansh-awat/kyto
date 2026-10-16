@@ -101,7 +101,9 @@ export function saveMemoryTool(actor: MemoryActor) {
         .string()
         .min(1)
         .max(TITLE_MAX)
-        .describe('Short handle, shown to you every turn.'),
+        .describe(
+          "Shown to you every turn, and the ONLY thing a later thread sees before deciding whether to fetch this, so make it say what's inside and when it applies: 6-15 words, e.g. 'kyto deploy: Coolify redeploys on push to main, check logs there', not 'deploy notes'."
+        ),
       summary: z
         .string()
         .min(1)

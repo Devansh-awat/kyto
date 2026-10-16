@@ -285,6 +285,7 @@ export async function buildTools({
   message,
   thread,
   secret = false,
+  takeReminder,
   takeSteering,
   unattended = false,
   unredactedEmail = false,
@@ -324,6 +325,11 @@ export async function buildTools({
    * subagent's tool call never swallows one.
    */
   takeSteering?: () => string | undefined;
+  /**
+   * A note from the harness itself for the next tool result (the main turn's
+   * "they haven't heard from you" nudge), or undefined.
+   */
+  takeReminder?: () => string | undefined;
   /** Answering as kyto's user account: a subagent's report wakes it, too. */
   asUserAccount?: boolean;
   /**
@@ -1028,20 +1034,27 @@ export async function buildTools({
               : 'done',
             result
           );
-          // A follow-up the author sent mid-turn rides on whichever result
-          // comes back next; a result of another shape leaves it queued.
-          const steering =
+          // A follow-up the author sent mid-turn, or a note from the harness,
+          // rides on whichever result comes back next; a result of another
+          // shape leaves it queued.
+          const carries =
             typeof result === 'string' ||
             (typeof result === 'object' &&
               result !== null &&
-              !Array.isArray(result))
-              ? takeSteering?.()
-              : undefined;
+              !Array.isArray(result));
+          const steering = carries ? takeSteering?.() : undefined;
+          const reminder = carries ? takeReminder?.() : undefined;
           let delivered: unknown = result;
-          if (steering && typeof result === 'string') {
-            delivered = `${result}\n\n${steering}`;
-          } else if (steering) {
-            delivered = { ...result, newMessages: steering };
+          if (typeof result === 'string') {
+            delivered = [result, steering, reminder]
+              .filter(Boolean)
+              .join('\n\n');
+          } else if (steering || reminder) {
+            delivered = {
+              ...result,
+              ...(steering ? { newMessages: steering } : {}),
+              ...(reminder ? { reminder } : {}),
+            };
           }
           return redactSecretsDeep(delivered, `tool ${name}`);
         } catch (error) {

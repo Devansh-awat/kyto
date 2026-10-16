@@ -6,7 +6,7 @@ import {
   subagentAttempts,
   subagentSystemPrompt,
 } from '@repo/ai';
-import type { ToolSet } from 'ai';
+import type { ModelMessage, ToolSet } from 'ai';
 import { tool } from 'ai';
 import { z } from 'zod';
 import type { KytoBot } from '@/harness/bot';
@@ -19,6 +19,7 @@ import { stripToolComplaints } from '@/lib/ai/stream/tool-complaints';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
 import { errorMessage } from '@/lib/utils/error';
+import { clamp } from '@/lib/utils/text';
 
 // A subagent is a headless copy of kyto: it shares the PARENT THREAD's sandbox
 // (so it sees the files/state the parent set up, and vice versa), the same full
@@ -71,17 +72,24 @@ type SubagentResult =
   | { report: string; success: true }
   | { error: string; success: false };
 
-// A background subagent, tracked so `subagent` (action `check`) can collect it later.
+// A subagent run, tracked so `subagent` (action `check`) can collect a
+// background one later, and `resume` can ask any finished one a follow-up.
 interface SubagentJob {
+  /** Who started it: only they may resume it (its context may hold their data). */
+  askerId: string;
   // Set once checkSubagent has handed this job's finished report back to the
   // model IN the live turn. wakeThread checks it right before posting, so a
   // report the model already collected and used isn't delivered a SECOND time as
   // a fresh "background subagent finished" turn (the job.then wake fires
   // independently of checkSubagent — nothing coordinated them before this flag).
   collected?: boolean;
+  /** Its own run, kept once it finishes, for `resume`. */
+  conversation?: ModelMessage[];
+  /** When the latest run finished; the forget timer checks it's still that run. */
+  finishedAt?: number;
   id: string;
   name?: string;
-  promise: Promise<SubagentResult>;
+  promise?: Promise<SubagentResult>;
   result?: SubagentResult;
   startedAt: number;
   status: 'running' | 'done' | 'failed';
@@ -99,10 +107,70 @@ const threadJobs = new Map<
   { counter: number; jobs: Map<string, SubagentJob> }
 >();
 
-function forgetLater({ id, threadId }: { id: string; threadId: string }) {
+// A kept conversation's tool results are cut to this: a resume replays the
+// whole run as its first request, and a run that read a few big files would
+// otherwise start its follow-up past the long-context price step.
+const KEPT_RESULT_CHARS = 4000;
+
+/**
+ * The run as it can be replayed: tool results cut to their heads, and the
+ * reasoning dropped (a finished answer doesn't need it, and a provider can
+ * refuse thinking it didn't sign).
+ */
+function resultText(value: unknown): string {
+  return typeof value === 'string' ? value : (JSON.stringify(value) ?? '');
+}
+
+export function keepConversation(messages: ModelMessage[]): ModelMessage[] {
+  return messages.map((message): ModelMessage => {
+    if (message.role === 'assistant' && Array.isArray(message.content)) {
+      return {
+        ...message,
+        content: message.content.filter((part) => part.type !== 'reasoning'),
+      };
+    }
+    if (message.role === 'tool') {
+      return {
+        ...message,
+        content: message.content.map((part) =>
+          part.type === 'tool-result'
+            ? {
+                ...part,
+                output: {
+                  type: 'text' as const,
+                  value:
+                    clamp(
+                      resultText(
+                        'value' in part.output ? part.output.value : part.output
+                      ),
+                      KEPT_RESULT_CHARS
+                    ) ?? '',
+                },
+              }
+            : part
+        ),
+      };
+    }
+    return message;
+  });
+}
+
+function forgetLater({
+  finishedAt,
+  id,
+  threadId,
+}: {
+  finishedAt: number;
+  id: string;
+  threadId: string;
+}) {
   setTimeout(() => {
     const registry = threadJobs.get(threadId);
-    registry?.jobs.delete(id);
+    // Resumed since: its own, later timer forgets it.
+    if (registry?.jobs.get(id)?.finishedAt !== finishedAt) {
+      return;
+    }
+    registry.jobs.delete(id);
     if (registry?.jobs.size === 0) {
       threadJobs.delete(threadId);
     }
@@ -146,7 +214,7 @@ export function runSubagentTool({
 
   const runSubagent = tool({
     description:
-      'Delegate a task to a subagent: a headless copy of kyto (shares your sandbox, same tools) that runs on a cheaper pinned model and returns a written report to you. Its run shows up inside your own plan/thinking block as it works; it does NOT post a message of its own, so YOU are the only voice in the thread and its findings only reach the user if you say them. Use it for open-ended investigation or self-contained work that would otherwise clutter your own context. It has NO access to this conversation beyond what you put in the task. By default it runs FOREGROUND (you wait for its report, then use it). Set background:true to fire it off and keep working immediately) you get a job id back instead of the report, and later call subagent (action check) with that id to collect it.',
+      'Delegate a task to a subagent: a headless copy of kyto (shares your sandbox, same tools) that runs on a cheaper pinned model and returns a written report to you. Its run shows up inside your own plan/thinking block as it works; it does NOT post a message of its own, so YOU are the only voice in the thread and its findings only reach the user if you say them. Use it for open-ended investigation or self-contained work that would otherwise clutter your own context. It has NO access to this conversation beyond what you put in the task. By default it runs FOREGROUND (you wait for its report, then use it). Set background:true to fire it off and keep working immediately) you get a job id back instead of the report, and later call subagent (action check) with that id to collect it. Every run has an `id`: to follow up on what it found (dig deeper, fix what it found, a related question), pass that id as `resume` with the follow-up as `task`. It continues with its whole earlier run in context, which is cheaper and better informed than a fresh subagent.',
     inputSchema: z.object({
       task: z
         .string()
@@ -166,8 +234,14 @@ export function runSubagentTool({
         .describe(
           'If true, spawn the subagent and return IMMEDIATELY without waiting: it runs independently and you get no report back on this call. Use it to run a side-task in parallel while you continue your own work; collect it later with subagent (action check), or let its report come back as a follow-up turn. Default false (wait for and receive the report).'
         ),
+      resume: z
+        .string()
+        .optional()
+        .describe(
+          'The id of a FINISHED subagent (e.g. "sub-2") to continue: `task` becomes your follow-up to it, and it answers with everything from its earlier run still in its context (what it read, ran and found), instead of a fresh subagent starting over. For "dig deeper", "now fix what you found", "what about X". Ids last an hour after the run.'
+        ),
     }),
-    execute: async ({ task, name, background }, { abortSignal }) => {
+    execute: async ({ task, name, background, resume }, { abortSignal }) => {
       if (subagentAttempts.length === 0) {
         return {
           error:
@@ -182,6 +256,42 @@ export function runSubagentTool({
           success: false,
         };
       }
+      const registry = registryFor();
+      let record: SubagentJob;
+      if (resume) {
+        const found = registry.jobs.get(resume);
+        if (!found?.conversation) {
+          return {
+            error: found
+              ? `Subagent ${resume} has nothing to resume: it is still running (collect it with subagent action check) or it failed before writing a report.`
+              : `Unknown subagent id: ${resume}. Ids last an hour after a run finishes, in this thread, until kyto restarts. Start a new subagent instead.`,
+            success: false,
+          };
+        }
+        // Its context holds what it read on its asker's behalf.
+        if (found.askerId !== message.author.userId) {
+          return {
+            error: `Subagent ${resume} was started for someone else, so it can't be resumed for this person. Start a new one.`,
+            success: false,
+          };
+        }
+        record = found;
+        record.status = 'running';
+        record.collected = false;
+      } else {
+        registry.counter += 1;
+        record = {
+          askerId: message.author.userId,
+          id: `sub-${registry.counter}`,
+          name,
+          startedAt: Date.now(),
+          status: 'running',
+        };
+      }
+      const id = record.id;
+      const label = record.name ?? name;
+      const prior = record.conversation;
+      record.conversation = undefined;
       // depthStore.run STARTS the job and returns its promise. Foreground
       // (default): await it and hand the report back to the parent model as this
       // tool call's RESULT — the next step sees the report and answers from it.
@@ -210,9 +320,11 @@ export function runSubagentTool({
           // purpose (owner's call): the name is only ever "kyto",
           // "kyto subagent", or "kyto subagent {name}" — nothing configurable
           // decorates it, and there is no icon override.
-          const label = name ? `kyto subagent ${name}` : 'kyto subagent';
+          const cardLabel = label ? `kyto subagent ${label}` : 'kyto subagent';
 
           let close: (() => Promise<void>) | undefined;
+          // The run that wrote the report, kept for a later `resume`.
+          let conversation: ModelMessage[] | undefined;
           let ranTools = false;
           let report = '';
           // Text from an attempt that then THREW: kept only as a last resort, so
@@ -259,8 +371,9 @@ export function runSubagentTool({
             async function* subagentChunks(): AsyncGenerator<
               string | StreamChunk
             > {
-              yield card('prompt', 'Prompt', 'in_progress');
-              yield card('prompt', 'Prompt', 'complete', task);
+              const promptTitle = prior ? 'Follow-up' : 'Prompt';
+              yield card('prompt', promptTitle, 'in_progress');
+              yield card('prompt', promptTitle, 'complete', task);
               // Walk the subagent roster. The cheap pinned tier returns an empty
               // completion often enough that a single model left a whole "herd"
               // of subagents reporting nothing back, so an attempt that produces
@@ -282,6 +395,7 @@ export function runSubagentTool({
                     attempt,
                     getFreshImages: built.drainImages,
                     holder: {},
+                    priorMessages: prior,
                     prompt: task,
                     // Background work, owner's call 2026-10-08: half price.
                     serviceTier: 'flex',
@@ -310,6 +424,14 @@ export function runSubagentTool({
                     'complete',
                     attempt.model
                   );
+                  if (report.trim()) {
+                    const { messages } = await result.response;
+                    conversation = keepConversation([
+                      ...(prior ?? []),
+                      { content: task, role: 'user' },
+                      ...messages,
+                    ]);
+                  }
                 } catch (error) {
                   lastError = error;
                   if (report.trim()) {
@@ -371,7 +493,7 @@ export function runSubagentTool({
               recipientTeamId: slack.teamId ?? '',
               recipientUserId: message.author.userId,
               taskDisplayMode: 'plan',
-              username: label,
+              username: cardLabel,
             });
 
             report = report.trim();
@@ -393,6 +515,8 @@ export function runSubagentTool({
           } catch (error) {
             return { error: errorMessage(error), success: false };
           } finally {
+            // A failed resume keeps the run it was resuming.
+            record.conversation = conversation ?? prior;
             // Only tear down the per-turn MCP/tool connections. The sandbox is the
             // parent's — the parent pauses it at turn end, so don't destroy it here.
             await close?.().catch(() => undefined);
@@ -400,64 +524,71 @@ export function runSubagentTool({
         }
       );
 
-      if (background) {
-        // Register the job so checkSubagent can collect it later, and keep its
-        // status current as it resolves. Then hand control back to the parent.
-        const registry = registryFor();
-        registry.counter += 1;
-        const id = `sub-${registry.counter}`;
-        const record: SubagentJob = {
+      // Every run is registered, foreground too, so it can be resumed.
+      record.promise = job;
+      record.result = undefined;
+      registry.jobs.set(id, record);
+      const settle = (result: SubagentResult) => {
+        record.status = result.success ? 'done' : 'failed';
+        record.result = result;
+        record.finishedAt = Date.now();
+        forgetLater({
+          finishedAt: record.finishedAt,
           id,
-          name,
-          promise: job,
-          startedAt: Date.now(),
-          status: 'running',
-        };
-        registry.jobs.set(id, record);
-        // A turn started BY a wake doesn't get to schedule another one, or five
-        // subagents reporting back could each spawn a turn that spawns more.
-        const mayWake = !message.id.startsWith(WAKE_MESSAGE_PREFIX);
-        job.then(
-          (result) => {
-            record.status = result.success ? 'done' : 'failed';
-            record.result = result;
-            forgetLater({ id, threadId: thread.id });
-            if (mayWake) {
-              wakeThread({ asUserAccount, job: record, message, thread }).catch(
-                () => undefined
-              );
-            }
-          },
-          (error: unknown) => {
-            record.status = 'failed';
-            record.result = { error: errorMessage(error), success: false };
-            forgetLater({ id, threadId: thread.id });
-            logger.error(
-              { err: error, thread: thread.id },
-              '[subagent] background run failed'
-            );
-            if (mayWake) {
-              wakeThread({ asUserAccount, job: record, message, thread }).catch(
-                () => undefined
-              );
-            }
-          }
+          threadId: thread.id,
+        });
+      };
+      const resumable = `To ask it a follow-up with its context intact, call subagent (action run) with resume: "${id}" and the follow-up as the task.`;
+      if (!background) {
+        const result = await job.catch(
+          (error: unknown): SubagentResult => ({
+            error: errorMessage(error),
+            success: false,
+          })
         );
-        const jobLabel = name ? `"${name}"` : 'it';
-        return {
-          background: true,
-          id,
-          note: `Subagent ${jobLabel} started in the background as ${id}. Keep working; when you need its findings call subagent (action check) with id "${id}". If your turn ends before it finishes, that's fine: its report comes back to you as a new turn in this thread, so you don't have to wait for it. It does NOT post anything itself, so nothing reaches the user until you say it.`,
-          success: true,
-        };
+        settle(result);
+        return result.success
+          ? { ...result, id, resume: resumable }
+          : { ...result, id };
       }
-      return await job;
+      // A turn started BY a wake doesn't get to schedule another one, or five
+      // subagents reporting back could each spawn a turn that spawns more.
+      const mayWake = !message.id.startsWith(WAKE_MESSAGE_PREFIX);
+      job.then(
+        (result) => {
+          settle(result);
+          if (mayWake) {
+            wakeThread({ asUserAccount, job: record, message, thread }).catch(
+              () => undefined
+            );
+          }
+        },
+        (error: unknown) => {
+          settle({ error: errorMessage(error), success: false });
+          logger.error(
+            { err: error, thread: thread.id },
+            '[subagent] background run failed'
+          );
+          if (mayWake) {
+            wakeThread({ asUserAccount, job: record, message, thread }).catch(
+              () => undefined
+            );
+          }
+        }
+      );
+      const jobLabel = label ? `"${label}"` : 'it';
+      return {
+        background: true,
+        id,
+        note: `Subagent ${jobLabel} started in the background as ${id}. Keep working; when you need its findings call subagent (action check) with id "${id}". If your turn ends before it finishes, that's fine: its report comes back to you as a new turn in this thread, so you don't have to wait for it. It does NOT post anything itself, so nothing reaches the user until you say it.`,
+        success: true,
+      };
     },
   });
 
   const checkSubagent = tool({
     description:
-      "Check on background subagents you started with runSubagent (background:true). With no id, lists every background subagent in this thread and its status. With an id, returns that subagent's status and (once finished) its full report. Set wait:true to block until it finishes before returning (use this to collect a background subagent's result before you answer).",
+      "Check on subagents you started with runSubagent. With no id, lists every subagent in this thread (background or not) and its status. With an id, returns that subagent's status and (once finished) its full report. Set wait:true to block until it finishes before returning (use this to collect a background subagent's result before you answer).",
     inputSchema: z.object({
       id: z
         .string()
@@ -495,7 +626,7 @@ export function runSubagentTool({
       if (wait && job.status === 'running') {
         // Bounded by the subagent's own run (and the turn's attempt watchdog): it
         // shares the turn abort signal, so a turn abort resolves this too.
-        await job.promise.catch(() => undefined);
+        await job.promise?.catch(() => undefined);
       }
       if (job.status === 'running') {
         return {

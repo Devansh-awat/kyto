@@ -183,6 +183,7 @@ export function streamAttempt({
   onFirstRequest,
   onError,
   onGatewayRetry,
+  priorMessages = [],
   prompt,
   reasoningEffort,
   requireToolFirst,
@@ -251,6 +252,11 @@ export function streamAttempt({
    * nothing more than turns getting slower.
    */
   onGatewayRetry?: (info: GatewayRetryInfo) => void;
+  /**
+   * An earlier conversation this call continues, ahead of `history` and
+   * `prompt`: a resumed subagent's own run, tool calls and results included.
+   */
+  priorMessages?: ModelMessage[];
   prompt: string;
   /**
    * Hack Club only: the effort to send, already decided by the caller (so it
@@ -323,9 +329,10 @@ export function streamAttempt({
   // replayed history. With neither, keep the plain string prompt.
   const initialImages = usableImages(images ?? [], onDroppedImages);
   const promptInput =
-    initialImages.length > 0 || history.length > 0
+    initialImages.length > 0 || history.length > 0 || priorMessages.length > 0
       ? {
           messages: [
+            ...priorMessages,
             ...history.map((content) => ({
               content,
               role: 'user' as const,

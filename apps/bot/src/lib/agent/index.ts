@@ -212,6 +212,10 @@ const THINKING_CAPPED_TTL_MS = 30 * 60 * 1000;
 // unchanged the whole time, which reads as stuck (#74): it is refreshed this
 // often with how long and how much it has thought.
 const THINKING_PROGRESS_MS = 30_000;
+const MS_PER_MINUTE = 60_000;
+// Tool cards alone this long, and the next tool result asks kyto to say in a
+// line what it's doing (a long build or research run read as a stuck bot).
+const SILENCE_NUDGE_MS = 3 * MS_PER_MINUTE;
 const thinkingCapped = new Map<string, number>();
 
 // Longer than any text isBareSkipText accepts (e.g. "```skip()```.").
@@ -959,6 +963,22 @@ async function executeTurn(
     // `--no-redact` is read off THIS message, never the thread's saved
     // settings, so it lasts one turn.
     const turnFlags = parseFlags(withoutLeadingMentions(rawText(turnMessage)));
+    // When the person last saw words from kyto (tool cards don't count), for
+    // the "they haven't heard from you" note on a tool result.
+    let spokeAt = Date.now();
+    let nudgedAt = 0;
+    const takeReminder = (): string | undefined => {
+      const now = Date.now();
+      if (
+        secret ||
+        now - spokeAt < SILENCE_NUDGE_MS ||
+        now - nudgedAt < SILENCE_NUDGE_MS
+      ) {
+        return;
+      }
+      nudgedAt = now;
+      return `[From kyto's harness, not from a person: the person you're working for has seen only tool cards from you for ${Math.round((now - spokeAt) / MS_PER_MINUTE)} minutes. Before your next tool call, write one short line saying what you're doing and what's left, then carry on.]`;
+    };
     const pendingTools = buildTools({
       asUserAccount,
       bot,
@@ -972,6 +992,7 @@ async function executeTurn(
       guardCodeTool: codingMonitor.guardTool,
       message: turnMessage,
       secret,
+      takeReminder,
       takeSteering: () => takeSteering(activeTurn),
       thread: turnThread,
       unredactedEmail:
@@ -1684,6 +1705,7 @@ async function executeTurn(
             // doesn't exist and the plan would show a perpetually spinning
             // Thinking. Whitespace-only fragments don't count (see isVisibleText).
             if (isVisibleText(chunk)) {
+              spokeAt = Date.now();
               const done = completeModelTask();
               if (done) {
                 yield done;
