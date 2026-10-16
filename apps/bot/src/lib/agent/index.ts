@@ -6,7 +6,6 @@ import {
   type ModelAttempt,
   modelSupportsVision,
   PRIMARY_ATTEMPT,
-  PRIMARY_MODEL,
   pickReasoningEffort,
   type ResolvedModelHolder,
   type SandboxContext,
@@ -95,6 +94,12 @@ import {
   type StreamTally,
 } from '@/lib/ai/stream';
 import { createCardBudget } from '@/lib/ai/stream/cards';
+import {
+  addReasoningCounts,
+  describeReasoning,
+  emptyReasoningCounts,
+  type ReasoningCounts,
+} from '@/lib/ai/stream/timing';
 import { pickPreloadTools } from '@/lib/ai/tool-preload';
 import { WAKE_ID } from '@/lib/ai/tools/background';
 import {
@@ -594,6 +599,8 @@ async function executeTurn(
     modelMs: number;
     outputCharsPerSecond?: number;
     outputTokensPerSecond?: number;
+    /** Thinking, summed over every model call (lib/ai/stream/timing). */
+    reasoning: ReasoningCounts;
     setupMs?: number;
     /** Slack's ts on the message to the turn starting: Socket Mode's delay. */
     ingressMs?: number;
@@ -613,6 +620,7 @@ async function executeTurn(
     ),
     modelCalls: 0,
     modelMs: 0,
+    reasoning: emptyReasoningCounts(),
     slowestTools: [],
     toolMs: 0,
     ttftMs: [],
@@ -624,6 +632,10 @@ async function executeTurn(
     turnTiming.modelCalls += 1;
     turnTiming.modelMs += timing.modelMs;
     turnTiming.toolMs += timing.toolMs;
+    turnTiming.reasoning = addReasoningCounts(
+      turnTiming.reasoning,
+      timing.reasoning
+    );
     turnTiming.ttftMs = [...turnTiming.ttftMs, ...timing.firstOutputMs].slice(
       -MAX_FIRST_TOKENS_LOGGED
     );
@@ -635,7 +647,11 @@ async function executeTurn(
       .sort((a, b) => b.ms - a.ms)
       .slice(0, SLOWEST_TOOLS_LOGGED);
   };
-  const timingLog = () => ({ ...turnTiming, totalMs: Date.now() - turnStart });
+  const timingLog = () => ({
+    ...turnTiming,
+    reasoning: describeReasoning(turnTiming.reasoning),
+    totalMs: Date.now() - turnStart,
+  });
   // The answering attempt's prompt-token split, logged on `turn complete`. Kept
   // separate from usageFooter: the footer is a user-facing opt-out, this is
   // operational (is the 1h cache actually being hit?) and always recorded.
@@ -781,7 +797,10 @@ async function executeTurn(
           ...timingLog(),
           answeredBy: answeredBy?.model,
           costUsd: turnUsage?.costUsd,
+          experimentModel: experimentArm?.model,
           reasoningEffort: handledEffort,
+          // `!effort` compares only random draws (lib/turn-timings).
+          reasoningRandom: handledEffortRandom,
         },
       });
     }
@@ -1389,16 +1408,11 @@ async function executeTurn(
           // Already as low as the retry would go.
           lowEffortRetried = true;
         } else if (currentAttempt.provider === HACKCLUB_PROVIDER) {
-          // Haiku's thinking shares the 8000-token output cap, and `high` left
-          // it ~1600 tokens to answer in: replies and tool calls were cut off
-          // mid-way, and the turns cost ~40x a medium one (owner's call
-          // 2026-10-11).
-          const chosen =
-            choice.effort === 'high' && currentAttempt.model === PRIMARY_MODEL
-              ? 'medium'
-              : choice.effort;
-          effort = chosen
-            ? { effort: chosen, random: false }
+          // `high` once ran at medium on haiku: its thinking filled the 8000
+          // output tokens. A `high` attempt now gets a bigger cap
+          // (HIGH_EFFORT_MAX_OUTPUT_TOKENS), so the choice stands.
+          effort = choice.effort
+            ? { effort: choice.effort, random: false }
             : pickReasoningEffort({ attempt: currentAttempt, threadId });
         }
         const modelDetails = effort

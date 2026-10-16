@@ -15,6 +15,8 @@ export interface SpendRecord {
   model: string;
   outputTokens: number;
   provider: string;
+  /** Part of `outputTokens`: thinking, shown or hidden. */
+  reasoningTokens: number;
   source: string;
 }
 
@@ -39,6 +41,7 @@ export function reportSpend({
     usage: {
       inputTokenDetails?: { cacheReadTokens?: number };
       inputTokens?: number;
+      outputTokenDetails?: { reasoningTokens?: number };
       outputTokens?: number;
       raw?: unknown;
     };
@@ -50,10 +53,12 @@ export function reportSpend({
   let inputTokens = 0;
   let cacheReadTokens = 0;
   let outputTokens = 0;
+  let reasoningTokens = 0;
   for (const step of steps) {
     inputTokens += step.usage.inputTokens ?? 0;
     cacheReadTokens += step.usage.inputTokenDetails?.cacheReadTokens ?? 0;
     outputTokens += step.usage.outputTokens ?? 0;
+    reasoningTokens += step.usage.outputTokenDetails?.reasoningTokens ?? 0;
   }
   sink({
     cacheReadTokens,
@@ -64,6 +69,7 @@ export function reportSpend({
     model,
     outputTokens,
     provider,
+    reasoningTokens,
     source,
   });
 }

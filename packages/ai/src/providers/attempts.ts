@@ -76,6 +76,11 @@ const FORMER_PRIMARY_MODEL = 'deepseek/deepseek-v4-flash-0731';
 // projection crosses the cap even with budget still free. Sized to observed
 // step outputs (<6k tokens). Raise if large single-step file writes truncate.
 export const MAX_OUTPUT_TOKENS = 8000;
+// At `high` effort the thinking alone ran to ~6,400 of those 8000 tokens on
+// haiku, leaving ~1,600 to answer in: replies and tool calls were cut mid-way
+// (2026-10-11). An attempt at `high` gets room for both (owner's call
+// 2026-10-16, when `high` joined the effort draw).
+export const HIGH_EFFORT_MAX_OUTPUT_TOKENS = 16_000;
 
 /** Build a HackClub attempt for any model id. */
 export function catalogAttempt(model: string): ModelAttempt {

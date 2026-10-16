@@ -35,6 +35,7 @@ import {
   GEMINI_PROVIDER,
   GLM_FLASH_MODEL,
   HACKCLUB_PROVIDER,
+  HIGH_EFFORT_MAX_OUTPUT_TOKENS,
   LUNA_MODEL,
   MAX_OUTPUT_TOKENS,
   type ModelAttempt,
@@ -411,7 +412,13 @@ export function streamAttempt({
     // models otherwise burn unbounded thinking tokens on someone's bill.
     ...(attempt.provider === HACKCLUB_PROVIDER ||
     attempt.byokProvider !== undefined
-      ? { maxOutputTokens: attempt.maxOutputTokens ?? MAX_OUTPUT_TOKENS }
+      ? {
+          maxOutputTokens:
+            attempt.maxOutputTokens ??
+            (reasoningEffort === 'high'
+              ? HIGH_EFFORT_MAX_OUTPUT_TOKENS
+              : MAX_OUTPUT_TOKENS),
+        }
       : {}),
     // We run our own fallback chain across providers, so the SDK's default of 3
     // internal tries per attempt just triples the wait before we can route
@@ -888,9 +895,10 @@ const GLM_FLASH_ROUTING = {
 // API calls it `reasoning_effort` and rejects the unknown field.
 const OPENROUTER_FORMAT_BYOK = new Set(['byok-hackclub', 'byok-openrouter']);
 
-// Each accepted by luna (2026-10-09) and haiku (2026-10-10) through the proxy;
-// `high` is left out because the experiment is about speed.
-const EXPERIMENT_EFFORTS = ['low', 'medium'];
+// Each accepted by luna (2026-10-09) and haiku (2026-10-10) through the proxy.
+// `high` joined the draw on 2026-10-16 (owner's call), to be compared on the
+// reasoning metrics the turn logs now carry.
+const EXPERIMENT_EFFORTS = ['low', 'medium', 'high'];
 
 /** What `--reasoning` accepts — all four passed the proxy on both models. */
 export const REASONING_EFFORTS = ['none', 'low', 'medium', 'high'] as const;
@@ -900,9 +908,11 @@ export const REASONING_EFFORTS = ['none', 'low', 'medium', 'high'] as const;
  * 2026-10-10 for haiku), logged with the turn so speed and quality can be
  * compared per model and effort from thread_logs. Every other model: medium.
  *
- * `none` left the draw (owner's call 2026-10-12). Haiku draws low/medium per
- * attempt: Anthropic caches those two together. On luna EVERY effort has its
- * own cache, so a luna thread keeps the one effort it drew.
+ * `none` left the draw (owner's call 2026-10-12), `high` joined it
+ * (2026-10-16). Haiku draws per attempt: Anthropic caches low and medium
+ * together (measured), and high is expected to share it (thinking stays on;
+ * unmeasured, the `cross-turn prefix` log shows it). On luna EVERY effort has
+ * its own cache, so a luna thread keeps the one effort it drew.
  */
 export function pickReasoningEffort({
   attempt,

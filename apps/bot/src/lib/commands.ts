@@ -18,7 +18,7 @@ import { createDebugSnapshot, debugSnapshotUrl } from '@/lib/debug-snapshot';
 import { type ParsedFlags, parseFlags } from '@/lib/flags';
 import logger from '@/lib/logger';
 import { describeSpend } from '@/lib/spend';
-import { describeThreadTimings } from '@/lib/turn-timings';
+import { describeEffortStats, describeThreadTimings } from '@/lib/turn-timings';
 import { errorMessage, toLogError } from '@/lib/utils/error';
 import { rawText, withoutLeadingMentions } from '@/lib/utils/message';
 
@@ -47,6 +47,7 @@ interface BotCommand {
     | 'ban'
     | 'bans'
     | 'debug'
+    | 'effort'
     | 'focusmode'
     | 'optout'
     | 'spend'
@@ -116,6 +117,17 @@ export async function handleCommand({
   }
   if (command.type === 'debug') {
     await runDebug({ message, thread });
+    return true;
+  }
+  if (command.type === 'effort') {
+    const text =
+      env.OWNER_USER_ID && message.author.userId === env.OWNER_USER_ID
+        ? await describeEffortStats(command.args).catch(
+            (error: unknown) =>
+              `couldn't read the effort stats: ${errorMessage(error)}`
+          )
+        : '`!effort` is for the bot owner.';
+    await tell({ message, text, thread, what: 'effort stats' });
     return true;
   }
   if (command.type === 'spend') {
@@ -505,6 +517,8 @@ function cmd(message: Message): BotCommand | null {
       return { args, type: 'debug' };
     case 'spend':
       return { args, type: 'spend' };
+    case 'effort':
+      return { args, type: 'effort' };
     // Anything else is not a command and must still reach the model — `!` opens
     // plenty of ordinary sentences too.
     default:

@@ -9,7 +9,7 @@ import {
 const LUNA_ATTEMPT = catalogAttempt(LUNA_MODEL);
 
 describe('pickReasoningEffort on haiku', () => {
-  test('draws only low or medium, never none', () => {
+  test('draws low, medium or high, never none', () => {
     const seen = new Set<string>();
     for (let thread = 0; thread < 60; thread++) {
       const threadId = `slack:C0TEST:${thread}`;
@@ -19,12 +19,12 @@ describe('pickReasoningEffort on haiku', () => {
         );
       }
     }
-    expect(seen).toEqual(new Set(['low', 'medium']));
+    expect(seen).toEqual(new Set(['low', 'medium', 'high']));
   });
 });
 
 describe('pickReasoningEffort on luna', () => {
-  test('a luna thread keeps one effort, and threads cover both', () => {
+  test('a luna thread keeps one effort, and threads cover all three', () => {
     const seen = new Set<string>();
     for (let thread = 0; thread < 60; thread++) {
       const threadId = `slack:C0TEST:${thread}`;
@@ -39,6 +39,6 @@ describe('pickReasoningEffort on luna', () => {
         seen.add(pick);
       }
     }
-    expect(seen).toEqual(new Set(['low', 'medium']));
+    expect(seen).toEqual(new Set(['low', 'medium', 'high']));
   });
 });

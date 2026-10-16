@@ -1,4 +1,5 @@
 import {
+  effortStats,
   listTurnTimings,
   pruneTurnTimings,
   recordTurnTiming,
@@ -107,4 +108,44 @@ export function startTimingsReaper(): void {
     );
   prune();
   setInterval(prune, PRUNE_INTERVAL_MS).unref();
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_EFFORT_DAYS = 7;
+// Turn timings are kept 30 days.
+const MAX_EFFORT_DAYS = 30;
+
+/**
+ * `!effort [days] [all]` (owner only): the effort experiment per model ×
+ * effort. Random draws only unless `all`: a `--reasoning high` turn was chosen
+ * for being hard.
+ */
+export async function describeEffortStats(args: string): Promise<string> {
+  const words = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const days = Math.min(
+    Math.max(
+      Number(words.find((word) => /^\d+$/.test(word))) || DEFAULT_EFFORT_DAYS,
+      1
+    ),
+    MAX_EFFORT_DAYS
+  );
+  const all = words.includes('all');
+  const cells = await effortStats({
+    randomOnly: !all,
+    since: new Date(Date.now() - days * DAY_MS),
+  });
+  if (cells.length === 0) {
+    return `No ${all ? '' : 'randomly drawn '}turns in the last ${days} days${all ? '' : ' (`!effort all` includes chosen efforts)'}.`;
+  }
+  const round = (value: number | null, digits = 0) =>
+    value === null ? '?' : value.toFixed(digits);
+  const lines = cells.map((cell) =>
+    [
+      `*${cell.model} · ${cell.effort}* (${cell.turns} turns${cell.up + cell.down > 0 ? `, ${cell.up}👍 ${cell.down}👎` : ''})`,
+      `  time: median ${seconds(cell.medianTotalMs ?? undefined) ?? '?'} (p90 ${seconds(cell.p90TotalMs ?? undefined) ?? '?'}), model ${seconds(cell.medianModelMs ?? undefined) ?? '?'} · cost $${round(cell.avgCostUsd, 4)}/turn · ${round(cell.steps, 1)} steps · reply ${round(cell.replyChars)} chars`,
+      `  thinking: ${round(cell.tokensPerTurn)} tokens/turn, ${round(cell.tokensPerThinkingStep)}/thinking step, ${round(cell.reasoningShare === null ? null : cell.reasoningShare * 100)}% of output · ${round(cell.thinkMsPerStep === null ? null : cell.thinkMsPerStep / 1000, 1)}s before answering per step · ${round(cell.tokensPerThinkSecond)} tok/s`,
+      `  shown: ${round(cell.charsPerBlock)} chars/block, ${round(cell.charsPerToken, 2)} chars/token, ${round(cell.reasoningCharsPerSecond)} chars/s`,
+    ].join('\n')
+  );
+  return `*Effort experiment, last ${days} days* (${all ? 'every turn' : 'random draws only'}; turns before 2026-10-16 have no thinking numbers)\n${lines.join('\n')}`;
 }

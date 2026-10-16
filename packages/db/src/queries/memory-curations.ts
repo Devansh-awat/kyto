@@ -33,7 +33,7 @@ export async function listAuthorsDueCuration({
     group by m.created_by, c.last_run
     having count(*) >= ${minMemories}
       and (c.last_run is null
-        or (c.last_run < ${curatedBefore} and max(m.updated_at) > c.last_run))
+        or (c.last_run < ${curatedBefore.toISOString()}::timestamptz and max(m.updated_at) > c.last_run))
   `);
   return rows.map((row) => row.author);
 }

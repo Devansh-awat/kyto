@@ -66,6 +66,7 @@ export function recordJevSpend({
     model: 'jev',
     outputTokens: 0,
     provider: 'hackclub',
+    reasoningTokens: 0,
     source,
   });
 }
@@ -109,6 +110,7 @@ export function recordCompletionSpend({
     model,
     outputTokens: usage.completion_tokens ?? 0,
     provider: 'hackclub',
+    reasoningTokens: 0,
     source,
   });
 }

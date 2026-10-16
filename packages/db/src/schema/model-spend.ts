@@ -28,6 +28,8 @@ export const modelSpend = pgTable(
     cacheReadTokens: integer('cache_read_tokens').notNull(),
     cacheWriteTokens: integer('cache_write_tokens').notNull(),
     outputTokens: integer('output_tokens').notNull(),
+    /** Part of outputTokens: thinking. 0 where the provider reports none. */
+    reasoningTokens: integer('reasoning_tokens').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),

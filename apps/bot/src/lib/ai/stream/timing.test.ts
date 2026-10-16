@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { createStreamTimer } from './timing';
+import { createStreamTimer, describeReasoning } from './timing';
 
 function clock() {
   let t = 0;
@@ -28,7 +28,7 @@ describe('createStreamTimer', () => {
     c.set(13_000);
     timer.observe('text-delta');
     timer.observe('finish-step');
-    expect(timer.summary()).toEqual({
+    expect(timer.summary()).toMatchObject({
       firstOutputMs: [4000, 3000],
       modelMs: 10_000,
       steps: 2,
@@ -90,5 +90,89 @@ describe('createStreamTimer', () => {
     timer.observe({ delta: 'y'.repeat(150), type: 'tool-input-delta' });
     timer.observe('finish-step');
     expect(timer.summary().outputCharsPerSecond).toBe(100);
+  });
+
+  test('a step is timed from its request, not from start-step', () => {
+    const c = clock();
+    const timer = createStreamTimer(c.now);
+    c.set(2000);
+    timer.observe('start-step');
+    timer.observe('text-delta');
+    timer.observe('finish-step');
+    c.set(5000);
+    timer.observe('start-step');
+    timer.observe('text-delta');
+    timer.observe('finish-step');
+    expect(timer.summary().firstOutputMs).toEqual([2000, 3000]);
+  });
+
+  test('a burst is not a speed', () => {
+    const c = clock();
+    const timer = createStreamTimer(c.now);
+    timer.observe('start-step');
+    c.set(1000);
+    timer.observe({ text: 'a', type: 'text-delta' });
+    c.set(1010);
+    timer.observe({ text: 'b'.repeat(500), type: 'text-delta' });
+    timer.observe({ type: 'finish-step', usage: { outputTokens: 200 } });
+    const summary = timer.summary();
+    expect(summary.outputCharsPerSecond).toBeUndefined();
+    expect(summary.outputTokensPerSecond).toBeUndefined();
+  });
+
+  test('counts thinking per block and per step', () => {
+    const c = clock();
+    const timer = createStreamTimer(c.now);
+    timer.observe('start-step');
+    c.set(1000);
+    timer.observe({ id: 'r', type: 'reasoning-start' });
+    timer.observe({ id: 'r', text: 'x'.repeat(100), type: 'reasoning-delta' });
+    c.set(3000);
+    timer.observe({ id: 'r', text: 'x'.repeat(300), type: 'reasoning-delta' });
+    timer.observe({ id: 'r', type: 'reasoning-end' });
+    c.set(4000);
+    timer.observe({ text: 'hi', type: 'text-delta' });
+    timer.observe({
+      type: 'finish-step',
+      usage: {
+        outputTokenDetails: { reasoningTokens: 100, textTokens: 1 },
+        outputTokens: 101,
+      },
+    });
+    // A hidden-reasoning step: tokens, no text, one buffered block.
+    timer.observe('start-step');
+    c.set(6000);
+    timer.observe({ id: 'q', type: 'reasoning-start' });
+    timer.observe({ id: 'q', text: 'summary', type: 'reasoning-delta' });
+    timer.observe({ toolCallId: 't', toolName: 'bash', type: 'tool-call' });
+    timer.observe({
+      type: 'finish-step',
+      usage: {
+        outputTokenDetails: { reasoningTokens: 300, textTokens: 0 },
+        outputTokens: 320,
+      },
+    });
+    const { perStep, reasoning } = timer.summary();
+    expect(reasoning).toMatchObject({
+      blocks: 2,
+      burstBlocks: 1,
+      chars: 407,
+      maxStepTokens: 300,
+      streamedChars: 400,
+      streamedMs: 2000,
+      thinkMs: 6000,
+      thinkingSteps: 2,
+      tokens: 400,
+    });
+    expect(perStep).toEqual([
+      [1000, 4000, 100, 400, 2, 0, 101],
+      [2000, 2000, 300, 7, 0, 0, 320],
+    ]);
+    expect(describeReasoning(reasoning)).toMatchObject({
+      charsPerBlock: 204,
+      charsPerSecond: 200,
+      tokensPerThinkSecond: 67,
+      tokensPerThinkingStep: 200,
+    });
   });
 });

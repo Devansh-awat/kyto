@@ -5,7 +5,9 @@ import { type ModelSpend, modelSpend } from '../schema';
 export type { ModelSpend } from '../schema';
 
 export async function recordModelSpend(
-  row: Omit<ModelSpend, 'createdAt' | 'id'>
+  row: Omit<ModelSpend, 'createdAt' | 'id' | 'reasoningTokens'> & {
+    reasoningTokens?: number;
+  }
 ): Promise<void> {
   await db.insert(modelSpend).values(row);
 }
