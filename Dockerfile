@@ -10,11 +10,24 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY . .
+# Manifests first, source after: `COPY . .` ahead of the install made every
+# commit a fresh `bun install` of the whole tree. Now the install layer is
+# reused until a manifest or the lockfile changes. A new workspace package
+# needs its package.json listed here.
+COPY package.json bun.lock bunfig.toml ./
+COPY apps/bot/package.json apps/bot/
+COPY packages/ai/package.json packages/ai/
+COPY packages/db/package.json packages/db/
+COPY packages/logging/package.json packages/logging/
+COPY packages/sandbox/package.json packages/sandbox/
+COPY tooling/cspell/package.json tooling/cspell/
+COPY tooling/github/package.json tooling/github/
+COPY tooling/typescript/package.json tooling/typescript/
 RUN bun install
 # agent-browser's postinstall (which bun skips) is what marks its native
 # binaries executable; the Slack browser spawns them directly.
 RUN find node_modules -path '*agent-browser/bin/agent-browser-linux-*' -exec chmod 755 {} +
+COPY . .
 
 EXPOSE 8080
 ENTRYPOINT ["/usr/bin/tini", "--"]

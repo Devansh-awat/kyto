@@ -1,0 +1,7 @@
+# Never in the image: a local node_modules would overwrite the installed one
+# at `COPY . .`, and the rest only makes the build context bigger.
+.git
+node_modules
+**/node_modules
+.turbo
+logs
