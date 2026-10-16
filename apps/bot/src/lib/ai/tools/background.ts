@@ -196,7 +196,10 @@ export function backgroundProcessTools({
     // poll knows the job finished. Single-quoting keeps the outer shell from
     // expanding anything in the user command ($?, $! stay for the inner sh).
     const wrapped = `{ ${command}\n} >"${proc.outPath}" 2>"${proc.errPath}"; echo $? >"${proc.exitPath}"`;
-    const launch = `nohup sh -c ${shSingleQuote(wrapped)} >/dev/null 2>&1 & echo $!`;
+    // `setsid`: its own process group, whose id is this pid, so a kill takes
+    // the command's children too. A plain `&` shares the shell's group, and
+    // the group kill silently missed: only `sh` died, the command ran on.
+    const launch = `nohup setsid sh -c ${shSingleQuote(wrapped)} >/dev/null 2>&1 & echo $!`;
     const result = await context.session.run({
       command: launch,
       workingDirectory: workingDirectory ?? context.sessionWorkDir,
@@ -240,12 +243,13 @@ export function backgroundProcessTools({
     // session are not a safe concurrent transport: the old Promise.all could
     // return one stream from a different poll while another was still being
     // copied, which surfaced as mysteriously missing stdout. The completion
-    // marker is written after both streams, so a single, ordered snapshot also
-    // preserves the finished-command invariant.
+    // marker is written after both streams, so it is read FIRST: read last, a
+    // command finishing between the reads came back "finished" with the
+    // output it had before it printed (an `echo` read as empty).
     const snapshot = await context.session.run({
-      command: `for path in "${proc.outPath}" "${proc.errPath}" "${proc.exitPath}"; do base64 -w0 "$path" 2>/dev/null || true; printf '\n'; done`,
+      command: `for path in "${proc.exitPath}" "${proc.outPath}" "${proc.errPath}"; do base64 -w0 "$path" 2>/dev/null || true; printf '\n'; done`,
     });
-    const [stdout64 = '', stderr64 = '', exit64 = ''] =
+    const [exit64 = '', stdout64 = '', stderr64 = ''] =
       snapshot.stdout.split('\n');
     const stdout = Buffer.from(stdout64, 'base64').toString();
     const stderr = Buffer.from(stderr64, 'base64').toString();
@@ -391,6 +395,20 @@ export function backgroundProcessTools({
     return last;
   }
 
+  // Kill the whole process group the launcher started, so children of the
+  // command die too, then forget the handle.
+  async function killManaged(id: string): Promise<boolean> {
+    const proc = processes.get(id);
+    if (!proc) {
+      return false;
+    }
+    await getSandboxContext().session.run({
+      command: `kill -9 -${proc.pid} 2>/dev/null || kill -9 ${proc.pid} 2>/dev/null || true`,
+    });
+    processes.delete(id);
+    return true;
+  }
+
   const runBackgroundProcess = tool({
     description:
       "Start a shell command running in the background in the sandbox and return immediately with a handle id, instead of waiting for it to finish: for a dev server, a watcher, a long build or benchmark you work alongside. Not for something you'd only wait on straight away (that is plain bash). Use process (action output) to check on it and process (action kill) to stop it.",
@@ -468,17 +486,9 @@ export function backgroundProcessTools({
     }),
     execute: async ({ id }) => {
       try {
-        const context = getSandboxContext();
-        const proc = processes.get(id);
-        if (!proc) {
+        if (!(await killManaged(id))) {
           return { error: `Unknown process id: ${id}`, success: false };
         }
-        // Kill the whole process group the launcher started, so children of the
-        // command die too, then forget the handle.
-        await context.session.run({
-          command: `kill -9 -${proc.pid} 2>/dev/null || kill -9 ${proc.pid} 2>/dev/null || true`,
-        });
-        processes.delete(id);
         return { success: true, summary: `Killed process ${id}.` };
       } catch (error) {
         return { error: errorMessage(error), success: false };
@@ -488,6 +498,7 @@ export function backgroundProcessTools({
 
   return {
     getProcessOutput,
+    killManaged,
     killProcess,
     runBackgroundProcess,
     startManaged,

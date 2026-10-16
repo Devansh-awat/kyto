@@ -1,18 +1,12 @@
-import nodePath from 'node:path/posix';
 import type { SandboxContext } from '@repo/ai';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { githubAuthHint } from '@/lib/github/diagnose';
 import { guardGithubCommand } from '@/lib/github/guard';
-import { fileDiagnostics } from '@/lib/sandbox/diagnostics';
 import { disarmFetchedRepos } from '@/lib/sandbox/git-safety';
-import {
-  clipOutput,
-  fullOutputPath,
-  OUTPUT_MAX,
-} from '@/lib/sandbox/output-clip';
-import { clamp } from '@/lib/utils/text';
+import { clipOutput, fullOutputPath } from '@/lib/sandbox/output-clip';
 import type { BackgroundProcessTools } from './background';
+import { resolvePath, shellQuote } from './workspace-files';
 
 // The model's workspace tools (replacing Pi's builtin bash/file tools). Every
 // tool runs in the lazy E2B sandbox: the first call materializes it, chat-only
@@ -24,12 +18,6 @@ import type { BackgroundProcessTools } from './background';
 // staring at an empty message until the watchdog kills it). The command keeps
 // running detached and the model gets a handle to poll.
 const AUTO_BACKGROUND_MS = 60_000;
-
-function resolvePath(context: SandboxContext, path: string): string {
-  return nodePath.normalize(
-    path.startsWith('/') ? path : nodePath.join(context.sessionWorkDir, path)
-  );
-}
 
 /**
  * Clip one stream of command output, keeping a full copy in the sandbox so the
@@ -58,12 +46,20 @@ async function clipStream(
   return clipOutput(text, path).text;
 }
 
+// A model-set timeout: how long bash may wait before the command is killed.
+// Ten minutes, like a coding agent's shell; the watchdog is held for it.
+const MAX_TIMEOUT_SECONDS = 600;
+const MS_PER_SECOND = 1000;
+
 export function bashTool({
   background,
+  extendAttemptDeadline,
   getSandboxContext,
   github,
   onBackgrounded,
 }: {
+  /** Holds the attempt's stall watchdog open across a long `timeout`. */
+  extendAttemptDeadline?: (extraMs: number) => () => void;
   // Shared with the background-process trio, so an auto-backgrounded command is
   // pollable via getProcessOutput. Optional so a caller can opt out of
   // auto-backgrounding (then a long command blocks as before).
@@ -81,15 +77,27 @@ export function bashTool({
 }) {
   return tool({
     description:
-      'Run a bash command in your isolated Linux sandbox (network access, common CLIs, bun/node/python preinstalled). The workspace PERSISTS across turns in this thread (files you write and packages you install are still there next time). A command still running after ~1 minute is automatically moved to the background and you get a handle to poll with process (action output), so for anything you expect to be slow, bound it with `timeout` or start it with process (action start) yourself rather than relying on the auto-move.',
+      'Run a bash command in your isolated Linux sandbox (network access, common CLIs, bun/node/python preinstalled). The workspace PERSISTS across turns in this thread (files you write and packages you install are still there next time). Without `timeout`, a command still running after ~1 minute is moved to the background and you get a handle to poll with process (action output). Set `timeout` BEFORE a command you know is slow (an install, a build, a test suite) and you wait for it up to that long instead; past it the command is killed. For something you want to keep running (a server, a watcher), use process (action start). Prefer grep and glob over `grep`/`find` here, and readFile over `cat`.',
     inputSchema: z.object({
       command: z.string().describe('The bash command to run.'),
+      timeout: z
+        .number()
+        .int()
+        .min(1)
+        .max(MAX_TIMEOUT_SECONDS)
+        .optional()
+        .describe(
+          `Seconds to wait before the command is killed (max ${MAX_TIMEOUT_SECONDS}). Omit for the default: moved to the background after ~60s, not killed.`
+        ),
       workingDirectory: z
         .string()
         .optional()
         .describe('Working directory (defaults to the workspace).'),
     }),
-    execute: async ({ command, workingDirectory }, { abortSignal }) => {
+    execute: async (
+      { command, timeout, workingDirectory },
+      { abortSignal }
+    ) => {
       const context = getSandboxContext();
       const resolvedDir = workingDirectory
         ? resolvePath(context, workingDirectory)
@@ -108,13 +116,18 @@ export function bashTool({
         return { error: guard.reason, exitCode: 1 };
       }
       if (background) {
+        const timeoutMs = timeout ? timeout * MS_PER_SECOND : undefined;
+        const release = timeoutMs
+          ? extendAttemptDeadline?.(timeoutMs)
+          : undefined;
         const backgrounded = await runWithAutoBackground({
           abortSignal,
           background,
           command,
           context,
+          timeoutMs,
           workingDirectory: resolvedDir,
-        });
+        }).finally(() => release?.());
         if (backgrounded.running) {
           onBackgrounded?.();
         }
@@ -135,7 +148,10 @@ export function bashTool({
       }
       const result = await context.session.run({
         abortSignal,
-        command,
+        // No process registry to kill it through: coreutils does it.
+        command: timeout
+          ? `timeout -k 5 ${timeout} bash -c ${shellQuote(command)}`
+          : command,
         workingDirectory: resolvedDir,
       });
       if (result.exitCode === 0) {
@@ -168,12 +184,15 @@ async function runWithAutoBackground({
   background,
   command,
   context,
+  timeoutMs,
   workingDirectory,
 }: {
   abortSignal?: AbortSignal;
   background: BackgroundProcessTools;
   command: string;
   context: SandboxContext;
+  /** The model's own limit: wait this long, then kill instead of moving on. */
+  timeoutMs?: number;
   workingDirectory?: string;
 }): Promise<
   Record<string, unknown> & { exitCode?: number; running?: boolean }
@@ -184,9 +203,19 @@ async function runWithAutoBackground({
   }
   const result = await background.waitManaged(
     started.id,
-    AUTO_BACKGROUND_MS,
+    timeoutMs ?? AUTO_BACKGROUND_MS,
     abortSignal
   );
+  if (!result.finished && timeoutMs) {
+    await background.killManaged(started.id);
+    return {
+      exitCode: 124,
+      note: `Killed after the ${Math.round(timeoutMs / MS_PER_SECOND)}s timeout you set; the output below is what it printed until then. If it was making progress, run it again with a longer timeout, or with process (action start) to keep it running.`,
+      stderr: await clipStream(result.stderr, context, 'stderr'),
+      stdout: await clipStream(result.stdout, context, 'stdout'),
+      timedOut: true,
+    };
+  }
   if (result.finished) {
     return {
       exitCode: result.exitCode,
@@ -203,186 +232,4 @@ async function runWithAutoBackground({
     stderr: await clipStream(result.stderr, context, 'stderr'),
     stdout: await clipStream(result.stdout, context, 'stdout'),
   };
-}
-
-export function readFileTool({
-  getSandboxContext,
-}: {
-  getSandboxContext: () => SandboxContext;
-}) {
-  return tool({
-    description:
-      'Read a text file from the sandbox workspace (null if it does not exist). Up to 12,000 characters come back per call, as one contiguous part: when the result has `nextOffset`, call again with `offset: nextOffset` (several in parallel is fine) to get the next part, and keep going until there is none: that is how to read a long document IN FULL. `startLine`/`endLine` narrow to a line range first; `offset` then pages within it.',
-    inputSchema: z.object({
-      endLine: z.number().int().min(1).optional(),
-      offset: z
-        .number()
-        .int()
-        .min(0)
-        .optional()
-        .describe(
-          "Character offset to start from: a previous result's `nextOffset`."
-        ),
-      path: z.string(),
-      startLine: z.number().int().min(1).optional(),
-    }),
-    execute: async ({ endLine, offset = 0, path, startLine }) => {
-      const context = getSandboxContext();
-      const bytes = await context.session.readBinaryFile({
-        path: resolvePath(context, path),
-      });
-      if (!bytes) {
-        return { content: null, found: false };
-      }
-      let text = new TextDecoder().decode(bytes);
-      if (startLine !== undefined || endLine !== undefined) {
-        text = text
-          .split('\n')
-          .slice(Math.max((startLine ?? 1) - 1, 0), endLine)
-          .join('\n');
-      }
-      // Contiguous parts, not a head+tail clip: a clip hides the middle, and a
-      // 75 KB story with 1-10k-character lines could not be read in full by any
-      // line range — kyto re-read the same gaps turn after turn.
-      const end = offset + OUTPUT_MAX;
-      return {
-        content: text.slice(offset, end),
-        found: true,
-        ...(text.length > end ? { nextOffset: end } : {}),
-        totalChars: text.length,
-      };
-    },
-  });
-}
-
-export function writeFileTool({
-  getSandboxContext,
-}: {
-  getSandboxContext: () => SandboxContext;
-}) {
-  return tool({
-    description:
-      'Write a text file in the sandbox workspace (creates parent directories, overwrites existing content). Your reply (including this tool call) is capped at a few thousand tokens, so a single call CANNOT carry a very large file: content over roughly 400 lines gets cut off mid-argument. Write a big file in successive chunks instead: the first call with append:false, each following call with append:true. A whole-file write is checked afterwards (parse, and tsc for TypeScript) and any errors come back in `diagnostics`: fix them before moving on. Chunked appends are NOT checked, because the file is incomplete until the last one; check those yourself with bash.',
-    inputSchema: z.object({
-      append: z
-        .boolean()
-        .optional()
-        .describe(
-          'Append to the file instead of overwriting it. Use this to build a large file across several calls.'
-        ),
-      content: z.string(),
-      path: z.string(),
-    }),
-    execute: async ({ append, content, path }, { abortSignal }) => {
-      const context = getSandboxContext();
-      const resolved = resolvePath(context, path);
-      const existing = append
-        ? await context.session.readBinaryFile({ path: resolved })
-        : null;
-      const next = existing
-        ? `${new TextDecoder().decode(existing)}${content}`
-        : content;
-      await context.session.writeBinaryFile({
-        content: new TextEncoder().encode(next),
-        path: resolved,
-      });
-      // An append is a PARTIAL file by construction — checking it would report
-      // "unexpected end of file" on every chunk but the last, which trains the
-      // model to ignore diagnostics. Only whole-file writes are checked.
-      const diagnostics = append
-        ? undefined
-        : await fileDiagnostics({ abortSignal, context, path: resolved });
-      return {
-        appended: Boolean(append),
-        bytes: next.length,
-        ...(diagnostics ? { diagnostics } : {}),
-        path: resolved,
-        written: true,
-      };
-    },
-  });
-}
-
-/** Collapse every run of whitespace so two texts differing only in indentation
- * or wrapping compare equal. */
-function squashWhitespace(value: string): string {
-  return value.replaceAll(/\s+/g, ' ').trim();
-}
-
-/**
- * Why an exact match failed, in terms the model can act on. "not found" alone
- * sends it into a guess-and-retry loop; nearly every real miss is one of three
- * things, and naming which one turns a retry into a fix.
- */
-function noMatchReason(text: string, oldString: string): string {
-  const base = 'oldString was not found in the file, so nothing was changed.';
-  if (text.includes('\r\n') && !oldString.includes('\r\n')) {
-    return `${base} The file uses CRLF line endings and your oldString uses LF: copy the text out of readFile instead of retyping it.`;
-  }
-  if (squashWhitespace(text).includes(squashWhitespace(oldString))) {
-    return `${base} The text IS there but the whitespace differs (indentation, tabs vs spaces, or a line break). Read the file and copy the region exactly as it appears.`;
-  }
-  const [firstLine] = oldString.split('\n');
-  if (firstLine && firstLine.trim().length > 0 && text.includes(firstLine)) {
-    return `${base} Its first line ("${clamp(firstLine.trim(), 80)}") does appear, so the mismatch is somewhere after it: re-read that region and copy it exactly.`;
-  }
-  return `${base} Read the file first and copy the exact region you mean to replace.`;
-}
-
-export function editFileTool({
-  getSandboxContext,
-}: {
-  getSandboxContext: () => SandboxContext;
-}) {
-  return tool({
-    description:
-      'Edit a text file in the sandbox by exact string replacement. oldString must match the file contents exactly (including whitespace) and, unless replaceAll is true, exactly once: a miss or an ambiguous match FAILS rather than guessing. After a successful edit the file is checked (parse, and tsc for TypeScript) and any errors come back in `diagnostics`; fix them before moving on.',
-    inputSchema: z.object({
-      newString: z.string(),
-      oldString: z.string(),
-      path: z.string(),
-      replaceAll: z.boolean().optional(),
-    }),
-    execute: async (
-      { newString, oldString, path, replaceAll },
-      { abortSignal }
-    ) => {
-      const context = getSandboxContext();
-      const resolved = resolvePath(context, path);
-      const bytes = await context.session.readBinaryFile({ path: resolved });
-      if (!bytes) {
-        throw new Error(`File not found: ${resolved}`);
-      }
-      const text = new TextDecoder().decode(bytes);
-      const occurrences = text.split(oldString).length - 1;
-      if (occurrences === 0) {
-        throw new Error(noMatchReason(text, oldString));
-      }
-      if (occurrences > 1 && !replaceAll) {
-        throw new Error(
-          `oldString matches ${occurrences} times in ${resolved}, so this edit is ambiguous and was NOT applied. Include more surrounding lines to make it unique, or set replaceAll:true if you really mean all ${occurrences}.`
-        );
-      }
-      // A replacer FUNCTION, not the string: as a string, `$&`, `$$`, `$'` and
-      // `` $` `` in newString are replacement patterns, which mangled shell and
-      // regex code (`$$` became `$`).
-      const updated = replaceAll
-        ? text.replaceAll(oldString, () => newString)
-        : text.replace(oldString, () => newString);
-      await context.session.writeBinaryFile({
-        content: new TextEncoder().encode(updated),
-        path: resolved,
-      });
-      const diagnostics = await fileDiagnostics({
-        abortSignal,
-        context,
-        path: resolved,
-      });
-      return {
-        ...(diagnostics ? { diagnostics } : {}),
-        path: resolved,
-        replaced: occurrences,
-      };
-    },
-  });
 }

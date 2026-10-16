@@ -63,6 +63,8 @@ const failedReviews = new Map<string, number>();
 const LOOKING_TOOLS = [
   'bash',
   'readFile',
+  'grep',
+  'glob',
   'writeFile',
   'editFile',
   'viewImage',

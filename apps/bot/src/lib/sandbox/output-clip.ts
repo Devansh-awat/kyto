@@ -72,7 +72,7 @@ function formatNumber(value: number): string {
  */
 function notice(stats: ClipStats, savedPath: string | undefined): string {
   const where = savedPath
-    ? `The COMPLETE output is saved at ${savedPath} — do not cat it: filter it (grep/jq/sed/awk), or to READ it in full page through it with readFile and \`offset\`.`
+    ? `The COMPLETE output is saved at ${savedPath} — do not cat it: filter it (grep/jq/sed/awk), or to READ it in full page through it with readFile (\`startLine\`).`
     : 'The complete output could not be saved to a file, so re-run the command filtered (grep/jq/head) if you need the middle.';
   return [
     '',

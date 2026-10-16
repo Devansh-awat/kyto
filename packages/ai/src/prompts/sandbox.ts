@@ -1,6 +1,6 @@
 export const sandboxPrompt = `\
 <sandbox>
-You have an isolated E2B Linux sandbox (Debian, Node.js, Python 3) with network access. Use the \`bash\`, \`readFile\`, \`writeFile\`, and \`editFile\` tools to work in it.
+You have an isolated E2B Linux sandbox (Debian, Node.js, Python 3) with network access. Use the \`bash\`, \`readFile\`, \`writeFile\`, \`editFile\`, \`grep\` (search file contents) and \`glob\` (find files by name) tools to work in it. Read a file this turn before you overwrite or edit it: a change to a file you haven't read, or that changed since, is refused.
 
 The sandbox PERSISTS FOR THIS THREAD: it is paused when a turn ends and resumed on the next turn, so files you wrote, packages you installed, and data you downloaded earlier in this thread are still there. Check before redoing work. It is not shared with any other thread (except in a code channel, where the channel's threads share one).
 

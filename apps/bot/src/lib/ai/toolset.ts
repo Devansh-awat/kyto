@@ -108,12 +108,7 @@ import {
   scheduleRecurringReminderTool,
 } from './tools/reminders';
 import { runJsTool } from './tools/run-js';
-import {
-  bashTool,
-  editFileTool,
-  readFileTool,
-  writeFileTool,
-} from './tools/sandbox';
+import { bashTool } from './tools/sandbox';
 import { scheduleReminderTool } from './tools/schedule-reminder';
 import { searchSlackTool } from './tools/search-slack';
 import { searchWebTool } from './tools/search-web';
@@ -131,6 +126,14 @@ import { uploadFileTool } from './tools/upload-file';
 import { fetchUrlTool, getPermalinkTool } from './tools/url';
 import { viewImageTool } from './tools/view-image';
 import { waitTool } from './tools/wait';
+import {
+  createFileReads,
+  editFileTool,
+  globTool,
+  grepTool,
+  readFileTool,
+  writeFileTool,
+} from './tools/workspace-files';
 
 export interface BuiltTools {
   /** Live view of the tool names currently exposed to the model. */
@@ -381,9 +384,13 @@ export async function buildTools({
       : { wake: { asUserAccount, message, thread } }),
   });
 
+  // What this turn has read, for the read-before-write rule (tools/sandbox).
+  const fileReads = createFileReads();
+
   const core: ToolSet = {
     bash: bashTool({
       background,
+      extendAttemptDeadline,
       getSandboxContext,
       github: { isOwner, threadId: thread.id, userId: authorUserId },
       // Its result says "check it with `process`", which is deferred: the model
@@ -404,9 +411,11 @@ export async function buildTools({
     // anti-coding check watches kyto doing the coding, and this is exactly the
     // alternative to that (see tools/opencode.ts).
     opencode: opencodeTool({ extendAttemptDeadline, getSandboxContext }),
-    readFile: readFileTool({ getSandboxContext }),
-    writeFile: writeFileTool({ getSandboxContext }),
-    editFile: editFileTool({ getSandboxContext }),
+    readFile: readFileTool({ getSandboxContext, reads: fileReads }),
+    writeFile: writeFileTool({ getSandboxContext, reads: fileReads }),
+    editFile: editFileTool({ getSandboxContext, reads: fileReads }),
+    grep: grepTool({ getSandboxContext }),
+    glob: globTool({ getSandboxContext }),
     wait: waitTool({ extendAttemptDeadline, getSandboxContext }),
     react: reactTool({ bot }),
     unreact: unreactTool({ bot }),

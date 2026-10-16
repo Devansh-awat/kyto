@@ -44,4 +44,7 @@ export const search: TaskRendererEntry = {
     const detail = text(input, 'pattern') ?? text(input, 'path');
     return { details: detail };
   },
+  response: ({ output }) => ({
+    output: text(output, 'error') ?? text(output, 'summary') ?? 'Done.',
+  }),
 };
