@@ -4,6 +4,7 @@ import { LogLevel } from '@slack/web-api';
 import { z } from 'zod';
 import { recordRevision } from '@/lib/message-revisions';
 import { onSlackMessage, onSlackReaction } from '@/lib/reminders/events';
+import { onThreadMessage } from '@/lib/todo-list';
 import { rememberActionToken } from './action-tokens';
 import type { RawSlackMessage, SlackHarness } from './harness';
 import { MemoryKV } from './kv';
@@ -390,6 +391,8 @@ export class KytoBot {
         this.harness.threadCache.apply(event as RawSlackMessage);
         // Never awaited: a slow DB write must not hold up the turn.
         recordRevision(event);
+        // A live to-do list moves under anything newer (lib/todo-list).
+        onThreadMessage(event);
         onSlackMessage(event).catch((error: unknown) => {
           this.slackLogger.warn(
             { err: error },

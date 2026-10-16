@@ -46,7 +46,7 @@ export interface StreamTiming {
   ttftMs?: number;
 }
 
-export type StepRow = [
+type StepRow = [
   firstOutputMs: number,
   thinkMs: number,
   reasoningTokens: number,

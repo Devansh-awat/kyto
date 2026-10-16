@@ -121,7 +121,7 @@ function resultText(value: unknown): string {
   return typeof value === 'string' ? value : (JSON.stringify(value) ?? '');
 }
 
-export function keepConversation(messages: ModelMessage[]): ModelMessage[] {
+function keepConversation(messages: ModelMessage[]): ModelMessage[] {
   return messages.map((message): ModelMessage => {
     if (message.role === 'assistant' && Array.isArray(message.content)) {
       return {

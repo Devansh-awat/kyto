@@ -121,6 +121,7 @@ import { slackScriptTool } from './tools/slack-script';
 import { runSubagentTool } from './tools/subagent';
 import { summarizeThreadTool } from './tools/summarize-thread';
 import { textToSpeechTool } from './tools/text-to-speech';
+import { todoTool } from './tools/todo';
 import { type Escalation, upgradeModelTool } from './tools/upgrade-model';
 import { uploadFileTool } from './tools/upload-file';
 import { fetchUrlTool, getPermalinkTool } from './tools/url';
@@ -263,6 +264,7 @@ const PUBLIC_POSTING_TOOLS = [
   'setChannelTopic',
   'submitEmoji',
   'textToSpeech',
+  'todo',
   'unpinMessage',
   'unreact',
   'uploadFile',
@@ -434,6 +436,9 @@ export async function buildTools({
       extendAttemptDeadline,
       isOwner,
     }),
+    // A live checklist in the thread: not for the user account, which posts
+    // like a person, nor for a run nobody watches (a subagent, a reminder).
+    ...(asUserAccount || unattended ? {} : { todo: todoTool({ thread }) }),
     getFile: getFileTool({ getSandboxContext }),
     viewImage: viewImageTool({
       getSandboxContext,

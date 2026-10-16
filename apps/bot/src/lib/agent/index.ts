@@ -134,6 +134,7 @@ import { openSandboxProxies } from '@/lib/sandbox/proxies';
 import { acquireThreadSandbox, threadSandboxStore } from '@/lib/sandbox/store';
 import { ensureChannelIndex } from '@/lib/slack/channel-links';
 import { setSessionStatus } from '@/lib/slack/code-channel-api';
+import { endTodoTurn, leftoverTodos, moveTodosDown } from '@/lib/todo-list';
 import { saveTurnTiming } from '@/lib/turn-timings';
 import {
   deepErrorText,
@@ -887,6 +888,12 @@ async function executeTurn(
     if (!(asUserAccount || at.threadTs) && isNativeCodeChannel(at.channel)) {
       await setSessionStatus({ channel: at.channel, status: 'active' });
     }
+    if (!asUserAccount) {
+      await endTodoTurn({
+        shutdown: abortReasonOf(controller.signal) === 'shutdown',
+        threadId,
+      }).catch(() => undefined);
+    }
     await endTracking({
       cutByShutdown: abortReasonOf(controller.signal) === 'shutdown',
     });
@@ -1030,6 +1037,15 @@ async function executeTurn(
     // The per-turn tail; the replayed thread stays in `history` so it can go
     // out as its own cacheable messages (see buildPrompt).
     let messageText = tail;
+    // An unfinished to-do list the last turn here left (lib/todo-list).
+    const leftover = asUserAccount ? undefined : leftoverTodos(threadId);
+    if (leftover) {
+      messageText = `${messageText}\n\n<todo_list>Your unfinished to-do list from your last turn in this thread (still shown in the thread):\n${leftover
+        .map((item) => `- [${item.status}] ${item.text}`)
+        .join(
+          '\n'
+        )}\nIf this message is about that work, carry on and call todo with the updated list; if not, leave it.</todo_list>`;
+    }
     // The same message, again, after a restart cut the first try short. What
     // was already posted is in the thread above; what was already DONE (a post,
     // a file, a reminder) may not be obvious from it.
@@ -2651,6 +2667,9 @@ async function executeTurn(
         // A rotation cuts a new plan message just like a split does, but from
         // inside the harness, where the budget is not visible.
         onRotate: () => cards.endMessage(),
+        // Each new message of the reply is the thread's newest: a live to-do
+        // list moves under it.
+        onNewMessage: () => moveTodosDown(threadId),
         recipientTeamId: slack.teamId ?? '',
         recipientUserId: turnMessage.author.userId,
         taskDisplayMode: 'plan',

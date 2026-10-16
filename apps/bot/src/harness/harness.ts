@@ -991,6 +991,9 @@ export class SlackHarness {
       // footer). Asked for only if that message has content; a caller whose
       // callback was never called has to post them some other way.
       finalBlocks?: () => Promise<unknown[] | undefined>;
+      // A new message of this stream got its first content: it is now the
+      // thread's newest message (the todo list moves under it).
+      onNewMessage?: () => void;
       // Per-message identity override (needs chat:write.customize). Used so a
       // subagent's own streamed message posts as "kyto subagent" + its icon.
       username?: string;
@@ -1026,6 +1029,12 @@ export class SlackHarness {
     // Whether the CURRENT streamer has appended anything: decides whether to stop
     // it (both on rotation and at the end). Reset on each rotation.
     let currentHasContent = false;
+    const markContent = () => {
+      if (!currentHasContent) {
+        currentHasContent = true;
+        options.onNewMessage?.();
+      }
+    };
     let structuredSupported = true;
     const appendChunk = async (chunk: StreamChunk): Promise<void> => {
       if (!structuredSupported) {
@@ -1035,7 +1044,7 @@ export class SlackHarness {
         await streamer.append({
           chunks: [filterOutboundDeep(sent)] as never,
         });
-        currentHasContent = true;
+        markContent();
       };
       // One card too big for even an empty message (a long heredoc as its
       // title, a build log as its output) used to latch the whole turn
@@ -1208,7 +1217,7 @@ export class SlackHarness {
                 });
               }
             }
-            currentHasContent = true;
+            markContent();
             continue;
           }
           if (text) {
@@ -1233,7 +1242,7 @@ export class SlackHarness {
               streamStartedAt = Date.now();
               await streamer.append({ markdown_text: markdownText });
             }
-            currentHasContent = true;
+            markContent();
           }
           continue;
         }

@@ -200,6 +200,26 @@ export class ThreadHandle {
     return this.sent({ client, raw: result, ts: result.ts ?? '' });
   }
 
+  /**
+   * Replace what one of the app's own messages says (`chat.update`), through
+   * the same secret filter and broadcast strip as `post`.
+   */
+  async update(ts: string, content: PostContent): Promise<void> {
+    const { channel } = this.location;
+    const post = scrub(
+      content.allowBroadcast ? content : stripBroadcasts(content)
+    );
+    const markdown = post.markdown?.slice(0, MARKDOWN_BLOCK_MAX);
+    const blocks =
+      post.blocks ?? (markdown ? markdownBlocks(markdown) : undefined);
+    await this.adapter.webClient.chat.update({
+      ...(blocks ? { blocks } : {}),
+      channel,
+      text: (post.fallbackText ?? post.markdown ?? '').replace(/<\/?u>/gi, ''),
+      ts,
+    } as never);
+  }
+
   private async postFiles({
     channel,
     post,

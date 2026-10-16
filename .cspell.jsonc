@@ -3,6 +3,9 @@
   "import": ["@repo/cspell-config"],
   "words": [
     "sortr",
+    "repost",
+    "reposted",
+    "reposts",
     "Adoptium",
     "decompiles",
     "fabricmc",
