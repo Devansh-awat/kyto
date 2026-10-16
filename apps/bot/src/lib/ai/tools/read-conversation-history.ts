@@ -10,7 +10,11 @@ import {
 } from '@/lib/slack/ids';
 import { askerSlackToken, slackAuthorizeUrl } from '@/lib/slack-oauth';
 import { rememberRepeatReads } from './repeat-reads';
-import { assertReadableChannel, joinChannel } from './utils';
+import {
+  assertReadableChannel,
+  joinChannel,
+  markStoredSelfMention,
+} from './utils';
 
 export function readConversationHistoryTool({
   askerUserId,
@@ -164,7 +168,12 @@ export function readConversationHistoryTool({
           messages: result.messages.map((message) => ({
             id: message.id,
             threadId: message.threadId,
-            text: message.text,
+            // The thread being answered is already in the prompt as live
+            // conversation; only another conversation's pings are stale.
+            text:
+              message.threadId === currentThreadId
+                ? message.text
+                : markStoredSelfMention(message.text),
             author: {
               userId: message.author.userId,
               userName: message.author.userName,
@@ -325,7 +334,7 @@ function askerResult({
       })),
       id: message.ts,
       replyCount: message.reply_count,
-      text: message.text ?? '',
+      text: markStoredSelfMention(message.text ?? ''),
       threadTs: message.thread_ts,
     })),
     nextCursor,

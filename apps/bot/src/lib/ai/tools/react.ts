@@ -13,7 +13,8 @@ function reactionError(error: unknown, emoji: string): string {
 
 export function reactTool({ bot }: { bot: Chat }) {
   return tool({
-    description: 'Add an emoji reaction to a specific message.',
+    description:
+      "Add an emoji reaction to a specific message. Pick one that fits its topic or tone, specific beats generic (a message about a dog gets `dog`, a fixed bug `wrench`). Whatever this returns is a finished call: don't react again to retry with another emoji.",
     inputSchema: z.object({
       threadId: z.string(),
       messageId: z.string(),

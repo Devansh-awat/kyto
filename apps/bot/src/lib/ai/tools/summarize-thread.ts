@@ -16,7 +16,8 @@ export function summarizeThreadTool({
   threadId: string;
 }) {
   return tool({
-    description: 'Summarize a conversation thread.',
+    description:
+      'Summarize a Slack thread: its decisions, open questions and action items. Leave out threadId for the current thread; pass one (`slack:C…:ts`) for another thread the asker can read.',
     inputSchema: z.object({
       instructions: z
         .string()

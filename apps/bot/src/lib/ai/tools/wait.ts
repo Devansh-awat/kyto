@@ -21,7 +21,7 @@ export function waitTool({
   getSandboxContext?: () => SandboxContext;
 }) {
   return tool({
-    description: `Pause for a duration, then continue the turn. Use to space out steps or wait out an external delay (a build, a deploy, a rate-limit window). Up to 1 hour per call. Set pauseSandbox to suspend your sandbox while you wait — it costs nothing while paused and the next sandbox command transparently resumes it with the same filesystem. Do NOT pause the sandbox if a background process must keep running during the wait (pausing suspends it). When the person names a duration ("wait 5 minutes"), make ONE call for exactly that long — don't split it into several or count it against some other deadline. Before a long wait, post anything they need now (a link, a status line): they see nothing while you wait.`,
+    description: `Pause for a duration, then continue the turn. Use to space out steps or wait out an external delay (a build, a deploy, a rate-limit window). Up to 1 hour per call. Set pauseSandbox to suspend your sandbox while you wait — it costs nothing while paused and the next sandbox command transparently resumes it with the same filesystem. Do NOT pause the sandbox if a background process must keep running during the wait (pausing suspends it). When the person names a duration ("wait 5 minutes"), make ONE call for exactly that long — don't split it into several or count it against some other deadline. Before a long wait, post anything they need now (a link, a status line): they see nothing while you wait. NOT for your own background \`process\` job: you're woken with its result when it finishes, so finish your reply instead of waiting on it.`,
     inputSchema: z.object({
       seconds: z
         .number()

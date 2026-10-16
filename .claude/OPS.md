@@ -193,3 +193,5 @@ so they stay `native = false` (ordinary) — `agents.*` calls would be refused
 there. Native code channels need the app's `code_channels:manage` scope and
 `features.code_channels` in `slack-manifest.json`; until the app is
 reinstalled with them, `create` reports Slack's `missing_scope` in words.
+
+- **Kevinton's `git clone` works in production** (the GitHub proxy knows the token); the same clone from a script on another host fails, which is not a bug.

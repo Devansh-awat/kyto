@@ -21,7 +21,7 @@ export function getFileTool({
 }) {
   return tool({
     description:
-      'Download a Slack file into the sandbox workspace so you can read it. Works for uploads, snippets, images, canvases, and any Slack file type. Accepts a Slack file URL, permalink, or file ID.',
+      "Download a Slack file into the sandbox workspace so you can read it. Works for uploads, snippets, images, canvases, and any Slack file type. Accepts a Slack file URL, permalink, or file ID. Use the exact F… id from a message's `[attachments: …]` or its permalink; never guess one. For an image, give `filename` the right extension (.png, .jpg, .webp) so viewImage can open it.",
     inputSchema: z.object({
       file: z
         .string()

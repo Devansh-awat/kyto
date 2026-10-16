@@ -60,18 +60,57 @@ const FENCE_LANGUAGES = new Set(
 const FENCE_OPEN = /^(\s*)(```|~~~)(.*)$/;
 const FENCE_ONLY = /^\s*(?:```|~~~)\s*$/;
 
+// The prompt forbids em dashes, yet a model still slips them in, so outbound
+// text gets them rewritten as the prompt asks: a comma. Never inside code.
+function withoutEmDashes(line: string): string {
+  if (!line.includes('\u2014')) {
+    return line;
+  }
+  return line
+    .split(/(`[^`]*`)/)
+    .map((part, index) =>
+      index % 2 === 1
+        ? part
+        : part
+            .replace(/^(\s*)\u2014\s*/, '$1')
+            .replace(/\s*\u2014\s*$/, ',')
+            .replace(/\s*\u2014\s*/g, ', ')
+            .replace(/,\s*([,.;:!?)])/g, '$1')
+    )
+    .join('');
+}
+
+// A Slack markdown block draws a table only at the top level with a blank line
+// around it; nested in a list item it showed as raw pipes.
+const TABLE_ROW = /^\s*\|.*\|\s*$/;
+
 /**
  * A line-by-line rewriter of code fences into the shape a CommonMark parser
  * reads the way Slack's own mrkdwn does: text after an opening fence goes on its
  * own line (unless it is a known language and `slack` is off — Slack mrkdwn has
  * no languages at all), and a closing fence glued to the end of a line gets a
  * line of its own. Stateful, so a caller can feed it complete lines as they
- * arrive.
+ * arrive. Outbound (`slack` off) it also drops em dashes and lifts tables to
+ * the top level, outside code only.
  */
 export function createFenceNormalizer({ slack }: { slack: boolean }): {
   line(line: string): string;
 } {
   let open = false;
+  let previous = '';
+  const prose = (line: string): string => {
+    if (slack) {
+      return line;
+    }
+    const before = previous;
+    previous = line;
+    const afterTable = TABLE_ROW.test(before);
+    if (TABLE_ROW.test(line)) {
+      return `${afterTable || !before.trim() ? '' : '\n'}${line.trim()}`;
+    }
+    const text = withoutEmDashes(line);
+    return afterTable && line.trim() ? `\n${text}` : text;
+  };
   return {
     line(line) {
       if (open) {
@@ -88,8 +127,9 @@ export function createFenceNormalizer({ slack }: { slack: boolean }): {
       }
       const match = FENCE_OPEN.exec(line);
       if (!match) {
-        return line;
+        return prose(line);
       }
+      previous = '';
       const [, indent = '', fence = '```', rest = ''] = match;
       const info = rest.trim();
       const oneLine = /^(.*\S)\s*(?:```|~~~)$/.exec(info);

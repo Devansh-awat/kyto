@@ -157,6 +157,30 @@ describe('createFenceNormalizer', () => {
     const text = 'hello\n\n```\nsudo apt install\n```\n\n*bold*';
     expect(normalize(text)).toBe(text);
   });
+
+  test('outbound em dashes become commas, but never in code', () => {
+    expect(
+      normalize(
+        'it works — mostly\n— lead\ntail —\nuse `a—b` here.\n```\nx — y\n```'
+      )
+    ).toBe('it works, mostly\nlead\ntail,\nuse `a—b` here.\n```\nx — y\n```');
+    expect(normalize('end —.')).toBe('end.');
+  });
+
+  test('inbound text keeps its em dashes', () => {
+    expect(normalize('a — b', true)).toBe('a — b');
+  });
+
+  test('a table nested in a list is lifted to the top level', () => {
+    expect(
+      normalize('- results:\n  | a | b |\n  |---|---|\n  | 1 | 2 |\n- next')
+    ).toBe('- results:\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n- next');
+  });
+
+  test('a table already on its own is untouched', () => {
+    const text = 'see:\n\n| a | b |\n|---|---|\n\nok';
+    expect(normalize(text)).toBe(text);
+  });
 });
 
 describe('mrkdwnToMarkdown', () => {

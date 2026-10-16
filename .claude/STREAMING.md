@@ -30,6 +30,10 @@ block landed in a message of its own (#78).
   language goes on its own line, and a closing fence glued to a line gets its own.
   Slack's composer writes "```some text\nmore```"; a markdown block read "some
   text" as the language and dropped it, and the glued close left a stray "```".
+  Outbound only (`slack: false`), outside code: an em dash becomes a comma (the
+  prompt forbids them and models still write them), and a table row nested in a
+  list goes to the top level with a blank line around the table (Slack drew a
+  nested table as raw pipes). Inbound text is never rewritten.
 - **Underline** (`harness/underline.ts`, owner's ask 2026-10-13): Slack markdown can't draw one, so a line the model writes with `<u>…</u>` (outside code) goes out as a `rich_text` block — a `blocks` chunk in a stream (verified: Slack keeps it in order between the markdown), a block between `markdown` blocks in a post. Its bold/italic/strike/code, links and mentions are converted too.
 - **Only VISIBLE text splits** (`isVisibleText`): models emit `"\n"` between
   tool calls; counting it opened an empty message per stretch of tools.

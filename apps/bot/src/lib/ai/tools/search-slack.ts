@@ -8,6 +8,7 @@ import logger from '@/lib/logger';
 import { askerSlackToken, slackAuthorizeUrl } from '@/lib/slack-oauth';
 import { toLogError } from '@/lib/utils/error';
 import { rememberRepeatReads } from './repeat-reads';
+import { markStoredSelfMention } from './utils';
 
 const actionTokenSchema = z.looseObject({
   action_token: z.string().min(1).optional(),
@@ -37,7 +38,9 @@ const contextMessageSchema = z
     user_id: z.string().nullish(),
   })
   .transform((message) => ({
-    text: capText(message.text ?? '', CONTEXT_TEXT_CHARS),
+    text: markStoredSelfMention(
+      capText(message.text ?? '', CONTEXT_TEXT_CHARS)
+    ),
     ts: message.ts ?? undefined,
     userId: message.user_id ?? undefined,
   }));
@@ -75,7 +78,9 @@ const slackSearchResponseSchema = z.looseObject({
               authorUserId: message.author_user_id ?? undefined,
               channelId: message.channel_id ?? undefined,
               channelName: message.channel_name ?? undefined,
-              content: capText(message.content ?? '', HIT_TEXT_CHARS),
+              content: markStoredSelfMention(
+                capText(message.content ?? '', HIT_TEXT_CHARS)
+              ),
               // Keep only the 2 context messages nearest the match on each side
               // (Slack returns ~5/5). Context is the dominant prompt-size driver
               // across agentic steps, so trimming it here slashes input-token
@@ -181,7 +186,9 @@ const userSearchResponseSchema = z.looseObject({
               // channel public on the strength of a search hit.
               channelIsPrivate: match.channel?.is_private,
               channelName: match.channel?.name,
-              content: capText(match.text ?? '', HIT_TEXT_CHARS),
+              content: markStoredSelfMention(
+                capText(match.text ?? '', HIT_TEXT_CHARS)
+              ),
               messageTs: match.ts ?? undefined,
               permalink: match.permalink ?? undefined,
               teamId: match.team ?? undefined,

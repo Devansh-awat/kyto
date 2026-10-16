@@ -393,7 +393,7 @@ export function backgroundProcessTools({
 
   const runBackgroundProcess = tool({
     description:
-      'Start a shell command running in the background in the sandbox and return immediately with a handle id, instead of waiting for it to finish. Use process (action output) to check on it and process (action kill) to stop it.',
+      "Start a shell command running in the background in the sandbox and return immediately with a handle id, instead of waiting for it to finish: for a dev server, a watcher, a long build or benchmark you work alongside. Not for something you'd only wait on straight away (that is plain bash). Use process (action output) to check on it and process (action kill) to stop it.",
     inputSchema: z.object({
       command: z.string().min(1),
     }),
@@ -415,7 +415,7 @@ export function backgroundProcessTools({
         return {
           id: started.id,
           success: true,
-          summary: `Started background process ${started.id}. If your turn ends before it does, you'll be woken with its result when it finishes (or told after 30 minutes if it's still going).`,
+          summary: `Started background process ${started.id}. Check it with process (action output, id ${started.id}); stop it with process (action kill, id ${started.id}). If your turn ends before it does, you'll be woken with its result when it finishes (or told after 30 minutes if it's still going), so don't poll it just to wait.`,
         };
       } catch (error) {
         return { error: errorMessage(error), success: false };

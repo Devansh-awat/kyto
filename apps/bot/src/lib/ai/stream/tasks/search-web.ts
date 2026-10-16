@@ -7,6 +7,12 @@ export const searchWeb: TaskRendererEntry = {
     details: text(input, 'query'),
   }),
   response: ({ input, output }) => {
+    if (text(output, 'error')) {
+      return {
+        output: 'Not searched: the query was one page, read with fetchUrl.',
+        title: 'Searched the web',
+      };
+    }
     const count = number(output, 'resultCount') ?? 0;
     const links = value(output, 'links');
     const topLinks = Array.isArray(links)
