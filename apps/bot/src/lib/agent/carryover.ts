@@ -52,7 +52,7 @@ export function renderContinuation(streamedText: string): string {
     '',
     streamedText.trim(),
     '',
-    'Pick up exactly where that left off and finish the job. Do NOT repeat what was already said, do not re-introduce yourself, and do not start the task over — continue it.',
+    'Pick up exactly where that left off and finish the job. Do NOT repeat what was already said, do not re-introduce yourself, and do not start the task over: continue it.',
   ].join('\n');
 }
 
@@ -94,7 +94,7 @@ export function renderCarryover(results: GatheredResult[]): string {
     return `${index + 1}. ${result.toolName}(${input})\n${output}`;
   });
   return [
-    'A previous attempt already ran these tools and got these results. Use them to answer directly — do NOT re-run the same tools:',
+    'A previous attempt already ran these tools and got these results. Use them to answer directly; do NOT re-run the same tools:',
     '',
     ...lines,
   ].join('\n');

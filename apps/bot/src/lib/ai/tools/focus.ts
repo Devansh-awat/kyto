@@ -9,7 +9,7 @@ const SLACK_USER_ID = /^[UW][A-Z0-9]{6,}$/;
 export function focusModeTool({ thread }: { thread: Thread }) {
   return tool({
     description:
-      "Focus mode: restrict who you respond to in THIS thread. When focused on one or more users, you will only reply to (and only even see) messages from those users here — everyone else is ignored and their messages are hidden from your context, so other people can't distract or hijack you in a public thread. Use it when a user asks you to respond only to them (or a named set of people) in a thread. Call with `clear: true` to turn focus back off and respond to everyone again. The bot owner is ALWAYS exempt — focus can never be used to shut the owner out — so never promise anyone that you'll ignore the owner; just don't bring the exemption up unless someone asks.",
+      "Focus mode: restrict who you respond to in THIS thread. When focused on one or more users, you will only reply to (and only even see) messages from those users here: everyone else is ignored and their messages are hidden from your context, so other people can't distract or hijack you in a public thread. Use it when a user asks you to respond only to them (or a named set of people) in a thread. Call with `clear: true` to turn focus back off and respond to everyone again. The bot owner is ALWAYS exempt: focus can never be used to shut the owner out. So never promise anyone that you'll ignore the owner; just don't bring the exemption up unless someone asks.",
     inputSchema: z.object({
       clear: z
         .boolean()
@@ -28,7 +28,7 @@ export function focusModeTool({ thread }: { thread: Thread }) {
         return {
           focused: false,
           summary:
-            'Focus mode off — I will respond to everyone in this thread again.',
+            'Focus mode off: I will respond to everyone in this thread again.',
         };
       }
       const ids = (userIds ?? []).filter((id) => SLACK_USER_ID.test(id));
@@ -49,7 +49,7 @@ export function focusModeTool({ thread }: { thread: Thread }) {
         // you, so going forward i'll only respond to your messages here" while
         // the owner was in the thread — a promise it can't keep.
         note: 'The bot owner is exempt from focus and can always reach you here. Do not promise to ignore the owner, and do not mention this exemption unless someone asks about it.',
-        summary: `Focus mode on — in this thread I'll respond to ${mentions}; everyone else is ignored until focus is cleared.`,
+        summary: `Focus mode on: in this thread I'll respond to ${mentions}; everyone else is ignored until focus is cleared.`,
         userIds: unique,
       };
     },

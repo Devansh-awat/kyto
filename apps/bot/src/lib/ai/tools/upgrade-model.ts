@@ -114,14 +114,14 @@ export function upgradeModelTool({
 }) {
   return tool({
     description:
-      "Hand this turn over to a stronger, more expensive model. Use it when the task is genuinely hard for you — intricate multi-file code, a subtle bug, tricky maths or reasoning, a long plan with many dependencies — or when you have tried and your answer would be a guess. Everything you have already found is passed on, so nothing is wasted and you should NOT redo the work first. Don't reach for it on ordinary questions, chat, or a task you can already do: it costs many times more per token and comes out of one shared daily budget for everyone. Once per turn.",
+      "Hand this turn over to a stronger, more expensive model. Use it when the task is genuinely hard for you (intricate multi-file code, a subtle bug, tricky maths or reasoning, a long plan with many dependencies) or when you have tried and your answer would be a guess. Everything you have already found is passed on, so nothing is wasted and you should NOT redo the work first. Don't reach for it on ordinary questions, chat, or a task you can already do: it costs many times more per token and comes out of one shared daily budget for everyone. Once per turn.",
     inputSchema: z.object({
       reason: z
         .string()
         .min(3)
         .max(300)
         .describe(
-          'What specifically is hard about this — one line, for the log and for the model taking over.'
+          'What specifically is hard about this: one line, for the log and for the model taking over.'
         ),
     }),
     execute: ({ reason }) => {
@@ -130,7 +130,7 @@ export function upgradeModelTool({
           upgraded: false,
           // Said plainly so the model gets on with it rather than trying again.
           summary:
-            'This turn has already been upgraded — you ARE the stronger model. Carry on and answer with what you have.',
+            'This turn has already been upgraded: you ARE the stronger model. Carry on and answer with what you have.',
         });
       }
       if (!claimDailyBudget()) {

@@ -56,7 +56,7 @@ const SUMMARY_SYSTEM = `You compact the older part of a Slack conversation so an
 
 Write a dense factual digest, not prose: one short line per note, each starting with the date it happened (the [date] on the message) and naming WHO. Preserve, in this order of priority:
 - decisions made and instructions given, and WHO gave them
-- standing rules ("never do X", "always ask Y first", "don't post in #z"), word for word with their exact scope — never drop one, never widen or narrow it, and keep it until a later message from the same person lifts it
+- standing rules ("never do X", "always ask Y first", "don't post in #z"), word for word with their exact scope. Never drop one, never widen or narrow it, and keep it until a later message from the same person lifts it
 - facts, names, ids, URLs, file paths, numbers and other specifics
 - what was asked for, and whether it was delivered
 - anything still open or promised

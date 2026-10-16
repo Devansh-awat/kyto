@@ -114,7 +114,7 @@ function earlierVersions(rows: MessageRevision[]): string {
   if (edits.length === 0) {
     return '';
   }
-  return `\n[edited — earlier ${edits.length === 1 ? 'version' : 'versions, oldest first'}: ${edits.map((row) => quoteRevision(row.text)).join(' → ')}]`;
+  return `\n[edited: earlier ${edits.length === 1 ? 'version' : 'versions, oldest first'}: ${edits.map((row) => quoteRevision(row.text)).join(' → ')}]`;
 }
 
 async function renderWithRevisions({
@@ -129,7 +129,7 @@ async function renderWithRevisions({
   revisions: MessageRevision[];
 }): Promise<string> {
   if (hidden && includeHidden) {
-    return `[## — hidden from kyto's own turns] ${await renderMessage(entry)}`;
+    return `[##: hidden from kyto's own turns] ${await renderMessage(entry)}`;
   }
   if (hidden) {
     // Its current text is a `##` message, which kyto never sees; only what it
@@ -185,7 +185,7 @@ function gapLine({
   }
   const at = new Date(Number(previousId) * 1000).toISOString();
   return [
-    `This conversation resumed after a pause: the message before this one was ${ago} earlier (${at}). What was true then — a status, a deadline, a plan, something you were waiting on — may have changed, so re-check anything time-sensitive instead of treating it as current.`,
+    `This conversation resumed after a pause: the message before this one was ${ago} earlier (${at}). What was true then (a status, a deadline, a plan, something you were waiting on) may have changed, so re-check anything time-sensitive instead of treating it as current.`,
   ];
 }
 
@@ -555,22 +555,22 @@ export async function buildPrompt(
       : []),
     ...(asUserAccount
       ? [
-          'You are answering as kyto\'s own Slack USER account — a regular member account named kyto, not the kyto app — so talk like a person in Slack does: short and casual, usually a line or two, no headings, no bullet lists unless the answer really is a list, no sign-offs or offers of more help. Nobody sees your plan, tool calls or reasoning, only what you write. On a longer task, one or two very short status lines before the answer are fine ("on it, give me a sec"); otherwise write only the answer. If the message isn\'t for you or needs no reply, call skip — nothing at all is shown. Your tools are the same as always.',
+          'You are answering as kyto\'s own Slack USER account: a regular member account named kyto, not the kyto app. So talk like a person in Slack does: short and casual, usually a line or two, no headings, no bullet lists unless the answer really is a list, no sign-offs or offers of more help. Nobody sees your plan, tool calls or reasoning, only what you write. On a longer task, one or two very short status lines before the answer are fine ("on it, give me a sec"); otherwise write only the answer. If the message isn\'t for you or needs no reply, call skip: nothing at all is shown. Your tools are the same as always.',
         ]
       : []),
     ...(pulledInLater
       ? [
-          "This message doesn't mention you, and this thread didn't start with you — someone brought you in partway, so you're seeing every reply here, most of them people talking to each other. Decide whether this one needs you: reply only if it's addressed to you, follows up on something you said, or asks something you should clearly answer. Otherwise call skip — nothing is posted.",
+          "This message doesn't mention you, and this thread didn't start with you: someone brought you in partway, so you're seeing every reply here, most of them people talking to each other. Decide whether this one needs you: reply only if it's addressed to you, follows up on something you said, or asks something you should clearly answer. Otherwise call skip: nothing is posted.",
         ]
       : []),
     ...(codeChannel === 'ordinary'
       ? [
-          'This is a CODE CHANNEL: every top-level message here is for you without a mention, and every thread in the channel shares ONE sandbox workspace — files from earlier threads are already there, so check before starting over. Earlier threads are readable with the Slack history tools.',
+          'This is a CODE CHANNEL: every top-level message here is for you without a mention, and every thread in the channel shares ONE sandbox workspace: files from earlier threads are already there, so check before starting over. Earlier threads are readable with the Slack history tools.',
         ]
       : []),
     ...(codeChannel === 'native' && thread && inChannelConversation
       ? [
-          "This is a Slack CODE CHANNEL and you are its agent: the whole channel is ONE conversation with you about one task — every message here is for you, no mention needed — and your replies go at the top level. The channel has one sandbox workspace; what you built earlier is still there. Show your work in the channel's tabs with the codeChannel tool (a `diff` tab after changing code, the pull request as a `pull_request` tab, a `canvas` tab for a plan people can comment on) and keep the context bar on the repo, branch and PR. Archive the channel only when someone asks.",
+          "This is a Slack CODE CHANNEL and you are its agent: the whole channel is ONE conversation with you about one task (every message here is for you, no mention needed) and your replies go at the top level. The channel has one sandbox workspace; what you built earlier is still there. Show your work in the channel's tabs with the codeChannel tool (a `diff` tab after changing code, the pull request as a `pull_request` tab, a `canvas` tab for a plan people can comment on) and keep the context bar on the repo, branch and PR. Archive the channel only when someone asks.",
         ]
       : []),
     ...(codeChannel === 'native' && thread && !inChannelConversation
@@ -637,6 +637,6 @@ export async function buildPrompt(
  */
 export function codingLine({ ownKey }: { ownKey: boolean }): string {
   return ownKey
-    ? "Coding on this turn: it runs on the person's OWN model key, so do real code work yourself — write, build, run and debug in your own shell."
-    : 'Coding on this turn (a hard rule — Hack Club AI provides your shared model on the condition that it does not do coding-agent work): do real code work through the `opencode` tool, not your own shell. Give it a complete brief in your own words and put nothing from Slack in it: no quoted messages, no names. Then deliver the result as your own work. Don\'t bring up OpenCode, delegating or any coding restriction on your own (if asked how it was done, you may say). A `<coding_work>` note, or a tool call answered "Not run", means exactly this: move that work to `opencode`, without commenting on it. For reading or searching a repo, use bash: OpenCode takes minutes for what grep does in seconds.';
+    ? "Coding on this turn: it runs on the person's OWN model key, so do real code work yourself. Write, build, run and debug in your own shell."
+    : 'Coding on this turn (a hard rule: Hack Club AI provides your shared model on the condition that it does not do coding-agent work): do real code work through the `opencode` tool, not your own shell. Give it a complete brief in your own words and put nothing from Slack in it: no quoted messages, no names. Then deliver the result as your own work. Don\'t bring up OpenCode, delegating or any coding restriction on your own (if asked how it was done, you may say). A `<coding_work>` note, or a tool call answered "Not run", means exactly this: move that work to `opencode`, without commenting on it. For reading or searching a repo, use bash: OpenCode takes minutes for what grep does in seconds.';
 }

@@ -69,7 +69,7 @@ export function getFileTool({
         : undefined;
       if (info?.size && info.size > MAX_FILE_BYTES) {
         throw new Error(
-          `${info.name ?? file} is ${Math.round(info.size / 1024 / 1024)} MB — over getFile's ${MAX_FILE_BYTES / 1024 / 1024} MB limit.`
+          `${info.name ?? file} is ${Math.round(info.size / 1024 / 1024)} MB: over getFile's ${MAX_FILE_BYTES / 1024 / 1024} MB limit.`
         );
       }
       const url =
@@ -83,7 +83,7 @@ export function getFileTool({
       // Slack files; use fetchUrl (or bash/curl in the sandbox) for other URLs.
       if (!isSlackFileHost(url)) {
         throw new Error(
-          'getFile only downloads Slack-hosted files. For any other URL use fetchUrl or fetch it from the sandbox — the bot token is never sent to a non-Slack host.'
+          'getFile only downloads Slack-hosted files. For any other URL use fetchUrl or fetch it from the sandbox: the bot token is never sent to a non-Slack host.'
         );
       }
 

@@ -12,9 +12,9 @@ description: Compare two or more AI models (e.g. Kimi K2.6 vs MiniMax M2.7) and 
 - Ideally the use case: coding, agents, local hosting, general chat.
 
 ## Steps
-1. **Check each model exists** with `searchWeb` (name + "release" / the vendor). New models are often real and only just out — confirm before calling one fake.
+1. **Check each model exists** with `searchWeb` (name + "release" / the vendor). New models are often real and only just out: confirm before calling one fake.
 2. **Find the head-to-head**: search "<A> vs <B> benchmark", plus per-model benchmark queries (SWE-bench, agentic, coding). Good sources: artificialanalysis.ai, benchlm.ai, the vendors' Hugging Face / GitHub READMEs. `fetchUrl` the best one or two.
-3. **Say what each model is for** — its headline strength, in a line.
+3. **Say what each model is for**: its headline strength, in a line.
 4. **Give a verdict by use case**, not one overall winner.
 5. **Offer to go deeper** (the benchmark table, one use case) instead of dumping everything.
 

@@ -46,7 +46,7 @@ export function viewImageTool({
 }) {
   return tool({
     description:
-      'Look at an image file in your sandbox so YOU can actually SEE it (a screenshot you took, a downloaded/generated image, an attachment on disk). readFile only gives you the raw bytes as text — use THIS to view the picture. Supported: png, jpg, webp, gif. Pass `question` to ask something specific about it ("what does the error say?", "transcribe the text", "which cores are listed?") — you get a direct answer as well as the description, and it is worth asking whenever you need a detail rather than a general impression; you can call this again with a different question. NOTE: this is for YOUR eyes only — it does NOT send or show the image to anyone in Slack. When the user asks you to SEND/SHOW/SHARE a picture, use uploadFile, not this.',
+      'Look at an image file in your sandbox so YOU can actually SEE it (a screenshot you took, a downloaded/generated image, an attachment on disk). readFile only gives you the raw bytes as text. Use THIS to view the picture. Supported: png, jpg, webp, gif. Pass `question` to ask something specific about it ("what does the error say?", "transcribe the text", "which cores are listed?"): you get a direct answer as well as the description, and it is worth asking whenever you need a detail rather than a general impression; you can call this again with a different question. NOTE: this is for YOUR eyes only: it does NOT send or show the image to anyone in Slack. When the user asks you to SEND/SHOW/SHARE a picture, use uploadFile, not this.',
     inputSchema: z.object({
       path: z.string().describe('Path to the image file in the sandbox.'),
       question: z
@@ -105,7 +105,7 @@ export function viewImageTool({
       }
       pushImage(image);
       return {
-        note: 'Loaded — you will see this image on your next step.',
+        note: 'Loaded: you will see this image on your next step.',
         path,
         viewing: true,
       };

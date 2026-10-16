@@ -50,7 +50,7 @@ export function ghTool({
   userId: string;
 }) {
   return tool({
-    description: `Run a \`gh\` (GitHub CLI) command in the sandbox. gh and git are already authenticated (credentials are brokered at the network layer — never ask for a token). On GitHub you ARE the account \`${GITHUB_LOGIN}\`: repos, PRs, issues, and commits under that name are your own work, so don't describe it as some other person. It's a real shell, so piping/filtering works, e.g. \`gh pr list --repo owner/repo | grep foo\` or \`gh api repos/o/r/issues --jq '.[].title'\`. For external contributions, fork first and push branches to the fork, then open a PR. Anyone may have you open PRs, file issues and comment on other people's repos WITHOUT the owner's approval, within limits: a few per person per day, at most one open PR per person per repo, and each is reviewed against that repo's contributing guidelines before it goes out — a refusal lists what to fix, so fix it rather than retrying as-is (refused attempts count). A footer naming who asked and saying you're an AI is added for you; don't write your own. Your forks are shared: for anyone but the fork's claimant, push branches named \`<their Slack user ID, lowercased>/<topic>\` and open the PR from that. A repo you set up for someone belongs to them: anyone can read it through you, but only they, their named editors, and the bot owner can have you write to it — you'll be refused otherwise, and that refusal is final.`,
+    description: `Run a \`gh\` (GitHub CLI) command in the sandbox. gh and git are already authenticated (credentials are brokered at the network layer; never ask for a token). On GitHub you ARE the account \`${GITHUB_LOGIN}\`: repos, PRs, issues, and commits under that name are your own work, so don't describe it as some other person. It's a real shell, so piping/filtering works, e.g. \`gh pr list --repo owner/repo | grep foo\` or \`gh api repos/o/r/issues --jq '.[].title'\`. For external contributions, fork first and push branches to the fork, then open a PR. Anyone may have you open PRs, file issues and comment on other people's repos WITHOUT the owner's approval, within limits: a few per person per day, at most one open PR per person per repo, and each is reviewed against that repo's contributing guidelines before it goes out: a refusal lists what to fix, so fix it rather than retrying as-is (refused attempts count). A footer naming who asked and saying you're an AI is added for you; don't write your own. Your forks are shared: for anyone but the fork's claimant, push branches named \`<their Slack user ID, lowercased>/<topic>\` and open the PR from that. A repo you set up for someone belongs to them: anyone can read it through you, but only they, their named editors, and the bot owner can have you write to it: you'll be refused otherwise, and that refusal is final.`,
     inputSchema: z.object({
       command: z
         .string()
@@ -166,7 +166,7 @@ export function githubAccessTool({
       const claim = await getGithubRepo(repo);
       if (!claim) {
         return {
-          error: `"${repo}" isn't claimed by anyone, so there's nothing to change — writes to it aren't gated.`,
+          error: `"${repo}" isn't claimed by anyone, so there's nothing to change: writes to it aren't gated.`,
           success: false,
         };
       }
@@ -183,7 +183,7 @@ export function githubAccessTool({
         return {
           released: claim.repo,
           success: true,
-          summary: `Released "${claim.repo}" — writes to it are no longer restricted.`,
+          summary: `Released "${claim.repo}": writes to it are no longer restricted.`,
         };
       }
       const parsed = parseEditors(editors);
@@ -199,7 +199,7 @@ export function githubAccessTool({
         success: true,
         summary: parsed.editors
           ? `Editors for "${claim.repo}": ${parsed.editors.map((id) => `<@${id}>`).join(', ')}.`
-          : `Cleared the editor list for "${claim.repo}" — only <@${claim.ownerUserId}> and the bot owner can write to it now.`,
+          : `Cleared the editor list for "${claim.repo}". Only <@${claim.ownerUserId}> and the bot owner can write to it now.`,
       };
     },
   });

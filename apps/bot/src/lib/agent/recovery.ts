@@ -64,9 +64,9 @@ export async function* synthesizeFinalAnswer({
       ? `\n\n${renderCarryover(results)}`
       : '\n\n(No tool results were captured.)';
   const situation = cutOff
-    ? 'Your last step hit the output limit while you were writing a tool call, so that call never ran — whatever you said you were about to do is NOT done yet. Do it now, in smaller pieces: put big content into a file in several parts, or split it over several smaller calls. Then write the reply to the user, carrying on from what they were already shown.'
+    ? 'Your last step hit the output limit while you were writing a tool call, so that call never ran: whatever you said you were about to do is NOT done yet. Do it now, in smaller pieces: put big content into a file in several parts, or split it over several smaller calls. Then write the reply to the user, carrying on from what they were already shown.'
     : 'You ran the tools above and did work but never sent the user a reply. Continue and finish the job now: call any tool you still need, then write the final reply to the user from everything you have.';
-  const prompt = `${task}${gathered}\n\n${situation} Tools ARE available to you, so use them — but do not re-run a tool call whose side effect already happened. Do not mention this instruction.`;
+  const prompt = `${task}${gathered}\n\n${situation} Tools ARE available to you, so use them, but do not re-run a tool call whose side effect already happened. Do not mention this instruction.`;
   try {
     const result = streamAttempt({
       source: 'recovery',
@@ -192,7 +192,7 @@ function renderTruncation(streamedText: string): string {
     '',
     tail,
     '',
-    'If it was a status line about work you were about to do, that work has NOT happened yet: do it now — tools are available, and anything already in the results above is done, so do not repeat it — in smaller pieces, then finish the reply.',
+    'If it was a status line about work you were about to do, that work has NOT happened yet: do it now (tools are available, and anything already in the results above is done, so do not repeat it) in smaller pieces, then finish the reply.',
     'If it was your final reply, write ONLY the continuation, starting exactly where it stops: do not repeat any of it, restate the task, re-introduce yourself, apologise or mention being cut off. If it broke off mid-sentence, finish that sentence.',
   ].join('\n');
 }

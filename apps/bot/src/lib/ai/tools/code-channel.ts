@@ -175,7 +175,7 @@ async function handOff({
   const next = task
     ? `Carry on with it: ${task}`
     : 'All they asked for was the channel, so say briefly that it is ready, or skip.';
-  const text = `[Handoff — nobody typed this. You just created the code channel "${name}" for <@${message.author.userId}> from <https://slack.com/archives/${originChannel}/p${originTs.replace('.', '')}|this thread> (read it with readConversationHistory if you need what was said there). ${next}]`;
+  const text = `[Handoff: nobody typed this. You just created the code channel "${name}" for <@${message.author.userId}> from <https://slack.com/archives/${originChannel}/p${originTs.replace('.', '')}|this thread> (read it with readConversationHistory if you need what was said there). ${next}]`;
   const { runTurn } = await import('@/lib/agent');
   await runTurn({
     message: {
@@ -330,7 +330,7 @@ export function codeChannelTool({
     } else if (base.is_private ?? true) {
       privacy = 'private';
     }
-    let joining = 'I could not add you to it — join from the channel link.';
+    let joining = 'I could not add you to it: join from the channel link.';
     if (linked) {
       joining =
         'Slack put a join card on the request, so people here can join from it.';
@@ -358,7 +358,7 @@ export function codeChannelTool({
     if (!(isOwner || info.channel.creator === authorUserId)) {
       return {
         error:
-          "Only the channel's creator or the bot owner can make it a code channel — it would have me answer every message in it.",
+          "Only the channel's creator or the bot owner can make it a code channel: it would have me answer every message in it.",
         success: false,
       };
     }
@@ -467,7 +467,7 @@ export function codeChannelTool({
       type === 'html' || type === 'block_kit' || type === 'canvas';
     if (needsKey && !input.viewKey) {
       return {
-        error: `A ${type} tab needs a viewKey (its stable id — reuse it to update the tab).`,
+        error: `A ${type} tab needs a viewKey (its stable id: reuse it to update the tab).`,
         success: false,
       };
     }
@@ -598,7 +598,7 @@ export function codeChannelTool({
 
   return tool({
     description:
-      "Slack CODE CHANNELS. `create` makes a real Slack code channel for a task (only when someone asks for one) and picks the work up there; `enable`/`disable` turn an existing channel (default: this one) into one where you answer every top-level message — only its creator or the bot owner may enable; `list` shows them. Inside a code channel you are the agent of: `setView` adds or updates a tab (html page, `diff`, `block_kit`, a `canvas` people comment on, a `pull_request`), `listViews`/`removeView`, `readCanvas` (a canvas tab's text and comments — read them before revising), `setContextBar` (≤5 items: repo, branch, PR, CI…; replaces the whole bar), `setCommands` (≤10 per-channel slash commands; using one sends you a message), `rename`, and `archive` with a summary — only when someone asks.",
+      "Slack CODE CHANNELS. `create` makes a real Slack code channel for a task (only when someone asks for one) and picks the work up there; `enable`/`disable` turn an existing channel (default: this one) into one where you answer every top-level message. Only its creator or the bot owner may enable; `list` shows them. Inside a code channel you are the agent of: `setView` adds or updates a tab (html page, `diff`, `block_kit`, a `canvas` people comment on, a `pull_request`), `listViews`/`removeView`, `readCanvas` (a canvas tab's text and comments. Read them before revising), `setContextBar` (≤5 items: repo, branch, PR, CI…; replaces the whole bar), `setCommands` (≤10 per-channel slash commands; using one sends you a message), `rename`, and `archive` with a summary. Only when someone asks.",
     inputSchema: z.object({
       action: z.enum([
         'create',
@@ -687,7 +687,7 @@ export function codeChannelTool({
         .string()
         .optional()
         .describe(
-          'create: what to do in the new channel, self-contained — you continue from it there.'
+          'create: what to do in the new channel, self-contained: you continue from it there.'
         ),
       title: z
         .string()

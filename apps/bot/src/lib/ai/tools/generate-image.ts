@@ -175,7 +175,7 @@ async function runEdit({
     ).catch(() => null);
     if (!bytes) {
       return {
-        error: `Could not read "${path}" from the sandbox. Check the path — an image someone posted is downloaded into your workspace, and listing the directory will show its real name.`,
+        error: `Could not read "${path}" from the sandbox. Check the path: an image someone posted is downloaded into your workspace, and listing the directory will show its real name.`,
         success: false,
       };
     }
@@ -231,7 +231,7 @@ export function generateImageTool({
 }) {
   return tool({
     description:
-      'Generate or EDIT AI images. With just a prompt it generates from scratch. Pass `editPaths` (sandbox file paths to existing images — an image someone sent you is already downloaded into your workspace) to edit them instead: "make the background blue", "add a hat", "combine these two", "turn this sketch into a photo". By default the result is posted to the current Slack thread; pass upload:false to work quietly (e.g. an asset for a site, or an intermediate step). Either way every image is saved into your sandbox workspace and the paths come back in the result, so you can edit it again, reuse it, or upload it later.',
+      'Generate or EDIT AI images. With just a prompt it generates from scratch. Pass `editPaths` (sandbox file paths to existing images: an image someone sent you is already downloaded into your workspace) to edit them instead: "make the background blue", "add a hat", "combine these two", "turn this sketch into a photo". By default the result is posted to the current Slack thread; pass upload:false to work quietly (e.g. an asset for a site, or an intermediate step). Either way every image is saved into your sandbox workspace and the paths come back in the result, so you can edit it again, reuse it, or upload it later.',
     inputSchema: z.object({
       editPaths: z
         .array(z.string())

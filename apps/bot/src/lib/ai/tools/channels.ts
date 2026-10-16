@@ -95,7 +95,7 @@ export function setChannelTopicTool({
 }) {
   return tool({
     description:
-      "Set a Slack channel's topic and/or purpose. Provide topic, purpose, or both. Defaults to the current channel — and unless the bot owner is the one asking, the current channel is the ONLY channel you can set it on.",
+      "Set a Slack channel's topic and/or purpose. Provide topic, purpose, or both. Defaults to the current channel, and unless the bot owner is the one asking, the current channel is the ONLY channel you can set it on.",
     inputSchema: z.object({
       topic: z
         .string()

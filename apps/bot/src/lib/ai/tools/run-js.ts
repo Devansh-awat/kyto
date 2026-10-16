@@ -77,7 +77,7 @@ export async function runJs(code: string) {
 export function runJsTool() {
   return tool({
     description:
-      'Run a short piece of plain JavaScript instantly, for maths, dates, string or JSON work — no sandbox start. The value of the last expression is returned, plus anything passed to console.log. It has NO network, files, imports, timers or npm packages, and stops after 2 seconds and 32 MB; for any of those use bash or codeMode in the sandbox.',
+      'Run a short piece of plain JavaScript instantly, for maths, dates, string or JSON work. No sandbox start. The value of the last expression is returned, plus anything passed to console.log. It has NO network, files, imports, timers or npm packages, and stops after 2 seconds and 32 MB; for any of those use bash or codeMode in the sandbox.',
     inputSchema: z.object({
       code: z
         .string()

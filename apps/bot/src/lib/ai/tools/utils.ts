@@ -16,7 +16,7 @@ const DM_CHANNEL_ID = /^D[A-Z0-9]+$/i;
 const GROUP_CHANNEL_ID = /^(G[A-Z0-9]+|mpdm-)/i;
 
 const UNREACHABLE_CONVERSATION =
-  "That is a DM or private conversation kyto's bot is not in, so this tool can't read it. readConversationHistory can — it reads such a conversation with the asking person's OWN connected Slack account, if they are in it (it links them to connect one otherwise). Failing that, searchSlack (`in:<@USERID>` or `in:<#CHANNEL>`) searches as the asker; only then ask them to paste the text.";
+  "That is a DM or private conversation kyto's bot is not in, so this tool can't read it. readConversationHistory can: it reads such a conversation with the asking person's OWN connected Slack account, if they are in it (it links them to connect one otherwise). Failing that, searchSlack (`in:<@USERID>` or `in:<#CHANNEL>`) searches as the asker; only then ask them to paste the text.";
 
 export async function assertReadableChannel(
   chatChannelId: string,
@@ -41,7 +41,7 @@ export async function assertReadableChannel(
       // `channel_not_found` to the model.
       if (/channel_not_found|not_in_channel/i.test(errorMessage(error))) {
         throw new Error(
-          `Kyto cannot see that conversation (${raw}). The bot can see every public channel, so this is most likely a PRIVATE channel (or a wrong id) — do not call it public or joinable. If it is a DM or a private channel kyto is not in, it is unreadable: ask for the content instead of retrying.`
+          `Kyto cannot see that conversation (${raw}). The bot can see every public channel, so this is most likely a PRIVATE channel (or a wrong id). Do not call it public or joinable. If it is a DM or a private channel kyto is not in, it is unreadable: ask for the content instead of retrying.`
         );
       }
       throw error;

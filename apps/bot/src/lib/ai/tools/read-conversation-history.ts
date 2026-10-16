@@ -25,7 +25,7 @@ export function readConversationHistoryTool({
 }) {
   return tool({
     description:
-      "Read channel history or thread replies. The current conversation is always readable. Another private channel, DM or group DM — including the person's DMs with other people or apps — is read with THEIR OWN connected Slack account, so it works for any conversation they are in once they have connected one (the error links them to it otherwise).",
+      "Read channel history or thread replies. The current conversation is always readable. Another private channel, DM or group DM (including the person's DMs with other people or apps) is read with THEIR OWN connected Slack account, so it works for any conversation they are in once they have connected one (the error links them to it otherwise).",
     inputSchema: z.object({
       permalink: z
         .string()
@@ -47,13 +47,13 @@ export function readConversationHistoryTool({
         .string()
         .optional()
         .describe(
-          "A message ts: only messages posted after it. To poll for replies to your own post, pass that post's ts — one call per check."
+          "A message ts: only messages posted after it. To poll for replies to your own post, pass that post's ts: one call per check."
         ),
       cursor: z
         .string()
         .optional()
         .describe(
-          'The `nextCursor` from a previous readConversationHistory response, verbatim. NOT a message ts — to start at a message, pass it as threadTs or permalink.'
+          'The `nextCursor` from a previous readConversationHistory response, verbatim. NOT a message ts: to start at a message, pass it as threadTs or permalink.'
         ),
     }),
     execute: rememberRepeatReads(

@@ -1,6 +1,6 @@
 ---
 name: fabric-mods
-description: Build, port or debug a Fabric mod for Minecraft Java Edition (1.14 to 26.x) in the sandbox — the right Loom plugin, mappings and Java for the version, current versions from Fabric's meta API, mixins, fabric.mod.json, crash logs. Use whenever a Fabric mod jar is being made or fixed, or a Fabric crash log needs reading.
+description: Build, port or debug a Fabric mod for Minecraft Java Edition (1.14 to 26.x) in the sandbox: the right Loom plugin, mappings and Java for the version, current versions from Fabric's meta API, mixins, fabric.mod.json, crash logs. Use whenever a Fabric mod jar is being made or fixed, or a Fabric crash log needs reading.
 ---
 
 # Fabric mods
@@ -14,14 +14,14 @@ Minecraft versions are `1.21.x` up to 1.21.11, then year-based (`26.1`, `26.2`, 
 | | 26.1 and newer | 1.21.11 and older |
 |---|---|---|
 | Loom plugin | `id 'net.fabricmc.fabric-loom' version "${loom_version}"` | `id 'net.fabricmc.fabric-loom-remap' version "${loom_version}"` |
-| Mappings | none — no `mappings` line, no `yarn_mappings` | `mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"` (or `loom.officialMojangMappings()`) |
+| Mappings | none. No `mappings` line, no `yarn_mappings` | `mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"` (or `loom.officialMojangMappings()`) |
 | Dependency config | `implementation` (loader, Fabric API, other mods) | `modImplementation` |
 | Names in source | Mojang's real names | Yarn names (or Mojang's, with officialMojangMappings) |
 | Java | 25 | 21 for 1.20.5+, 17 for 1.18–1.20.4, 16 for 1.17, 8 for 1.16 and older |
 
 The old plugin id `fabric-loom` and Yarn on a 26.x version are the two commonest mistakes. Set `options.release` and `sourceCompatibility`/`targetCompatibility` to the Java above, and `"java": ">=<that>"` in `fabric.mod.json`.
 
-## 2. Current versions — look them up, never remember them
+## 2. Current versions: look them up, never remember them
 
 ```bash
 curl -s https://meta.fabricmc.net/v2/versions/game | jq -r '[.[]|select(.stable)][0].version'     # latest stable Minecraft

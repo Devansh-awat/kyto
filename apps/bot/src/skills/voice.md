@@ -1,6 +1,6 @@
 ---
 name: voice
-description: Speech and audio work — speak text aloud, transcribe a voice message or audio/video file, convert or trim audio. Use for "say this", "transcribe this", "what does this voice memo say", "convert to mp3".
+description: Speech and audio work: speak text aloud, transcribe a voice message or audio/video file, convert or trim audio. Use for "say this", "transcribe this", "what does this voice memo say", "convert to mp3".
 ---
 
 > Adapted from coolton's `voice` skill, itself from gorkie's ([techwithanirudh/gorkie](https://github.com/techwithanirudh/gorkie), AGPL-3.0).
@@ -8,7 +8,7 @@ description: Speech and audio work — speak text aloud, transcribe a voice mess
 # Voice
 
 ## Text to speech
-Use the `textToSpeech` tool — it posts the audio itself. Only fall back to the sandbox (`pip install gTTS`, then `gTTS(text=…, lang="en").save(path)` and `uploadFile`) if that tool is unavailable or the person wants a file with specific settings.
+Use the `textToSpeech` tool: it posts the audio itself. Only fall back to the sandbox (`pip install gTTS`, then `gTTS(text=…, lang="en").save(path)` and `uploadFile`) if that tool is unavailable or the person wants a file with specific settings.
 
 ## Speech to text
 1. Get the audio into the sandbox: `getFile` with the Slack file.
@@ -32,4 +32,4 @@ ffmpeg covers conversion, trimming (`-ss 00:01:00 -t 30`), sample rate and diagn
 
 ## Notes
 - If transcription fails, say whether it was the conversion, silence/noise, or the model.
-- These are tools used to produce an answer, not software being built — fine to run.
+- These are tools used to produce an answer, not software being built: fine to run.

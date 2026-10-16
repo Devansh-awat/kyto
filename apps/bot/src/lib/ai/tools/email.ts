@@ -104,7 +104,7 @@ export function checkInboxTool({
   const redactSecrets = emailRedactor(redact);
   return tool({
     description:
-      'List recent messages in kyto\'s own email inbox (via AgentMail). This gives you each message\'s sender, recipients (to/cc), arrival time, subject and a short preview — call email (action read) with a message id to get the actual body. Set full:true to fetch the bodies of everything listed in one go, which is usually what someone means by "read my latest email".',
+      'List recent messages in kyto\'s own email inbox (via AgentMail). This gives you each message\'s sender, recipients (to/cc), arrival time, subject and a short preview. Call email (action read) with a message id to get the actual body. Set full:true to fetch the bodies of everything listed in one go, which is usually what someone means by "read my latest email".',
     inputSchema: z.object({
       limit: z.number().int().min(1).max(50).default(10),
       full: z
@@ -213,7 +213,7 @@ export function readEmailTool({
   const redactSecrets = emailRedactor(redact);
   return tool({
     description:
-      "Read the full body of one message in kyto's inbox, by the message id from email (action inbox). Use this whenever someone asks what an email actually says — the preview from email (action inbox) is only the first line or so.",
+      "Read the full body of one message in kyto's inbox, by the message id from email (action inbox). Use this whenever someone asks what an email actually says: the preview from email (action inbox) is only the first line or so.",
     inputSchema: z.object({
       messageId: z
         .string()

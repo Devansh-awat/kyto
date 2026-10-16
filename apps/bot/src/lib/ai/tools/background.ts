@@ -525,7 +525,7 @@ function processReport({
   const silent = !(result.stdout.trim() || result.stderr.trim());
   const body = result.finished
     ? `the background command ${id} you started earlier in this thread (\`${command}\`) has FINISHED with exit code ${result.exitCode ?? 'unknown'}.\n\n${output}${silent ? '\n\nIt printed NOTHING. Exit 0 with no output is not proof it worked (a run that refused every write exited 0 like this): check the files it was meant to produce before you say it did.' : ''}\n\nCarry on with the task it was part of if there is more to do, or tell the thread what matters from it.`
-    : `the background command ${id} you started earlier in this thread (\`${command}\`) is STILL RUNNING 30 minutes after your turn ended — time's up for keeping the sandbox awake for it. Once the sandbox pauses it freezes, and it resumes the next time this thread uses the sandbox.\n\n${output}\n\nDecide: if it is worth waiting for, check it with the \`process\` tool (action \`output\`, id "${id}"), which keeps watching it for another 30 minutes; if it is stuck or no longer needed, kill it (action \`kill\`). Only post if the thread is waiting on its result or it failed in a way someone needs to know; killing a leftover job nobody asked about is housekeeping, so do it and call skip (an unasked "stopped the leftover job" message was noise, issue #71).`;
+    : `the background command ${id} you started earlier in this thread (\`${command}\`) is STILL RUNNING 30 minutes after your turn ended: time's up for keeping the sandbox awake for it. Once the sandbox pauses it freezes, and it resumes the next time this thread uses the sandbox.\n\n${output}\n\nDecide: if it is worth waiting for, check it with the \`process\` tool (action \`output\`, id "${id}"), which keeps watching it for another 30 minutes; if it is stuck or no longer needed, kill it (action \`kill\`). Only post if the thread is waiting on its result or it failed in a way someone needs to know; killing a leftover job nobody asked about is housekeeping, so do it and call skip (an unasked "stopped the leftover job" message was noise, issue #71).`;
   return {
     attachments: [],
     author: wake.message.author,
@@ -533,7 +533,7 @@ function processReport({
     isMention: false,
     metadata: { dateSent: new Date() },
     raw: {},
-    text: `[Automatic note, not written by a person: ${body} Don't explain that you were woken up. If nothing needs saying, call the skip TOOL — do not write the word "skip" as your reply.]`,
+    text: `[Automatic note, not written by a person: ${body} Don't explain that you were woken up. If nothing needs saying, call the skip TOOL. Do not write the word "skip" as your reply.]`,
     threadId: wake.thread.id,
   };
 }

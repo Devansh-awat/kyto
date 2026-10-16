@@ -1,14 +1,14 @@
 ---
 name: ysws-shops
-description: Find which Hack Club YSWS programs offer which prizes or shop items — rank programs by shipped projects, crawl their shop/prize pages, and build a cached, greppable item index. Use for "which YSWS has a 3D printer", "what's in the YSWS shops", "top N YSWS and their prizes".
+description: Find which Hack Club YSWS programs offer which prizes or shop items. Rank programs by shipped projects, crawl their shop/prize pages, and build a cached, greppable item index. Use for "which YSWS has a 3D printer", "what's in the YSWS shops", "top N YSWS and their prizes".
 ---
 
 # YSWS shops
 
 Never hand-type an item list: every item in the answer must come from a page the crawl saved.
 
-1. If `ysws-shops/<today>/index.csv` already exists in the sandbox, skip to step 3 — the cache answers follow-ups with a grep.
-2. Write the crawler and run it (stdlib only; ~1-2 min for 50 programs). `--top N` takes the N programs with the most shipped projects (`ships.hackclub.com/api/v1/ysws_entries`, the popularity ranking — "top 50" means this, not start date); `--all` ranks every program ever (396), not just the active ones.
+1. If `ysws-shops/<today>/index.csv` already exists in the sandbox, skip to step 3: the cache answers follow-ups with a grep.
+2. Write the crawler and run it (stdlib only; ~1-2 min for 50 programs). `--top N` takes the N programs with the most shipped projects (`ships.hackclub.com/api/v1/ysws_entries`, the popularity ranking: "top 50" means this, not start date); `--all` ranks every program ever (396), not just the active ones.
 
 ```bash
 cat > ysws_shops.py <<'PY'
@@ -159,7 +159,7 @@ python3 ysws_shops.py --top 50
 
 3. Answer from the files:
    - `ysws-shops/<date>/index.csv` / `index.md`: program, ships, status, matched items, shop URLs.
-   - A specific item: `grep -ril "3d printer" ysws-shops/<date>/pages` — then read the matching file to quote the real line (the vocabulary match only says the words appear; "grant" may be the program's funding, not a prize).
-   - An item not in the vocabulary: grep the pages for it — every page's text is saved.
+   - A specific item: `grep -ril "3d printer" ysws-shops/<date>/pages`: then read the matching file to quote the real line (the vocabulary match only says the words appear; "grant" may be the program's funding, not a prize).
+   - An item not in the vocabulary: grep the pages for it: every page's text is saved.
 4. `client-rendered` rows are JavaScript shops with no text in the HTML: `fetchUrl` on their shop URL (it renders through a reader) before calling them empty. `login-gated` and `not responding` are reported as such, never guessed.
 5. Hand over `index.md` (or the CSV) as a file when asked for one, and say how many programs had items, how many were client-rendered, gated or down.

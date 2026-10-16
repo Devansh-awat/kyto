@@ -19,7 +19,7 @@ const actAsSchema = z
   .enum(['app', 'account', 'owner'])
   .optional()
   .describe(
-    "Whose name the pin shows: 'app' = the kyto app (bot); 'account' = kyto's own Slack user account (only in channels it has joined); 'owner' = the OWNER's personal account, never kyto — only when the owner triggered this turn AND explicitly asked for it to be under their name. Defaults to whichever kyto you are answering as."
+    "Whose name the pin shows: 'app' = the kyto app (bot); 'account' = kyto's own Slack user account (only in channels it has joined); 'owner' = the OWNER's personal account, never kyto. Only when the owner triggered this turn AND explicitly asked for it to be under their name. Defaults to whichever kyto you are answering as."
   );
 
 type Actor = 'app' | 'account' | 'owner';

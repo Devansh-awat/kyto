@@ -37,7 +37,7 @@ export function askQuestionTool({
 }) {
   return tool({
     description:
-      'Ask specific people a multiple-choice question and WAIT for their answer. Posts a public message in this thread with option buttons, addressed to the user ids you name — only those people can answer it; everyone else sees it but their clicks are refused. Use this when you genuinely need someone to decide between concrete options and guessing would waste their time or do the wrong thing; do NOT use it to ask something you could work out yourself, and do not use it in a recurring job (nobody is there). It blocks for up to 10 minutes and then returns whatever came in, so ask it once and early rather than repeatedly.',
+      'Ask specific people a multiple-choice question and WAIT for their answer. Posts a public message in this thread with option buttons, addressed to the user ids you name. Only those people can answer it; everyone else sees it but their clicks are refused. Use this when you genuinely need someone to decide between concrete options and guessing would waste their time or do the wrong thing; do NOT use it to ask something you could work out yourself, and do not use it in a recurring job (nobody is there). It blocks for up to 10 minutes and then returns whatever came in, so ask it once and early rather than repeatedly.',
     inputSchema: z.object({
       allowOther: z
         .boolean()
@@ -137,7 +137,7 @@ export function askQuestionTool({
           answers: {},
           complete: false,
           summary:
-            'Nobody answered within 10 minutes. The question is still in the thread and they can still answer it, but you do not have an answer now — say so and either carry on with what does not depend on it, or stop. Do not ask again in this turn, and do not invent an answer.',
+            'Nobody answered within 10 minutes. The question is still in the thread and they can still answer it, but you do not have an answer now. Say so and either carry on with what does not depend on it, or stop. Do not ask again in this turn, and do not invent an answer.',
         };
       }
 

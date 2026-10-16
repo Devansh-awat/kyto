@@ -199,7 +199,7 @@ export function canvasWriteTool({ thread }: { thread: Thread }) {
 
   return tool({
     description:
-      'Create or edit a Slack canvas (a rich, persistent document). Use to capture meeting notes, decisions, specs, runbooks, or any long-lived structured content. Prefer this over long messages for content the team will return to. When you share it afterwards, post the `link` this returns as a labelled markdown link ([Title](link)) — never paste a canvas URL you composed yourself, and never paste one bare.',
+      'Create or edit a Slack canvas (a rich, persistent document). Use to capture meeting notes, decisions, specs, runbooks, or any long-lived structured content. Prefer this over long messages for content the team will return to. When you share it afterwards, post the `link` this returns as a labelled markdown link ([Title](link)). Never paste a canvas URL you composed yourself, and never paste one bare.',
     inputSchema: z.object({
       // Everything short comes FIRST and `markdown` comes LAST, deliberately:
       // models emit JSON arguments in schema order, so if the call is truncated
@@ -234,7 +234,7 @@ export function canvasWriteTool({ thread }: { thread: Thread }) {
         .min(1)
         .max(100_000)
         .describe(
-          'Canvas body as Slack-flavored markdown. Checklists MUST use `- [ ]` / `- [x]` (real clickable checkboxes) — never emoji squares. Mention people as `![](@U123)`, channels as `![](#C123)`. Load the slackDocs tool (topic "canvas") for the full syntax.'
+          'Canvas body as Slack-flavored markdown. Checklists MUST use `- [ ]` / `- [x]` (real clickable checkboxes). Never emoji squares. Mention people as `![](@U123)`, channels as `![](#C123)`. Load the slackDocs tool (topic "canvas") for the full syntax.'
         ),
     }),
     execute: async ({ mode, title, markdown, canvasId, editOperation }) => {
@@ -350,7 +350,7 @@ export function canvasWriteTool({ thread }: { thread: Thread }) {
 export function canvasDeleteTool() {
   return tool({
     description:
-      'Delete a Slack canvas by its canvas/file id. This is permanent — only use when explicitly asked to remove a canvas.',
+      'Delete a Slack canvas by its canvas/file id. This is permanent. Only use when explicitly asked to remove a canvas.',
     inputSchema: z.object({
       canvasId: z
         .string()

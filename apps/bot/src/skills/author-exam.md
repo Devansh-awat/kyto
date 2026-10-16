@@ -1,6 +1,6 @@
 ---
 name: author-exam
-description: WRITE an original exam, quiz or test paper with a sourced answer key (not take one). Use when someone asks kyto to create, draft or replace a test, round or question paper — especially a benchmark round other bots also write.
+description: WRITE an original exam, quiz or test paper with a sourced answer key (not take one). Use when someone asks kyto to create, draft or replace a test, round or question paper, especially a benchmark round other bots also write.
 ---
 
 # Writing an exam

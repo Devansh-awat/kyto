@@ -110,7 +110,7 @@ export function deploySiteTool({
 }) {
   return tool({
     description:
-      'Publish a prebuilt static site so it is reachable at https://<host>/<name>/. Build and test the site in the sandbox first, then point sourceDir at the built static output (e.g. dist or out). The host only serves static files — it never runs site code — so deploy fully static output (HTML/CSS/JS/assets), not a dev server. A site can have multiple pages: pass `page` to publish into a sub-path like /<name>/home without disturbing the rest of the site, or omit it to publish the whole site at the root. Publishing a new name claims it for the person who asked; re-publishing an existing name edits that site, which only its creator, the editors they named, and the bot owner may do.',
+      'Publish a prebuilt static site so it is reachable at https://<host>/<name>/. Build and test the site in the sandbox first, then point sourceDir at the built static output (e.g. dist or out). The host only serves static files (it never runs site code) so deploy fully static output (HTML/CSS/JS/assets), not a dev server. A site can have multiple pages: pass `page` to publish into a sub-path like /<name>/home without disturbing the rest of the site, or omit it to publish the whole site at the root. Publishing a new name claims it for the person who asked; re-publishing an existing name edits that site, which only its creator, the editors they named, and the bot owner may do.',
     inputSchema: z.object({
       editors: editorsSchema,
       name: siteNameSchema,
@@ -228,7 +228,7 @@ export function removeSiteTool({
 }) {
   return tool({
     description:
-      'Take down a published static site so it is no longer served at /<name>/. Pass `page` to remove only a single page sub-path (e.g. "home") and leave the rest of the site up. Permanent — only use when explicitly asked. Only the site\'s creator, the editors they named, and the bot owner may remove it.',
+      'Take down a published static site so it is no longer served at /<name>/. Pass `page` to remove only a single page sub-path (e.g. "home") and leave the rest of the site up. Permanent. Only use when explicitly asked. Only the site\'s creator, the editors they named, and the bot owner may remove it.',
     inputSchema: z.object({ name: siteNameSchema, page: pageSchema }),
     execute: async ({ name, page }) => {
       try {

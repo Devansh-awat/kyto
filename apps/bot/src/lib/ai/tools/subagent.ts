@@ -146,7 +146,7 @@ export function runSubagentTool({
 
   const runSubagent = tool({
     description:
-      'Delegate a task to a subagent — a headless copy of kyto (shares your sandbox, same tools) that runs on a cheaper pinned model and returns a written report to you. Its run shows up inside your own plan/thinking block as it works; it does NOT post a message of its own, so YOU are the only voice in the thread and its findings only reach the user if you say them. Use it for open-ended investigation or self-contained work that would otherwise clutter your own context. It has NO access to this conversation beyond what you put in the task. By default it runs FOREGROUND (you wait for its report, then use it). Set background:true to fire it off and keep working immediately — you get a job id back instead of the report, and later call subagent (action check) with that id to collect it.',
+      'Delegate a task to a subagent: a headless copy of kyto (shares your sandbox, same tools) that runs on a cheaper pinned model and returns a written report to you. Its run shows up inside your own plan/thinking block as it works; it does NOT post a message of its own, so YOU are the only voice in the thread and its findings only reach the user if you say them. Use it for open-ended investigation or self-contained work that would otherwise clutter your own context. It has NO access to this conversation beyond what you put in the task. By default it runs FOREGROUND (you wait for its report, then use it). Set background:true to fire it off and keep working immediately) you get a job id back instead of the report, and later call subagent (action check) with that id to collect it.',
     inputSchema: z.object({
       task: z
         .string()
@@ -164,7 +164,7 @@ export function runSubagentTool({
         .boolean()
         .optional()
         .describe(
-          'If true, spawn the subagent and return IMMEDIATELY without waiting — it runs independently and you get no report back on this call. Use it to run a side-task in parallel while you continue your own work; collect it later with subagent (action check), or let its report come back as a follow-up turn. Default false (wait for and receive the report).'
+          'If true, spawn the subagent and return IMMEDIATELY without waiting: it runs independently and you get no report back on this call. Use it to run a side-task in parallel while you continue your own work; collect it later with subagent (action check), or let its report come back as a follow-up turn. Default false (wait for and receive the report).'
         ),
     }),
     execute: async ({ task, name, background }, { abortSignal }) => {
@@ -178,7 +178,7 @@ export function runSubagentTool({
       const depth = depthStore.getStore() ?? 0;
       if (depth >= MAX_SUBAGENT_DEPTH) {
         return {
-          error: `Subagent nesting limit (${MAX_SUBAGENT_DEPTH}) reached — cannot delegate further.`,
+          error: `Subagent nesting limit (${MAX_SUBAGENT_DEPTH}) reached: cannot delegate further.`,
           success: false,
         };
       }
@@ -447,7 +447,7 @@ export function runSubagentTool({
         return {
           background: true,
           id,
-          note: `Subagent ${jobLabel} started in the background as ${id}. Keep working; when you need its findings call subagent (action check) with id "${id}". If your turn ends before it finishes, that's fine — its report comes back to you as a new turn in this thread, so you don't have to wait for it. It does NOT post anything itself, so nothing reaches the user until you say it.`,
+          note: `Subagent ${jobLabel} started in the background as ${id}. Keep working; when you need its findings call subagent (action check) with id "${id}". If your turn ends before it finishes, that's fine: its report comes back to you as a new turn in this thread, so you don't have to wait for it. It does NOT post anything itself, so nothing reaches the user until you say it.`,
           success: true,
         };
       }
@@ -457,7 +457,7 @@ export function runSubagentTool({
 
   const checkSubagent = tool({
     description:
-      "Check on background subagents you started with runSubagent (background:true). With no id, lists every background subagent in this thread and its status. With an id, returns that subagent's status and — once finished — its full report. Set wait:true to block until it finishes before returning (use this to collect a background subagent's result before you answer).",
+      "Check on background subagents you started with runSubagent (background:true). With no id, lists every background subagent in this thread and its status. With an id, returns that subagent's status and (once finished) its full report. Set wait:true to block until it finishes before returning (use this to collect a background subagent's result before you answer).",
     inputSchema: z.object({
       id: z
         .string()
@@ -616,7 +616,7 @@ function reportMessage({
     raw: {},
     text: `[Automatic note, not written by a person: the background subagent ${label} you started earlier in this thread has finished. ${body}
 
-Nobody in the thread has seen any of this — the subagent posts nothing of its own, so you are the only way these findings reach anyone. Reply with what actually matters from them for the task that was being worked on, in your own words and at whatever length it deserves. Don't thank anyone and don't explain that you were woken up. If the findings genuinely need nothing said, call the skip TOOL — do not write the word "skip" as your reply.]`,
+Nobody in the thread has seen any of this: the subagent posts nothing of its own, so you are the only way these findings reach anyone. Reply with what actually matters from them for the task that was being worked on, in your own words and at whatever length it deserves. Don't thank anyone and don't explain that you were woken up. If the findings genuinely need nothing said, call the skip TOOL. Do not write the word "skip" as your reply.]`,
     threadId: thread.id,
   };
 }
@@ -652,7 +652,7 @@ async function synthesizeReport({
     attempt,
     holder: {},
     serviceTier: 'flex',
-    prompt: `${task}\n\nYou already did the work above. Write your final report now — the findings, in full. This message is prose only: do not call anything, do not start new work, and do not describe your setup or environment.`,
+    prompt: `${task}\n\nYou already did the work above. Write your final report now: the findings, in full. This message is prose only: do not call anything, do not start new work, and do not describe your setup or environment.`,
     system,
     tools,
   });

@@ -34,7 +34,7 @@ export function pollTool({
         .enum(['thread', 'channel'])
         .default('thread')
         .describe(
-          'Where the poll card goes: "thread" (default) inside the current thread, or "channel" as a new top-level message in the current channel — use it when asked to put the poll in the channel itself rather than the thread.'
+          'Where the poll card goes: "thread" (default) inside the current thread, or "channel" as a new top-level message in the current channel. Use it when asked to put the poll in the channel itself rather than the thread.'
         ),
     }),
     execute: async ({ options, postTo, question }) => {
@@ -71,7 +71,7 @@ export function pollTool({
           optionCount: options.length,
           success: true,
           summary: redirectedToThread
-            ? 'Posted the poll as a reply in this thread rather than as a new message in the channel — only the bot owner can have me start a top-level post. Say so if it matters; do not try another route.'
+            ? 'Posted the poll as a reply in this thread rather than as a new message in the channel. Only the bot owner can have me start a top-level post. Say so if it matters; do not try another route.'
             : `Posted an interactive poll with ${options.length} options.`,
         };
       } catch (error) {

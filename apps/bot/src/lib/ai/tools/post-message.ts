@@ -157,15 +157,15 @@ export function postMessageTool({
   );
   const permission = isOwner
     ? 'Post to another target. Type must be thread, channel, or user.'
-    : 'You may post into the current thread freely — and `type: "channel"` on the channel you were mentioned in is delivered as a reply in that thread, because starting a top-level post is the owner\'s alone. A DM to the person who asked you for it (type user, their own id) is sent straight away; a DM to anyone else is held until the owner clicks Confirm, which can take a while or never come. Posting into a DIFFERENT channel is queued for the owner\'s approval — it is posted in this thread with Approve/Deny buttons, never expires, and nothing is sent unless they approve. Say it is waiting; do not claim it was sent, and do not look for another way to send it.';
+    : 'You may post into the current thread freely, and `type: "channel"` on the channel you were mentioned in is delivered as a reply in that thread, because starting a top-level post is the owner\'s alone. A DM to the person who asked you for it (type user, their own id) is sent straight away; a DM to anyone else is held until the owner clicks Confirm, which can take a while or never come. Posting into a DIFFERENT channel is queued for the owner\'s approval: it is posted in this thread with Approve/Deny buttons, never expires, and nothing is sent unless they approve. Say it is waiting; do not claim it was sent, and do not look for another way to send it.';
   let userAccountNote = '';
   if (userAccountConfigured) {
     userAccountNote = asUserAccount
-      ? " You are answering as kyto's own Slack USER account, so posts go out from that account by default — the same rules, confirmations and approvals apply, and it only reaches channels that account has joined. Pass `fromUserAccount: false` only if the kyto APP must send it (a custom identity needs that)."
-      : " Pass `fromUserAccount: true` to send it from kyto's own Slack USER account (a normal member account named kyto) instead of the app — the same rules, confirmations and approvals apply. It only reaches channels that account has joined, and it cannot be combined with a custom identity.";
+      ? " You are answering as kyto's own Slack USER account, so posts go out from that account by default: the same rules, confirmations and approvals apply, and it only reaches channels that account has joined. Pass `fromUserAccount: false` only if the kyto APP must send it (a custom identity needs that)."
+      : " Pass `fromUserAccount: true` to send it from kyto's own Slack USER account (a normal member account named kyto) instead of the app: the same rules, confirmations and approvals apply. It only reaches channels that account has joined, and it cannot be combined with a custom identity.";
   }
   return tool({
-    description: `Post a message. ${permission} Body is markdown; pass \`blocks\` to send Block Kit instead (the markdown body is then the notification fallback text). Broadcast pings (<!channel>/<!here>/<!everyone>) NEVER survive a post into a different channel or a DM — they are stripped to plain text there even for the owner, who can only broadcast in the channel kyto was invoked in. Those tokens are LIVE pings, not text: to merely talk about @here/@channel (quoting a rule, answering a question about it), write the words without angle brackets — a post holding a real token from anyone but the owner is held for the owner's approval instead of being sent. A post into the thread you are answering lands in that same thread, and any text you write after it is ALSO posted there as your reply — so nothing like "Posted." or "Done" afterwards; write more only if it adds something, else call skip.${
+    description: `Post a message. ${permission} Body is markdown; pass \`blocks\` to send Block Kit instead (the markdown body is then the notification fallback text). Broadcast pings (<!channel>/<!here>/<!everyone>) NEVER survive a post into a different channel or a DM: they are stripped to plain text there even for the owner, who can only broadcast in the channel kyto was invoked in. Those tokens are LIVE pings, not text: to merely talk about @here/@channel (quoting a rule, answering a question about it), write the words without angle brackets: a post holding a real token from anyone but the owner is held for the owner's approval instead of being sent. A post into the thread you are answering lands in that same thread, and any text you write after it is ALSO posted there as your reply. So nothing like "Posted." or "Done" afterwards; write more only if it adds something, else call skip.${
       isOwner
         ? ' You can post under a custom identity: `asName` + `asIcon` for a fully custom display name and avatar, or `asUser` (a user/bot id or @mention) to post looking like that person/bot (their name + avatar). Slack still marks it as an app.'
         : ''
@@ -175,7 +175,7 @@ export function postMessageTool({
         .string()
         .optional()
         .describe(
-          `Optional Block Kit payload: a JSON array of up to ${MAX_BLOCKS} blocks (e.g. [{"type":"section","text":{"type":"mrkdwn","text":"hi"}}]). Replaces the markdown body; \`message\` is still sent as the notification fallback. Do NOT append a "Posted by kyto"/"sent by kyto in #channel" or any author/attribution context block — Slack already shows who sent the message and the channel, so such a footer is noise; only include blocks that carry real content.`
+          `Optional Block Kit payload: a JSON array of up to ${MAX_BLOCKS} blocks (e.g. [{"type":"section","text":{"type":"mrkdwn","text":"hi"}}]). Replaces the markdown body; \`message\` is still sent as the notification fallback. Do NOT append a "Posted by kyto"/"sent by kyto in #channel" or any author/attribution context block: Slack already shows who sent the message and the channel, so such a footer is noise; only include blocks that carry real content.`
         ),
       fromUserAccount: z
         .boolean()
@@ -209,7 +209,7 @@ export function postMessageTool({
         .string()
         .optional()
         .describe(
-          "Owner only. A user/bot id or @mention to mirror — the post wears that person/bot's display name and avatar. A plain name (not an id) is used as the display name only."
+          "Owner only. A user/bot id or @mention to mirror: the post wears that person/bot's display name and avatar. A plain name (not an id) is used as the display name only."
         ),
     }),
     execute: async (
@@ -271,7 +271,7 @@ export function postMessageTool({
       }
       if (target !== undefined && !isRawSlackChannelId(target)) {
         return {
-          error: `"${id}" is not a Slack channel/thread id — it looks like a message timestamp. Pass a channel id (C…/G…/D…), an <#channel> mention, or a slack:CHANNEL[:TS] thread id.`,
+          error: `"${id}" is not a Slack channel/thread id: it looks like a message timestamp. Pass a channel id (C…/G…/D…), an <#channel> mention, or a slack:CHANNEL[:TS] thread id.`,
         };
       }
       // A non-owner's "post to the channel" becomes a reply in the thread kyto
@@ -449,7 +449,7 @@ export function postMessageTool({
             : ` (requested by <@${authorUserId}>)`;
         const asWhom = identity?.username ? ` as "${identity.username}"` : '';
         const askedBecause = mirrored
-          ? ` — <@${authorUserId}> asked me to send it under your name and picture`
+          ? `: <@${authorUserId}> asked me to send it under your name and picture`
           : '';
         return await requestPostConfirmation({
           abortSignal,
@@ -487,7 +487,7 @@ export function postMessageTool({
         return {
           ...sent,
           summary:
-            'Posted as a reply in this thread rather than as a new message in the channel — only the bot owner can have me start a top-level post. Say so if it matters; do not try another route. Your reply goes into this same thread, so do not repeat what you posted.',
+            'Posted as a reply in this thread rather than as a new message in the channel. Only the bot owner can have me start a top-level post. Say so if it matters; do not try another route. Your reply goes into this same thread, so do not repeat what you posted.',
         };
       }
       // The model posted into the thread it is answering and then wrote the

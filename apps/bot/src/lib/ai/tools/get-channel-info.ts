@@ -23,7 +23,7 @@ export function getChannelInfoTool({
 }) {
   return tool({
     description:
-      'Fetch metadata for a channel: name, member count, DM status, visibility (public/private), etc. Works for private channels kyto is not in too (name and visibility only, from the Flaron directory). Never call a channel public unless this says so. With `members: true` it also lists who is in it — each member\'s id, name and whether they are a bot — in one call: use it for "who is in this channel" and "everyone except the bots", never a users.info loop.',
+      'Fetch metadata for a channel: name, member count, DM status, visibility (public/private), etc. Works for private channels kyto is not in too (name and visibility only, from the Flaron directory). Never call a channel public unless this says so. With `members: true` it also lists who is in it (each member\'s id, name and whether they are a bot) in one call: use it for "who is in this channel" and "everyone except the bots", never a users.info loop.',
     inputSchema: z.object({
       channelId: z.string(),
       members: z

@@ -81,7 +81,7 @@ export function bashTool({
 }) {
   return tool({
     description:
-      'Run a bash command in your isolated Linux sandbox (network access, common CLIs, bun/node/python preinstalled). The workspace PERSISTS across turns in this thread — files you write and packages you install are still there next time. A command still running after ~1 minute is automatically moved to the background and you get a handle to poll with process (action output) — so for anything you expect to be slow, bound it with `timeout` or start it with process (action start) yourself rather than relying on the auto-move.',
+      'Run a bash command in your isolated Linux sandbox (network access, common CLIs, bun/node/python preinstalled). The workspace PERSISTS across turns in this thread (files you write and packages you install are still there next time). A command still running after ~1 minute is automatically moved to the background and you get a handle to poll with process (action output), so for anything you expect to be slow, bound it with `timeout` or start it with process (action start) yourself rather than relying on the auto-move.',
     inputSchema: z.object({
       command: z.string().describe('The bash command to run.'),
       workingDirectory: z
@@ -198,7 +198,7 @@ async function runWithAutoBackground({
   return {
     backgrounded: true,
     id: started.id,
-    note: `This command was still running after 60s, so it was moved to the background (handle "${started.id}") to keep the turn responsive — it is STILL RUNNING. Check it with the \`process\` tool (action \`output\`, id "${started.id}") and stop it with action \`kill\`. Don't just re-run it. If you need its result before replying, keep working on other things and check back, or use the wait tool. If your turn ends first, you'll be woken with its result when it finishes (or told after 30 minutes if it's still going).`,
+    note: `This command was still running after 60s, so it was moved to the background (handle "${started.id}") to keep the turn responsive: it is STILL RUNNING. Check it with the \`process\` tool (action \`output\`, id "${started.id}") and stop it with action \`kill\`. Don't just re-run it. If you need its result before replying, keep working on other things and check back, or use the wait tool. If your turn ends first, you'll be woken with its result when it finishes (or told after 30 minutes if it's still going).`,
     running: true,
     stderr: await clipStream(result.stderr, context, 'stderr'),
     stdout: await clipStream(result.stdout, context, 'stdout'),
@@ -212,7 +212,7 @@ export function readFileTool({
 }) {
   return tool({
     description:
-      'Read a text file from the sandbox workspace (null if it does not exist). Up to 12,000 characters come back per call, as one contiguous part: when the result has `nextOffset`, call again with `offset: nextOffset` (several in parallel is fine) to get the next part, and keep going until there is none — that is how to read a long document IN FULL. `startLine`/`endLine` narrow to a line range first; `offset` then pages within it.',
+      'Read a text file from the sandbox workspace (null if it does not exist). Up to 12,000 characters come back per call, as one contiguous part: when the result has `nextOffset`, call again with `offset: nextOffset` (several in parallel is fine) to get the next part, and keep going until there is none: that is how to read a long document IN FULL. `startLine`/`endLine` narrow to a line range first; `offset` then pages within it.',
     inputSchema: z.object({
       endLine: z.number().int().min(1).optional(),
       offset: z
@@ -221,7 +221,7 @@ export function readFileTool({
         .min(0)
         .optional()
         .describe(
-          "Character offset to start from — a previous result's `nextOffset`."
+          "Character offset to start from: a previous result's `nextOffset`."
         ),
       path: z.string(),
       startLine: z.number().int().min(1).optional(),
@@ -262,7 +262,7 @@ export function writeFileTool({
 }) {
   return tool({
     description:
-      'Write a text file in the sandbox workspace (creates parent directories, overwrites existing content). Your reply — including this tool call — is capped at a few thousand tokens, so a single call CANNOT carry a very large file: content over roughly 400 lines gets cut off mid-argument. Write a big file in successive chunks instead — the first call with append:false, each following call with append:true. A whole-file write is checked afterwards (parse, and tsc for TypeScript) and any errors come back in `diagnostics` — fix them before moving on. Chunked appends are NOT checked, because the file is incomplete until the last one; check those yourself with bash.',
+      'Write a text file in the sandbox workspace (creates parent directories, overwrites existing content). Your reply (including this tool call) is capped at a few thousand tokens, so a single call CANNOT carry a very large file: content over roughly 400 lines gets cut off mid-argument. Write a big file in successive chunks instead: the first call with append:false, each following call with append:true. A whole-file write is checked afterwards (parse, and tsc for TypeScript) and any errors come back in `diagnostics`: fix them before moving on. Chunked appends are NOT checked, because the file is incomplete until the last one; check those yourself with bash.',
     inputSchema: z.object({
       append: z
         .boolean()
@@ -317,14 +317,14 @@ function squashWhitespace(value: string): string {
 function noMatchReason(text: string, oldString: string): string {
   const base = 'oldString was not found in the file, so nothing was changed.';
   if (text.includes('\r\n') && !oldString.includes('\r\n')) {
-    return `${base} The file uses CRLF line endings and your oldString uses LF — copy the text out of readFile instead of retyping it.`;
+    return `${base} The file uses CRLF line endings and your oldString uses LF: copy the text out of readFile instead of retyping it.`;
   }
   if (squashWhitespace(text).includes(squashWhitespace(oldString))) {
     return `${base} The text IS there but the whitespace differs (indentation, tabs vs spaces, or a line break). Read the file and copy the region exactly as it appears.`;
   }
   const [firstLine] = oldString.split('\n');
   if (firstLine && firstLine.trim().length > 0 && text.includes(firstLine)) {
-    return `${base} Its first line ("${clamp(firstLine.trim(), 80)}") does appear, so the mismatch is somewhere after it — re-read that region and copy it exactly.`;
+    return `${base} Its first line ("${clamp(firstLine.trim(), 80)}") does appear, so the mismatch is somewhere after it: re-read that region and copy it exactly.`;
   }
   return `${base} Read the file first and copy the exact region you mean to replace.`;
 }
@@ -336,7 +336,7 @@ export function editFileTool({
 }) {
   return tool({
     description:
-      'Edit a text file in the sandbox by exact string replacement. oldString must match the file contents exactly (including whitespace) and, unless replaceAll is true, exactly once — a miss or an ambiguous match FAILS rather than guessing. After a successful edit the file is checked (parse, and tsc for TypeScript) and any errors come back in `diagnostics`; fix them before moving on.',
+      'Edit a text file in the sandbox by exact string replacement. oldString must match the file contents exactly (including whitespace) and, unless replaceAll is true, exactly once: a miss or an ambiguous match FAILS rather than guessing. After a successful edit the file is checked (parse, and tsc for TypeScript) and any errors come back in `diagnostics`; fix them before moving on.',
     inputSchema: z.object({
       newString: z.string(),
       oldString: z.string(),

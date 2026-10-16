@@ -38,7 +38,7 @@ export function embedTool({
 }) {
   return tool({
     description:
-      "Post a LIVE, interactive page inside a Slack message — it renders in the message itself and people can click and type in it, rather than following a link. Two kinds: `html`, where you write a complete self-contained HTML page (inline all CSS/JS; it is hosted on kyto's own domain), and `whiteboard`, a real-time SHARED drawing canvas — everyone who opens it is on the same board, sees each other's cursors live, and what they draw is kept between visits, so it is a good answer when people want to sketch something out together. Use it for anything better seen than described: a chart, an interactive demo, a diagram people should be able to pan, a scratch canvas. ALWAYS set an explicit background-color AND text color in your CSS — the embed inherits nothing from Slack, so default-coloured text can come out invisible. Re-publishing the same `id` swaps what an existing embed shows; the Slack message keeps working. This is NOT a website people can keep visiting and sharing — use sites (action deploy) for that.",
+      "Post a LIVE, interactive page inside a Slack message: it renders in the message itself and people can click and type in it, rather than following a link. Two kinds: `html`, where you write a complete self-contained HTML page (inline all CSS/JS; it is hosted on kyto's own domain), and `whiteboard`, a real-time SHARED drawing canvas: everyone who opens it is on the same board, sees each other's cursors live, and what they draw is kept between visits, so it is a good answer when people want to sketch something out together. Use it for anything better seen than described: a chart, an interactive demo, a diagram people should be able to pan, a scratch canvas. ALWAYS set an explicit background-color AND text color in your CSS: the embed inherits nothing from Slack, so default-coloured text can come out invisible. Re-publishing the same `id` swaps what an existing embed shows; the Slack message keeps working. This is NOT a website people can keep visiting and sharing. Use sites (action deploy) for that.",
     inputSchema: z.object({
       html: z
         .string()
@@ -108,7 +108,7 @@ export function embedTool({
         if (!post) {
           return {
             published: true,
-            summary: `Published the embed at ${url}. Not posted — call again with post:true, or link it.`,
+            summary: `Published the embed at ${url}. Not posted. Call again with post:true, or link it.`,
             url,
           };
         }
@@ -125,7 +125,7 @@ export function embedTool({
           ],
           // Block Kit needs a text fallback for notifications and for clients
           // that cannot render the block at all.
-          fallbackText: `${title} — ${url}`,
+          fallbackText: `${title}: ${url}`,
         });
         logger.info({ id: slug, kind, requestedBy }, '[embed] posted');
         return {
@@ -145,7 +145,7 @@ export function embedTool({
         if (/not_in_channel|channel_not_found/.test(message)) {
           return {
             error:
-              "The kyto app isn't in this channel, and only the app can post a live embed, so it cannot render here — retrying won't help. The page itself is published: call again with post:false for its URL and share that link, saying it opens in the browser rather than inside Slack.",
+              "The kyto app isn't in this channel, and only the app can post a live embed, so it cannot render here: retrying won't help. The page itself is published: call again with post:false for its URL and share that link, saying it opens in the browser rather than inside Slack.",
             published: false,
           };
         }
@@ -158,7 +158,7 @@ export function embedTool({
 export function removeEmbedTool() {
   return tool({
     description:
-      'Delete an embed page kyto published. The Slack message that carried it stays, but its card stops loading — so only do this when asked.',
+      'Delete an embed page kyto published. The Slack message that carried it stays, but its card stops loading. So only do this when asked.',
     inputSchema: z.object({
       id: z.string().min(2).max(60).describe('The embed slug to delete.'),
     }),

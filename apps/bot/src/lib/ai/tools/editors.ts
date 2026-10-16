@@ -28,7 +28,7 @@ export function parseEditors(editors: string[] | undefined): EditorsResult {
     const id = toRawSlackUserId(entry);
     if (!id) {
       return {
-        error: `"${entry}" is not a Slack user id. Use the id (U123ABC) or a <@U123ABC> mention — look it up with getUser if you only have a name.`,
+        error: `"${entry}" is not a Slack user id. Use the id (U123ABC) or a <@U123ABC> mention: look it up with getUser if you only have a name.`,
         ok: false,
       };
     }

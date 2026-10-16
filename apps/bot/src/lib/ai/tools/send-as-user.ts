@@ -261,7 +261,7 @@ export function sendAsUserTool({
           const raw = normalizeSlackChannelArg(channelId);
           if (!raw) {
             return {
-              error: `"${channelId}" is not a Slack channel id — it looks like a message timestamp. Pass a channel id (C…/G…/D…) or an <#channel> mention.`,
+              error: `"${channelId}" is not a Slack channel id: it looks like a message timestamp. Pass a channel id (C…/G…/D…) or an <#channel> mention.`,
               success: false,
             };
           }
@@ -407,7 +407,7 @@ export function editAsUserTool({
           const raw = normalizeSlackChannelArg(channelId);
           if (!raw) {
             return {
-              error: `"${channelId}" is not a Slack channel id — it looks like a message timestamp. Pass a channel id (C…/G…/D…) or an <#channel> mention.`,
+              error: `"${channelId}" is not a Slack channel id: it looks like a message timestamp. Pass a channel id (C…/G…/D…) or an <#channel> mention.`,
               success: false,
             };
           }

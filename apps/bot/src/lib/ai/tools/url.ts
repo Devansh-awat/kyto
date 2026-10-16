@@ -75,7 +75,7 @@ export function getPermalinkTool({
 }) {
   return tool({
     description:
-      "Get a shareable Slack permalink for a message, e.g. to reference it elsewhere — in this channel by default, or in any channel the asker can read. If it fails, don't build a link by hand; say you couldn't get one.",
+      "Get a shareable Slack permalink for a message, e.g. to reference it elsewhere: in this channel by default, or in any channel the asker can read. If it fails, don't build a link by hand; say you couldn't get one.",
     inputSchema: z.object({
       channelId: z
         .string()
@@ -223,7 +223,7 @@ export async function fetchUrlText({
       // verification" page), not a permissions problem: retrying with curl or
       // other headers just burns steps.
       throw new Error(
-        `Fetch failed: ${response.status} — the site blocks automated fetches, through a reader too; a real browser may get through, or ask the user to paste or attach the page`
+        `Fetch failed: ${response.status}: the site blocks automated fetches, through a reader too; a real browser may get through, or ask the user to paste or attach the page`
       );
     }
   }
@@ -277,7 +277,7 @@ export function fetchUrlTool({
 }) {
   return tool({
     description:
-      "Fetch the text content of a specific URL the user pasted or referenced. Use this instead of a web search when you already have the exact link. A bot-walled or JavaScript-only page is read through a rendering reader automatically (`via` says which route worked). A page longer than 20,000 characters comes in parts: the result's `totalChars` is the whole page and `nextOffset` is where the next part starts — call again with `offset: nextOffset` (several offsets in parallel is fine) until there is no `nextOffset`. Read every part before summarising or quoting a whole page; never present a summary of part of a page as the page's. For a long DOCUMENT (a legal page, a story, docs) pass `toFile: true` instead: the whole cleaned text is saved in the sandbox in one call and you get its path, length and opening — then grep it or read it with readFile, in parallel ranges. Don't curl and convert HTML by hand.",
+      "Fetch the text content of a specific URL the user pasted or referenced. Use this instead of a web search when you already have the exact link. A bot-walled or JavaScript-only page is read through a rendering reader automatically (`via` says which route worked). A page longer than 20,000 characters comes in parts: the result's `totalChars` is the whole page and `nextOffset` is where the next part starts (call again with `offset: nextOffset` (several offsets in parallel is fine) until there is no `nextOffset`. Read every part before summarising or quoting a whole page; never present a summary of part of a page as the page's. For a long DOCUMENT (a legal page, a story, docs) pass `toFile: true` instead: the whole cleaned text is saved in the sandbox in one call and you get its path, length and opening) then grep it or read it with readFile, in parallel ranges. Don't curl and convert HTML by hand.",
     inputSchema: z.object({
       toFile: z
         .boolean()
@@ -291,7 +291,7 @@ export function fetchUrlTool({
         .min(0)
         .optional()
         .describe(
-          "Character offset to start from — a previous result's `nextOffset`. Omit for the start."
+          "Character offset to start from: a previous result's `nextOffset`. Omit for the start."
         ),
       url: z.string().url().describe('The URL to fetch.'),
     }),

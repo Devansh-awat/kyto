@@ -1,6 +1,6 @@
 ---
 name: minecraft-forge-mods
-description: Build, patch or debug a Minecraft Forge mod or coremod (1.12.2 and other legacy Forge versions) in the sandbox — compiling against the REAL Forge, launchwrapper and Minecraft jars, ASM class transformers, obfuscated names, jar manifests. Use whenever a jar someone will load into a Minecraft client or server is being made or fixed.
+description: Build, patch or debug a Minecraft Forge mod or coremod (1.12.2 and other legacy Forge versions) in the sandbox: compiling against the REAL Forge, launchwrapper and Minecraft jars, ASM class transformers, obfuscated names, jar manifests. Use whenever a jar someone will load into a Minecraft client or server is being made or fixed.
 ---
 
 # Minecraft Forge mods and coremods
