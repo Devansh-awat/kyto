@@ -53,7 +53,7 @@ export async function isAddressedToKyto(state: string): Promise<boolean> {
         questions: {
           addressed: {
             instructions:
-              'kyto is an AI assistant in this Slack thread, which other people and bots also talk in. kyto is busy answering an earlier message. Is the LATEST message meant for kyto — addressed to it, a follow-up or correction to what kyto is working on, or something kyto is expected to respond to — rather than meant only for another person or bot?',
+              'kyto is an AI assistant in this Slack thread, which other people and bots also talk in. kyto is busy answering an earlier message. Is the LATEST message meant for kyto (addressed to it, a follow-up or correction to what kyto is working on, or something kyto is expected to respond to) rather than meant only for another person or bot?',
             type: 'noul',
           },
         },

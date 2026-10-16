@@ -282,6 +282,7 @@ export async function buildTools({
   message,
   thread,
   secret = false,
+  takeSteering,
   unattended = false,
   unredactedEmail = false,
 }: {
@@ -314,6 +315,12 @@ export async function buildTools({
   thread: ThreadHandle;
   /** A `!secret` turn: nothing may be posted publicly on its behalf. */
   secret?: boolean;
+  /**
+   * The turn author's follow-ups sent mid-turn, rendered for the next tool
+   * result (lib/agent/steering). Only the main turn passes it, so a
+   * subagent's tool call never swallows one.
+   */
+  takeSteering?: () => string | undefined;
   /** Answering as kyto's user account: a subagent's report wakes it, too. */
   asUserAccount?: boolean;
   /**
@@ -839,7 +846,7 @@ export async function buildTools({
       ? {
           slackBrowser: {
             summary:
-              "a browser logged in to Slack as kyto's user account: workflows, other apps' buttons (owner only) — last resort, never for what another tool here does (custom emoji: submitEmoji)",
+              "a browser logged in to Slack as kyto's user account: workflows, other apps' buttons (owner only): last resort, never for what another tool here does (custom emoji: submitEmoji)",
             tool: slackBrowser.tool,
           },
         }
@@ -933,7 +940,7 @@ export async function buildTools({
     const gate = mcp.gates[name];
     deferred[name] = {
       summary: gate
-        ? `MCP tool (${name}) — ${gate.category}${
+        ? `MCP tool (${name}): ${gate.category}${
             gate.rule === 'ask'
               ? ', needs the user to approve each call (they get a button)'
               : ''
@@ -1012,7 +1019,22 @@ export async function buildTools({
               : 'done',
             result
           );
-          return redactSecretsDeep(result, `tool ${name}`);
+          // A follow-up the author sent mid-turn rides on whichever result
+          // comes back next; a result of another shape leaves it queued.
+          const steering =
+            typeof result === 'string' ||
+            (typeof result === 'object' &&
+              result !== null &&
+              !Array.isArray(result))
+              ? takeSteering?.()
+              : undefined;
+          let delivered: unknown = result;
+          if (steering && typeof result === 'string') {
+            delivered = `${result}\n\n${steering}`;
+          } else if (steering) {
+            delivered = { ...result, newMessages: steering };
+          }
+          return redactSecretsDeep(delivered, `tool ${name}`);
         } catch (error) {
           finishEffect?.('failed');
           // Rethrown as-is unless a secret was found: an abort must stay an
@@ -1093,7 +1115,7 @@ export async function buildTools({
   const hiddenNote = mcp.blocked
     .map(
       (entry) =>
-        `\n(${entry.count} tool${entry.count === 1 ? '' : 's'} on the ${entry.server} MCP server are hidden by the user's own rules for ${entry.categories.join('/')} — tell them to change it in App Home if they need one.)`
+        `\n(${entry.count} tool${entry.count === 1 ? '' : 's'} on the ${entry.server} MCP server are hidden by the user's own rules for ${entry.categories.join('/')}. Tell them to change it in App Home if they need one.)`
     )
     .join('');
 
@@ -1122,7 +1144,7 @@ export async function buildTools({
       return Promise.resolve({
         loaded,
         summary: loaded.length
-          ? `Loaded: ${loaded.join(', ')}. They usually stay available on later messages in this thread, but a restart drops them — if one comes back unavailable, load it again.`
+          ? `Loaded: ${loaded.join(', ')}. They usually stay available on later messages in this thread, but a restart drops them. If one comes back unavailable, load it again.`
           : 'No matching tools.',
         unknown,
       });
@@ -1176,7 +1198,7 @@ export async function buildTools({
         : `<mcp_servers>The asker's MCP servers this turn (added in App Home; their tools are in loadTools' catalog as mcp_<server>_<tool>):\n${mcp.status
             .map(({ failure, server, tools: count }) =>
               failure
-                ? `- ${server}: not connected — ${failure} (fixed in App Home; it is retried automatically)`
+                ? `- ${server}: not connected: ${failure} (fixed in App Home; it is retried automatically)`
                 : `- ${server}: connected, ${count} tool${count === 1 ? '' : 's'}`
             )
             .join('\n')}</mcp_servers>`,

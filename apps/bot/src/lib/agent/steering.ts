@@ -30,6 +30,65 @@ export function interruptTurn({
   activeTurn.controller.abort(new TurnAbort('interrupt'));
 }
 
+// How long a folded-in message may wait for a tool result to ride on. A turn
+// that is streaming its answer, or sitting in one long tool, gets interrupted
+// after this as before.
+const STEER_DELIVERY_MS = 30_000;
+
+/**
+ * Fold a message into the running turn instead of aborting it: it is handed to
+ * the model with the next tool result (`takeSteering`), so a correction three
+ * minutes into research no longer throws that research away. False when it
+ * can't be folded in, and the caller interrupts as before.
+ *
+ * Only the turn's OWN author's messages: every gate in the turn checks that
+ * author, so anyone else's words folded in would act with their identity (the
+ * reason `queuedInput` stops at the author boundary). Not a message carrying
+ * files either: only a turn's own message gets them put in the sandbox. And
+ * only a real Slack message: a background or subagent wake carries the
+ * author's id and tells kyto to skip if nothing needs saying, which mid-turn
+ * would end the turn it was folded into.
+ */
+export function steerTurn({
+  activeTurn,
+  input,
+}: {
+  activeTurn: ActiveTurn;
+  input: TurnInput;
+}): boolean {
+  const author = activeTurn.message?.author.userId;
+  if (
+    !author ||
+    input.message.author.userId !== author ||
+    input.message.attachments.length > 0 ||
+    typeof input.message.raw.ts !== 'string'
+  ) {
+    return false;
+  }
+  activeTurn.steering.push(input);
+  setTimeout(() => {
+    const index = activeTurn.steering.indexOf(input);
+    if (index !== -1 && !activeTurn.controller.signal.aborted) {
+      activeTurn.steering.splice(index, 1);
+      interruptTurn({ activeTurn, input });
+    }
+  }, STEER_DELIVERY_MS).unref();
+  return true;
+}
+
+/** The waiting follow-ups as one note for a tool result, and off the queue. */
+export function takeSteering(activeTurn: ActiveTurn): string | undefined {
+  const waiting = activeTurn.steering.splice(0);
+  const notes = waiting
+    .map(({ message }) => withoutFlags(message.text).trim())
+    .filter(Boolean)
+    .map(
+      (text) =>
+        `[New message from the person you're working for, sent while you were working on this. Read it and factor it in now; your final reply answers it too]: ${text}`
+    );
+  return notes.length > 0 ? notes.join('\n\n') : undefined;
+}
+
 /**
  * The follow-up input after an interrupt: a rapid burst merged into one message
  * so steering keeps every intermediate correction.

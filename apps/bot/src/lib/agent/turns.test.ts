@@ -7,6 +7,7 @@ describe('stopAllTurns', () => {
     const turn: ActiveTurn = {
       controller: new AbortController(),
       pendingMessages: [],
+      steering: [],
     };
     setTurn({ threadId: 'slack:C1:1', turn });
     turn.controller.signal.addEventListener('abort', () => {
@@ -22,6 +23,7 @@ describe('stopAllTurns', () => {
     const turn: ActiveTurn = {
       controller: new AbortController(),
       pendingMessages: [],
+      steering: [],
     };
     setTurn({ threadId: 'slack:C2:1', turn });
     const started = Date.now();

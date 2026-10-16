@@ -75,6 +75,8 @@ import {
   abortReasonOf,
   interruptTurn,
   queuedInput,
+  steerTurn,
+  takeSteering,
 } from '@/lib/agent/steering';
 import { rememberThinking } from '@/lib/agent/thinking';
 import {
@@ -380,7 +382,9 @@ export async function runTurn(input: {
       return runTurn(input);
     }
   }
-  interruptTurn({ activeTurn: turn, input });
+  if (!(input.secret || steerTurn({ activeTurn: turn, input }))) {
+    interruptTurn({ activeTurn: turn, input });
+  }
   // The ✅ is the app's; a person doesn't react to say they read you.
   if (input.asUserAccount) {
     return;
@@ -508,6 +512,7 @@ async function executeTurn(
     controller,
     message: secret ? undefined : message,
     pendingMessages: [],
+    steering: [],
   };
   const slot = turnSlot({ asUserAccount, threadId });
   setTurn({ threadId: slot, turn: activeTurn });
@@ -873,10 +878,17 @@ async function executeTurn(
       slack.refreshCachedThread(threadId).catch(() => undefined);
     }
     clearTurn({ threadId: slot, turn: activeTurn });
+    // A follow-up that never met a tool result (the turn was already writing
+    // its answer) gets a turn of its own, like an interrupt's. Not after a stop.
+    const reason = abortReasonOf(controller.signal);
+    const unseen = activeTurn.steering.splice(0);
+    if (reason === undefined || reason === 'interrupt') {
+      activeTurn.pendingMessages.push(...unseen);
+    }
     // Only an interrupt replays queued messages; a rapid burst is merged into a
     // single follow-up so steering does not drop intermediate corrections.
     const resume =
-      abortReasonOf(controller.signal) === 'interrupt'
+      reason === 'interrupt' || (reason === undefined && unseen.length > 0)
         ? queuedInput(activeTurn)
         : undefined;
     if (resume) {
@@ -941,6 +953,7 @@ async function executeTurn(
       guardCodeTool: codingMonitor.guardTool,
       message: turnMessage,
       secret,
+      takeSteering: () => takeSteering(activeTurn),
       thread: turnThread,
       unredactedEmail:
         turnFlags?.ok === true && turnFlags.flags.noRedact === true,
@@ -988,7 +1001,7 @@ async function executeTurn(
       messageText = `${messageText}\n\n<unanswered_earlier>These earlier messages in the thread were addressed to you, and a newer message interrupted you before you replied to them:\n${lines.join('\n')}\nAnswer them in this reply too, unless the thread has already settled them.</unanswered_earlier>`;
     }
     if (resumed) {
-      messageText = `${messageText}\n\n<resumed_after_restart>kyto restarted while answering this message and is picking it back up. Anything you already posted is in the thread above, and what your tools found before the restart is in your earlier reasoning — continue from there instead of starting over.\n${describePriorEffects(priorEffects)}</resumed_after_restart>`;
+      messageText = `${messageText}\n\n<resumed_after_restart>kyto restarted while answering this message and is picking it back up. Anything you already posted is in the thread above, and what your tools found before the restart is in your earlier reasoning: continue from there instead of starting over.\n${describePriorEffects(priorEffects)}</resumed_after_restart>`;
     }
     const conversation = [...history, messageText].join('\n\n');
     const promptMs = Date.now() - promptStart;

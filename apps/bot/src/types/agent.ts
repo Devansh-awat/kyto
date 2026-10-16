@@ -17,4 +17,6 @@ export interface ActiveTurn {
   /** What the turn is answering; unset for a `!secret` turn, which no check may read. */
   message?: Message;
   pendingMessages: TurnInput[];
+  /** The author's own follow-ups, waiting for the next tool result (steering.ts). */
+  steering: TurnInput[];
 }
