@@ -37,6 +37,7 @@ import {
   rememberLoadedTools,
   threadToolOrder,
 } from './loaded-tools';
+import { analyzeDataTool } from './tools/analyze-data';
 import { askQuestionTool } from './tools/ask-question';
 import { backgroundProcessTools } from './tools/background';
 import { browserTool } from './tools/browser';
@@ -47,6 +48,7 @@ import {
   canvasWriteTool,
 } from './tools/canvas';
 import { createChannelTool, setChannelTopicTool } from './tools/channels';
+import { nowTool } from './tools/clock';
 import { codeChannelTool } from './tools/code-channel';
 import { codeModeTool } from './tools/code-mode';
 import {
@@ -107,6 +109,7 @@ import {
   scheduleEventReminderTool,
   scheduleRecurringReminderTool,
 } from './tools/reminders';
+import { ALLOWED_AFTER_STOP, reportAbuseTool } from './tools/report-abuse';
 import { runJsTool } from './tools/run-js';
 import { bashTool } from './tools/sandbox';
 import { scheduleReminderTool } from './tools/schedule-reminder';
@@ -119,6 +122,7 @@ import { slackBrowserTool } from './tools/slack-browser';
 import { slackDocsTool } from './tools/slack-docs';
 import { slackScriptTool } from './tools/slack-script';
 import { runSubagentTool } from './tools/subagent';
+import { submitFeedbackTool } from './tools/submit-feedback';
 import { summarizeThreadTool } from './tools/summarize-thread';
 import { textToSpeechTool } from './tools/text-to-speech';
 import { todoTool } from './tools/todo';
@@ -286,6 +290,7 @@ export async function buildTools({
   guardCodeTool,
   message,
   thread,
+  maxToolCalls,
   secret = false,
   takeReminder,
   takeSteering,
@@ -321,6 +326,11 @@ export async function buildTools({
   thread: ThreadHandle;
   /** A `!secret` turn: nothing may be posted publicly on its behalf. */
   secret?: boolean;
+  /**
+   * Tool calls this run may make; past it each call is refused with "write
+   * up what you have". A subagent's cap: nobody watches it to stop a loop.
+   */
+  maxToolCalls?: number;
   /**
    * The turn author's follow-ups sent mid-turn, rendered for the next tool
    * result (lib/agent/steering). Only the main turn passes it, so a
@@ -394,6 +404,9 @@ export async function buildTools({
 
   // What this turn has read, for the read-before-write rule (tools/sandbox).
   const fileReads = createFileReads();
+  // Set once this turn's request was reported as abuse that stops it
+  // (tools/report-abuse): every later tool but a few is refused.
+  let abuseStop: string | undefined;
 
   const core: ToolSet = {
     bash: bashTool({
@@ -436,6 +449,21 @@ export async function buildTools({
       extendAttemptDeadline,
       isOwner,
     }),
+    now: nowTool(),
+    // A person reporting kyto's abuse to the owner needs a person there.
+    ...(unattended
+      ? {}
+      : {
+          reportAbuse: reportAbuseTool({
+            bot,
+            message,
+            onStop: (category) => {
+              abuseStop = category;
+            },
+            secret,
+            threadId: thread.id,
+          }),
+        }),
     // A live checklist in the thread: not for the user account, which posts
     // like a person, nor for a run nobody watches (a subagent, a reminder).
     ...(asUserAccount || unattended ? {} : { todo: todoTool({ thread }) }),
@@ -559,6 +587,24 @@ export async function buildTools({
       summary: 'size / type / mtime of a sandbox file',
       tool: fileStatTool({ getSandboxContext }),
     },
+    analyzeData: {
+      summary:
+        'SQL (DuckDB) over a CSV/Excel/Parquet/JSON file in the sandbox, or its column stats',
+      tool: analyzeDataTool({ getSandboxContext }),
+    },
+    ...(unattended
+      ? {}
+      : {
+          submitFeedback: {
+            summary:
+              'record feedback about kyto itself given in conversation (bug, praise, suggestion) and tell the owner',
+            tool: submitFeedbackTool({
+              bot,
+              threadId: thread.id,
+              userId: authorUserId,
+            }),
+          },
+        }),
     summarizeThread: {
       summary: 'summarize a long Slack thread',
       tool: summarizeThreadTool({
@@ -994,6 +1040,7 @@ export async function buildTools({
   // deferred.
   const usage = new Map<string, number>();
   let slackCalls = 0;
+  let totalCalls = 0;
   const loadedNames = new Set<string>();
   const preloadedNames = new Set<string>();
   let loadToolsCalls = 0;
@@ -1007,6 +1054,13 @@ export async function buildTools({
       ...entry,
       execute: async (input: never, options: never) => {
         usage.set(name, (usage.get(name) ?? 0) + 1);
+        totalCalls += 1;
+        if (maxToolCalls !== undefined && totalCalls > maxToolCalls) {
+          return {
+            error: `Not run: this run has made ${maxToolCalls} tool calls, its limit. Stop working now and write your report with what you have, saying plainly what is left undone.`,
+            success: false,
+          };
+        }
         if (SLACK_READ_TOOLS.has(name)) {
           slackCalls += 1;
           if (slackCalls > SLACK_TOOL_BUDGET) {
@@ -1015,6 +1069,12 @@ export async function buildTools({
               success: false,
             };
           }
+        }
+        if (abuseStop && !ALLOWED_AFTER_STOP.has(name)) {
+          return {
+            error: `Refused: this request was reported as abuse (${abuseStop}) and stopped. Don't continue it: reply briefly that you won't do it and end your turn.`,
+            success: false,
+          };
         }
         const refusal = await guard?.({ input, toolName: name });
         if (refusal) {

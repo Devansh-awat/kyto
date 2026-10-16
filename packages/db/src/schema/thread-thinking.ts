@@ -12,7 +12,19 @@ import { jsonb, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
  * `privateTo`: it is replayed in full only on that person's own turns. Plain
  * strings are rows written before that existed, treated as not private.
  */
-export type StoredThinkingTurn = string | { privateTo: string; text: string };
+export type StoredThinkingTurn =
+  | string
+  | {
+      /** What kyto DID that turn (tool calls, one line each), for compaction. */
+      actions?: string;
+      /** The Slack message the turn answered. */
+      messageTs?: string;
+      privateTo?: string;
+      /** The turn's reasoning. */
+      text: string;
+      /** Its tool calls and results, replayed while it is one of the last 3. */
+      tools?: string;
+    };
 
 export const threadThinking = pgTable('thread_thinking', {
   threadId: text('thread_id').primaryKey(),

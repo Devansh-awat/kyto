@@ -73,28 +73,52 @@ export function selectWithinBudget(
   return kept.reverse();
 }
 
+/** A recalled turn: its reasoning, and its tool results when kept. */
+export interface RecalledTurn {
+  reasoning: string;
+  tools?: string;
+}
+
+// Only the most recent turns' tool results ride along (owner's call
+// 2026-10-16: the last three, no more); older turns keep their reasoning.
+export const TOOL_RESULT_TURNS = 3;
+
 /**
  * The block buildPrompt injects. Framed hard, because the failure mode of
  * showing a model its own past reasoning is that it narrates or re-litigates it
  * instead of moving on.
  */
 export function renderThinking(
-  turns: string[],
+  turns: (string | RecalledTurn)[],
   budget: number = THINKING_BUDGET_CHARS
 ): string {
-  const selected = selectWithinBudget(turns, budget);
+  const recalled = turns.map((turn) =>
+    typeof turn === 'string' ? { reasoning: turn } : turn
+  );
+  const selected = selectWithinBudget(
+    recalled.map((turn) => turn.reasoning),
+    budget
+  );
   if (selected.length === 0) {
     return '';
   }
-  const rendered = selected.map((turn, index) => {
+  const kept = recalled.slice(-selected.length);
+  const rendered = selected.map((reasoning, index) => {
     const ago = selected.length - index;
     const label = ago === 1 ? 'your previous turn' : `${ago} turns ago`;
-    return `[${label}]\n${turn}`;
+    const tools = ago <= TOOL_RESULT_TURNS ? kept[index]?.tools : undefined;
+    return [
+      `[${label}]`,
+      reasoning,
+      tools ? `[what your tools returned that turn]\n${tools}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
   });
   return [
     '<your_previous_thinking>',
     'Your own private reasoning AND what your tools returned in earlier turns in THIS thread, oldest first. Nobody in Slack can see it: Slack only kept what you said out loud, so this is the only way you still have your train of thought and the facts your tools uncovered (a value you computed, a captcha you decoded, an OCR result) but never typed into a message.',
-    'Older turns are abbreviated to their tails; if you need detail that was dropped, re-run the tool rather than guessing at it.',
+    `Older turns are abbreviated to their tails, and only the last ${TOOL_RESULT_TURNS} turns keep their tool results; if you need detail that was dropped, re-run the tool rather than guessing at it.`,
     'Use it to pick up where you left off: what you already tried, ruled out, were part-way through, or found. Do NOT narrate it, quote it, or apologise for it: it is a memory, not something the user said.',
     '',
     ...rendered,

@@ -7,7 +7,9 @@ import {
 import {
   THINKING_BUDGET_CHARS as DEFAULT_THINKING_BUDGET_CHARS,
   MAX_TURN_CHARS,
+  type RecalledTurn,
   renderThinking as renderThinkingBlock,
+  TOOL_RESULT_TURNS,
   tail,
 } from '@/lib/agent/thinking-render';
 import logger from '@/lib/logger';
@@ -39,6 +41,10 @@ const THINKING_BUDGET_CHARS = numericEnv(
 // Hard cap on how many turns are kept on disk, so a very long-lived thread's row
 // stays bounded regardless of the char budget. Rendering trims further to fit.
 const MAX_STORED_TURNS = 40;
+// Past that, a turn keeps only its one-line-per-call actions, for the thread
+// digest: compaction folds the OLDEST messages, long after their reasoning
+// was dropped.
+const MAX_ACTION_TURNS = 200;
 
 function numericEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -65,13 +71,19 @@ const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
  * Best-effort: a DB hiccup here must never fail the turn.
  */
 export async function rememberThinking({
+  actions,
   blocks,
+  messageTs,
   observations,
   privateTo,
   threadId,
 }: {
+  /** One line per tool call this turn, for thread compaction (#2). */
+  actions?: string;
   blocks: string[];
-  /** Pre-rendered, already-clamped summary of the turn's tool results. */
+  /** The Slack message this turn answered. */
+  messageTs?: string;
+  /** Pre-rendered, already-capped record of the turn's tool calls and results. */
   observations?: string;
   /** The speaker, when the turn read their private data (see recallThinking). */
   privateTo?: string;
@@ -81,25 +93,46 @@ export async function rememberThinking({
     .map((block) => block.trim())
     .filter(Boolean)
     .join('\n\n');
-  const trimmedObservations = observations?.trim();
-  const text = [
-    reasoning,
-    trimmedObservations
-      ? `[what your tools returned this turn]\n${trimmedObservations}`
-      : '',
-  ]
-    .filter(Boolean)
-    .join('\n\n');
-  if (!text) {
+  const tools = observations?.trim();
+  if (!(reasoning || tools || actions)) {
     return;
   }
   try {
     const existing = await getThreadThinking(threadId, RETENTION_MS);
-    const clamped = tail(text, MAX_TURN_CHARS);
-    const turns = [
-      ...existing,
-      privateTo ? { privateTo, text: clamped } : clamped,
-    ].slice(-MAX_STORED_TURNS);
+    // A turn past the last few is never shown its tool results again, so
+    // they are not kept on disk either.
+    const aged = existing.map((turn, index) =>
+      typeof turn === 'object' &&
+      turn.tools &&
+      existing.length - index >= TOOL_RESULT_TURNS
+        ? { ...turn, tools: undefined }
+        : turn
+    );
+    const all = [
+      ...aged,
+      {
+        ...(actions ? { actions } : {}),
+        ...(messageTs ? { messageTs } : {}),
+        ...(privateTo ? { privateTo } : {}),
+        text: tail(reasoning, MAX_TURN_CHARS),
+        ...(tools ? { tools } : {}),
+      },
+    ].slice(-MAX_ACTION_TURNS);
+    const turns = all
+      .map((turn, index): StoredThinkingTurn => {
+        if (all.length - index <= MAX_STORED_TURNS) {
+          return turn;
+        }
+        return typeof turn === 'object' && turn.actions
+          ? {
+              actions: turn.actions,
+              ...(turn.messageTs ? { messageTs: turn.messageTs } : {}),
+              ...(turn.privateTo ? { privateTo: turn.privateTo } : {}),
+              text: '',
+            }
+          : '';
+      })
+      .filter((turn) => turn !== '');
     await saveThreadThinking(threadId, turns);
   } catch (error) {
     logger.warn({ err: error, threadId }, '[thinking] failed to persist');
@@ -119,18 +152,25 @@ export async function recallThinking({
 }: {
   speakerId: string;
   threadId: string;
-}): Promise<string[]> {
+}): Promise<RecalledTurn[]> {
   const turns: StoredThinkingTurn[] = await getThreadThinking(
     threadId,
     RETENTION_MS
   ).catch(() => []);
-  return turns.map((turn) => {
+  // Actions-only entries are for the digest, not the replay.
+  const replayed = turns.filter(
+    (turn) => typeof turn === 'string' || turn.text || turn.tools
+  );
+  return replayed.map((turn) => {
     if (typeof turn === 'string') {
-      return turn;
+      return { reasoning: turn };
     }
-    return turn.privateTo === speakerId
-      ? turn.text
-      : `[An earlier turn here, for <@${turn.privateTo}>, read their private data (DMs, a private channel, email or their own connected tools). Its reasoning and tool results are kept to their own turns, so they are not shown to you now. If you need what it found, ask them, or look it up yourself with the current speaker's access.]`;
+    if (!turn.privateTo || turn.privateTo === speakerId) {
+      return { reasoning: turn.text, tools: turn.tools };
+    }
+    return {
+      reasoning: `[An earlier turn here, for <@${turn.privateTo}>, read their private data (DMs, a private channel, email or their own connected tools). Its reasoning and tool results are kept to their own turns, so they are not shown to you now. If you need what it found, ask them, or look it up yourself with the current speaker's access.]`,
+    };
   });
 }
 
@@ -158,6 +198,32 @@ export function startThinkingReaper(): void {
  * thinking-render.ts (pure, tested); this only supplies the env-overridable
  * budget.
  */
-export function renderThinking(turns: string[]): string {
+export function renderThinking(turns: RecalledTurn[]): string {
   return renderThinkingBlock(turns, THINKING_BUDGET_CHARS);
+}
+
+/**
+ * What kyto did answering each message, by the message's ts, for the thread
+ * digest. The digest is shared with everyone in the thread, so a turn that
+ * read someone's private data says only that it did.
+ */
+export async function recallActions(
+  threadId: string
+): Promise<Map<string, string>> {
+  const turns = await getThreadThinking(threadId, RETENTION_MS).catch(
+    () => [] as StoredThinkingTurn[]
+  );
+  const actions = new Map<string, string>();
+  for (const turn of turns) {
+    if (typeof turn === 'string' || !(turn.actions && turn.messageTs)) {
+      continue;
+    }
+    actions.set(
+      turn.messageTs,
+      turn.privateTo
+        ? `(work done with <@${turn.privateTo}>'s private access; details kept to them)`
+        : turn.actions
+    );
+  }
+  return actions;
 }

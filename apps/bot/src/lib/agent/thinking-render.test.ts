@@ -90,4 +90,19 @@ describe('renderThinking', () => {
     // nothing, and re-derives from a gap it cannot see.
     expect(renderThinking(['a'])).toContain('abbreviated');
   });
+
+  test('only the last three turns carry their tool results', () => {
+    const block = renderThinking(
+      Array.from({ length: 5 }, (_, index) => ({
+        reasoning: `r${index}`,
+        tools: `RESULTS-${index}`,
+      }))
+    );
+    expect(block).not.toContain('RESULTS-0');
+    expect(block).not.toContain('RESULTS-1');
+    for (const index of [2, 3, 4]) {
+      expect(block).toContain(`RESULTS-${index}`);
+    }
+    expect(block).toContain('r0');
+  });
 });

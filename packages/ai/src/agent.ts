@@ -183,6 +183,8 @@ export function streamAttempt({
   onFirstRequest,
   onError,
   onGatewayRetry,
+  continueFrom = [],
+  priorInputTokens,
   priorMessages = [],
   prompt,
   reasoningEffort,
@@ -257,6 +259,18 @@ export function streamAttempt({
    * `prompt`: a resumed subagent's own run, tool calls and results included.
    */
   priorMessages?: ModelMessage[];
+  /**
+   * Work an earlier attempt at THIS request already did, after `prompt`: its
+   * tool calls and their results, so a fallback model carries on from them.
+   */
+  continueFrom?: ModelMessage[];
+  /**
+   * The provider-measured size of the carried messages (`priorMessages` or
+   * `continueFrom`) when they were last sent. Past COMPACT_AT of the price
+   * step (100k for a model without one), the FIRST request is compacted the
+   * way a later step would be, instead of going out whole.
+   */
+  priorInputTokens?: number;
   prompt: string;
   /**
    * Hack Club only: the effort to send, already decided by the caller (so it
@@ -329,7 +343,10 @@ export function streamAttempt({
   // replayed history. With neither, keep the plain string prompt.
   const initialImages = usableImages(images ?? [], onDroppedImages);
   const promptInput =
-    initialImages.length > 0 || history.length > 0 || priorMessages.length > 0
+    initialImages.length > 0 ||
+    history.length > 0 ||
+    priorMessages.length > 0 ||
+    continueFrom.length > 0
       ? {
           messages: [
             ...priorMessages,
@@ -347,9 +364,19 @@ export function streamAttempt({
                   : prompt,
               role: 'user' as const,
             },
+            ...continueFrom,
           ] satisfies ModelMessage[],
         }
       : { prompt };
+  // Where the request sits, and what a first-request compaction keeps
+  // verbatim: a resumed subagent's follow-up, or a fallback's request plus the
+  // last tool round it inherited.
+  const promptIndex = priorMessages.length + history.length;
+  const lastCarriedCall = continueFrom.findLastIndex(
+    (message) => message.role === 'assistant'
+  );
+  const carriedKeepFrom =
+    lastCarriedCall === -1 ? promptIndex : promptIndex + 1 + lastCarriedCall;
   const billSteps = (steps: Parameters<typeof reportSpend>[0]['steps']) =>
     reportSpend({
       effort: holder.reasoningEffort ?? reasoningEffort,
@@ -453,7 +480,11 @@ export function streamAttempt({
         }
       : {}),
     ...(onError ? { onError: ({ error }) => onError(error) } : {}),
-    ...(activeTools || getFreshImages || requireToolFirst || priceStep
+    ...(activeTools ||
+    getFreshImages ||
+    requireToolFirst ||
+    priceStep ||
+    priorInputTokens
       ? {
           // Gate deferred tools per step AND inject any images the model asked to
           // view: the SDK renders images only in a user message, so a screenshot
@@ -488,11 +519,19 @@ export function streamAttempt({
             // the model summarizes everything but the system prompt and
             // tools. Step 0 is the replayed thread, which thread compaction
             // bounds. See context-trim.ts.
-            const lastInput = steps.at(-1)?.usage.inputTokens;
+            // The first request of a call that carries earlier work is
+            // measured by that work's last request (priorInputTokens).
+            const first = stepNumber === 0;
+            const lastInput = first
+              ? priorInputTokens
+              : steps.at(-1)?.usage.inputTokens;
+            const ceiling =
+              priceStep ?? (first ? CARRIED_COMPACT_STEP : undefined);
+            const keepFrom = first ? carriedKeepFrom : sentLength;
             if (
-              priceStep &&
+              ceiling &&
               lastInput !== undefined &&
-              lastInput > priceStep * COMPACT_AT
+              lastInput > ceiling * COMPACT_AT
             ) {
               onCompaction?.({
                 before: lastInput,
@@ -504,17 +543,17 @@ export function streamAttempt({
               // step, they are cut in the summary request only: they are not
               // cached yet, and they are kept whole after the summary anyway.
               const appended =
-                lastInput + estimateMessageTokens(messages.slice(sentLength));
+                lastInput + estimateMessageTokens(messages.slice(keepFrom));
               const summary = await summarizeContext({
                 activeToolNames: activeTools?.(),
                 messages:
-                  appended > priceStep
+                  appended > ceiling
                     ? applyTrim({
                         messages,
                         picks: planTrim({
-                          fromIndex: sentLength,
+                          fromIndex: first ? 0 : sentLength,
                           messages,
-                          target: priceStep * COMPACT_AT,
+                          target: ceiling * COMPACT_AT,
                           tokens: appended,
                         }).picks,
                       })
@@ -522,16 +561,18 @@ export function streamAttempt({
               });
               if (summary) {
                 stepMessages = compactedMessages({
-                  lastStepFrom: sentLength,
+                  lastStepFrom: keepFrom,
                   messages,
-                  request: initialMessages.at(-1),
+                  request: first
+                    ? messages[promptIndex]
+                    : initialMessages.at(-1),
                   summary,
                 });
               } else {
                 const plan = planTrim({
-                  fromIndex: initialMessages.length,
+                  fromIndex: first ? 0 : initialMessages.length,
                   messages,
-                  target: priceStep * TRIM_TARGET,
+                  target: ceiling * TRIM_TARGET,
                   tokens: appended,
                 });
                 stepMessages = applyTrim({ messages, picks: plan.picks });
@@ -901,6 +942,8 @@ const GLM_FLASH_ROUTING = {
 // BYOK endpoints that speak OpenRouter's `reasoning: { effort }`; OpenAI's own
 // API calls it `reasoning_effort` and rejects the unknown field.
 const OPENROUTER_FORMAT_BYOK = new Set(['byok-hackclub', 'byok-openrouter']);
+// "Too big" for a carried conversation on a model with no price step.
+const CARRIED_COMPACT_STEP = 100_000;
 
 // Each accepted by luna (2026-10-09) and haiku (2026-10-10) through the proxy.
 // `high` joined the draw on 2026-10-16 (owner's call), to be compared on the
@@ -1116,7 +1159,7 @@ function injectThoughtSignatures(
   payload: Record<string, unknown>,
   signatures: Map<string, string>
 ): boolean {
-  if (signatures.size === 0 || !Array.isArray(payload.messages)) {
+  if (!Array.isArray(payload.messages)) {
     return false;
   }
   let changed = false;
@@ -1126,7 +1169,13 @@ function injectThoughtSignatures(
     }
     for (const call of message.tool_calls as Record<string, unknown>[]) {
       const id = typeof call.id === 'string' ? call.id : undefined;
-      const signature = id ? signatures.get(id) : undefined;
+      // A call carried over from another model's attempt (carriedMessages in
+      // the bot) never had a Gemini signature; Google's documented value for
+      // a call it didn't produce lets it through validation.
+      const signature = id
+        ? (signatures.get(id) ??
+          (id.startsWith('carried-') ? CARRIED_CALL_SIGNATURE : undefined))
+        : undefined;
       if (!signature) {
         continue;
       }
@@ -1143,6 +1192,8 @@ function injectThoughtSignatures(
   }
   return changed;
 }
+
+const CARRIED_CALL_SIGNATURE = 'skip_thought_signature_validator';
 
 // Max bytes to scan of a Gemini response for thought signatures — they ride on
 // the tool-call delta, which is near the start, but text/reasoning can precede

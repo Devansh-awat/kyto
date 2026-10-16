@@ -1,4 +1,11 @@
-import { pgTable, primaryKey, text, timestamp } from 'drizzle-orm/pg-core';
+import {
+  index,
+  pgTable,
+  primaryKey,
+  serial,
+  text,
+  timestamp,
+} from 'drizzle-orm/pg-core';
 
 // 👍/👎 on a kyto reply, from the buttons under it. One row per person per
 // reply: clicking again changes the rating, and the optional comment from the
@@ -32,3 +39,21 @@ export const replyFeedback = pgTable(
 );
 
 export type ReplyFeedback = typeof replyFeedback.$inferSelect;
+
+// Feedback someone gave kyto IN CONVERSATION (the `submitFeedback` tool): a
+// bug, praise or a suggestion with no reply to click 👍/👎 under. The owner is
+// DM'd too; this is the durable copy, erased with "Your data".
+export const submittedFeedback = pgTable(
+  'submitted_feedback',
+  {
+    id: serial('id').primaryKey(),
+    userId: text('user_id').notNull(),
+    threadId: text('thread_id').notNull(),
+    kind: text('kind').notNull(),
+    body: text('body').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [index('submitted_feedback_user_idx').on(table.userId)]
+);

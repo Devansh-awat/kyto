@@ -65,6 +65,8 @@ const LOOKING_TOOLS = [
   'readFile',
   'grep',
   'glob',
+  'now',
+  'analyzeData',
   'writeFile',
   'editFile',
   'viewImage',

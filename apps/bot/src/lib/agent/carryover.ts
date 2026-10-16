@@ -1,3 +1,4 @@
+import type { JSONValue, ModelMessage } from 'ai';
 import { redactSecrets } from '@/lib/email/redact';
 import { clamp } from '@/lib/utils/text';
 
@@ -18,13 +19,19 @@ export const CARRYOVER_MAX_RESULTS = 12;
 export const CARRYOVER_OUTPUT_MAX = 1500;
 const CARRYOVER_INPUT_MAX = 400;
 
-// Bounds on the tool observations persisted into the thinking store, kept
-// smaller than the carryover so reasoning + observations both fit the per-turn
-// thinking budget (MAX_TURN_CHARS). Keeps the most recent results.
-export const OBSERVATION_MAX_RESULTS = 14;
+// Bounds on the tool calls and results persisted into the thinking store and
+// replayed while the turn is one of the last three (owner's call 2026-10-16).
+// Every call is kept, each result cut to OBSERVATION_OUTPUT_MAX, and the turn
+// to OBSERVATION_TURN_MAX, most recent first: three tool-heavy turns must not
+// push the next request past the long-context price step.
 const EMAIL_RESULT = /^(?:email|checkInbox|readEmail|mcp_agentmail)/;
-const OBSERVATION_OUTPUT_MAX = 1000;
-const OBSERVATION_INPUT_MAX = 300;
+const OBSERVATION_OUTPUT_MAX = 6000;
+const OBSERVATION_INPUT_MAX = 1000;
+export const OBSERVATION_TURN_MAX = 30_000;
+// One line per call for the thread digest (#2): what was done, not the data.
+const ACTION_INPUT_MAX = 160;
+const ACTION_OUTPUT_MAX = 160;
+const ACTIONS_TURN_MAX = 3000;
 
 /** A stable string for a tool input, used both for rendering and for dedupe. */
 export function stableInput(input: unknown): string {
@@ -56,28 +63,58 @@ export function renderContinuation(streamedText: string): string {
   ].join('\n');
 }
 
+/** A result's text as it may be stored: a `--no-redact` turn's login links
+ * must not outlive it. */
+function storedOutput(result: GatheredResult, max: number): string {
+  const output = toCompactText(result.output, max);
+  return EMAIL_RESULT.test(result.toolName)
+    ? redactSecrets(output).text
+    : output;
+}
+
 /**
- * A compact record of what this turn's tools returned, persisted alongside the
- * reasoning so the NEXT turn can recall a fact kyto observed but never typed into
- * Slack (a decoded captcha, an OCR result, a computed value). Empty string when
- * the turn ran no tools.
+ * What this turn's tools were called with and returned, persisted alongside
+ * the reasoning so the next three turns can use a fact kyto observed but never
+ * typed into Slack (a decoded captcha, an id, a computed value). Most recent
+ * first when over the turn's cap. Empty string when the turn ran no tools.
  */
 export function renderObservations(results: GatheredResult[]): string {
-  if (results.length === 0) {
-    return '';
+  const blocks: string[] = [];
+  let used = 0;
+  for (const result of [...results].reverse()) {
+    const block = `${result.toolName}(${toCompactText(result.input, OBSERVATION_INPUT_MAX)}) →\n${storedOutput(result, OBSERVATION_OUTPUT_MAX)}`;
+    if (used + block.length > OBSERVATION_TURN_MAX && blocks.length > 0) {
+      blocks.push(
+        `[${results.length - blocks.length} earlier tool calls this turn not kept]`
+      );
+      break;
+    }
+    blocks.push(block);
+    used += block.length + 2;
   }
-  return results
-    .slice(-OBSERVATION_MAX_RESULTS)
-    .map((result) => {
-      const input = toCompactText(result.input, OBSERVATION_INPUT_MAX);
-      const output = toCompactText(result.output, OBSERVATION_OUTPUT_MAX);
-      // Stored and replayed on later turns: a `--no-redact` turn's login
-      // links must not outlive it.
-      return `${result.toolName}(${input}) → ${
-        EMAIL_RESULT.test(result.toolName) ? redactSecrets(output).text : output
-      }`;
-    })
-    .join('\n');
+  return blocks.reverse().join('\n\n');
+}
+
+/**
+ * One short line per tool call: what kyto DID this turn, for the thread digest
+ * (compaction), which otherwise only knows what was said.
+ */
+export function renderActions(results: GatheredResult[]): string {
+  const lines = results.map(
+    (result) =>
+      `${result.toolName}(${toCompactText(result.input, ACTION_INPUT_MAX)}) → ${storedOutput(result, ACTION_OUTPUT_MAX).replaceAll('\n', ' ')}`
+  );
+  const kept: string[] = [];
+  let used = 0;
+  for (const line of lines.reverse()) {
+    if (used + line.length > ACTIONS_TURN_MAX) {
+      kept.push(`(${lines.length - kept.length} earlier calls)`);
+      break;
+    }
+    kept.push(line);
+    used += line.length + 1;
+  }
+  return kept.reverse().join('\n');
 }
 
 /**
@@ -98,6 +135,61 @@ export function renderCarryover(results: GatheredResult[]): string {
     '',
     ...lines,
   ].join('\n');
+}
+
+/** A tool output as JSON a provider accepts; text when it isn't JSON. */
+function toJson(value: unknown): JSONValue {
+  try {
+    return (JSON.parse(JSON.stringify(value) ?? 'null') as JSONValue) ?? null;
+  } catch {
+    return String(value);
+  }
+}
+
+/**
+ * A fallback model's view of what the failed attempt already did: its tool
+ * calls and results as REAL messages after the request, so it carries on from
+ * them the way the first model would have, instead of reading a clipped text
+ * summary (12 results, 1500 characters each). Whole: streamAttempt compacts
+ * the first request when they make it too big. A call to a tool this turn
+ * doesn't have (a hallucinated name) is left out: providers refuse a call to
+ * an undefined tool.
+ */
+export function carriedMessages({
+  results,
+  toolNames,
+}: {
+  results: GatheredResult[];
+  toolNames: ReadonlySet<string>;
+}): ModelMessage[] {
+  const kept = results.filter((result) => toolNames.has(result.toolName));
+  if (kept.length === 0) {
+    return [];
+  }
+  const id = (index: number) => `carried-${index + 1}`;
+  return [
+    {
+      content: kept.map((result, index) => ({
+        input: result.input,
+        toolCallId: id(index),
+        toolName: result.toolName,
+        type: 'tool-call' as const,
+      })),
+      role: 'assistant',
+    },
+    {
+      content: kept.map((result, index) => ({
+        output:
+          typeof result.output === 'string'
+            ? { type: 'text' as const, value: result.output }
+            : { type: 'json' as const, value: toJson(result.output) },
+        toolCallId: id(index),
+        toolName: result.toolName,
+        type: 'tool-result' as const,
+      })),
+      role: 'tool',
+    },
+  ];
 }
 
 // Tools whose result is public by nature: the open web, kyto's own computing.

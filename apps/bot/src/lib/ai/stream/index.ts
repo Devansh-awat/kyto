@@ -82,6 +82,7 @@ export async function* renderStream({
   onToolResult,
   onError,
   onFinish,
+  onStepUsage,
   onTally,
   secret = false,
   stream,
@@ -149,6 +150,11 @@ export async function* renderStream({
   // text, is the "stops mid-task" bug (tools ran, synthesis step came back empty)
   // and must fall back instead of ending the turn silently.
   onFinish?: (finishReason: string) => void;
+  /** Each finished step's provider-reported usage. */
+  onStepUsage?: (usage: {
+    inputTokens?: number;
+    outputTokens?: number;
+  }) => void;
   stream: AsyncIterable<TextStreamPart<ToolSet>>;
 }): AsyncGenerator<string | StreamChunk> {
   const toolInputs = new Map<string, unknown>();
@@ -249,6 +255,9 @@ export async function* renderStream({
           },
           '[stream] fullStream part'
         );
+      }
+      if (part.type === 'finish-step') {
+        onStepUsage?.(part.usage);
       }
       if (part.type === 'finish-step' || part.type === 'finish') {
         const reason = (part as { finishReason?: string }).finishReason;

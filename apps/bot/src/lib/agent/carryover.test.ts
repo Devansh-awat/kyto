@@ -2,9 +2,11 @@ import { describe, expect, test } from 'bun:test';
 import {
   CARRYOVER_MAX_RESULTS,
   CARRYOVER_OUTPUT_MAX,
+  carriedMessages,
   type GatheredResult,
   isPrivateObservation,
-  OBSERVATION_MAX_RESULTS,
+  OBSERVATION_TURN_MAX,
+  renderActions,
   renderCarryover,
   renderContinuation,
   renderObservations,
@@ -86,24 +88,39 @@ describe('renderObservations', () => {
     expect(renderObservations([])).toBe('');
   });
 
-  test('records what each tool returned, one per line', () => {
+  test('records what each tool was called with and returned', () => {
     const block = renderObservations(results(3));
-    expect(block.split('\n')).toHaveLength(3);
-    expect(block).toContain('tool1({"query":"q1"}) → result 1');
+    expect(block.split('\n\n')).toHaveLength(3);
+    expect(block).toContain('tool1({"query":"q1"}) →\nresult 1');
   });
 
-  test('keeps the most recent when over its own, smaller cap', () => {
-    const block = renderObservations(results(OBSERVATION_MAX_RESULTS + 3));
-    expect(block.split('\n')).toHaveLength(OBSERVATION_MAX_RESULTS);
-    expect(block).toContain(`tool${OBSERVATION_MAX_RESULTS + 2}`);
+  test('keeps every call while the turn fits its cap', () => {
+    expect(renderObservations(results(40)).split('\n\n')).toHaveLength(40);
   });
 
-  test('stays smaller than the carryover cap', () => {
-    // Reasoning AND observations share one per-turn thinking budget.
-    expect(OBSERVATION_MAX_RESULTS).toBeGreaterThan(0);
-    expect(renderObservations(results(5)).length).toBeLessThan(
-      renderCarryover(results(5)).length
-    );
+  test('keeps the most recent when over the turn cap, and says so', () => {
+    const big = Array.from({ length: 20 }, (_, index) => ({
+      input: { n: index },
+      output: 'x'.repeat(5000),
+      toolName: `tool${index}`,
+    }));
+    const block = renderObservations(big);
+    expect(block.length).toBeLessThan(OBSERVATION_TURN_MAX + 6000);
+    expect(block).toContain('tool19(');
+    expect(block).not.toContain('tool0(');
+    expect(block).toContain('earlier tool calls this turn not kept');
+  });
+});
+
+describe('renderActions', () => {
+  test('one short line per call', () => {
+    const lines = renderActions([
+      { input: { command: 'ls' }, output: 'a\nb', toolName: 'bash' },
+      { input: { query: 'x' }, output: 'y'.repeat(900), toolName: 'searchWeb' },
+    ]).split('\n');
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toBe('bash({"command":"ls"}) → a b');
+    expect((lines[1] ?? '').length).toBeLessThan(400);
   });
 });
 
@@ -187,5 +204,36 @@ describe('renderObservations email redaction', () => {
         { input: {}, output: `see ${link}`, toolName: 'fetchUrl' },
       ])
     ).toContain(link);
+  });
+});
+
+describe('carriedMessages', () => {
+  test('replays results as real calls, leaving out unknown tools', () => {
+    const messages = carriedMessages({
+      results: [
+        { input: { q: 'x' }, output: { hits: 2 }, toolName: 'searchWeb' },
+        { input: {}, output: 'text', toolName: 'madeUp' },
+        { input: { command: 'ls' }, output: 'a.txt', toolName: 'bash' },
+      ],
+      toolNames: new Set(['bash', 'searchWeb']),
+    });
+    expect(messages.map((message) => message.role)).toEqual([
+      'assistant',
+      'tool',
+    ]);
+    expect(JSON.stringify(messages)).not.toContain('madeUp');
+    expect(messages[1]).toMatchObject({
+      content: [
+        {
+          output: { type: 'json', value: { hits: 2 } },
+          toolCallId: 'carried-1',
+        },
+        { output: { type: 'text', value: 'a.txt' }, toolCallId: 'carried-2' },
+      ],
+    });
+  });
+
+  test('nothing carried, nothing sent', () => {
+    expect(carriedMessages({ results: [], toolNames: new Set() })).toEqual([]);
   });
 });

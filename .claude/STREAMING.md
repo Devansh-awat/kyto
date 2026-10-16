@@ -233,3 +233,5 @@ latches text-only (cutting it would lose words).
   index; an unknown name is left exactly as written. Channels only — a person or
   a user group is never auto-resolved, because guessing which `@name` is whom is
   how you ping the wrong person or a whole group nobody asked for.
+
+- **"Compacting context" card** (`compaction-card.ts`, `side-chunks.ts`): the main turn's and a subagent's mid-turn compaction (`@repo/ai/context-trim.ts`) shows a card with the measured saving, pushed from inside `prepareStep` through the side-chunk queue the plan renderer drains. Kevinton only logs it.

@@ -38,6 +38,8 @@ export interface EffortCell {
   /** Reasoning characters per reasoning token: ~4 = full text streamed. */
   charsPerToken: number | null;
   down: number;
+  /** Turns whose effort was the random draw; the rest were chosen. */
+  drawn: number;
   effort: string;
   medianModelMs: number | null;
   medianTotalMs: number | null;
@@ -60,17 +62,14 @@ export interface EffortCell {
 
 /**
  * The effort experiment by model × effort since `since`, from what each turn
- * saved (lib/ai/stream/timing). `randomOnly` keeps the draws: a turn whose
- * effort somebody chose with `--reasoning high` was picked BECAUSE it was hard,
- * so it can't be compared with a random one. A 👍/👎 counts against the turn
- * whose reply it was left on: same thread, posted between that turn's message
- * and its end.
+ * saved (lib/ai/stream/timing). Drawn and chosen efforts (`--reasoning`,
+ * `--model`) are counted together, with how many were drawn. A 👍/👎 counts
+ * against the turn whose reply it was left on: same thread, posted between
+ * that turn's message and its end.
  */
 export async function effortStats({
-  randomOnly,
   since,
 }: {
-  randomOnly: boolean;
   since: Date;
 }): Promise<EffortCell[]> {
   const rows = await db.execute<Record<string, string | number | null>>(sql`
@@ -80,7 +79,6 @@ export async function effortStats({
       where tt.outcome = 'complete'
         and tt.created_at >= ${since.toISOString()}::timestamptz
         and tt.timing->>'answeredBy' is not null
-        and (${!randomOnly}::boolean or (tt.timing->>'reasoningRandom')::boolean)
     ),
     f as (
       select t.id,
@@ -96,6 +94,7 @@ export async function effortStats({
       t.timing->>'answeredBy' as model,
       coalesce(t.timing->>'reasoningEffort', '(none)') as effort,
       count(*)::int as turns,
+      count(*) filter (where (t.timing->>'reasoningRandom')::boolean)::int as drawn,
       percentile_cont(0.5) within group (order by t.total_ms) as median_total_ms,
       percentile_cont(0.9) within group (order by t.total_ms) as p90_total_ms,
       percentile_cont(0.5) within group (order by (t.timing->>'modelMs')::float) as median_model_ms,
@@ -123,6 +122,7 @@ export async function effortStats({
     charsPerBlock: num(row.chars_per_block),
     charsPerToken: num(row.chars_per_token),
     down: Number(row.down),
+    drawn: Number(row.drawn),
     effort: String(row.effort),
     medianModelMs: num(row.median_model_ms),
     medianTotalMs: num(row.median_total_ms),

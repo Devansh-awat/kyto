@@ -8,6 +8,7 @@ import {
   deletePrivateMemoriesByAuthor,
   deleteRevisionsForUser,
   deleteSlackGrant,
+  deleteSubmittedFeedbackForUser,
   deleteSummariesForChannel,
   deleteThinkingForChannel,
   deleteThreadLogsForChannel,
@@ -69,6 +70,8 @@ export interface EraseResult {
     sandboxes: number;
     /** Sandboxes E2B would not kill this time; their rows are kept. */
     sandboxesLeft: number;
+    /** Feedback they gave kyto in conversation (the submitFeedback tool). */
+    submittedFeedback: number;
     /** DM threads whose compacted history (lib/agent/compaction) was deleted. */
     summarizedThreads: number;
     thinkingThreads: number;
@@ -218,6 +221,16 @@ export async function eraseUserData({
     }
   );
 
+  const submittedFeedback = await deleteSubmittedFeedbackForUser(userId).catch(
+    (error: unknown) => {
+      logger.error(
+        { err: errorMessage(error), userId },
+        '[erase] failed to delete submitted feedback'
+      );
+      return 0;
+    }
+  );
+
   const settings = includeSettings
     ? await eraseSettings(userId)
     : {
@@ -235,6 +248,7 @@ export async function eraseUserData({
       memoryCount,
       messageRevisions,
       sandboxes,
+      submittedFeedback,
       summarizedThreads,
       thinkingThreads,
       userId,
@@ -251,6 +265,7 @@ export async function eraseUserData({
       messageRevisions,
       sandboxesLeft,
       sandboxes,
+      submittedFeedback,
       summarizedThreads,
       thinkingThreads,
     },
@@ -361,6 +376,11 @@ export function summarize(result: EraseResult): string {
   if (removed.messageRevisions > 0) {
     lines.push(
       `• ${removed.messageRevisions} kept ${removed.messageRevisions === 1 ? 'copy' : 'copies'} of your edited or deleted messages deleted`
+    );
+  }
+  if (removed.submittedFeedback > 0) {
+    lines.push(
+      `• ${removed.submittedFeedback} piece${removed.submittedFeedback === 1 ? '' : 's'} of feedback you gave kyto in conversation deleted`
     );
   }
   if (removed.dmNotebook) {

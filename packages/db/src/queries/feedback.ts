@@ -1,6 +1,6 @@
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { db } from '../client';
-import { replyFeedback } from '../schema';
+import { replyFeedback, submittedFeedback } from '../schema';
 
 /**
  * Record (or change) someone's rating of a reply. A second click on the same
@@ -48,4 +48,25 @@ export async function recordReplyFeedback({
         replyFeedback.userId,
       ],
     });
+}
+
+/** Feedback given in conversation (the `submitFeedback` tool). */
+export async function recordSubmittedFeedback(row: {
+  body: string;
+  kind: string;
+  threadId: string;
+  userId: string;
+}): Promise<void> {
+  await db.insert(submittedFeedback).values(row);
+}
+
+/** "Your data": everything this person submitted. Returns how many. */
+export async function deleteSubmittedFeedbackForUser(
+  userId: string
+): Promise<number> {
+  const deleted = await db
+    .delete(submittedFeedback)
+    .where(eq(submittedFeedback.userId, userId))
+    .returning({ id: submittedFeedback.id });
+  return deleted.length;
 }

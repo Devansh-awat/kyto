@@ -19,7 +19,6 @@ import { stripToolComplaints } from '@/lib/ai/stream/tool-complaints';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
 import { errorMessage } from '@/lib/utils/error';
-import { clamp } from '@/lib/utils/text';
 
 // A subagent is a headless copy of kyto: it shares the PARENT THREAD's sandbox
 // (so it sees the files/state the parent set up, and vice versa), the same full
@@ -47,6 +46,11 @@ import { clamp } from '@/lib/utils/text';
 // NOT spawn a further subagent (a runaway recursive spawn is a real cost/time
 // risk with no natural backstop, and one level is all that's actually useful).
 const MAX_SUBAGENT_DEPTH = 1;
+// A run's tool calls past this are refused with "write your report now": a
+// subagent looping on searches has no person watching to stop it.
+const MAX_SUBAGENT_TOOL_CALLS = 200;
+// What a report may hand the parent: past this it is cut, and says so.
+const MAX_REPORT_CHARS = 30_000;
 
 const depthStore = new AsyncLocalStorage<number>();
 
@@ -75,15 +79,18 @@ type SubagentResult =
 // A subagent run, tracked so `subagent` (action `check`) can collect a
 // background one later, and `resume` can ask any finished one a follow-up.
 interface SubagentJob {
-  /** Who started it: only they may resume it (its context may hold their data). */
-  askerId: string;
   // Set once checkSubagent has handed this job's finished report back to the
   // model IN the live turn. wakeThread checks it right before posting, so a
   // report the model already collected and used isn't delivered a SECOND time as
   // a fresh "background subagent finished" turn (the job.then wake fires
   // independently of checkSubagent — nothing coordinated them before this flag).
   collected?: boolean;
-  /** Its own run, kept once it finishes, for `resume`. */
+  /**
+   * That run's size as last measured by the provider, so a resume compacts
+   * its first request when it would be too big (streamAttempt).
+   */
+  contextTokens?: number;
+  /** Its own run, kept whole once it finishes, for `resume`. */
   conversation?: ModelMessage[];
   /** When the latest run finished; the forget timer checks it's still that run. */
   finishedAt?: number;
@@ -107,52 +114,28 @@ const threadJobs = new Map<
   { counter: number; jobs: Map<string, SubagentJob> }
 >();
 
-// A kept conversation's tool results are cut to this: a resume replays the
-// whole run as its first request, and a run that read a few big files would
-// otherwise start its follow-up past the long-context price step.
-const KEPT_RESULT_CHARS = 4000;
-
 /**
- * The run as it can be replayed: tool results cut to their heads, and the
- * reasoning dropped (a finished answer doesn't need it, and a provider can
- * refuse thinking it didn't sign).
+ * How big the kept conversation is, from the provider's own counts: the last
+ * request plus what it wrote. After a resume that was compacted, the kept
+ * conversation is the UNcompacted one, so it is the earlier size plus what
+ * this run added, whichever is larger.
  */
-function resultText(value: unknown): string {
-  return typeof value === 'string' ? value : (JSON.stringify(value) ?? '');
-}
-
-function keepConversation(messages: ModelMessage[]): ModelMessage[] {
-  return messages.map((message): ModelMessage => {
-    if (message.role === 'assistant' && Array.isArray(message.content)) {
-      return {
-        ...message,
-        content: message.content.filter((part) => part.type !== 'reasoning'),
-      };
-    }
-    if (message.role === 'tool') {
-      return {
-        ...message,
-        content: message.content.map((part) =>
-          part.type === 'tool-result'
-            ? {
-                ...part,
-                output: {
-                  type: 'text' as const,
-                  value:
-                    clamp(
-                      resultText(
-                        'value' in part.output ? part.output.value : part.output
-                      ),
-                      KEPT_RESULT_CHARS
-                    ) ?? '',
-                },
-              }
-            : part
-        ),
-      };
-    }
-    return message;
-  });
+function measuredSize({
+  priorTokens,
+  steps,
+}: {
+  priorTokens?: number;
+  steps: readonly { usage: { inputTokens?: number; outputTokens?: number } }[];
+}): number | undefined {
+  const firstInput = steps[0]?.usage.inputTokens;
+  const last = steps.at(-1)?.usage;
+  if (firstInput === undefined || last?.inputTokens === undefined) {
+    return;
+  }
+  const lastSize = last.inputTokens + (last.outputTokens ?? 0);
+  return priorTokens === undefined
+    ? lastSize
+    : Math.max(lastSize, priorTokens + lastSize - firstInput);
 }
 
 function forgetLater({
@@ -238,7 +221,7 @@ export function runSubagentTool({
         .string()
         .optional()
         .describe(
-          'The id of a FINISHED subagent (e.g. "sub-2") to continue: `task` becomes your follow-up to it, and it answers with everything from its earlier run still in its context (what it read, ran and found), instead of a fresh subagent starting over. For "dig deeper", "now fix what you found", "what about X". Ids last an hour after the run.'
+          'The id of a FINISHED subagent in this thread (e.g. "sub-2") to continue: `task` becomes your follow-up to it, and it answers with everything from its earlier run still in its context (what it read, ran, found and reasoned), instead of a fresh subagent starting over. For "dig deeper", "now fix what you found", "what about X". Ids last an hour after the run.'
         ),
     }),
     execute: async ({ task, name, background, resume }, { abortSignal }) => {
@@ -268,20 +251,12 @@ export function runSubagentTool({
             success: false,
           };
         }
-        // Its context holds what it read on its asker's behalf.
-        if (found.askerId !== message.author.userId) {
-          return {
-            error: `Subagent ${resume} was started for someone else, so it can't be resumed for this person. Start a new one.`,
-            success: false,
-          };
-        }
         record = found;
         record.status = 'running';
         record.collected = false;
       } else {
         registry.counter += 1;
         record = {
-          askerId: message.author.userId,
           id: `sub-${registry.counter}`,
           name,
           startedAt: Date.now(),
@@ -291,6 +266,7 @@ export function runSubagentTool({
       const id = record.id;
       const label = record.name ?? name;
       const prior = record.conversation;
+      const priorTokens = record.contextTokens;
       record.conversation = undefined;
       // depthStore.run STARTS the job and returns its promise. Foreground
       // (default): await it and hand the report back to the parent model as this
@@ -320,11 +296,15 @@ export function runSubagentTool({
           // purpose (owner's call): the name is only ever "kyto",
           // "kyto subagent", or "kyto subagent {name}" — nothing configurable
           // decorates it, and there is no icon override.
+          // Who it works for, where, and when: it has no clock and no thread
+          // of its own. In the prompt, not the system prompt, which is cached.
+          const briefed = `[Asked by ${message.author.fullName ?? message.author.userName} (<@${message.author.userId}>) in thread ${thread.id}, at ${new Date().toISOString()}]\n\n${task}`;
           const cardLabel = label ? `kyto subagent ${label}` : 'kyto subagent';
 
           let close: (() => Promise<void>) | undefined;
           // The run that wrote the report, kept for a later `resume`.
           let conversation: ModelMessage[] | undefined;
+          let contextTokens: number | undefined;
           let ranTools = false;
           let report = '';
           // Text from an attempt that then THREW: kept only as a last resort, so
@@ -346,6 +326,7 @@ export function runSubagentTool({
               // its own to hold open, so an MCP tool set to ask permission refuses
               // here instead of stalling the parent behind a button.
               unattended: true,
+              maxToolCalls: MAX_SUBAGENT_TOOL_CALLS,
             });
             close = built.close;
             const knownTools = new Set(Object.keys(built.tools));
@@ -395,8 +376,9 @@ export function runSubagentTool({
                     attempt,
                     getFreshImages: built.drainImages,
                     holder: {},
+                    priorInputTokens: priorTokens,
                     priorMessages: prior,
-                    prompt: task,
+                    prompt: briefed,
                     // Background work, owner's call 2026-10-08: half price.
                     serviceTier: 'flex',
                     system,
@@ -425,12 +407,18 @@ export function runSubagentTool({
                     attempt.model
                   );
                   if (report.trim()) {
-                    const { messages } = await result.response;
-                    conversation = keepConversation([
-                      ...(prior ?? []),
-                      { content: task, role: 'user' },
-                      ...messages,
+                    const [{ messages }, steps] = await Promise.all([
+                      result.response,
+                      result.steps,
                     ]);
+                    // Kept WHOLE, reasoning and tool results included; a
+                    // resume compacts it if it is too big (owner's call).
+                    conversation = [
+                      ...(prior ?? []),
+                      { content: briefed, role: 'user' },
+                      ...messages,
+                    ];
+                    contextTokens = measuredSize({ priorTokens, steps });
                   }
                 } catch (error) {
                   lastError = error;
@@ -497,6 +485,9 @@ export function runSubagentTool({
             });
 
             report = report.trim();
+            if (report.length > MAX_REPORT_CHARS) {
+              report = `${report.slice(0, MAX_REPORT_CHARS)}\n\n(The report was cut here at ${MAX_REPORT_CHARS.toLocaleString('en')} characters. Resume the subagent for the rest.)`;
+            }
             if (report) {
               return { report, success: true };
             }
@@ -517,6 +508,7 @@ export function runSubagentTool({
           } finally {
             // A failed resume keeps the run it was resuming.
             record.conversation = conversation ?? prior;
+            record.contextTokens = conversation ? contextTokens : priorTokens;
             // Only tear down the per-turn MCP/tool connections. The sandbox is the
             // parent's — the parent pauses it at turn end, so don't destroy it here.
             await close?.().catch(() => undefined);

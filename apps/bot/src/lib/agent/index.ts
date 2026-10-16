@@ -28,9 +28,10 @@ import type { Message, StreamChunk } from '@/harness/types';
 import { addressedState, isAddressedToKyto } from '@/lib/agent/addressed';
 import { createAttemptRouter } from '@/lib/agent/attempt-router';
 import {
+  carriedMessages,
   type GatheredResult,
   isPrivateObservation,
-  renderCarryover,
+  renderActions,
   renderContinuation,
   renderObservations,
   stableInput,
@@ -1140,6 +1141,9 @@ async function executeTurn(
     // instead of re-running the same tools.
     const gatheredResults: GatheredResult[] = [];
     const gatheredKeys = new Set<string>();
+    // The last request's size as the provider counted it (input + output), so
+    // a fallback carrying those results compacts its first request if needed.
+    let lastMeasuredSize: number | undefined;
     // How many times the CURRENT attempt has been re-run in place because its
     // stream was cut off mid-flight (see truncatedStream below). A dropped
     // connection says nothing about the model, so it must not cost a fallback
@@ -1280,7 +1284,9 @@ async function executeTurn(
         );
       }
       if (isFallback && gatheredResults.length > 0) {
-        blocks.push(renderCarryover(gatheredResults));
+        blocks.push(
+          'An earlier model started this turn and was cut off. Its tool calls and their results come right after this message: carry on from them, and do not re-run them.'
+        );
       }
       if (isFallback && streamedText.trim().length > 0) {
         blocks.push(renderContinuation(streamedText));
@@ -1604,6 +1610,16 @@ async function executeTurn(
             model: currentAttempt.model,
             ownKey: onOwnKey,
           }),
+          // What the earlier attempt already did, as real tool calls.
+          ...(isFallback
+            ? {
+                continueFrom: carriedMessages({
+                  results: gatheredResults,
+                  toolNames: new Set(Object.keys(built.tools)),
+                }),
+                priorInputTokens: lastMeasuredSize,
+              }
+            : {}),
           system: systemPrompt({ hints }),
           toolOrder: built.toolOrder,
           tools: built.tools,
@@ -1686,6 +1702,11 @@ async function executeTurn(
               },
               onFinish: (reason) => {
                 attemptFinishReason = reason;
+              },
+              onStepUsage: ({ inputTokens, outputTokens }) => {
+                if (inputTokens !== undefined) {
+                  lastMeasuredSize = inputTokens + (outputTokens ?? 0);
+                }
               },
               onError: (info) => {
                 attemptStreamError ??= info;
@@ -2120,7 +2141,9 @@ async function executeTurn(
         // just say?" and get the private answer.
         if (!secret) {
           await rememberThinking({
+            actions: renderActions(gatheredResults),
             blocks: attemptThinking,
+            messageTs: message.id,
             observations: renderObservations(gatheredResults),
             ...(gatheredResults.some(isPrivateObservation)
               ? { privateTo: message.author.userId }
@@ -2313,6 +2336,8 @@ async function executeTurn(
                 ...attemptThinking,
                 'kyto restarted before this turn finished. The tool results below came before the restart; sandbox files from them are still there.',
               ],
+              actions: renderActions(gatheredResults),
+              messageTs: message.id,
               observations: renderObservations(gatheredResults),
               ...(gatheredResults.some(isPrivateObservation)
                 ? { privateTo: message.author.userId }
