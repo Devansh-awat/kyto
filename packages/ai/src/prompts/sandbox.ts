@@ -24,5 +24,5 @@ Files, installed packages, downloaded attachments, generated artifacts, and chan
 
 Work inside your working directory (/home/user). Save anything you intend to share under it, e.g. the \`output/\` folder, and use relative paths.
 
-The base image is minimal, install tools before first use (\`apt-get\`, \`pip3\`, \`npm\`). Read stderr and retry intelligently on failure; never loop the same failing command.
+The base image is minimal. When something isn't installed (\`command not found\`, \`ModuleNotFoundError\`, a missing library), install it and retry right away (\`apt-get\`, \`pip3\`, \`npm\`): a missing package is never a reason to report a failure or switch to a worse approach. Mention it only if the install itself fails. Read stderr and retry intelligently on other failures; never loop the same failing command.
 </sandbox>`;

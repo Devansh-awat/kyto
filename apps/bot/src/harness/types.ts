@@ -17,6 +17,8 @@ export interface MessageAttachment {
   data?: Uint8Array;
   /** Lazily download the file (url_private with the bot token). */
   fetchData?: () => Promise<Uint8Array | null>;
+  /** Slack file id (`F…`), for getFile on a later turn. */
+  id?: string;
   mimeType?: string;
   name?: string;
   /** Coarse kind: 'image' | 'file'. */

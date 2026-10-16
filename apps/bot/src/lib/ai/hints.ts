@@ -12,7 +12,7 @@ import type { Message } from '@/harness/types';
 import { threadModelChoice } from '@/lib/agent/model-choice';
 import { slack } from '@/lib/chat';
 import { resolveKytoEmail } from '@/lib/email/address';
-import { resolveChannelName, resolveWorkspaceName } from '@/lib/slack/names';
+import { resolveChannel, resolveWorkspaceName } from '@/lib/slack/names';
 
 // How long a tidy-up stays mentioned in the person's <memories> block.
 const CURATION_NOTE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -41,7 +41,7 @@ export async function requestHints({
     curations,
     channelInstructions,
   ] = await Promise.all([
-    resolveChannelName(rawChannelId),
+    resolveChannel(rawChannelId),
     resolveWorkspaceName(),
     getUserCustomization(message.author.userId).catch(() => null),
     // Scoped to the person kyto is answering: their own memories, whatever the
@@ -70,7 +70,8 @@ export async function requestHints({
     userAccountId: slack.userAccountId,
     channel: {
       id: channelId,
-      name: channel,
+      kind: channel.kind,
+      name: channel.name,
     },
     channelGroupIds: groupIds,
     channelInstructions: channelInstructions?.prompt,

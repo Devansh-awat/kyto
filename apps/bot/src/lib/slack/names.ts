@@ -81,29 +81,43 @@ export async function resolveUserNames(
   return new Map(entries);
 }
 
-export async function resolveChannelName(
+export type ChannelKind = 'dm' | 'group_dm' | 'private' | 'public';
+
+/** The conversation's name and kind, cached for a day (kind never changes). */
+export async function resolveChannel(
   channelId: string
-): Promise<string | undefined> {
+): Promise<{ kind?: ChannelKind; name?: string }> {
   const state = bot.getState();
-  const cached = await state.get<{ name?: string }>(
+  const cached = await state.get<{ kind?: ChannelKind; name?: string }>(
     `slack:channel:${channelId}`
   );
-  if (cached?.name) {
-    return cached.name;
+  // Entries cached before `kind` existed are read again once.
+  if (cached?.kind) {
+    return cached;
   }
   try {
     const info = await slack.webClient.conversations.info({
       channel: channelId,
     });
-    const name = info.channel?.name;
-    if (name) {
-      await state
-        .set(`slack:channel:${channelId}`, { name }, 86_400_000)
-        .catch(() => undefined);
+    const conversation = info.channel;
+    if (!conversation) {
+      return {};
     }
-    return name;
+    let kind: ChannelKind = 'public';
+    if (conversation.is_im) {
+      kind = 'dm';
+    } else if (conversation.is_mpim) {
+      kind = 'group_dm';
+    } else if (conversation.is_private) {
+      kind = 'private';
+    }
+    const resolved = { kind, name: conversation.name };
+    await state
+      .set(`slack:channel:${channelId}`, resolved, 86_400_000)
+      .catch(() => undefined);
+    return resolved;
   } catch {
-    return;
+    return {};
   }
 }
 

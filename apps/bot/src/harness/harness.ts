@@ -476,6 +476,7 @@ export class SlackHarness {
       return [
         {
           fetchData: () => this.downloadFile(url),
+          id: file.id,
           mimeType: file.mimetype,
           name: file.name,
           type: file.mimetype?.startsWith('image/') ? 'image' : 'file',

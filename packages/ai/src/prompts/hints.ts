@@ -2,6 +2,7 @@ export interface RequestHints {
   botUserId?: string;
   channel?: {
     id?: string;
+    kind?: 'dm' | 'group_dm' | 'private' | 'public';
     name?: string;
   };
   /** Channel groups this channel belongs to — what a group-scoped memory or a

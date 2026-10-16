@@ -32,8 +32,15 @@ export function contextPrompt(hints: RequestHints): string {
   if (hints.workspace) {
     lines.push(`The current Slack workspace is ${hints.workspace}.`);
   }
-  if (hints.channel?.name) {
-    lines.push(`The current channel name is ${hints.channel.name}.`);
+  const kind = hints.channel?.kind;
+  if (kind === 'dm') {
+    lines.push('This conversation is a DM.');
+  } else if (kind === 'group_dm') {
+    lines.push('This conversation is a group DM.');
+  } else if (hints.channel?.name) {
+    lines.push(
+      `The current channel is #${hints.channel.name}${kind ? `, a ${kind} channel` : ''}.`
+    );
   }
   lines.push(`The current thread id is ${hints.threadId}.`);
   if (hints.channel?.id) {

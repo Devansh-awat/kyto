@@ -1192,12 +1192,19 @@ async function executeTurn(
     // it had started talking) what the user has already been shown.
     const attemptPrompt = ({
       isFallback,
+      model,
       ownKey,
     }: {
       isFallback: boolean;
+      model: string;
       ownKey: boolean;
     }): string => {
-      const blocks = [messageText, codingLine({ ownKey })];
+      // Asked "what model are you?", kyto answered from its training instead.
+      const blocks = [
+        messageText,
+        `This reply is being written by the model \`${model}\`; asked which model you are, that's the answer.`,
+        codingLine({ ownKey }),
+      ];
       if (visionDescription) {
         blocks.push(
           `The user attached image(s). A vision model looked at them and described them for you (you cannot see the raw pixels this turn):\n<attached_image_description>\n${visionDescription}\n</attached_image_description>`
@@ -1528,7 +1535,11 @@ async function executeTurn(
               '[agent] gateway failure, retrying the same request'
             );
           },
-          prompt: attemptPrompt({ isFallback, ownKey: onOwnKey }),
+          prompt: attemptPrompt({
+            isFallback,
+            model: currentAttempt.model,
+            ownKey: onOwnKey,
+          }),
           system: systemPrompt({ hints }),
           toolOrder: built.toolOrder,
           tools: built.tools,

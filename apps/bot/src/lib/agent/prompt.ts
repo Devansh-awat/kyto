@@ -12,6 +12,7 @@ import { parseFlags, withoutFlags } from '@/lib/flags';
 import logger from '@/lib/logger';
 import { threadRevisions } from '@/lib/message-revisions';
 import { renderNotebooks } from '@/lib/notebooks';
+import { mayReadChannel } from '@/lib/slack/channel-access';
 import { renderLinkedCanvases } from '@/lib/slack/linked-canvases';
 import {
   isHiddenFromBot,
@@ -151,6 +152,12 @@ async function renderDeleted({
   return `[deleted by its author] ${line}${earlierVersions(rows)}`;
 }
 
+// Channels a message names (`<#C…>`) checked for whether kyto may read them for
+// the asker. Without it, a bare channel reference got called private without
+// a single read attempt.
+const MAX_CHECKED_CHANNELS = 5;
+const CHANNEL_REFERENCE = /<#([CG][A-Z0-9]+)(?:\|[^>]*)?>/g;
+
 // Below this a pause is just conversation; above it, the thread replayed as
 // one block reads as one moment, and kyto answered week-old state as live.
 const GAP_NOTE_MIN_SECONDS = 10 * 60;
@@ -190,7 +197,17 @@ async function renderMessage(message: Message): Promise<string> {
   const pronouns = message.author.pronouns
     ? `, ${message.author.pronouns}`
     : '';
-  return `@${authorLabel(message)} (${message.author.userId}${pronouns}): ${text}`;
+  // Only the current message's files reach the sandbox, so "the screenshot
+  // above" had no handle at all; the id is what getFile takes.
+  const files = message.attachments
+    .filter((file) => file.id)
+    .map(
+      (file) =>
+        `${file.name ?? 'file'} (${file.id}${file.mimeType ? `, ${file.mimeType}` : ''})`
+    );
+  const attached =
+    files.length > 0 ? ` [attachments: ${files.join(', ')}]` : '';
+  return `@${authorLabel(message)} (${message.author.userId}${pronouns}): ${text}${attached}`;
 }
 
 export async function buildPrompt(
@@ -230,70 +247,92 @@ export async function buildPrompt(
   // Everything below is independent, so it is read at once: the Slack thread
   // read is the slow part (~0.5s), and awaiting the rest in front of it put
   // every one of their round trips between the ping and the model request.
-  const [current, thinking, notebooks, threadRead, revisions, canvases] =
-    await Promise.all([
-      renderMessage(message),
-      // What kyto was THINKING on this thread's last few turns. Slack replayed
-      // above only records what it said, so without this each turn re-derives
-      // the reasoning (and the dead ends) of the one before it.
-      thread && !memoriesOff
-        ? recallThinking({
-            speakerId: message.author.userId,
-            threadId: thread.id,
-          }).then(renderThinking)
-        : '',
-      // The user account reads the global notebook too; the app, only the
-      // channel's (lib/notebooks.ts). A failed read costs the notes, not the turn.
-      thread && !memoriesOff
-        ? renderNotebooks({
-            channelId: slack.decodeThreadId(thread.id).channel,
-            includeGlobal: asUserAccount,
-          }).catch((error: unknown) => {
-            logger.warn(
-              { err: error },
-              '[prompt] could not load the notebooks'
-            );
-            return '';
-          })
-        : '',
-      thread
-        ? Promise.all([
-            // Focus mode: drop messages from non-focused users so kyto genuinely
-            // never sees what other people said in a focused thread (not just
-            // declines to reply). Its own messages and the owner's are always kept.
-            thread.state.catch(() => null),
-            // Start the read at the newest message an earlier turn already
-            // digested. Everything before it is in the summary, so re-reading it
-            // would be Slack API work whose only output we already have written down.
-            loadThreadSummary(thread.id).then(async (stored) => ({
-              fetched: await readThread({
-                asUserAccount,
-                oldest: stored?.throughMessageId,
-                threadId: thread.id,
-              }),
-              measured: await getThreadPromptSize(thread.id).catch(
-                () => undefined
-              ),
-              stored,
-            })),
-          ])
-        : undefined,
-      thread
-        ? threadRevisions(thread.id)
-        : new Map<string, MessageRevision[]>(),
-      // A canvas the message links ("rubric: [canvas]") is read for it (#76).
-      renderLinkedCanvases({
-        askerUserId: message.author.userId,
-        attachments: message.attachments,
-        currentChannelId: thread
-          ? slack.decodeThreadId(thread.id).channel
-          : undefined,
-        text: rawSlackText(message) ?? message.text,
-      }).catch((error: unknown) => {
-        logger.warn({ err: error }, '[prompt] could not read linked canvases');
-        return '';
-      }),
-    ]);
+  const currentChannelId = thread
+    ? slack.decodeThreadId(thread.id).channel
+    : undefined;
+  const [
+    current,
+    thinking,
+    notebooks,
+    threadRead,
+    revisions,
+    canvases,
+    channelAccess,
+  ] = await Promise.all([
+    renderMessage(message),
+    // What kyto was THINKING on this thread's last few turns. Slack replayed
+    // above only records what it said, so without this each turn re-derives
+    // the reasoning (and the dead ends) of the one before it.
+    thread && !memoriesOff
+      ? recallThinking({
+          speakerId: message.author.userId,
+          threadId: thread.id,
+        }).then(renderThinking)
+      : '',
+    // The user account reads the global notebook too; the app, only the
+    // channel's (lib/notebooks.ts). A failed read costs the notes, not the turn.
+    thread && !memoriesOff
+      ? renderNotebooks({
+          channelId: slack.decodeThreadId(thread.id).channel,
+          includeGlobal: asUserAccount,
+        }).catch((error: unknown) => {
+          logger.warn({ err: error }, '[prompt] could not load the notebooks');
+          return '';
+        })
+      : '',
+    thread
+      ? Promise.all([
+          // Focus mode: drop messages from non-focused users so kyto genuinely
+          // never sees what other people said in a focused thread (not just
+          // declines to reply). Its own messages and the owner's are always kept.
+          thread.state.catch(() => null),
+          // Start the read at the newest message an earlier turn already
+          // digested. Everything before it is in the summary, so re-reading it
+          // would be Slack API work whose only output we already have written down.
+          loadThreadSummary(thread.id).then(async (stored) => ({
+            fetched: await readThread({
+              asUserAccount,
+              oldest: stored?.throughMessageId,
+              threadId: thread.id,
+            }),
+            measured: await getThreadPromptSize(thread.id).catch(
+              () => undefined
+            ),
+            stored,
+          })),
+        ])
+      : undefined,
+    thread ? threadRevisions(thread.id) : new Map<string, MessageRevision[]>(),
+    // A canvas the message links ("rubric: [canvas]") is read for it (#76).
+    renderLinkedCanvases({
+      askerUserId: message.author.userId,
+      attachments: message.attachments,
+      currentChannelId,
+      text: rawSlackText(message) ?? message.text,
+    }).catch((error: unknown) => {
+      logger.warn({ err: error }, '[prompt] could not read linked canvases');
+      return '';
+    }),
+    Promise.all(
+      [
+        ...new Set(
+          [...(rawSlackText(message) ?? '').matchAll(CHANNEL_REFERENCE)]
+            .map((match) => match[1] ?? '')
+            .filter((id) => id && id !== currentChannelId)
+        ),
+      ]
+        .slice(0, MAX_CHECKED_CHANNELS)
+        .map(async (channelId) =>
+          (await mayReadChannel({
+            askerUserId: message.author.userId,
+            channelId,
+            currentChannelId,
+          }))
+            ? `<#${channelId}> is readable: it's public or the asker is in it, so read it rather than guessing.`
+            : `<#${channelId}> isn't readable for this asker: it isn't public and they aren't in it (or kyto couldn't check).`
+        )
+    ),
+  ]);
 
   // A native code channel's one conversation, not a thread (lib/code-channels).
   const inChannelConversation =
@@ -502,6 +541,9 @@ export async function buildPrompt(
     `The current date and time is ${new Date().toISOString()}.`,
     `The message you're responding to has id ${message.id}.`,
     ...gapLine({ currentId: message.id, previousId: previousMessageId }),
+    ...(channelAccess.length > 0
+      ? [`Channels this message mentions:\n${channelAccess.join('\n')}`]
+      : []),
     // The system prompt names both identities without saying which is "you"
     // (it is one cached prefix for both), so every turn says it here.
     ...(slack.userAccountId && slack.botUserId
