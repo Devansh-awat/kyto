@@ -35,14 +35,19 @@ interface TodoList {
 // a person): one move after they settle, not one per message.
 const MOVE_DEBOUNCE_MS = 1500;
 const KEEP_MS = 24 * 60 * 60 * 1000;
-// Slack's own plan block (the look of kyto's Thinking cards: a check, a
-// spinner, an empty circle), which a plain post accepts too (checked
-// 2026-10-17 with 30 items of 200 chars). It replaced emoji lines the owner
-// found ugly.
-const PLAN_STATUS: Record<TodoStatus, string> = {
-  done: 'complete',
-  in_progress: 'in_progress',
-  pending: 'pending',
+// One rich_text block of workspace emoji rows (owner's pick 2026-10-17, "option
+// E"): Slack's plan block starts collapsed and folds up again on every update,
+// loose task cards refuse a "pending" status, and plain ☐/☒ were too small.
+// These are custom emoji in the Hack Club workspace: a blue ticked box, an
+// animated grey spinner, an empty grey box.
+const EMOJI: Record<TodoStatus, string> = {
+  done: 'checked-t',
+  in_progress: 'loading',
+  pending: 'unchecked-t',
+};
+const STYLE: Partial<Record<TodoStatus, Record<string, boolean>>> = {
+  done: { strike: true },
+  in_progress: { bold: true },
 };
 
 const lists = new Map<string, TodoList>();
@@ -54,16 +59,30 @@ function render(items: TodoItem[]): {
   const done = items.filter((item) => item.status === 'done').length;
   const title = `To-do · ${done}/${items.length}`;
   const current = items.find((item) => item.status === 'in_progress');
+  const rows = items.flatMap(({ status, text }, index) => {
+    const style = STYLE[status];
+    return [
+      { name: EMOJI[status], type: 'emoji' },
+      {
+        text: `  ${text.replaceAll('\n', ' ')}${index < items.length - 1 ? '\n' : ''}`,
+        type: 'text',
+        ...(style ? { style } : {}),
+      },
+    ];
+  });
   return {
     blocks: [
       {
-        tasks: items.map(({ status, text }, index) => ({
-          status: PLAN_STATUS[status],
-          task_id: `todo-${index}`,
-          title: text.replaceAll('\n', ' '),
-        })),
-        title,
-        type: 'plan',
+        elements: [
+          {
+            elements: [
+              { style: { bold: true }, text: `${title}\n`, type: 'text' },
+              ...rows,
+            ],
+            type: 'rich_text_section',
+          },
+        ],
+        type: 'rich_text',
       },
     ],
     fallbackText: current ? `${title}: ${current.text}` : title,
