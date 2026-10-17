@@ -1,11 +1,13 @@
+import { env } from '@/env';
 import { runTurn } from '@/lib/agent';
-import { stopTurn } from '@/lib/agent/turns';
+import { getTurn, stopTurn, USER_ACCOUNT_TURN_SUFFIX } from '@/lib/agent/turns';
 import { isUserAllowed } from '@/lib/allowed-users';
 import { activeBan } from '@/lib/bans';
 import { bot, slack } from '@/lib/chat';
 import { isNativeCodeChannel } from '@/lib/code-channels';
 import logger from '@/lib/logger';
 import { toLogError } from '@/lib/utils/error';
+import type { ActiveTurn } from '@/types/agent';
 
 // What a Slack code channel kyto is the agent of sends kyto besides messages:
 // the stop button, its per-channel slash commands (registered with the
@@ -16,18 +18,47 @@ import { toLogError } from '@/lib/utils/error';
 // to itself — then answers it like anything they typed.
 
 // Slack's stop button: halt the turn like `!stop`. Slack updates the session's
-// status itself.
-bot.onAgentSessionStopped(({ channelId, threadTs }) => {
+// status itself. Only the person the turn is answering (or the owner) may stop
+// it (owner's call 2026-10-17): in a shared channel anyone could otherwise cut
+// off someone else's answer. A click without a user id stops nothing.
+bot.onAgentSessionStopped(async ({ channelId, threadTs, userId }) => {
   if (!channelId) {
-    return Promise.resolve();
+    return;
   }
   const threadId = slack.encodeThreadId({
     channel: channelId,
     threadTs: threadTs ?? '',
   });
-  const stopped = stopTurn({ threadId });
-  logger.info({ stopped, threadId }, '[code-channel] stop button pressed');
-  return Promise.resolve();
+  const mayStop = (turn: ActiveTurn) =>
+    userId !== undefined &&
+    (userId === env.OWNER_USER_ID || turn.message?.author.userId === userId);
+  const running = [threadId, `${threadId}${USER_ACCOUNT_TURN_SUFFIX}`].flatMap(
+    (slot) => getTurn({ threadId: slot }) ?? []
+  );
+  const stopped = stopTurn({ mayStop, threadId });
+  logger.info(
+    { stopped, threadId, userId },
+    '[code-channel] stop button pressed'
+  );
+  if (stopped || running.length === 0 || !userId) {
+    return;
+  }
+  const authors = [
+    ...new Set(running.flatMap((turn) => turn.message?.author.userId ?? [])),
+  ];
+  await slack.webClient.chat
+    .postEphemeral({
+      channel: channelId,
+      text: `Only ${authors.length > 0 ? authors.map((id) => `<@${id}>`).join(' or ') : 'the person who asked'} can stop this answer.`,
+      ...(threadTs ? { thread_ts: threadTs } : {}),
+      user: userId,
+    })
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), threadId },
+        '[code-channel] could not explain a refused stop'
+      );
+    });
 });
 
 bot.onUnhandledAction(async (event) => {
