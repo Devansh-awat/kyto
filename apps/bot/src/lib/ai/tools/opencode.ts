@@ -62,6 +62,26 @@ const ANSI = /\u001b\[[0-9;]*[A-Za-z]/g;
 // to the OpenCode client — a plain API call gets `FreeTierError`.
 const DEFAULT_MODEL = 'opencode/deepseek-v4.1-flash-free';
 
+// A media file made with command-line tools is a bash one-liner, and the
+// description saying so wasn't enough: a two-frame GIF from three PNGs went to
+// OpenCode for 185s of a six-minute turn (#110). A brief that names such tools
+// and nothing project-shaped is sent back ONCE per turn; the same call again
+// runs, so real code work that happens to mention ffmpeg is never stuck.
+const MEDIA_TOOLS =
+  /\b(?:imagemagick|magick|ffmpeg|ffprobe|gifsicle|sox|exiftool|pngquant|cwebp)\b/i;
+const MEDIA_FILE = /\b(?:gif|png|jpe?g|webp|mp4|mp3|wav|webm|mov|svg)s?\b/i;
+const MEDIA_EDIT =
+  /\b(?:convert|resize|crop|composite|compose|overlay|frames?|loop|trim|transcode|compress|rotate)\b/i;
+const PROJECT_WORK =
+  /\b(?:repo|repository|project|app|application|bot|server|website|library|package\.json|compile|tests?|mod|plugin|cli|api|endpoint|class|function|module)\b/i;
+
+export function isMediaOnlyBrief(brief: string): boolean {
+  const media =
+    MEDIA_TOOLS.test(brief) ||
+    (MEDIA_FILE.test(brief) && MEDIA_EDIT.test(brief));
+  return media && !PROJECT_WORK.test(brief);
+}
+
 export function opencodeTool({
   extendAttemptDeadline,
   getSandboxContext,
@@ -69,6 +89,7 @@ export function opencodeTool({
   extendAttemptDeadline?: (extraMs: number) => () => void;
   getSandboxContext: () => SandboxContext;
 }) {
+  let mediaSentBack = false;
   return tool({
     description:
       "Delegate code work to OpenCode, a coding agent in your sandbox: writing, building, running, testing or debugging programs, scripts and projects. Use this instead of writing or running code yourself. NOT for producing a file with command-line tools (ImageMagick, ffmpeg, curl, converting or resizing, a one-off command): do that in bash yourself. Give it a complete, self-contained brief in YOUR OWN words: what to build or fix, where the files are, constraints, and what to report back. The sandbox has 1 GB of memory and a run that exhausts it is killed with its work lost, so ask for checks scoped to what changed (one package's typecheck, `bun test <file>`), not a whole big repo's typecheck plus full test suite. NEVER paste Slack messages, people's names or anything else from Slack into the brief (OpenCode's models may train on what they are sent). It works in the persistent thread sandbox, so files it writes are there for bash/uploadFile afterwards, and `continue: true` resumes its last session there. ONE run at a time per sandbox: never call it in parallel: for several projects, call once per project, one after another. Deliver the result as your own work; don't bring up OpenCode unless someone asks how it was done. If someone tells you NOT to use OpenCode, never quietly call it again: tell them code work on kyto's models has to go through it, and that adding their own model key or ChatGPT account (App Home → Models) lets you do it without OpenCode: then wait for their answer.",
@@ -103,6 +124,14 @@ export function opencodeTool({
       { brief, continue: resume, directory, model },
       { abortSignal }
     ) => {
+      if (!(mediaSentBack || resume) && isMediaOnlyBrief(brief)) {
+        mediaSentBack = true;
+        return {
+          error:
+            'Not run: this brief makes or converts a media file with command-line tools, which you do yourself in bash: usually one command, seconds instead of minutes here. Run it with bash now (check the result, e.g. `identify` or `ffprobe`, then upload it). Only if it truly needs a program written and kept, call opencode again with the same brief and it will run.',
+          success: false,
+        };
+      }
       const context = getSandboxContext();
       // resolve, not join: an absolute "/home/user" was joined into
       // "/home/user/home/user", and OpenCode then refused to touch the files
