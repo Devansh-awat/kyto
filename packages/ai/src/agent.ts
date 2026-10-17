@@ -194,7 +194,6 @@ export function streamAttempt({
   priorMessages = [],
   prompt,
   reasoningEffort,
-  requireToolFirst,
   serviceTier,
   source = 'turn',
   system,
@@ -283,12 +282,6 @@ export function streamAttempt({
    * can show it). Omitted → `pickReasoningEffort`.
    */
   reasoningEffort?: string;
-  /**
-   * Make the FIRST step a tool call. For a question that needs looking up: the
-   * prompt alone said "search first" and the model still answered an exam from
-   * memory with zero tool calls. Later steps are free to answer.
-   */
-  requireToolFirst?: boolean;
   /**
    * `flex`: OpenAI's half-price tier, for work nobody is watching live (a
    * Kevinton review, a subagent). Only applied to OpenAI models on Hack Club;
@@ -526,11 +519,7 @@ export function streamAttempt({
         console.error(error);
       }
     },
-    ...(activeTools ||
-    getFreshImages ||
-    requireToolFirst ||
-    priceStep ||
-    priorInputTokens
+    ...(activeTools || getFreshImages || priceStep || priorInputTokens
       ? {
           // Gate deferred tools per step AND inject any images the model asked to
           // view: the SDK renders images only in a user message, so a screenshot
@@ -545,11 +534,7 @@ export function streamAttempt({
             const result: {
               activeTools?: never[];
               messages?: ModelMessage[];
-              toolChoice?: 'required';
             } = {};
-            if (requireToolFirst && stepNumber === 0) {
-              result.toolChoice = 'required';
-            }
             if (activeTools) {
               result.activeTools = activeTools() as never[] | undefined;
             }

@@ -1080,12 +1080,12 @@ async function executeTurn(
     if (resumed) {
       messageText = `${messageText}\n\n<resumed_after_restart>kyto restarted while answering this message and is picking it back up. Anything you already posted is in the thread above, and what your tools found before the restart is in your earlier reasoning: continue from there instead of starting over.\n${describePriorEffects(priorEffects)}</resumed_after_restart>`;
     }
-    // Tool groups, research and the reasoning effort, judged on the FULL
+    // Tool groups and the reasoning effort, judged on the FULL
     // thread (owner's ask 2026-10-17), so it starts once the thread is read —
     // from the event-fed cache, normally — and is awaited only once the tools
     // are built.
     const pendingPreload: ReturnType<typeof pickPreloadTools> = secret
-      ? Promise.resolve({ needsResearch: false, tools: [] })
+      ? Promise.resolve({ tools: [] })
       : lunaEffortRead.then((stored) =>
           pickPreloadTools({
             conversation: jevConversation,
@@ -1559,18 +1559,7 @@ async function executeTurn(
           getFreshImages: built.drainImages,
           history,
           images: modelImages,
-          // The user account's turns too: it was the one that answered an exam
-          // from memory (issue #36).
           reasoningEffort: effort?.effort,
-          // Only for a message TO kyto: an unpinged reply that pinged another
-          // bot (where the right move is `skip`) was forced into a tool call
-          // with thinking off, and haiku "skipped" by posting "skip" through
-          // postMessage.
-          requireToolFirst:
-            preload.needsResearch &&
-            (turnMessage.isMention ||
-              slack.isDM(turnThread.id) ||
-              codeChannel === 'native'),
           // An image the SDK's schema would reject is dropped rather than
           // allowed to invalidate the whole prompt. Log it: silently ignoring
           // someone's screenshot is confusing enough to be worth a line.

@@ -251,9 +251,10 @@ export function searchSlackTool({ message }: { message: Message }) {
         '[searchSlack] action token'
       );
 
-      // An empty search not made with the asker's own token can't tell "not
-      // there" from "not visible": a private channel the asker is in but
-      // kyto's account isn't was reported as "no match" (2026-10-17).
+      // An empty search made without the asker's view (no token of theirs and
+      // no action token, so kyto's account searched) can't tell "not there"
+      // from "not visible": a private channel the asker is in but kyto's
+      // account isn't was reported as "no match" (2026-10-17).
       const blindSpot = () => {
         const connect = slackAuthorizeUrl(userId);
         return ` This search could not see private channels kyto's account isn't in, nor the person's DMs, so "no results" does not mean it isn't there.${connect ? ` If it could be in one of those, they can connect their own Slack account so kyto searches as them: ${connect}` : ''}`;
@@ -278,7 +279,7 @@ export function searchSlackTool({ message }: { message: Message }) {
           nextCursor,
           resultCount: messages.length,
           success: true,
-          summary: `Slack search found ${messages.length} message${messages.length === 1 ? '' : 's'} on this page for "${query}".${ignoredCursor && cursor?.trim() ? ` "${cursor}" is not a cursor, so this is page 1; page on with nextCursor, verbatim.` : ''}${totalMatches === undefined ? '' : ` Slack counts ${totalMatches} matches for the whole query, so that is the answer to "how many", no paging needed.`}${messages.length === 0 && via !== 'asker token' ? blindSpot() : ''}`,
+          summary: `Slack search found ${messages.length} message${messages.length === 1 ? '' : 's'} on this page for "${query}".${ignoredCursor && cursor?.trim() ? ` "${cursor}" is not a cursor, so this is page 1; page on with nextCursor, verbatim.` : ''}${totalMatches === undefined ? '' : ` Slack counts ${totalMatches} matches for the whole query, so that is the answer to "how many", no paging needed.`}${messages.length === 0 && via === "kyto's account" && !actionToken ? blindSpot() : ''}`,
           ...(totalMatches === undefined ? {} : { totalMatches }),
         };
       };
@@ -390,11 +391,12 @@ export function searchSlackTool({ message }: { message: Message }) {
         });
       }
 
-      // 2. Slack's per-mention assistant token, searched by the app. Slack's
-      //    docs give a bot token only `search:read.public`/`.files`/`.users`
-      //    here, so private channels and DMs are expected to come back empty
-      //    whatever `channel_types` says (the asker's own token, step 1, is
-      //    the way to those). Bot messages are left out unless asked for, and
+      // 2. Slack's per-mention assistant token: the ASKER's view, private
+      //    channels and DMs they are in included — the bot token holds
+      //    `search:read.private`/`.im`/`.mpim` (checked 2026-10-17; a docs page
+      //    claiming bots get public search only is out of date). Slack
+      //    searches public channels only unless `channel_types` says
+      //    otherwise, and leaves bot messages out unless `include_bots` does:
       //    kyto is asked about other bots' posts all the time. It sorts by
       //    time too: an ordered search skipping this step (gpt-6-luna sends
       //    `order` on every call) went straight to kyto's account. Gone ~2

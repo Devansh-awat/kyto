@@ -149,15 +149,6 @@ const GROUPS = {
 
 type GroupId = keyof typeof GROUPS;
 
-// Not a tool group: asked in the same call (so it costs no wait of its own),
-// and a yes makes the turn's first step a tool call (requireToolFirst).
-const RESEARCH_ID = 'research';
-const RESEARCH_QUESTION =
-  'Does answering need facts that should be looked up rather than recalled: about this Slack workspace or Hack Club (its people, channels, bots, events, history, counts), or quiz/exam-style factual questions?';
-// Higher than the preload bar: a wrong yes forces a pointless tool call on a
-// chat turn, a wrong no only leaves the prompt's own rule in charge.
-const RESEARCH_THRESHOLD = 0.7;
-
 // The turn's reasoning effort, in the same call (owner's ask 2026-10-17: the
 // random draw ran a malware scan at `low`). Haiku takes Jev's pick every turn.
 // Luna keeps one prompt cache PER EFFORT, so it is only ever raised from where
@@ -203,8 +194,8 @@ export interface EffortPicks {
 }
 
 /**
- * The deferred tool names Jev thinks this turn will need, whether the answer
- * has to be looked up, and (given `lunaEffort`) the turn's reasoning effort;
+ * The deferred tool names Jev thinks this turn will need and (given
+ * `lunaEffort`) the turn's reasoning effort;
  * nothing of any if it could not say. `conversation` is the thread as kyto
  * sees it, the new message last.
  */
@@ -217,10 +208,9 @@ export async function pickPreloadTools({
   lunaEffort?: JevEffort;
 }): Promise<{
   effort?: EffortPicks;
-  needsResearch: boolean;
   tools: string[];
 }> {
-  const none = { needsResearch: false, tools: [] };
+  const none = { tools: [] };
   const state = conversation.trim().slice(-MAX_STATE_CHARS);
   if (!state) {
     return none;
@@ -229,10 +219,7 @@ export async function pickPreloadTools({
     ? JEV_EFFORTS.slice(JEV_EFFORTS.indexOf(lunaEffort) + 1)
     : [];
   const questions: Record<string, unknown> = Object.fromEntries(
-    [
-      ...Object.entries(GROUPS),
-      [RESEARCH_ID, { question: RESEARCH_QUESTION }] as const,
-    ].map(([id, group]) => [
+    Object.entries(GROUPS).map(([id, group]) => [
       id,
       {
         instructions: `An AI assistant in Slack is about to handle the latest message in this conversation. ${group.question}`,
@@ -288,7 +275,6 @@ export async function pickPreloadTools({
     const picked = (Object.keys(GROUPS) as GroupId[]).filter(
       (id) => noul(id) >= PRELOAD_THRESHOLD
     );
-    const needsResearch = noul(RESEARCH_ID) >= RESEARCH_THRESHOLD;
     let effort: EffortPicks | undefined;
     const haiku = choiceSchema.safeParse(answers.effort).data;
     if (lunaEffort && haiku && isEffort(haiku.choice)) {
@@ -309,13 +295,9 @@ export async function pickPreloadTools({
         },
       };
     }
-    logger.info(
-      { effort, needsResearch, picked },
-      '[tool-preload] jev picked tool groups'
-    );
+    logger.info({ effort, picked }, '[tool-preload] jev picked tool groups');
     return {
       ...(effort ? { effort } : {}),
-      needsResearch,
       tools: picked.flatMap((id) => [...GROUPS[id].tools]),
     };
   } catch (error) {

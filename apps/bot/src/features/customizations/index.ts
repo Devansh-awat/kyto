@@ -1322,7 +1322,7 @@ bot.onAction('home_connect_slack', async (event) => {
     .openDM(userId)
     .then((thread) =>
       thread.post({
-        markdown: `Connect your Slack account to kyto here: ${url}\n\nThis lets kyto act as you where you ask it to — today that means deleting your question when you use \`!secret\`. The link is yours alone and expires in 15 minutes.`,
+        markdown: `Connect your Slack account to kyto here: ${url}\n\nThis lets kyto act as you where you ask it to: search Slack and read your private channels and DMs as you when you ask it to (otherwise only within ~2 minutes of pinging it), and delete your question when you use \`!secret\`. The link is yours alone and expires in 15 minutes.`,
       })
     )
     .catch((error: unknown) => {
