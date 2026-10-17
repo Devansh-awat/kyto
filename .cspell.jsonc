@@ -3,6 +3,12 @@
   "import": ["@repo/cspell-config"],
   "words": [
     "ordinality",
+    "unflushed",
+    "magick",
+    "gifsicle",
+    "exiftool",
+    "pngquant",
+    "cwebp",
     "sortr",
     "repost",
     "duckdb",

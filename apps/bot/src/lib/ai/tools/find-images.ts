@@ -10,7 +10,7 @@ import {
 import { toRawSlackChannelId } from '@/lib/slack/ids';
 import { errorMessage } from '@/lib/utils/error';
 
-// "Find the image Ricky posted in #macondo 1-4 months ago" took ~30 calls and
+// "find the image X posted in #c 1-4 months ago" took ~30 calls and
 // 123s of searchSlack, which can't see inside an image or filter by file type,
 // and still missed (#109). Slack's file list can: one call per page, by
 // channel, author, date range and type.
