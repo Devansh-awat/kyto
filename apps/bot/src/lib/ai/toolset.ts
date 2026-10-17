@@ -70,6 +70,7 @@ import {
   submitEmojiTool,
 } from './tools/emoji';
 import { deleteFileTool, fileStatTool } from './tools/files';
+import { findImagesTool } from './tools/find-images';
 import { focusModeTool } from './tools/focus';
 import { generateImageTool } from './tools/generate-image';
 import { findChannelsTool, getChannelInfoTool } from './tools/get-channel-info';
@@ -180,6 +181,7 @@ export interface BuiltTools {
 // limit, which every other turn and kyto's own replies share. The sandbox's
 // `slack` command has its own budget in lib/slack-proxy.
 const SLACK_READ_TOOLS = new Set([
+  'findImages',
   'getChannelInfo',
   'getPermalink',
   'getUser',
@@ -708,6 +710,11 @@ export async function buildTools({
     findChannels: {
       summary: 'find channels by name, private ones included (names only)',
       tool: findChannelsTool(),
+    },
+    findImages: {
+      summary:
+        'list the images posted in a channel by author and date (to find a meme/screenshot)',
+      tool: findImagesTool({ askerUserId: authorUserId, thread }),
     },
     browser: {
       summary: 'drive a real Chromium browser (screenshots, clicks, scraping)',

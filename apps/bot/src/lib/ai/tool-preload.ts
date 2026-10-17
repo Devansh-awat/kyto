@@ -83,6 +83,11 @@ const GROUPS = {
     question: 'Does this ask to generate or create an AI image or picture?',
     tools: ['generateImage'],
   },
+  imageHunt: {
+    question:
+      'Does it ask to find a specific image, meme, screenshot or picture someone posted in Slack?',
+    tools: ['findImages'],
+  },
   libraryDocs: {
     question:
       'Is this about how to use a specific programming library, framework, SDK or API, where current documentation would help?',
