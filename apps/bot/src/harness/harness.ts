@@ -569,6 +569,7 @@ export class SlackHarness {
         // Slack carries pronouns on the profile when the user has set them.
         // Rendered inline wherever the user is named, so kyto never guesses.
         pronouns: user?.profile?.pronouns || undefined,
+        timezone: user?.tz || undefined,
         userId,
         // Slack's own order: display name, else real name. `name` is the
         // handle — a bot's is often `june2` while it shows as "June".

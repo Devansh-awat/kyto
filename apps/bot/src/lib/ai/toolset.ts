@@ -449,7 +449,10 @@ export async function buildTools({
       extendAttemptDeadline,
       isOwner,
     }),
-    now: nowTool(),
+    now: nowTool({
+      askerTimezone: () =>
+        bot.getUser(authorUserId).then((author) => author.timezone),
+    }),
     // A person reporting kyto's abuse to the owner needs a person there.
     ...(unattended
       ? {}

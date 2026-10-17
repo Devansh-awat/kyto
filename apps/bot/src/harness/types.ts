@@ -8,6 +8,8 @@ export interface Author {
   isMe?: boolean;
   /** The user's Slack profile pronouns field, when they've set one. */
   pronouns?: string;
+  /** Their Slack profile's IANA timezone. */
+  timezone?: string;
   userId: string;
   userName: string;
 }
