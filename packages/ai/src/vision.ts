@@ -18,6 +18,15 @@ const DESCRIBE_INSTRUCTION =
   'anything that could matter to answering a question about it. Be thorough and ' +
   'factual; do not speculate or add commentary. If there are multiple images, label ' +
   'them Image 1, Image 2, … in order.';
+// With a question, ONLY its answer: the full description after it cost an
+// image hunt 8-21s and 1,000+ chars per candidate when the answer was yes or
+// no (#109). A caller that wants the rest asks without a question.
+const ANSWER_INSTRUCTION =
+  'You look at image(s) for an AI assistant that cannot see them and answer its ' +
+  'question about them, directly and completely. Quote visible text verbatim when ' +
+  'the question turns on it. Add at most one short sentence of context if it ' +
+  'changes the answer; no general description. Be factual; do not speculate. If ' +
+  'there are multiple images, answer for each as Image 1, Image 2, … in order.';
 
 /**
  * Return a text description of the given images, or null if there is nothing to
@@ -35,7 +44,7 @@ export async function describeImages({
    * cores are listed?"). Without it the vision model writes a general
    * description, which is a lot of tokens for a question that had one answer —
    * and a general description regularly missed the one detail that was asked
-   * about. With it, the answer comes back first and the description second.
+   * about. With it, only the answer comes back.
    */
   question?: string;
   signal?: AbortSignal;
@@ -61,10 +70,10 @@ export async function describeImages({
         holder: {},
         images: usable,
         prompt: question
-          ? `The assistant asked specifically: "${question}". Answer that FIRST, directly and completely, then give the description.`
+          ? `The assistant asks: "${question}"`
           : 'Describe the image(s).',
         source: 'vision',
-        system: DESCRIBE_INSTRUCTION,
+        system: question ? ANSWER_INSTRUCTION : DESCRIBE_INSTRUCTION,
         tools: {},
       });
       const text = (await result.text).trim();

@@ -45,7 +45,7 @@ export function viewImageTool({
 }) {
   return tool({
     description:
-      'Look at an image file in your sandbox so YOU can actually SEE it (a screenshot you took, a downloaded/generated image, an attachment on disk). readFile only gives you the raw bytes as text. Use THIS to view the picture. Supported: png, jpg, webp, gif. Pass `question` to ask something specific about it ("what does the error say?", "transcribe the text", "which cores are listed?"): you get a direct answer as well as the description, and it is worth asking whenever you need a detail rather than a general impression; you can call this again with a different question. NOTE: this is for YOUR eyes only: it does NOT send or show the image to anyone in Slack. When the user asks you to SEND/SHOW/SHARE a picture, use uploadFile, not this.',
+      'Look at an image file in your sandbox so YOU can actually SEE it (a screenshot you took, a downloaded/generated image, an attachment on disk). readFile only gives you the raw bytes as text. Use THIS to view the picture. Supported: png, jpg, webp, gif. Pass `question` to ask something specific about it ("what does the error say?", "transcribe the text", "which cores are listed?"): you get ONLY the answer, which is much faster than a full description, so ask whenever you need a detail rather than a general impression. Checking candidates against something (is this the meme with that caption?) is a yes/no question, e.g. "Does the top text say X? Answer yes or no, then quote the top text.", with the candidates checked in parallel. Leave `question` out for a full description. NOTE: this is for YOUR eyes only: it does NOT send or show the image to anyone in Slack. When the user asks you to SEND/SHOW/SHARE a picture, use uploadFile, not this.',
     inputSchema: z.object({
       path: z.string().describe('Path to the image file in the sandbox.'),
       question: z
@@ -53,7 +53,7 @@ export function viewImageTool({
         .max(500)
         .optional()
         .describe(
-          'A specific question about the image, answered directly before the description.'
+          'A specific question about the image; only its answer comes back.'
         ),
     }),
     execute: async ({ path, question }) => {
