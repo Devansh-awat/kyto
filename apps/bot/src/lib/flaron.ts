@@ -129,3 +129,82 @@ export async function searchFlaronChannels(
     ({ id, name }) => ({ id, name })
   );
 }
+
+const userSchema = z.looseObject({
+  data: z
+    .looseObject({
+      fraud: z.string().nullish(),
+      idv_status: z.string().nullish(),
+      nda: z
+        .looseObject({
+          nda_version: z.string().nullish(),
+          status: z.string().nullish(),
+        })
+        .nullish(),
+      user: z
+        .looseObject({
+          deleted: z.boolean().optional(),
+          is_admin: z.boolean().optional(),
+          is_owner: z.boolean().optional(),
+          is_primary_owner: z.boolean().optional(),
+          is_restricted: z.boolean().optional(),
+          is_ultra_restricted: z.boolean().optional(),
+          name: z.string().optional(),
+          tz: z.string().nullish(),
+          tz_label: z.string().nullish(),
+        })
+        .optional(),
+    })
+    .optional(),
+});
+
+export interface FlaronUser {
+  deleted?: boolean;
+  /** Flaron's fraud tier, verbatim (e.g. "blue"); its meaning is Flaron's. */
+  fraud?: string;
+  /** Hack Club Auth identity verification, e.g. `verified_eligible`. */
+  idvStatus?: string;
+  /** Workspace admin or owner. */
+  isAdmin?: boolean;
+  /** A single- or multi-channel guest. */
+  isGuest?: boolean;
+  nda?: { status?: string; version?: string };
+  timezone?: string;
+  userName?: string;
+}
+
+/**
+ * Flaron's view of a user (owner's ask 2026-10-17: everything it gives, fraud
+ * tier included); undefined when Flaron can't be reached or doesn't know them.
+ */
+export async function lookupFlaronUser(
+  id: string
+): Promise<FlaronUser | undefined> {
+  const parsed = userSchema.safeParse(
+    await getJson(`/user/${encodeURIComponent(id)}`).catch(() => null)
+  );
+  const data = parsed.success ? parsed.data.data : undefined;
+  if (!data) {
+    return;
+  }
+  const user = data.user;
+  return {
+    deleted: user?.deleted,
+    fraud: data.fraud ?? undefined,
+    idvStatus: data.idv_status ?? undefined,
+    isAdmin: user
+      ? Boolean(user.is_admin || user.is_owner || user.is_primary_owner)
+      : undefined,
+    isGuest: user
+      ? Boolean(user.is_restricted || user.is_ultra_restricted)
+      : undefined,
+    nda: data.nda
+      ? {
+          status: data.nda.status ?? undefined,
+          version: data.nda.nda_version ?? undefined,
+        }
+      : undefined,
+    timezone: user?.tz_label ?? user?.tz ?? undefined,
+    userName: user?.name,
+  };
+}
