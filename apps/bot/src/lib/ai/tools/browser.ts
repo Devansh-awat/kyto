@@ -21,6 +21,12 @@ const MAX_OUTPUT_CHARS = 8000;
 const COMMAND_TIMEOUT_SECONDS = 90;
 // What coreutils `timeout` exits with when it had to kill the command.
 const TIMED_OUT_EXIT_CODE = 124;
+// A Slack workspace page (the web client, a message archive link). The sandbox
+// browser has no Slack session, so it can only reach an error page — kyto once
+// opened one for a captcha it was asked to click, before the owner pointed it
+// at slackBrowser (#101). Slack's public pages (help, api docs) stay open.
+const SLACK_WORKSPACE_URL =
+  /\b(?:[\w-]+\.)?slack\.com\/(?:client|archives)\b|\bapp\.slack\.com\b/i;
 
 function truncate(text: string): string {
   return text.length > MAX_OUTPUT_CHARS
@@ -100,6 +106,13 @@ export function browserTool({
         ),
     }),
     execute: async ({ command }, { abortSignal }) => {
+      if (SLACK_WORKSPACE_URL.test(command)) {
+        return {
+          error:
+            "Not run: this browser isn't signed in to Slack, so a workspace page only shows a sign-in or error page. Read Slack with the Slack tools (readConversationHistory, searchSlack, getPermalink…). Clicking things in Slack as kyto is slackBrowser, which only the owner can ask for.",
+          success: false,
+        };
+      }
       const context = getSandboxContext();
       if (!context) {
         return {
