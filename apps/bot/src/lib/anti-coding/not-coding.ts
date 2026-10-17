@@ -91,8 +91,14 @@ const GIT_BRANCH_LISTS = new Set([
 // `--upload-pack`/`-u`, a hooks `--template`, `-c`/`--config`.
 const GIT_FETCH = new Set(['clone', 'fetch']);
 const GIT_FETCH_RUNS = /^(?:--upload-pack|-u|--template|-c|--config)(?:=|$)/;
-const GIT_PUBLISH = new Set(['push']);
-const GIT_PUSH_RUNS = /^--(?:receive-pack|exec)(?:=|$)/;
+// Committing and pushing a finished document (a skill file, notes) is not
+// coding either (owner's call 2026-10-15): a docs-only `git init … gh repo
+// create` was refused at 0.90 and handed to OpenCode for 144s (#108). A commit
+// can't launder code: whatever it commits was judged when it was written.
+const GIT_PUBLISH = new Set(['add', 'commit', 'init', 'push']);
+// `--receive-pack`/`--exec` name a program to RUN for a local remote; an init
+// `--template` copies hooks in.
+const GIT_PUBLISH_RUNS = /^--(?:receive-pack|exec|template)(?:=|$)/;
 // `git diff --output=f` and `git log -o f` write a file.
 const GIT_WRITES = /^(?:--output|-o)/;
 
@@ -110,7 +116,7 @@ const GH_READ: Record<string, Set<string>> = {
 const GH_PUBLISH: Record<string, Set<string>> = {
   issue: new Set(['comment', 'create']),
   pr: new Set(['comment', 'create']),
-  repo: new Set(['fork']),
+  repo: new Set(['create', 'fork']),
 };
 // What turns a publishing verb into an edit, a delete or a browser.
 const GH_PUBLISH_UNSAFE_FLAGS = new Set([
@@ -142,7 +148,7 @@ const commandInput = z.object({ command: z.string() });
 type Token = { op: '&&' | '|' | '2>&1' } | { word: string };
 
 // A shell line as words and the three operators a model wraps a one-liner in:
-// `cd dir && …`, `… && …`, and `2>&1 | tail -5`. Null for anything else outside
+// `cd dir && …`, `… && …` (or `;`), and `2>&1 | tail -5`. Null for anything else outside
 // quotes. Quoted text is only text — a PR body with "(" in it is still a PR —
 // except what double quotes still expand.
 function tokenize(command: string): Token[] | null {
@@ -164,6 +170,12 @@ function tokenize(command: string): Token[] | null {
       endWord();
       tokens.push({ op: '&&' });
       i += 2;
+    } else if (char === ';') {
+      // Each side still has to pass on its own, exactly as with `&&` (#108's
+      // refused line was `git init; gh repo create …`).
+      endWord();
+      tokens.push({ op: '&&' });
+      i += 1;
     } else if (char === '|' && command[i + 1] !== '|') {
       endWord();
       tokens.push({ op: '|' });
@@ -292,8 +304,7 @@ function isNotCodingArgv([head, ...args]: string[]): boolean {
       );
     }
     if (sub !== undefined && GIT_PUBLISH.has(sub)) {
-      // `--receive-pack`/`--exec` name a program to RUN for a local remote.
-      return !rest.some((arg) => GIT_PUSH_RUNS.test(arg));
+      return !rest.some((arg) => GIT_PUBLISH_RUNS.test(arg));
     }
     return (
       sub !== undefined &&
