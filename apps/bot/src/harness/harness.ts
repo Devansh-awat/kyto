@@ -57,6 +57,11 @@ const STREAM_EXPIRED = 'message_not_in_streaming_state';
 // Slack's answer when a streamed message can hold no more: a long tool-only run
 // piles every card into one message (#93 hit it at ~25 cards).
 const MESSAGE_FULL = 'msg_too_long';
+// Reply text one streamed message is given before the rest goes to a new one.
+// Slack takes ~12k chars of markdown; lib/agent/reply cuts at 10k, but only
+// between releases, so one long run with no newline went out as a single 32k
+// append and failed the turn after its text had started (#106).
+const MESSAGE_TEXT_CHARS = 11_000;
 const SHRUNK_TITLE_CHARS = 200;
 const SHRUNK_BODY_CHARS = 1500;
 
@@ -1036,6 +1041,32 @@ export class SlackHarness {
         options.onNewMessage?.();
       }
     };
+    // Reply text in the current message, against MESSAGE_TEXT_CHARS.
+    let currentTextChars = 0;
+    // Reply text the current streamer holds but Slack has not taken: a failed
+    // flush stays in the buffer of a streamer that is about to be dropped, so
+    // the next one is handed it, or up to a buffer's worth of reply vanishes.
+    let unflushedText = '';
+    const sendText = async (text: string): Promise<void> => {
+      unflushedText += text;
+      await streamer.append({ markdown_text: text });
+      if (unflushedText.length >= STREAM_BUFFER_CHARS) {
+        unflushedText = '';
+      }
+      currentTextChars += text.length;
+      markContent();
+    };
+    const restartStreamer = async (): Promise<void> => {
+      const carried = unflushedText;
+      unflushedText = '';
+      streamer = startStreamer();
+      streamStartedAt = Date.now();
+      currentHasContent = false;
+      currentTextChars = 0;
+      if (carried) {
+        await sendText(carried);
+      }
+    };
     let structuredSupported = true;
     const appendChunk = async (chunk: StreamChunk): Promise<void> => {
       if (!structuredSupported) {
@@ -1045,6 +1076,8 @@ export class SlackHarness {
         await streamer.append({
           chunks: [filterOutboundDeep(sent)] as never,
         });
+        // A chunk flushes the text buffered ahead of it.
+        unflushedText = '';
         markContent();
       };
       // One card too big for even an empty message (a long heredoc as its
@@ -1085,9 +1118,7 @@ export class SlackHarness {
           );
           options.onRotate?.();
           await stopStreamer({ final: false });
-          streamer = startStreamer();
-          streamStartedAt = Date.now();
-          currentHasContent = false;
+          await restartStreamer();
           try {
             await send();
           } catch (retryError) {
@@ -1122,9 +1153,7 @@ export class SlackHarness {
           if (streamer.ts) {
             posted.push(streamer.ts);
           }
-          streamer = startStreamer();
-          streamStartedAt = Date.now();
-          currentHasContent = false;
+          await restartStreamer();
           return;
         }
         structuredSupported = false;
@@ -1143,24 +1172,29 @@ export class SlackHarness {
         return;
       }
       const blocks = final ? await options.finalBlocks?.() : undefined;
-      await streamer
-        .stop(blocks ? { blocks: blocks as never } : undefined)
-        .catch((error: unknown) => {
-          this.logger.warn({ err: error }, '[harness] stream stop failed');
-        });
+      try {
+        await streamer.stop(blocks ? { blocks: blocks as never } : undefined);
+        unflushedText = '';
+      } catch (error) {
+        this.logger.warn({ err: error }, '[harness] stream stop failed');
+        // A full message refuses the stop too, its unsent text riding along:
+        // closed bare instead, or it spins until Slack expires it. The text
+        // stays in unflushedText for the next message.
+        if (streamer.ts) {
+          await this.webClient
+            .apiCall('chat.stopStream', { channel, ts: streamer.ts })
+            .catch(() => undefined);
+        }
+      }
       // After stop: a short message is buffered until then, so before it the
       // stream may not have started and has no ts to take back.
       if (streamer.ts) {
         posted.push(streamer.ts);
       }
     };
-    // Rotate to a fresh streamer before Slack expires the current one (see
-    // STREAM_ROTATE_MS). Finalizes the current card and opens a new one that
-    // subsequent chunks append to.
-    const rotateIfStale = async (): Promise<void> => {
-      if (Date.now() - streamStartedAt < STREAM_ROTATE_MS) {
-        return;
-      }
+    // Finalizes the current message and opens a new one that subsequent chunks
+    // append to.
+    const rotate = async (): Promise<void> => {
       // Settle the outgoing message BEFORE stopping it: this is the caller's
       // only chance to finish cards it opened here, since the next append goes
       // to a message where those ids do not exist.
@@ -1168,9 +1202,71 @@ export class SlackHarness {
         await appendChunk(chunk);
       }
       await stopStreamer({ final: false });
-      streamer = startStreamer();
-      streamStartedAt = Date.now();
-      currentHasContent = false;
+      await restartStreamer();
+    };
+    // Rotate to a fresh streamer before Slack expires the current one (see
+    // STREAM_ROTATE_MS).
+    const rotateIfStale = async (): Promise<void> => {
+      if (Date.now() - streamStartedAt < STREAM_ROTATE_MS) {
+        return;
+      }
+      await rotate();
+    };
+    // An expired or full message must not take the rest of the answer down
+    // with it: the text goes again at the top of a new one.
+    const sendReplyText = async (text: string): Promise<void> => {
+      try {
+        await sendText(text);
+      } catch (error) {
+        const full = String(error).includes(MESSAGE_FULL) && currentHasContent;
+        if (!(full || String(error).includes(STREAM_EXPIRED))) {
+          throw error;
+        }
+        this.logger.warn(
+          { err: error },
+          full
+            ? '[harness] streamed message full; text continues in a new message'
+            : '[harness] stream expired; text continues in a new message'
+        );
+        // What onRotate would settle the old message with can't go there.
+        options.onRotate?.();
+        if (full) {
+          await stopStreamer({ final: false });
+        } else if (streamer.ts) {
+          posted.push(streamer.ts);
+        }
+        // `text` is in unflushedText, so the new message opens with it.
+        await restartStreamer();
+      }
+    };
+    // Reply text, split so no message passes MESSAGE_TEXT_CHARS: at a line
+    // break in reach, else a space, else wherever it has to.
+    const appendText = async (text: string): Promise<void> => {
+      let rest = text;
+      while (rest) {
+        const room = Math.max(0, MESSAGE_TEXT_CHARS - currentTextChars);
+        if (rest.length <= room) {
+          await sendReplyText(rest);
+          return;
+        }
+        const head = rest.slice(0, room);
+        const atLine = head.lastIndexOf('\n') + 1;
+        const atWord = head.lastIndexOf(' ') + 1;
+        let cut = room;
+        if (atLine > room / 2) {
+          cut = atLine;
+        } else if (atWord > room / 2) {
+          cut = atWord;
+        } else if (currentTextChars > 0) {
+          // Nothing worth cutting at in what's left: this message just ends.
+          cut = 0;
+        }
+        if (cut > 0) {
+          await sendReplyText(rest.slice(0, cut));
+          rest = rest.slice(cut);
+        }
+        await rotate();
+      }
     };
     const iterator = chunks[Symbol.asyncIterator]();
     // Unset while a chunk is being handled, so the producer is never run ahead
@@ -1213,37 +1309,14 @@ export class SlackHarness {
               if ('block' in part) {
                 await appendChunk({ blocks: [part.block], type: 'blocks' });
               } else if (part.markdown) {
-                await streamer.append({
-                  markdown_text: filterOutbound(`${part.markdown}\n`),
-                });
+                await appendText(filterOutbound(`${part.markdown}\n`));
               }
             }
             markContent();
             continue;
           }
           if (text) {
-            const markdownText = filterOutbound(text);
-            try {
-              await streamer.append({ markdown_text: markdownText });
-            } catch (error) {
-              // Reply text now streams too: an expired message must not take
-              // the rest of the answer down with it.
-              if (!String(error).includes(STREAM_EXPIRED)) {
-                throw error;
-              }
-              this.logger.warn(
-                { err: error },
-                '[harness] stream expired; text continues in a new message'
-              );
-              options.onRotate?.();
-              if (streamer.ts) {
-                posted.push(streamer.ts);
-              }
-              streamer = startStreamer();
-              streamStartedAt = Date.now();
-              await streamer.append({ markdown_text: markdownText });
-            }
-            markContent();
+            await appendText(filterOutbound(text));
           }
           continue;
         }

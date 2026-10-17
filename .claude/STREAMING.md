@@ -25,6 +25,14 @@ block landed in a message of its own (#78).
   broadcast (a `<!here>` only pings from a posted `mrkdwn` section, so that text
   is posted on its own). A cut inside a code block closes it (`endMessage`) and
   reopens it at the top of the next message.
+- **The harness backstops that cut** (#106): `streamedFull` is only checked
+  between releases, so one long run with no newline went out as a single 32k
+  append and Slack's `msg_too_long` failed the turn. `stream()` now never gives
+  a message more than `MESSAGE_TEXT_CHARS` (11k) of text — split at a newline,
+  else a space — and a `msg_too_long` or expiry on text continues in a new
+  message. Text the SDK buffered but Slack never took (`unflushedText`) is
+  carried to the next message, not dropped with the dead streamer. This cut
+  does not reopen code fences — it should almost never fire.
 - **Fences are normalized on the way out and in** (`createFenceNormalizer`,
   `harness/markdown.ts`): text after an opening fence that isn't a known
   language goes on its own line, and a closing fence glued to a line gets its own.
