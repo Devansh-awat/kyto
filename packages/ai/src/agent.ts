@@ -379,7 +379,19 @@ export function streamAttempt({
   const carriedKeepFrom =
     lastCarriedCall === -1 ? promptIndex : promptIndex + 1 + lastCarriedCall;
   const meter = createCallMeter();
-  const billSteps = (steps: Parameters<typeof reportSpend>[0]['steps']) =>
+  // Set once the call is billed: a call that dies before finishing any step
+  // gets neither onFinish nor (unless stopped) onAbort, only a rejected
+  // `steps`, and is billed from there instead of vanishing (`!effort`).
+  let billed = false;
+  const billSteps = (
+    steps: Parameters<typeof reportSpend>[0]['steps'],
+    ended: 'aborted' | 'error'
+  ) => {
+    if (billed) {
+      return;
+    }
+    billed = true;
+    meter.close(ended);
     reportSpend({
       effort: holder.reasoningEffort ?? reasoningEffort,
       model: attempt.model,
@@ -390,6 +402,7 @@ export function streamAttempt({
       stats: meter.summary(),
       steps,
     });
+  };
   const priceStep = LONG_CONTEXT_PRICE_STEP[attempt.model];
   // How many messages the previous step's request carried: what follows them
   // is the last step's own output, which compaction keeps verbatim.
@@ -412,12 +425,23 @@ export function streamAttempt({
     activeToolNames: string[] | undefined;
     messages: ModelMessage[];
   }): Promise<string | undefined> => {
+    const summaryMeter = createCallMeter();
+    const billSummary = (steps: Parameters<typeof reportSpend>[0]['steps']) =>
+      reportSpend({
+        effort: holder.reasoningEffort ?? reasoningEffort,
+        model: attempt.model,
+        provider: attempt.byokProvider
+          ? `byok:${attempt.byokProvider}`
+          : attempt.provider,
+        source: `${source}-compaction`,
+        stats: summaryMeter.summary(),
+        steps,
+      });
     try {
       const inert: ToolSet = {};
       for (const [name, definition] of Object.entries(tools)) {
         inert[name] = { ...definition, execute: undefined };
       }
-      const summaryMeter = createCallMeter();
       const summary = await generateText({
         abortSignal,
         onLanguageModelCallEnd: (event) => summaryMeter.onEnd(event),
@@ -430,22 +454,16 @@ export function streamAttempt({
         system: systemInput,
         tools: inert,
       });
-      reportSpend({
-        effort: holder.reasoningEffort ?? reasoningEffort,
-        model: attempt.model,
-        provider: attempt.byokProvider
-          ? `byok:${attempt.byokProvider}`
-          : attempt.provider,
-        source: `${source}-compaction`,
-        stats: summaryMeter.summary(),
-        steps: summary.steps,
-      });
+      billSummary(summary.steps);
       return summary.text.trim() || undefined;
-    } catch {
+    } catch (error) {
+      summaryMeter.onError(error);
+      summaryMeter.close(abortSignal?.aborted ? 'aborted' : 'error');
+      billSummary([]);
       return;
     }
   };
-  return streamText({
+  const result = streamText({
     ...promptInput,
     abortSignal,
     // Cap output on every metered path: HackClub (pessimistic spend projection)
@@ -486,7 +504,15 @@ export function streamAttempt({
           },
         }
       : {}),
-    ...(onError ? { onError: ({ error }) => onError(error) } : {}),
+    onError: ({ error }) => {
+      meter.onError(error);
+      if (onError) {
+        onError(error);
+      } else {
+        // The SDK's own default, kept for callers that pass no handler.
+        console.error(error);
+      }
+    },
     ...(activeTools ||
     getFreshImages ||
     requireToolFirst ||
@@ -634,9 +660,10 @@ export function streamAttempt({
     ],
     // An aborted attempt (a stop, the watchdog, an interrupt) was paid for
     // too, step by step.
-    onAbort: ({ steps }) => billSteps(steps),
+    onAbort: ({ steps }) => billSteps(steps, 'aborted'),
     onChunk: ({ chunk }) => meter.onChunk(chunk.type),
-    onFinish: ({ steps }) => billSteps(steps),
+    // A request still open at the finish died after earlier steps finished.
+    onFinish: ({ steps }) => billSteps(steps, 'error'),
     onLanguageModelCallEnd: (event) => meter.onEnd(event),
     onLanguageModelCallStart: () => meter.onStart(),
     onStepEnd: ({ usage }) => {
@@ -652,6 +679,11 @@ export function streamAttempt({
     system: systemInput,
     tools,
   });
+  // `steps` rejects only when no step finished: the call's one row then.
+  result.steps.then(undefined, () =>
+    billSteps([], abortSignal?.aborted ? 'aborted' : 'error')
+  );
+  return result;
 }
 
 /**

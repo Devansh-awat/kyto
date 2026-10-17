@@ -2,6 +2,7 @@ import { LUNA_MODEL, PRIMARY_MODEL } from '@repo/ai';
 import { type SpendRecord, setSpendSink } from '@repo/ai/spend';
 import {
   callStats,
+  type RequestMedians,
   recordModelSpend,
   type SpendGroup,
   summarizeModelSpend,
@@ -244,6 +245,7 @@ const EFFORT_MODELS = [PRIMARY_MODEL, LUNA_MODEL];
 const EFFORTS = ['low', 'medium', 'high'];
 const MS_PER_SECOND = 1000;
 const PERCENT = 100;
+const TOKENS_PER_K = 1000;
 
 /**
  * `!effort [days] [source]` (owner only, 2026-10-17): haiku and luna at each
@@ -272,16 +274,25 @@ export async function describeEffortStats(args: string): Promise<string> {
     value === null ? '?' : value.toFixed(digits);
   const s = (ms: number | null) =>
     ms === null ? '?' : `${(ms / MS_PER_SECOND).toFixed(1)}s`;
+  const k = (tokens: number | null) =>
+    tokens === null ? '?' : `${(tokens / TOKENS_PER_K).toFixed(1)}k`;
+  const request = (label: string, r: RequestMedians) =>
+    `  ${label}: input ${k(r.inputTokens)} tokens (${k(r.uncachedTokens)} not cached) · first token ${s(r.ttftMs)} · before answering ${s(r.thinkMs)} · took ${s(r.ms)}`;
   const lines = cells.map((cell) => {
     const call = cell.perCall;
     const step = cell.perThinkingStep;
+    const failed = cell.erroredCalls + cell.abortedCalls;
     return [
       `*${cell.model.split('/').at(-1)} · ${cell.effort}*: ${cell.calls} calls, ${cell.steps} steps (${cell.sources.map((entry) => `${entry.source} ${entry.calls}`).join(', ')})`,
+      `  failures: ${cell.erroredCalls} errored, ${cell.abortedCalls} stopped (${f(cell.calls > 0 ? (failed / cell.calls) * PERCENT : null)}% of calls) · requests ended by ${cell.finishReasons.map((entry) => `${entry.reason} ${entry.count}`).join(', ')}${cell.errors.length > 0 ? ` · errors: ${cell.errors.map((entry) => `${entry.error} ×${entry.count}`).join(', ')}` : ''}`,
       `  cost: $${f(cell.costPerCall, 4)}/call, $${f(cell.costTotal, 3)} total · ${f(cell.cacheReadShare === null ? null : cell.cacheReadShare * PERCENT)}% of input cached`,
-      `  time: call median ${s(cell.medianCallMs)} (p90 ${s(cell.p90CallMs)}) · ${f(cell.stepsPerCall, 1)} steps/call · step median ${s(cell.medianStepMs)} (p90 ${s(cell.p90StepMs)}) · first token ${s(cell.medianTtftMs)} · before answering ${s(cell.medianThinkMs)}`,
-      `  thinking: ${cell.thinkingSteps} of ${cell.steps} steps · ${f(cell.reasoningShare === null ? null : cell.reasoningShare * PERCENT)}% of output · ${f(call.reasoningTokens)} tokens per call, ${f(step.reasoningTokens)} per thinking step`,
+      `  time (finished only): call median ${s(cell.medianCallMs)} (p90 ${s(cell.p90CallMs)}) · ${f(cell.stepsPerCall, 1)} steps/call · step median ${s(cell.medianStepMs)} (p90 ${s(cell.p90StepMs)})`,
+      request('first request', cell.firstRequest),
+      request('later requests', cell.laterRequests),
+      `  input processing: ${s(cell.prefillMsPer1k)} to first token per 1k uncached tokens (${cell.prefillSteps} step${cell.prefillSteps === 1 ? '' : 's'} with no thinking and ≥1k new input)`,
+      `  thinking: ${cell.thinkingSteps} of ${cell.steps} steps · ${f(cell.reasoningShare === null ? null : cell.reasoningShare * PERCENT)}% of output · ${f(call.reasoningTokens)} tokens per finished call, ${f(step.reasoningTokens)} per thinking step`,
       `  thinking speed: ${f(cell.thinkTokensPerSecond)} tokens/s before the answer (prefill included)`,
-      `  answer: per call ${f(call.textTokens)} tokens / ${f(call.textChars)} chars / ${f(call.textWords)} words of text, tool calls ${f(call.toolInputChars)} chars / ${f(call.toolInputWords)} words · ${f(cell.answerCharsPerToken, 2)} chars and ${f(cell.answerWordsPerToken, 2)} words per answer token`,
+      `  answer: per finished call ${f(call.textTokens)} tokens / ${f(call.textChars)} chars / ${f(call.textWords)} words of text, tool calls ${f(call.toolInputChars)} chars / ${f(call.toolInputWords)} words · ${f(cell.answerCharsPerToken, 2)} chars and ${f(cell.answerWordsPerToken, 2)} words per answer token`,
       `  answer speed: ${f(cell.answerTokensPerSecond)} tokens/s, ${f(cell.answerCharsPerSecond)} chars/s, ${f(cell.answerWordsPerSecond, 1)} words/s`,
     ].join('\n');
   });

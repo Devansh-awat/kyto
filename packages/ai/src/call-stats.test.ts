@@ -30,14 +30,22 @@ describe('createCallMeter', () => {
         { text: 'I should look this up.', type: 'reasoning' },
         { input: { query: 'bun test' }, type: 'tool-call' },
       ],
+      finishReason: 'tool-calls',
       usage: {
+        inputTokenDetails: { cacheReadTokens: 9000 },
+        inputTokens: 12_000,
         outputTokenDetails: { reasoningTokens: 7, textTokens: 0 },
         outputTokens: 19,
+        raw: { prompt_tokens_details: { cache_write_tokens: 2500 } },
       },
     });
     expect(meter.summary()).toEqual({
       steps: [
         {
+          cacheReadTokens: 9000,
+          cacheWriteTokens: 2500,
+          finishReason: 'tool-calls',
+          inputTokens: 12_000,
           ms: 2000,
           outputTokens: 19,
           reasoningTokens: 7,
@@ -87,5 +95,62 @@ describe('createCallMeter', () => {
     expect(step?.ms).toBe(900);
     expect(step?.thinkMs).toBeUndefined();
     expect(step?.ttftMs).toBeUndefined();
+  });
+
+  test('a request that dies is a failed step, labelled by name and status only', () => {
+    const time = clock();
+    const meter = createCallMeter({ now: time.now });
+    meter.onStart();
+    time.set(300);
+    meter.onChunk('reasoning-delta');
+    time.set(5000);
+    meter.onError(
+      Object.assign(new Error('prompt text the error quoted'), {
+        name: 'AI_APICallError',
+        statusCode: 502,
+      })
+    );
+    meter.close('error');
+    expect(meter.summary()?.steps).toEqual([
+      {
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        error: 'AI_APICallError 502',
+        finishReason: 'error',
+        inputTokens: 0,
+        ms: 5000,
+        outputTokens: 0,
+        reasoningTokens: 0,
+        textChars: 0,
+        textTokens: 0,
+        textWords: 0,
+        toolInputChars: 0,
+        toolInputWords: 0,
+        ttftMs: 300,
+      },
+    ]);
+  });
+
+  test('a stop mid-request is aborted; a call that ended cleanly adds nothing', () => {
+    const time = clock();
+    const meter = createCallMeter({ now: time.now });
+    meter.onStart();
+    time.set(800);
+    meter.onEnd({
+      content: [{ text: 'hi', type: 'text' }],
+      finishReason: 'length',
+      usage: { outputTokens: 1 },
+    });
+    meter.close('error');
+    meter.onStart();
+    time.set(1500);
+    meter.close('aborted');
+    const steps = meter.summary()?.steps ?? [];
+    expect(steps.map((step) => step.finishReason)).toEqual([
+      'length',
+      'aborted',
+    ]);
+    expect(steps[1]?.ms).toBe(700);
+    expect(steps[1]?.error).toBeUndefined();
   });
 });

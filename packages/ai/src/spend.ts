@@ -52,7 +52,9 @@ export function reportSpend({
     };
   }[];
 }): void {
-  if (!sink || steps.length === 0) {
+  // A call that failed before finishing a step still has its failed request
+  // in `stats`, and is recorded so failures count (`!effort`).
+  if (!sink || (steps.length === 0 && !stats?.steps.length)) {
     return;
   }
   let inputTokens = 0;
