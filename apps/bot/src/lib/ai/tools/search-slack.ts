@@ -388,8 +388,11 @@ export function searchSlackTool({ message }: { message: Message }) {
       //    searches public channels only unless `channel_types` says
       //    otherwise, and kyto never said, which is why DM content came back
       //    empty (PR #32). Gone ~2 minutes into the turn.
-      // It has no time sort, so an ordered search goes straight to step 3.
-      if (actionToken && !prefix && !order) {
+      // It has no time sort, so an ordered search tries step 3 first and comes
+      // back here only when that finds nothing: gpt-6-luna sends `order` on
+      // every call, and skipping this step outright left a private channel the
+      // asker is in (and kyto's account isn't) unsearchable.
+      const assistantSearch = async () => {
         const parsedResponse = slackSearchResponseSchema.safeParse(
           await slack.webClient
             .apiCall('assistant.search.context', {
@@ -433,8 +436,20 @@ export function searchSlackTool({ message }: { message: Message }) {
         }
         logger.warn(
           { error: response?.ok ? 'no results' : response?.error, query },
-          "[searchSlack] assistant search gave nothing; trying kyto's account"
+          '[searchSlack] assistant search gave nothing'
         );
+      };
+      // An untagged real cursor was issued by the assistant search, ordered
+      // or not, so its next page comes from there too.
+      if (
+        actionToken &&
+        !prefix &&
+        (!order || pageCursor || !slack.userAccountId)
+      ) {
+        const result = await assistantSearch();
+        if (result) {
+          return result;
+        }
       }
 
       // 3. kyto's user account. It sees every public channel and the private
@@ -456,6 +471,17 @@ export function searchSlackTool({ message }: { message: Message }) {
             tag: CURSOR_PREFIX.account,
           });
           if (result.ok) {
+            if (
+              result.matches.length === 0 &&
+              order &&
+              actionToken &&
+              !prefix
+            ) {
+              const fallback = await assistantSearch();
+              if (fallback) {
+                return fallback;
+              }
+            }
             return found({
               messages: result.matches,
               nextCursor: result.next,
