@@ -2,7 +2,6 @@ import { LUNA_MODEL, PRIMARY_MODEL } from '@repo/ai';
 import { type SpendRecord, setSpendSink } from '@repo/ai/spend';
 import {
   callStats,
-  type RequestMedians,
   recordModelSpend,
   type SpendGroup,
   summarizeModelSpend,
@@ -245,16 +244,16 @@ const EFFORT_MODELS = [PRIMARY_MODEL, LUNA_MODEL];
 const EFFORTS = ['low', 'medium', 'high'];
 const MS_PER_SECOND = 1000;
 const PERCENT = 100;
-const TOKENS_PER_K = 1000;
 
 /**
  * `!effort [days] [source]` (owner only, 2026-10-17): haiku and luna at each
  * effort, over every model call (turns, subagents, Kevinton, reminders, the
- * digest, …; `source` keeps one), from the per-step stats each call records.
- * The answer in tokens, chars and words side by side (the two tokenizers
- * differ); thinking in tokens and time only, since its text is a summary.
+ * digest, …; `source` keeps one), as one six-row table. Haiku's cost is what
+ * Hack Club bills (30% off, it is pinned to Anthropic), luna's is list price.
  */
-export async function describeEffortStats(args: string): Promise<string> {
+export async function describeEffortStats(
+  args: string
+): Promise<{ markdown: string; text: string }> {
   const days = Math.min(
     Math.max(Number(args.match(/\d+/)?.[0]) || DEFAULT_EFFORT_DAYS, 1),
     MAX_SPEND_DAYS
@@ -268,33 +267,37 @@ export async function describeEffortStats(args: string): Promise<string> {
   });
   const scope = `last ${days} day${days === 1 ? '' : 's'}${source ? `, ${source} only` : ', every source'}`;
   if (cells.length === 0) {
-    return `No measured haiku or luna calls in the ${scope} (calls are measured from 2026-10-17).`;
+    const text = `No measured haiku or luna calls in the ${scope} (calls are measured from 2026-10-17).`;
+    return { markdown: text, text };
   }
   const f = (value: number | null, digits = 0) =>
     value === null ? '?' : value.toFixed(digits);
   const s = (ms: number | null) =>
     ms === null ? '?' : `${(ms / MS_PER_SECOND).toFixed(1)}s`;
-  const k = (tokens: number | null) =>
-    tokens === null ? '?' : `${(tokens / TOKENS_PER_K).toFixed(1)}k`;
-  const request = (label: string, r: RequestMedians) =>
-    `  ${label}: input ${k(r.inputTokens)} tokens (${k(r.uncachedTokens)} not cached) · first token ${s(r.ttftMs)} · before answering ${s(r.thinkMs)} · took ${s(r.ms)}`;
-  const lines = cells.map((cell) => {
-    const call = cell.perCall;
-    const step = cell.perThinkingStep;
-    const failed = cell.erroredCalls + cell.abortedCalls;
-    return [
-      `*${cell.model.split('/').at(-1)} · ${cell.effort}*: ${cell.calls} calls, ${cell.steps} steps (${cell.sources.map((entry) => `${entry.source} ${entry.calls}`).join(', ')})`,
-      `  failures: ${cell.erroredCalls} errored, ${cell.abortedCalls} stopped (${f(cell.calls > 0 ? (failed / cell.calls) * PERCENT : null)}% of calls) · requests ended by ${cell.finishReasons.map((entry) => `${entry.reason} ${entry.count}`).join(', ')}${cell.errors.length > 0 ? ` · errors: ${cell.errors.map((entry) => `${entry.error} ×${entry.count}`).join(', ')}` : ''}`,
-      `  cost: $${f(cell.costPerCall, 4)}/call, $${f(cell.costTotal, 3)} total · ${f(cell.cacheReadShare === null ? null : cell.cacheReadShare * PERCENT)}% of input cached`,
-      `  time (finished only): call median ${s(cell.medianCallMs)} (p90 ${s(cell.p90CallMs)}) · ${f(cell.stepsPerCall, 1)} steps/call · step median ${s(cell.medianStepMs)} (p90 ${s(cell.p90StepMs)})`,
-      request('first request', cell.firstRequest),
-      request('later requests', cell.laterRequests),
-      `  input processing: ${s(cell.prefillMsPer1k)} to first token per 1k uncached tokens (${cell.prefillSteps} step${cell.prefillSteps === 1 ? '' : 's'} with no thinking and ≥1k new input)`,
-      `  thinking: ${cell.thinkingSteps} of ${cell.steps} steps · ${f(cell.reasoningShare === null ? null : cell.reasoningShare * PERCENT)}% of output · ${f(call.reasoningTokens)} tokens per finished call, ${f(step.reasoningTokens)} per thinking step`,
-      `  thinking speed: ${f(cell.thinkTokensPerSecond)} tokens/s before the answer (prefill included)`,
-      `  answer: per finished call ${f(call.textTokens)} tokens / ${f(call.textChars)} chars / ${f(call.textWords)} words of text, tool calls ${f(call.toolInputChars)} chars / ${f(call.toolInputWords)} words · ${f(cell.answerCharsPerToken, 2)} chars and ${f(cell.answerWordsPerToken, 2)} words per answer token`,
-      `  answer speed: ${f(cell.answerTokensPerSecond)} tokens/s, ${f(cell.answerCharsPerSecond)} chars/s, ${f(cell.answerWordsPerSecond, 1)} words/s`,
-    ].join('\n');
-  });
-  return `*Haiku vs luna by effort, ${scope}* (list prices; haiku costs 30% less on Hack Club)\n${lines.join('\n')}`;
+  const rows = EFFORT_MODELS.flatMap((model) =>
+    EFFORTS.map((effort) => {
+      const name = `${model.split('/').at(-1)} · ${effort}`;
+      const cell = cells.find(
+        (entry) => entry.model === model && entry.effort === effort
+      );
+      if (!cell) {
+        return `| ${name} | 0 | – | – | – | – | – | – | – |`;
+      }
+      const discount =
+        model === PRIMARY_MODEL ? 1 - HACKCLUB_CLAUDE_DISCOUNT : 1;
+      const failed = cell.erroredCalls + cell.abortedCalls;
+      return `| ${name} | ${cell.calls}${failed > 0 ? ` (${failed} failed)` : ''} | $${f(cell.costPerCall === null ? null : cell.costPerCall * discount, 4)} | ${f(cell.cacheReadShare === null ? null : cell.cacheReadShare * PERCENT)}% | ${s(cell.medianCallMs)} (p90 ${s(cell.p90CallMs)}) | ${f(cell.stepsPerCall, 1)} | ${f(cell.perCall.reasoningTokens)} | ${f(cell.perCall.textTokens)} | ${f(cell.answerTokensPerSecond)} |`;
+    })
+  );
+  const title = `*Haiku vs luna by effort, ${scope}* (Hack Club prices, haiku's 30% off applied)`;
+  return {
+    markdown: [
+      title,
+      '',
+      '| model · effort | calls | $/call | cached | call median | steps/call | thinking tok/call | answer tok/call | answer tok/s |',
+      '|---|---|---|---|---|---|---|---|---|',
+      ...rows,
+    ].join('\n'),
+    text: title,
+  };
 }

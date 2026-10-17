@@ -120,14 +120,30 @@ export async function handleCommand({
     return true;
   }
   if (command.type === 'effort') {
-    const text =
-      env.OWNER_USER_ID && message.author.userId === env.OWNER_USER_ID
-        ? await describeEffortStats(command.args).catch(
-            (error: unknown) =>
-              `couldn't read the effort stats: ${errorMessage(error)}`
-          )
-        : '`!effort` is for the bot owner.';
-    await tell({ message, text, thread, what: 'effort stats' });
+    if (!(env.OWNER_USER_ID && message.author.userId === env.OWNER_USER_ID)) {
+      await tell({
+        message,
+        text: '`!effort` is for the bot owner.',
+        thread,
+        what: 'effort stats',
+      });
+      return true;
+    }
+    // A table, so it goes out as a markdown block (plain ephemeral text is
+    // mrkdwn, which draws no tables).
+    const stats = await describeEffortStats(command.args).catch(
+      (error: unknown) => {
+        const text = `couldn't read the effort stats: ${errorMessage(error)}`;
+        return { markdown: text, text };
+      }
+    );
+    await tell({
+      blocks: [{ text: stats.markdown, type: 'markdown' }],
+      message,
+      text: stats.text,
+      thread,
+      what: 'effort stats',
+    });
     return true;
   }
   if (command.type === 'spend') {
@@ -464,18 +480,20 @@ async function runFocusMode({
 // kyto, and a thread that just got focused is exactly the place not to add a
 // visible message nobody asked for.
 async function tell({
+  blocks,
   message,
   text,
   thread,
   what,
 }: {
+  blocks?: unknown[];
   message: Message;
   text: string;
   thread: Thread;
   what: string;
 }): Promise<void> {
   await thread
-    .postEphemeral(message.author, text, { fallbackToDM: false })
+    .postEphemeral(message.author, text, { blocks, fallbackToDM: false })
     .catch((error: unknown) => {
       logger.warn(
         {
