@@ -81,7 +81,7 @@ Checked before publication:
 
 Publishing reveals where and how kyto runs: the Oracle Linux host layout and
 service user (`deploy/kyto.service`), the Postgres role name, the bot's app/user
-ids, the `gorkie__devansh_` legacy handle, and the full list of env vars it reads
+ids, its `kyto2` handle, and the full list of env vars it reads
 (`apps/bot/.env.example`). None of that is exploitable on its own, and all of it is
 load-bearing documentation. Worth knowing it goes public, not worth removing.
 

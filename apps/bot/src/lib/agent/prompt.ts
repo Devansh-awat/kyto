@@ -61,8 +61,8 @@ const MAX_HISTORY_PAGES = 20;
 // thread. Short enough to always reach the newest message, long enough that the
 // replay window is still full.
 const RECENT_WINDOW_SECONDS = 7 * 24 * 60 * 60;
-// The bot's Slack username is a leftover gorkie-era handle; label its own
-// authored messages as kyto so it doesn't think "gorkie" spoke (mirrors the
+// The app's Slack handle is `kyto2`; label its own authored messages as kyto
+// so it doesn't think someone else spoke (mirrors the
 // same special-case in annotateMentions).
 const BOT_NAME = 'kyto';
 
