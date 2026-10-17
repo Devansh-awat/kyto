@@ -13,6 +13,7 @@ import { GITHUB_LOGIN, guardGithubCommand } from '@/lib/github/guard';
 import { disarmFetchedRepos } from '@/lib/sandbox/git-safety';
 import { errorMessage } from '@/lib/utils/error';
 import { editorsSchema, parseEditors } from './editors';
+import { withGhPrefixes } from './gh-prefix';
 
 // gh/git are pre-authenticated inside the sandbox WITHOUT any GitHub credential
 // being there: they are pointed at the host-side proxy (`lib/github-proxy`),
@@ -33,9 +34,6 @@ function truncate(text: string): string {
 }
 
 // `gh`'s own top-level commands, for a command written without the `gh`.
-const GH_SUBCOMMAND =
-  /^\s*(?:alias|api|attestation|auth|browse|cache|codespace|config|extension|gist|gpg-key|issue|label|org|pr|project|release|repo|ruleset|run|search|secret|ssh-key|status|variable|workflow)\s/;
-
 export function ghTool({
   getSandboxContext,
   isOwner,
@@ -50,7 +48,7 @@ export function ghTool({
   userId: string;
 }) {
   return tool({
-    description: `Run a \`gh\` (GitHub CLI) command in the sandbox. gh and git are already authenticated (credentials are brokered at the network layer; never ask for a token). On GitHub you ARE the account \`${GITHUB_LOGIN}\`: repos, PRs, issues, and commits under that name are your own work, so don't describe it as some other person. It's a real shell, so piping/filtering works, e.g. \`gh pr list --repo owner/repo | grep foo\` or \`gh api repos/o/r/issues --jq '.[].title'\`. For external contributions, fork first and push branches to the fork, then open a PR. Anyone may have you open PRs, file issues and comment on other people's repos WITHOUT the owner's approval, within limits: a few per person per day, at most one open PR per person per repo, and each is reviewed against that repo's contributing guidelines before it goes out: a refusal lists what to fix, so fix it rather than retrying as-is (refused attempts count). A footer naming who asked and saying you're an AI is added for you; don't write your own. Your forks are shared: for anyone but the fork's claimant, push branches named \`<their Slack user ID, lowercased>/<topic>\` and open the PR from that. A repo you set up for someone belongs to them: anyone can read it through you, but only they, their named editors, and the bot owner can have you write to it: you'll be refused otherwise, and that refusal is final.`,
+    description: `Run a \`gh\` (GitHub CLI) command in the sandbox. gh and git are already authenticated (credentials are brokered at the network layer; never ask for a token). On GitHub you ARE the account \`${GITHUB_LOGIN}\`: repos, PRs, issues, and commits under that name are your own work, so don't describe it as some other person. Your OWN source code is the public repo \`Devansh-awat/kyto\` (branch \`main\`): read "your recent commits" or "your code" there; \`${GITHUB_LOGIN}/kyto\` is only your fork, whose main is stale (its pushes are PR branches), and a PR "to yourself" targets Devansh-awat/kyto. It's a real shell, so piping/filtering works, e.g. \`gh pr list --repo owner/repo | grep foo\` or \`gh api repos/o/r/issues --jq '.[].title'\`. For external contributions, fork first and push branches to the fork, then open a PR. Anyone may have you open PRs, file issues and comment on other people's repos WITHOUT the owner's approval, within limits: a few per person per day, at most one open PR per person per repo, and each is reviewed against that repo's contributing guidelines before it goes out: a refusal lists what to fix, so fix it rather than retrying as-is (refused attempts count). A footer naming who asked and saying you're an AI is added for you; don't write your own. Your forks are shared: for anyone but the fork's claimant, push branches named \`<their Slack user ID, lowercased>/<topic>\` and open the PR from that. A repo you set up for someone belongs to them: anyone can read it through you, but only they, their named editors, and the bot owner can have you write to it: you'll be refused otherwise, and that refusal is final.`,
     inputSchema: z.object({
       command: z
         .string()
@@ -58,13 +56,8 @@ export function ghTool({
         .describe('Shell command using gh and/or pipes to other commands.'),
     }),
     execute: async ({ command: written }, { abortSignal }) => {
-      // Models drop the leading `gh` ("repo create …", "api -X POST …") and
-      // the shell answered "repo: command not found" — read as a refusal,
-      // which sent kyto hunting for another route (#80). Normalized BEFORE the
-      // guard, so the guard checks exactly what runs.
-      const command = GH_SUBCOMMAND.test(written)
-        ? `gh ${written.trim()}`
-        : written;
+      // Normalized BEFORE the guard, so the guard checks exactly what runs.
+      const command = withGhPrefixes(written).trim();
       if (!env.GH_TOKEN) {
         return {
           error: 'gh requires GH_TOKEN to be configured on the host.',
