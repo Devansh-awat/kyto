@@ -7,14 +7,16 @@ import logger from '@/lib/logger';
 import { toLogError } from '@/lib/utils/error';
 
 // When either kyto — the app or its Slack user account — lands in a channel,
-// the other one follows it in, and in a PRIVATE channel so does the owner
-// (owner's call, 2026-09-30). The app sees its own joins as they happen; the
+// the other one follows it in, and a PRIVATE channel is DM'd to the owner by
+// name and id (owner's call, 2026-10-16: he used to be invited in, which
+// members read as kyto bringing in a watcher; a channel mention in the DM
+// would be unreadable to him from outside, so it is plain text). The app sees its own joins as they happen; the
 // account's joins are only visible by listing its channels (Slack delivers it
 // no channel events), so a poller diffs both against `kyto_channels`.
 //
 // Only a channel NEW to an identity acts, once: re-inviting on every pass
-// would pull someone straight back into a channel they just removed kyto or
-// the owner from. The very first pass for an identity records what is there
+// would pull someone straight back into a channel they just removed kyto
+// from, and DM the owner about it again. The very first pass for an identity records what is there
 // and invites no one — otherwise switching this on invites into every
 // channel kyto has ever been in.
 
@@ -100,12 +102,15 @@ async function invite({
   }
 }
 
-/** `joined` just landed in the channel: bring in the other kyto, and the owner if it is private. */
+/** `joined` just landed in the channel: bring in the other kyto, and tell the owner if it is private. */
 async function pairChannel({
   channelId,
+  inviter,
   joined,
 }: {
   channelId: string;
+  /** Who added it, when Slack said (the join event; the poller can't know). */
+  inviter?: string;
   joined: Identity;
 }): Promise<void> {
   const info = await clientFor(joined)
@@ -117,48 +122,41 @@ async function pairChannel({
     return;
   }
   const other: Identity = joined === 'app' ? 'user' : 'app';
+  // The other kyto follows this one in and counts as new there too: one DM
+  // per channel, from whichever arrived first.
+  const otherWasThere = (await listKytoChannelIds(other)).includes(channelId);
   const otherId = other === 'app' ? slack.botUserId : slack.userAccountId;
   if (otherId) {
     await invite({ channelId, inviter: joined, userId: otherId, who: other });
   }
   const owner = env.OWNER_USER_ID;
-  if (!(channel.is_private && owner)) {
+  if (!(channel.is_private && owner) || otherWasThere) {
     return;
   }
-  const added = await invite({
-    channelId,
-    inviter: joined,
-    userId: owner,
-    who: 'owner',
-  });
-  if (!added) {
-    return;
-  }
-  // Said out loud, with a real ping (owner's call, 2026-10-03): Slack's own
-  // "joined by invitation from kyto" line is easy to miss, and a channel that
-  // finds the owner there unexplained reads it as kyto spying for him — it
-  // happened in #big-brains-ts. The members must know, and be able to remove
-  // him, so the pairing can't be used to slip someone in unnoticed.
-  await bot
-    .channel(channelId)
-    .post({
-      ...(joined === 'user' ? { fromUserAccount: true } : {}),
-      markdown: `<@${owner}> was added automatically by me to prevent abuse.`,
-    })
-    .catch((error: unknown) => {
-      logger.warn(
-        { ...toLogError(error), channelId },
-        '[channel-pairing] owner-added notice failed'
-      );
+  const who = joined === 'app' ? "kyto's app" : "kyto's user account";
+  const by = inviter ? ` by <@${inviter}>` : '';
+  try {
+    const dm = await bot.openDM(owner);
+    await dm.post({
+      markdown: `${who} was added${by} to the private channel ${channel.name ?? '(name unknown)'} (${channelId}).`,
     });
+    logger.info({ channelId, joined }, '[channel-pairing] owner told');
+  } catch (error) {
+    logger.warn(
+      { ...toLogError(error), channelId },
+      '[channel-pairing] owner DM failed'
+    );
+  }
 }
 
 /** Record a join; pair the channel only if this identity had not been seen there. */
 async function noteJoin({
   channelId,
+  inviter,
   joined,
 }: {
   channelId: string;
+  inviter?: string;
   joined: Identity;
 }): Promise<void> {
   const fresh = await addKytoChannels({
@@ -166,7 +164,7 @@ async function noteJoin({
     identity: joined,
   });
   if (fresh.length > 0) {
-    await pairChannel({ channelId, joined });
+    await pairChannel({ channelId, inviter, joined });
   }
 }
 
@@ -204,7 +202,7 @@ async function sweepAll(): Promise<void> {
 export function startChannelPairing(): void {
   // The fast path: the app sees a member join in any channel it is in — its
   // own join, or the account's.
-  bot.onMemberJoinedChannel(async ({ channelId, userId }) => {
+  bot.onMemberJoinedChannel(async ({ channelId, inviter, userId }) => {
     if (!slack.userAccountId) {
       return;
     }
@@ -215,7 +213,7 @@ export function startChannelPairing(): void {
       joined = 'user';
     }
     if (joined) {
-      await noteJoin({ channelId, joined });
+      await noteJoin({ channelId, inviter, joined });
     }
   });
   sweepAll().catch(() => undefined);
