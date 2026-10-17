@@ -110,9 +110,7 @@ export interface CallStatsCell {
   p90StepMs: number | null;
   /** Per call. */
   perCall: {
-    reasoningChars: number | null;
     reasoningTokens: number | null;
-    reasoningWords: number | null;
     textChars: number | null;
     textTokens: number | null;
     textWords: number | null;
@@ -121,17 +119,10 @@ export interface CallStatsCell {
   };
   /** Per THINKING step. */
   perThinkingStep: {
-    reasoningChars: number | null;
     reasoningTokens: number | null;
-    reasoningWords: number | null;
   };
-  /** Shown thinking chars per thinking token: ~4 = streamed in full. */
-  reasoningCharsPerToken: number | null;
   /** Thinking tokens over all output tokens. */
   reasoningShare: number | null;
-  /** Shown thinking, over the time it streamed. */
-  shownCharsPerSecond: number | null;
-  shownWordsPerSecond: number | null;
   /** Calls per source, most first. */
   sources: { calls: number; source: string }[];
   steps: number;
@@ -145,7 +136,8 @@ export interface CallStatsCell {
 /**
  * The model × effort comparison (`!effort`, owner's ask 2026-10-17): every
  * source's calls since `since`, from the per-step `stats` each call records
- * (@repo/ai call-stats), so tokens, characters and words sit side by side.
+ * (@repo/ai call-stats): the answer in tokens, characters and words side by
+ * side, thinking in tokens and time only (its text is a summary).
  */
 export async function callStats({
   efforts,
@@ -170,11 +162,7 @@ export async function callStats({
     )})
     ${source ? sql`and ms.source = ${source}` : sql``}`;
   const n = (field: string) => sql.raw(`coalesce((e->>'${field}')::float, 0)`);
-  // A rate over a window this short is a buffered burst, not a speed: haiku's
-  // thinking arrives in one 5ms lump through the gateway (30k chars/s).
-  const shownWindow = sql.raw(
-    `(e->>'reasoningStreamMs')::float >= ${MIN_RATE_WINDOW_MS}`
-  );
+  // A rate over a window this short is a buffered burst, not a speed.
   const answerWindow = sql.raw(
     `e ? 'thinkMs' and (e->>'ms')::float - (e->>'thinkMs')::float >= ${MIN_RATE_WINDOW_MS}`
   );
@@ -202,14 +190,12 @@ export async function callStats({
     ),
     steps as (
       select model, effort, count(*)::int as steps,
-        count(*) filter (where ${n('reasoningTokens')} > 0 or ${n('reasoningChars')} > 0)::int as thinking_steps,
+        count(*) filter (where ${n('reasoningTokens')} > 0)::int as thinking_steps,
         percentile_cont(0.5) within group (order by (e->>'ms')::float) as median_step_ms,
         percentile_cont(0.9) within group (order by (e->>'ms')::float) as p90_step_ms,
         percentile_cont(0.5) within group (order by (e->>'ttftMs')::float) as median_ttft_ms,
         percentile_cont(0.5) within group (order by (e->>'thinkMs')::float) as median_think_ms,
         sum(${n('reasoningTokens')}) as reasoning_tokens,
-        sum(${n('reasoningChars')}) as reasoning_chars,
-        sum(${n('reasoningWords')}) as reasoning_words,
         sum(${n('textTokens')}) as text_tokens,
         sum(${n('textChars')}) as text_chars,
         sum(${n('textWords')}) as text_words,
@@ -218,10 +204,6 @@ export async function callStats({
         sum(${n('outputTokens')}) as output_tokens,
         sum(${n('reasoningTokens')}) filter (where e ? 'thinkMs')
           * 1000 / nullif(sum(${n('thinkMs')}) filter (where e ? 'thinkMs' and ${n('reasoningTokens')} > 0), 0) as think_tokens_per_second,
-        sum(${n('reasoningChars')}) filter (where ${shownWindow})
-          * 1000 / nullif(sum(${n('reasoningStreamMs')}) filter (where ${shownWindow}), 0) as shown_chars_per_second,
-        sum(${n('reasoningWords')}) filter (where ${shownWindow})
-          * 1000 / nullif(sum(${n('reasoningStreamMs')}) filter (where ${shownWindow}), 0) as shown_words_per_second,
         sum(${n('outputTokens')} - ${n('reasoningTokens')}) filter (where ${answerWindow})
           * 1000 / nullif(sum(${n('ms')} - ${n('thinkMs')}) filter (where ${answerWindow}), 0) as answer_tokens_per_second,
         sum(${n('textChars')} + ${n('toolInputChars')}) filter (where ${answerWindow})
@@ -278,9 +260,7 @@ export async function callStats({
       p90CallMs: num(row.p90_call_ms),
       p90StepMs: num(row.p90_step_ms),
       perCall: {
-        reasoningChars: per(row.reasoning_chars, calls),
         reasoningTokens: per(row.reasoning_tokens, calls),
-        reasoningWords: per(row.reasoning_words, calls),
         textChars: per(row.text_chars, calls),
         textTokens: per(row.text_tokens, calls),
         textWords: per(row.text_words, calls),
@@ -288,14 +268,9 @@ export async function callStats({
         toolInputWords: per(row.tool_input_words, calls),
       },
       perThinkingStep: {
-        reasoningChars: per(row.reasoning_chars, thinkingSteps),
         reasoningTokens: per(row.reasoning_tokens, thinkingSteps),
-        reasoningWords: per(row.reasoning_words, thinkingSteps),
       },
-      reasoningCharsPerToken: ratio(row.reasoning_chars, row.reasoning_tokens),
       reasoningShare: ratio(row.reasoning_tokens, row.output_tokens),
-      shownCharsPerSecond: num(row.shown_chars_per_second),
-      shownWordsPerSecond: num(row.shown_words_per_second),
       sources: sourceSchema.catch([]).parse(row.sources ?? []),
       steps: Number(row.steps),
       stepsPerCall: num(row.steps_per_call),

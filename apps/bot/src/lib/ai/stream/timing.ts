@@ -28,8 +28,8 @@ export interface StreamTiming {
    */
   outputTokensPerSecond?: number;
   /**
-   * One row per step: `[firstOutputMs, thinkMs, reasoningTokens,
-   * reasoningChars, textChars, toolInputChars, outputTokens]`. Tuples, not
+   * One row per step: `[firstOutputMs, thinkMs, reasoningTokens, textChars,
+   * toolInputChars, outputTokens]`. Tuples, not
    * objects: a 40-step turn is one log line.
    */
   perStep: StepRow[];
@@ -50,7 +50,6 @@ type StepRow = [
   firstOutputMs: number,
   thinkMs: number,
   reasoningTokens: number,
-  reasoningChars: number,
   textChars: number,
   toolInputChars: number,
   outputTokens: number,
@@ -58,26 +57,18 @@ type StepRow = [
 
 /**
  * Raw sums, so attempts and turns add up and the ratios are computed once
- * (describeReasoning). A thinking BLOCK is one reasoning-start..end; a
- * thinking STEP is a model request that reported reasoning tokens or text.
+ * (describeReasoning). A thinking STEP is a model request that reported
+ * reasoning tokens or streamed any. Thinking is counted in tokens and time,
+ * never characters: both models stream only a summary of it, written by
+ * another model (owner's call 2026-10-17).
  */
 export interface ReasoningCounts {
-  blocks: number;
-  /** Blocks whose whole text arrived in one delta: buffered, not streamed. */
-  burstBlocks: number;
-  chars: number;
-  /** Longest single block, in characters. */
-  maxBlockChars: number;
   /** Most reasoning tokens in one step. */
   maxStepTokens: number;
   outputTokens: number;
   steps: number;
   /** Steps that reported usage at all. */
   stepsWithUsage: number;
-  /** Characters of reasoning in blocks that streamed (more than one delta). */
-  streamedChars: number;
-  /** First delta to `reasoning-end` of those blocks. */
-  streamedMs: number;
   textChars: number;
   textTokens: number;
   thinkingSteps: number;
@@ -94,16 +85,10 @@ export interface ReasoningCounts {
 
 export function emptyReasoningCounts(): ReasoningCounts {
   return {
-    blocks: 0,
-    burstBlocks: 0,
-    chars: 0,
-    maxBlockChars: 0,
     maxStepTokens: 0,
     outputTokens: 0,
     steps: 0,
     stepsWithUsage: 0,
-    streamedChars: 0,
-    streamedMs: 0,
     textChars: 0,
     textTokens: 0,
     thinkMs: 0,
@@ -118,16 +103,10 @@ export function addReasoningCounts(
   more: ReasoningCounts
 ): ReasoningCounts {
   return {
-    blocks: into.blocks + more.blocks,
-    burstBlocks: into.burstBlocks + more.burstBlocks,
-    chars: into.chars + more.chars,
-    maxBlockChars: Math.max(into.maxBlockChars, more.maxBlockChars),
     maxStepTokens: Math.max(into.maxStepTokens, more.maxStepTokens),
     outputTokens: into.outputTokens + more.outputTokens,
     steps: into.steps + more.steps,
     stepsWithUsage: into.stepsWithUsage + more.stepsWithUsage,
-    streamedChars: into.streamedChars + more.streamedChars,
-    streamedMs: into.streamedMs + more.streamedMs,
     textChars: into.textChars + more.textChars,
     textTokens: into.textTokens + more.textTokens,
     thinkMs: into.thinkMs + more.thinkMs,
@@ -142,17 +121,10 @@ const per = (a: number, b: number, scale = 1): number | undefined =>
 const ratio = (a: number, b: number): number | undefined =>
   b > 0 ? Math.round((a / b) * 100) / 100 : undefined;
 
-/**
- * The ratios the effort experiment is judged on. `charsPerToken` near 4 means
- * the full reasoning was streamed; far below it means a summary (luna shows
- * one) or nothing, so `chars`-based numbers say nothing about that model.
- */
+/** The ratios the effort experiment is judged on. */
 export function describeReasoning(counts: ReasoningCounts) {
   return {
     ...counts,
-    charsPerBlock: per(counts.chars, counts.blocks),
-    charsPerSecond: per(counts.streamedChars, counts.streamedMs, MS_PER_SECOND),
-    charsPerToken: ratio(counts.chars, counts.tokens),
     msPerThinkingStep: per(counts.thinkMs, counts.thinkingSteps),
     reasoningShareOfOutput: ratio(counts.tokens, counts.outputTokens),
     tokensPerStep: per(counts.tokens, counts.stepsWithUsage),
@@ -165,9 +137,7 @@ export function describeReasoning(counts: ReasoningCounts) {
 export interface TimedPart {
   /** `tool-input-delta`'s text. */
   delta?: string;
-  /** `reasoning-*`'s block id. */
-  id?: string;
-  /** `text-delta`'s and `reasoning-delta`'s text. */
+  /** `text-delta`'s text. */
   text?: string;
   toolCallId?: string;
   toolName?: string;
@@ -210,31 +180,11 @@ export function createStreamTimer(now: () => number = Date.now) {
   // When the current step's request went out: see `firstOutputMs`.
   let requestAt = startedAt;
   let stepAnswerAt: number | undefined;
-  let stepReasoningChars = 0;
+  let stepReasoned = false;
   let stepTextChars = 0;
   let stepToolInputChars = 0;
   const reasoning = emptyReasoningCounts();
   const perStep: StepRow[] = [];
-  // Open thinking blocks by provider id: first delta's time, chars, deltas.
-  const blocks = new Map<
-    string,
-    { chars: number; deltas: number; firstAt?: number }
-  >();
-  const closeBlock = (id: string, at: number) => {
-    const block = blocks.get(id);
-    blocks.delete(id);
-    if (!block) {
-      return;
-    }
-    reasoning.blocks += 1;
-    reasoning.maxBlockChars = Math.max(reasoning.maxBlockChars, block.chars);
-    if (block.deltas <= 1) {
-      reasoning.burstBlocks += block.chars > 0 ? 1 : 0;
-    } else if (block.firstAt !== undefined && at > block.firstAt) {
-      reasoning.streamedChars += block.chars;
-      reasoning.streamedMs += at - block.firstAt;
-    }
-  };
   let stepStartedAt: number | undefined;
   let stepFirstOutputAt: number | undefined;
   let stepLastOutputAt: number | undefined;
@@ -262,7 +212,7 @@ export function createStreamTimer(now: () => number = Date.now) {
       if (type === 'start-step') {
         stepStartedAt = requestAt;
         stepAnswerAt = undefined;
-        stepReasoningChars = 0;
+        stepReasoned = false;
         stepTextChars = 0;
         stepToolInputChars = 0;
         stepFirstOutputAt = undefined;
@@ -272,20 +222,8 @@ export function createStreamTimer(now: () => number = Date.now) {
         stepChars = 0;
         return;
       }
-      if (type === 'reasoning-start') {
-        blocks.set(part.id ?? '', { chars: 0, deltas: 0 });
-      } else if (type === 'reasoning-delta') {
-        const length = part.text?.length ?? 0;
-        const block = blocks.get(part.id ?? '');
-        if (block && length > 0) {
-          block.chars += length;
-          block.deltas += 1;
-          block.firstAt ??= at;
-        }
-        reasoning.chars += length;
-        stepReasoningChars += length;
-      } else if (type === 'reasoning-end') {
-        closeBlock(part.id ?? '', at);
+      if (type === 'reasoning-delta') {
+        stepReasoned = true;
       }
       if (stepAnswerAt === undefined && ANSWER_OUTPUT.has(type)) {
         stepAnswerAt = at;
@@ -348,9 +286,6 @@ export function createStreamTimer(now: () => number = Date.now) {
         }
       } else if (type === 'finish-step') {
         steps += 1;
-        for (const id of [...blocks.keys()]) {
-          closeBlock(id, at);
-        }
         const tokens = part.usage?.outputTokens;
         const reasoningTokens =
           part.usage?.outputTokenDetails?.reasoningTokens ?? 0;
@@ -370,7 +305,7 @@ export function createStreamTimer(now: () => number = Date.now) {
             reasoningTokens
           );
         }
-        if (reasoningTokens > 0 || stepReasoningChars > 0) {
+        if (reasoningTokens > 0 || stepReasoned) {
           reasoning.thinkingSteps += 1;
           reasoning.thinkMs += thinkMs;
         }
@@ -378,7 +313,6 @@ export function createStreamTimer(now: () => number = Date.now) {
           stepFirstOutputAt === undefined ? -1 : stepFirstOutputAt - requestAt,
           thinkMs,
           reasoningTokens,
-          stepReasoningChars,
           stepTextChars,
           stepToolInputChars,
           tokens ?? 0,

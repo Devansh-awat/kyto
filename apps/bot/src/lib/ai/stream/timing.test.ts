@@ -120,16 +120,16 @@ describe('createStreamTimer', () => {
     expect(summary.outputTokensPerSecond).toBeUndefined();
   });
 
-  test('counts thinking per block and per step', () => {
+  test('counts thinking per step, in tokens and time only', () => {
     const c = clock();
     const timer = createStreamTimer(c.now);
     timer.observe('start-step');
     c.set(1000);
-    timer.observe({ id: 'r', type: 'reasoning-start' });
-    timer.observe({ id: 'r', text: 'x'.repeat(100), type: 'reasoning-delta' });
+    timer.observe({ type: 'reasoning-start' });
+    timer.observe({ text: 'x'.repeat(100), type: 'reasoning-delta' });
     c.set(3000);
-    timer.observe({ id: 'r', text: 'x'.repeat(300), type: 'reasoning-delta' });
-    timer.observe({ id: 'r', type: 'reasoning-end' });
+    timer.observe({ text: 'x'.repeat(300), type: 'reasoning-delta' });
+    timer.observe({ type: 'reasoning-end' });
     c.set(4000);
     timer.observe({ text: 'hi', type: 'text-delta' });
     timer.observe({
@@ -139,11 +139,11 @@ describe('createStreamTimer', () => {
         outputTokens: 101,
       },
     });
-    // A hidden-reasoning step: tokens, no text, one buffered block.
+    // A step whose thinking summary arrived in one buffered delta.
     timer.observe('start-step');
     c.set(6000);
-    timer.observe({ id: 'q', type: 'reasoning-start' });
-    timer.observe({ id: 'q', text: 'summary', type: 'reasoning-delta' });
+    timer.observe({ type: 'reasoning-start' });
+    timer.observe({ text: 'summary', type: 'reasoning-delta' });
     timer.observe({ toolCallId: 't', toolName: 'bash', type: 'tool-call' });
     timer.observe({
       type: 'finish-step',
@@ -154,23 +154,16 @@ describe('createStreamTimer', () => {
     });
     const { perStep, reasoning } = timer.summary();
     expect(reasoning).toMatchObject({
-      blocks: 2,
-      burstBlocks: 1,
-      chars: 407,
       maxStepTokens: 300,
-      streamedChars: 400,
-      streamedMs: 2000,
       thinkMs: 6000,
       thinkingSteps: 2,
       tokens: 400,
     });
     expect(perStep).toEqual([
-      [1000, 4000, 100, 400, 2, 0, 101],
-      [2000, 2000, 300, 7, 0, 0, 320],
+      [1000, 4000, 100, 2, 0, 101],
+      [2000, 2000, 300, 0, 0, 320],
     ]);
     expect(describeReasoning(reasoning)).toMatchObject({
-      charsPerBlock: 204,
-      charsPerSecond: 200,
       tokensPerThinkSecond: 67,
       tokensPerThinkingStep: 200,
     });

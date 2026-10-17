@@ -1,9 +1,11 @@
 /**
  * What one model call did, step by step: how long each request took, how much
  * it thought and wrote, and how fast (owner's ask 2026-10-17, for choosing
- * between haiku and luna and their efforts). Tokens AND characters AND words,
- * because the two models' tokenizers differ: a haiku token is not a luna
- * token, so tokens alone can't compare them.
+ * between haiku and luna and their efforts). The ANSWER is counted in tokens
+ * AND characters AND words, because the two models' tokenizers differ: a haiku
+ * token is not a luna token. Thinking only in tokens and time: neither model
+ * shows its real thinking, only a summary another model writes, so its
+ * characters measure the summary (owner's call 2026-10-17: don't log them).
  *
  * Timestamps come from the stream's chunks; amounts from the finished
  * response's content and usage. A call that isn't streamed (generateText) has
@@ -16,11 +18,7 @@ export interface StepStats {
   /** Request out → response done. */
   ms: number;
   outputTokens: number;
-  reasoningChars: number;
-  /** First → last streamed thinking chunk; absent when nothing streamed. */
-  reasoningStreamMs?: number;
   reasoningTokens: number;
-  reasoningWords: number;
   textChars: number;
   textTokens: number;
   textWords: number;
@@ -63,15 +61,11 @@ export function createCallMeter({
   const steps: StepStats[] = [];
   let startedAt: number | undefined;
   let firstOutputAt: number | undefined;
-  let firstReasoningAt: number | undefined;
-  let lastReasoningAt: number | undefined;
   let firstAnswerAt: number | undefined;
   return {
     onStart(): void {
       startedAt = now();
       firstOutputAt = undefined;
-      firstReasoningAt = undefined;
-      lastReasoningAt = undefined;
       firstAnswerAt = undefined;
     },
     onChunk(type: string): void {
@@ -81,8 +75,6 @@ export function createCallMeter({
       const at = now();
       if (type === 'reasoning-delta') {
         firstOutputAt ??= at;
-        firstReasoningAt ??= at;
-        lastReasoningAt = at;
       } else if (ANSWER_CHUNKS.has(type)) {
         firstOutputAt ??= at;
         firstAnswerAt ??= at;
@@ -92,13 +84,10 @@ export function createCallMeter({
       const endedAt = now();
       const begun = startedAt ?? endedAt;
       startedAt = undefined;
-      let reasoning = '';
       let text = '';
       let toolInput = '';
       for (const part of content) {
-        if (part.type === 'reasoning') {
-          reasoning += part.text ?? '';
-        } else if (part.type === 'text') {
+        if (part.type === 'text') {
           text += part.text ?? '';
         } else if (part.type === 'tool-call') {
           toolInput +=
@@ -114,16 +103,7 @@ export function createCallMeter({
       steps.push({
         ms: Math.round(timing?.responseTimeMs ?? endedAt - begun),
         outputTokens: usage.outputTokens ?? 0,
-        reasoningChars: reasoning.length,
-        ...(firstReasoningAt !== undefined &&
-        lastReasoningAt !== undefined &&
-        lastReasoningAt > firstReasoningAt
-          ? {
-              reasoningStreamMs: Math.round(lastReasoningAt - firstReasoningAt),
-            }
-          : {}),
         reasoningTokens: usage.outputTokenDetails?.reasoningTokens ?? 0,
-        reasoningWords: words(reasoning),
         ...(firstAnswerAt === undefined
           ? {}
           : { thinkMs: Math.round(firstAnswerAt - begun) }),

@@ -12,7 +12,7 @@ function clock() {
 }
 
 describe('createCallMeter', () => {
-  test('a thinking step that then calls a tool', () => {
+  test("a thinking step that then calls a tool; the thinking's text isn't counted", () => {
     const time = clock();
     const meter = createCallMeter({ now: time.now });
     meter.onStart();
@@ -40,10 +40,7 @@ describe('createCallMeter', () => {
         {
           ms: 2000,
           outputTokens: 19,
-          reasoningChars: 22,
-          reasoningStreamMs: 1000,
           reasoningTokens: 7,
-          reasoningWords: 5,
           textChars: 0,
           textTokens: 0,
           textWords: 0,
@@ -75,8 +72,6 @@ describe('createCallMeter', () => {
     expect(step?.ms).toBe(3510);
     expect(step?.thinkMs).toBe(3000);
     expect(step?.ttftMs).toBe(3000);
-    expect(step?.reasoningStreamMs).toBeUndefined();
-    expect(step?.reasoningChars).toBe(0);
     expect(step?.textWords).toBe(5);
   });
 

@@ -249,7 +249,8 @@ const PERCENT = 100;
  * `!effort [days] [source]` (owner only, 2026-10-17): haiku and luna at each
  * effort, over every model call (turns, subagents, Kevinton, reminders, the
  * digest, …; `source` keeps one), from the per-step stats each call records.
- * Tokens, chars and words side by side: the two tokenizers differ.
+ * The answer in tokens, chars and words side by side (the two tokenizers
+ * differ); thinking in tokens and time only, since its text is a summary.
  */
 export async function describeEffortStats(args: string): Promise<string> {
   const days = Math.min(
@@ -278,8 +279,8 @@ export async function describeEffortStats(args: string): Promise<string> {
       `*${cell.model.split('/').at(-1)} · ${cell.effort}*: ${cell.calls} calls, ${cell.steps} steps (${cell.sources.map((entry) => `${entry.source} ${entry.calls}`).join(', ')})`,
       `  cost: $${f(cell.costPerCall, 4)}/call, $${f(cell.costTotal, 3)} total · ${f(cell.cacheReadShare === null ? null : cell.cacheReadShare * PERCENT)}% of input cached`,
       `  time: call median ${s(cell.medianCallMs)} (p90 ${s(cell.p90CallMs)}) · ${f(cell.stepsPerCall, 1)} steps/call · step median ${s(cell.medianStepMs)} (p90 ${s(cell.p90StepMs)}) · first token ${s(cell.medianTtftMs)} · before answering ${s(cell.medianThinkMs)}`,
-      `  thinking: ${cell.thinkingSteps} of ${cell.steps} steps · ${f(cell.reasoningShare === null ? null : cell.reasoningShare * PERCENT)}% of output · per call ${f(call.reasoningTokens)} tokens / ${f(call.reasoningChars)} chars / ${f(call.reasoningWords)} words · per thinking step ${f(step.reasoningTokens)} tokens / ${f(step.reasoningChars)} chars / ${f(step.reasoningWords)} words`,
-      `  thinking speed: ${f(cell.thinkTokensPerSecond)} tokens/s before the answer (prefill included) · shown ${f(cell.shownCharsPerSecond)} chars/s, ${f(cell.shownWordsPerSecond, 1)} words/s · ${f(cell.reasoningCharsPerToken, 2)} shown chars per thinking token (both models show a summary another model writes, so this is how much the summary keeps, not how much was thought)`,
+      `  thinking: ${cell.thinkingSteps} of ${cell.steps} steps · ${f(cell.reasoningShare === null ? null : cell.reasoningShare * PERCENT)}% of output · ${f(call.reasoningTokens)} tokens per call, ${f(step.reasoningTokens)} per thinking step`,
+      `  thinking speed: ${f(cell.thinkTokensPerSecond)} tokens/s before the answer (prefill included)`,
       `  answer: per call ${f(call.textTokens)} tokens / ${f(call.textChars)} chars / ${f(call.textWords)} words of text, tool calls ${f(call.toolInputChars)} chars / ${f(call.toolInputWords)} words · ${f(cell.answerCharsPerToken, 2)} chars and ${f(cell.answerWordsPerToken, 2)} words per answer token`,
       `  answer speed: ${f(cell.answerTokensPerSecond)} tokens/s, ${f(cell.answerCharsPerSecond)} chars/s, ${f(cell.answerWordsPerSecond, 1)} words/s`,
     ].join('\n');
