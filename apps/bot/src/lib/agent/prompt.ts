@@ -1,4 +1,5 @@
 import { getThreadPromptSize, type MessageRevision } from '@repo/db/queries';
+import { z } from 'zod';
 import { mrkdwnToMarkdown } from '@/harness/markdown';
 import type { ThreadHandle as Thread } from '@/harness/thread';
 import type { Message } from '@/harness/types';
@@ -189,6 +190,14 @@ function gapLine({
   ];
 }
 
+// A message that is only a plan card (any bot's "Thinking completed" / "Done"
+// with its task rows): it says nothing about what was asked or answered.
+const planCardSchema = z.object({
+  blocks: z.array(z.object({ type: z.enum(['plan', 'task_card']) })).min(1),
+});
+const isPlanCard = (message: Message) =>
+  planCardSchema.safeParse(message.raw).success;
+
 async function renderMessage(message: Message): Promise<string> {
   const slackText = rawSlackText(message);
   const text = slackText
@@ -242,6 +251,11 @@ export async function buildPrompt(
   /** The first message replayed verbatim, stored with the request's size. */
   firstReplayedId?: string;
   history: string[];
+  /**
+   * The thread as Jev judges it (lib/ai/tool-preload): what kyto sees, minus
+   * plan cards, the new message last.
+   */
+  jevConversation: string;
   tail: string;
 }> {
   // Everything below is independent, so it is read at once: the Slack thread
@@ -338,6 +352,7 @@ export async function buildPrompt(
   const inChannelConversation =
     thread !== undefined && !slack.decodeThreadId(thread.id).threadTs;
   let history: string[] = [];
+  let jevLines: string[] = [];
   let compacted = '';
   let pulledInLater = false;
   let previousMessageId: string | undefined;
@@ -500,6 +515,7 @@ export async function buildPrompt(
       const lines = await Promise.all([
         ...replayed.map(async (entry) => ({
           id: entry.id,
+          planCard: isPlanCard(entry),
           line: await renderWithRevisions({
             entry,
             hidden: isHiddenFromBot(entry),
@@ -509,10 +525,14 @@ export async function buildPrompt(
         })),
         ...deleted.map(async ({ id, row, rows }) => ({
           id,
+          planCard: false,
           line: await renderDeleted({ row, rows }),
         })),
       ]);
       lines.sort((a, b) => (a.id < b.id ? -1 : Number(a.id > b.id)));
+      jevLines = lines.flatMap(({ line, planCard }) =>
+        planCard ? [] : [line]
+      );
       const rendered = lines.map(({ line }) => line);
       history = rendered.map((line, index) =>
         index === 0
@@ -625,6 +645,9 @@ export async function buildPrompt(
       compacted,
       ...history,
     ].filter(Boolean),
+    jevConversation: [compacted, ...jevLines, current]
+      .filter(Boolean)
+      .join('\n\n'),
     tail: [thinking, nowLine, latest, canvases].filter(Boolean).join('\n\n'),
   };
 }

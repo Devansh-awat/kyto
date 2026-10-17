@@ -1008,7 +1008,7 @@ const CARRIED_COMPACT_STEP = 100_000;
 // Each accepted by luna (2026-10-09) and haiku (2026-10-10) through the proxy.
 // `high` joined the draw on 2026-10-16 (owner's call), to be compared on the
 // reasoning metrics the turn logs now carry.
-const EXPERIMENT_EFFORTS = ['low', 'medium', 'high'];
+const EXPERIMENT_EFFORTS = ['low', 'medium', 'high'] as const;
 
 /** What `--reasoning` accepts — all four passed the proxy on both models. */
 export const REASONING_EFFORTS = ['none', 'low', 'medium', 'high'] as const;
@@ -1037,20 +1037,30 @@ export function pickReasoningEffort({
   if (attempt.model !== LUNA_MODEL && attempt.model !== PRIMARY_MODEL) {
     return { effort: 'medium', random: false };
   }
-  let efforts = EXPERIMENT_EFFORTS;
   if (threadId && attempt.model === LUNA_MODEL) {
-    // Salted, so it doesn't line up with the haiku/luna split, which hashes
-    // the bare thread id.
-    const byte =
-      createHash('sha256').update(`effort:${threadId}`).digest()[0] ?? 0;
-    const pinned =
-      EXPERIMENT_EFFORTS[byte % EXPERIMENT_EFFORTS.length] ?? 'medium';
-    efforts = [pinned];
+    return { effort: lunaThreadEffort(threadId), random: true };
   }
   return {
-    effort: efforts[Math.floor(Math.random() * efforts.length)] ?? 'medium',
+    effort:
+      EXPERIMENT_EFFORTS[
+        Math.floor(Math.random() * EXPERIMENT_EFFORTS.length)
+      ] ?? 'medium',
     random: true,
   };
+}
+
+/**
+ * The effort a luna thread drew: pinned per thread, because luna keeps one
+ * cache per effort. Jev may raise a thread above it (apps/bot tool-preload).
+ */
+export function lunaThreadEffort(
+  threadId: string
+): (typeof EXPERIMENT_EFFORTS)[number] {
+  // Salted, so it doesn't line up with the haiku/luna split, which hashes the
+  // bare thread id.
+  const byte =
+    createHash('sha256').update(`effort:${threadId}`).digest()[0] ?? 0;
+  return EXPERIMENT_EFFORTS[byte % EXPERIMENT_EFFORTS.length] ?? 'medium';
 }
 
 export function tuneBody(

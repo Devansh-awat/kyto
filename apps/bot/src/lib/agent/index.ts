@@ -2,10 +2,13 @@ import {
   describeImages,
   HACKCLUB_PROVIDER,
   LEADERBOARD_FALLBACK,
+  LUNA_MODEL,
+  lunaThreadEffort,
   MAX_STEPS,
   type ModelAttempt,
   modelSupportsVision,
   PRIMARY_ATTEMPT,
+  PRIMARY_MODEL,
   pickReasoningEffort,
   type ResolvedModelHolder,
   type SandboxContext,
@@ -15,8 +18,14 @@ import {
 } from '@repo/ai';
 import { comparePrefix, type PrefixUnit } from '@repo/ai/cache-probe';
 import { stepsCacheWrites, stepsCostUsd } from '@repo/ai/usage-cost';
-import { type InflightEffect, saveThreadPromptSize } from '@repo/db/queries';
+import {
+  getThreadLunaEffort,
+  type InflightEffect,
+  saveThreadLunaEffort,
+  saveThreadPromptSize,
+} from '@repo/db/queries';
 import { LazySandbox } from '@repo/sandbox';
+import { z } from 'zod';
 import { env } from '@/env';
 import {
   hasBroadcastToken,
@@ -100,7 +109,11 @@ import {
   emptyReasoningCounts,
   type ReasoningCounts,
 } from '@/lib/ai/stream/timing';
-import { pickPreloadTools } from '@/lib/ai/tool-preload';
+import {
+  type EffortPicks,
+  JEV_EFFORTS,
+  pickPreloadTools,
+} from '@/lib/ai/tool-preload';
 import { WAKE_ID } from '@/lib/ai/tools/background';
 import {
   claimStickyUpgrade,
@@ -235,6 +248,9 @@ const EPHEMERAL_MAX = 2900;
 const JEV_CONTEXT_CHARS = 10_000;
 const MAX_JEV_CONTEXTS = 1000;
 const jevContexts = new Map<string, string>();
+
+/** Who chose an attempt's reasoning effort, logged with the turn. */
+type EffortSource = 'default' | 'flag' | 'jev' | 'random' | 'retry';
 // Each thread's previous turn's first request, as prefix units, so the next
 // turn can log where its prompt stopped matching. Within a turn every step is
 // checked (onCachePrefix); ACROSS turns nothing was, and haiku's first step
@@ -571,9 +587,9 @@ async function executeTurn(
   let handledSteps: number | undefined;
   // Which reasoning effort the answering attempt ran at (issue #36 experiment).
   let handledEffort: string | undefined;
-  // False when the effort was the thread's `--reasoning`: those turns are not
-  // part of the experiment and must be filtered out of its numbers.
-  let handledEffortRandom: boolean | undefined;
+  // Who chose it: `jev` (lib/ai/tool-preload), `random` (Jev gave no answer),
+  // `flag` (the thread's `--reasoning`) or `retry` (#73's low-effort re-run).
+  let handledEffortBy: EffortSource | undefined;
   // Every attempt that failed this turn, so the terminal log line explains the
   // whole fallback walk (which models were tried, and why each one died).
   const attempts: AttemptFailure[] = [];
@@ -611,6 +627,10 @@ async function executeTurn(
     ingressMs?: number;
     /** The setup's parts, run in parallel (see the `[agent] setup` line). */
     jevMs?: number;
+    /** Jev's effort picks and its numbers (lib/ai/tool-preload). */
+    jevEffort?: EffortPicks;
+    /** Waited on Jev past the prompt build and the tools. */
+    preloadWaitMs?: number;
     promptMs?: number;
     readsMs?: number;
     toolsWaitMs?: number;
@@ -783,8 +803,9 @@ async function executeTurn(
         durationMs: Date.now() - turnStart,
         failedAttempts: failedAttemptsLog(attempts),
         outputTokens: turnUsage?.outputTokens,
+        reasoningBy: handledEffortBy,
         reasoningEffort: handledEffort,
-        reasoningRandom: handledEffortRandom,
+        reasoningRandom: handledEffortBy === 'random',
         // Which model the experiment drew for this thread; undefined when a
         // `--model` or an upgrade decided it — leave those out of the numbers.
         experimentModel: experimentArm?.model,
@@ -804,9 +825,10 @@ async function executeTurn(
           answeredBy: answeredBy?.model,
           costUsd: turnUsage?.costUsd,
           experimentModel: experimentArm?.model,
+          reasoningBy: handledEffortBy,
           reasoningEffort: handledEffort,
           // Kept for !timings; !effort reads model_spend (lib/spend).
-          reasoningRandom: handledEffortRandom,
+          reasoningRandom: handledEffortBy === 'random',
         },
       });
     }
@@ -1020,21 +1042,19 @@ async function executeTurn(
     const jevStart = Date.now();
     const earlierThread = jevContexts.get(threadId) ?? '';
     codingMonitor.setConversation(earlierThread);
-    const jevVerdicts = Promise.all([
-      codingMonitor.checkTurn(),
-      secret
-        ? Promise.resolve({ needsResearch: false, tools: [] })
-        : pickPreloadTools(`${earlierThread}\n\n${turnMessage.text}`),
-    ]);
+    const codingVerdict = codingMonitor.checkTurn();
+    // Luna's effort only goes up within a thread (lib/ai/tool-preload).
+    const lunaEffortRead = getThreadLunaEffort(threadId).catch(() => undefined);
     const promptStart = Date.now();
-    const { firstReplayedId, history, tail } = await buildPrompt(turnMessage, {
-      codeChannel,
-      asUserAccount,
-      channelInstructions: hints.channelInstructions,
-      customizationPrompt: hints.customization?.prompt,
-      memoriesOff: hints.memoryMode === 'off',
-      thread: turnThread,
-    });
+    const { firstReplayedId, history, jevConversation, tail } =
+      await buildPrompt(turnMessage, {
+        codeChannel,
+        asUserAccount,
+        channelInstructions: hints.channelInstructions,
+        customizationPrompt: hints.customization?.prompt,
+        memoriesOff: hints.memoryMode === 'off',
+        thread: turnThread,
+      });
     // The per-turn tail; the replayed thread stays in `history` so it can go
     // out as its own cacheable messages (see buildPrompt).
     let messageText = tail;
@@ -1060,6 +1080,20 @@ async function executeTurn(
     if (resumed) {
       messageText = `${messageText}\n\n<resumed_after_restart>kyto restarted while answering this message and is picking it back up. Anything you already posted is in the thread above, and what your tools found before the restart is in your earlier reasoning: continue from there instead of starting over.\n${describePriorEffects(priorEffects)}</resumed_after_restart>`;
     }
+    // Tool groups, research and the reasoning effort, judged on the FULL
+    // thread (owner's ask 2026-10-17), so it starts once the thread is read —
+    // from the event-fed cache, normally — and is awaited only once the tools
+    // are built.
+    const pendingPreload: ReturnType<typeof pickPreloadTools> = secret
+      ? Promise.resolve({ needsResearch: false, tools: [] })
+      : lunaEffortRead.then((stored) =>
+          pickPreloadTools({
+            conversation: jevConversation,
+            lunaEffort:
+              z.enum(JEV_EFFORTS).safeParse(stored).data ??
+              lunaThreadEffort(threadId),
+          })
+        );
     const conversation = [...history, messageText].join('\n\n');
     const promptMs = Date.now() - promptStart;
     codingMonitor.setConversation(conversation);
@@ -1078,7 +1112,7 @@ async function executeTurn(
         jevContexts.delete(idlest);
       }
     }
-    const [isCodingWork, preload] = await jevVerdicts;
+    const isCodingWork = await codingVerdict;
     if (isCodingWork) {
       messageText = `${messageText}\n\n<coding_work>${DELEGATE_NOTE}</coding_work>`;
     }
@@ -1179,18 +1213,23 @@ async function executeTurn(
     let nextAttemptLabel: 'fallback' | 'upgraded' | undefined = stickyUpgrade
       ? 'upgraded'
       : undefined;
-    // From the Jev calls' start, so it overlaps promptMs: only what exceeds
-    // the prompt build is wait.
-    const jevMs = Date.now() - jevStart;
     const toolsStart = Date.now();
     const built = await pendingTools;
     if (built.mcpStatus) {
       messageText = `${messageText}\n\n${built.mcpStatus}`;
     }
-    built.preload(preload.tools);
     const toolsWaitMs = Date.now() - toolsStart;
+    const preloadStart = Date.now();
+    const preload = await pendingPreload;
+    // What the turn waited on Jev past the prompt build and the tools.
+    const preloadWaitMs = Date.now() - preloadStart;
+    // From the Jev calls' start, so it overlaps promptMs.
+    const jevMs = Date.now() - jevStart;
+    built.preload(preload.tools);
     Object.assign(turnTiming, {
+      jevEffort: preload.effort,
       jevMs,
+      preloadWaitMs,
       promptMs,
       readsMs: setupReadMs,
       toolsWaitMs,
@@ -1201,6 +1240,7 @@ async function executeTurn(
     logger.info(
       {
         jevMs,
+        preloadWaitMs,
         promptMs,
         readsMs: setupReadMs,
         statusWaitMs: Date.now() - statusStart,
@@ -1437,28 +1477,58 @@ async function executeTurn(
         // The effort is decided here rather than inside the request so the
         // card can say which one this attempt runs on — and whether it was the
         // random draw (the effort experiment) or the thread's `--reasoning`.
-        let effort: { effort: string; random: boolean } | undefined;
+        let effort: { by: EffortSource; effort: string } | undefined;
         const cappedKey = `${threadId}|${attemptKey(currentAttempt)}`;
         const cappedUntil = thinkingCapped.get(cappedKey) ?? 0;
         if (cappedUntil <= Date.now()) {
           thinkingCapped.delete(cappedKey);
         }
         if (currentAttempt === lowEffortAttempt) {
-          effort = { effort: 'low', random: false };
+          effort = { by: 'retry', effort: 'low' };
         } else if (cappedUntil > Date.now() && !choice.effort) {
-          effort = { effort: 'low', random: false };
+          effort = { by: 'retry', effort: 'low' };
           // Already as low as the retry would go.
           lowEffortRetried = true;
         } else if (currentAttempt.provider === HACKCLUB_PROVIDER) {
           // `high` once ran at medium on haiku: its thinking filled the 8000
           // output tokens. A `high` attempt now gets a bigger cap
           // (HIGH_EFFORT_MAX_OUTPUT_TOKENS), so the choice stands.
-          effort = choice.effort
-            ? { effort: choice.effort, random: false }
-            : pickReasoningEffort({ attempt: currentAttempt, threadId });
+          // Jev's pick on haiku and luna (owner's call 2026-10-17); the draw
+          // only when Jev gave none, and every other model's medium.
+          const jevEffort = {
+            [LUNA_MODEL]: preload.effort?.luna,
+            [PRIMARY_MODEL]: preload.effort?.haiku,
+          }[currentAttempt.model];
+          if (choice.effort) {
+            effort = { by: 'flag', effort: choice.effort };
+          } else if (jevEffort) {
+            effort = { by: 'jev', effort: jevEffort };
+            if (
+              currentAttempt.model === LUNA_MODEL &&
+              preload.effort?.lunaRaised
+            ) {
+              saveThreadLunaEffort({ effort: jevEffort, threadId }).catch(
+                (error: unknown) => {
+                  logger.warn(
+                    { ...toLogError(error), threadId },
+                    "[agent] could not save the thread's raised luna effort"
+                  );
+                }
+              );
+            }
+          } else {
+            const drawn = pickReasoningEffort({
+              attempt: currentAttempt,
+              threadId,
+            });
+            effort = {
+              by: drawn.random ? 'random' : 'default',
+              effort: drawn.effort,
+            };
+          }
         }
         const modelDetails = effort
-          ? `${currentAttempt.model} · ${effort.effort} reasoning${effort.random ? ' (random)' : ''}`
+          ? `${currentAttempt.model} · ${effort.effort} reasoning${effort.by === 'jev' || effort.by === 'random' ? ` (${effort.by})` : ''}`
           : currentAttempt.model;
         cards.track({ id: modelTaskId, title: modelTaskTitle });
         yield {
@@ -1492,7 +1562,15 @@ async function executeTurn(
           // The user account's turns too: it was the one that answered an exam
           // from memory (issue #36).
           reasoningEffort: effort?.effort,
-          requireToolFirst: preload.needsResearch,
+          // Only for a message TO kyto: an unpinged reply that pinged another
+          // bot (where the right move is `skip`) was forced into a tool call
+          // with thinking off, and haiku "skipped" by posting "skip" through
+          // postMessage.
+          requireToolFirst:
+            preload.needsResearch &&
+            (turnMessage.isMention ||
+              slack.isDM(turnThread.id) ||
+              codeChannel === 'native'),
           // An image the SDK's schema would reject is dropped rather than
           // allowed to invalidate the whole prompt. Log it: silently ignoring
           // someone's screenshot is confusing enough to be worth a line.
@@ -2107,12 +2185,13 @@ async function executeTurn(
         }
         handledSteps = holder.calls;
         handledEffort = holder.reasoningEffort;
-        handledEffortRandom = effort?.random;
+        handledEffortBy = effort?.by;
         logger.info(
           {
             attempt: attemptLog(currentAttempt),
+            reasoningBy: effort?.by,
             reasoningEffort: holder.reasoningEffort,
-            reasoningRandom: effort?.random,
+            reasoningRandom: effort?.by === 'random',
             durationMs: Date.now() - attemptStart,
             outcome: skipped ? 'skip' : 'text',
             steps: holder.calls,

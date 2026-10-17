@@ -232,7 +232,7 @@ async function runAgent(
         // blocking the run for ten minutes on a click that may never come.
         unattended: true,
       }),
-      pickPreloadTools(reminder.text),
+      pickPreloadTools({ conversation: reminder.text }),
     ]);
     close = built.close;
     const words = new Set(reminder.text.match(/[\w-]+/g) ?? []);
