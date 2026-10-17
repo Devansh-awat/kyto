@@ -1,4 +1,5 @@
 import {
+  BYOK_EFFORTS,
   BYOK_MAX_OUTPUT_TOKENS,
   BYOK_MIN_OUTPUT_TOKENS,
   isByokProviderId,
@@ -1046,6 +1047,8 @@ bot.onModalSubmit(
       ?.trim()
       .replaceAll(',', '');
     const maxOutputTokens = maxTokensText ? Number(maxTokensText) : null;
+    const reasoningEffort =
+      z.enum(BYOK_EFFORTS).safeParse(event.values.byok_effort).data ?? null;
     if (
       maxOutputTokens !== null &&
       !(
@@ -1110,6 +1113,7 @@ bot.onModalSubmit(
           maxOutputTokens,
           model,
           provider,
+          reasoningEffort,
           userId: event.user.userId,
         });
       } catch (error) {
@@ -1154,6 +1158,7 @@ bot.onModalSubmit(
         maxOutputTokens,
         model,
         provider,
+        reasoningEffort,
         // Preserve the user's existing fallback choice across a rotation.
         serviceFallback: existing?.serviceFallback ?? false,
         userId: event.user.userId,

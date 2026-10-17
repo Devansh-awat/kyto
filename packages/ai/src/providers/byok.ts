@@ -25,6 +25,19 @@ export const BYOK_PROVIDER_IDS = [
 // above 128k most providers refuse the request outright.
 export const BYOK_MIN_OUTPUT_TOKENS = 1000;
 export const BYOK_MAX_OUTPUT_TOKENS = 128_000;
+// A key whose owner left the cap blank. 8000 (the shared key's cap) left GLM
+// 5.3 Flash, which thinks at `max` (95% of max_tokens) unless told otherwise,
+// ~400 tokens to answer in: turn after turn ended on finish=length with no
+// text after 1-4 minutes (#95). It's their own key; give it room.
+export const BYOK_DEFAULT_OUTPUT_TOKENS = 32_000;
+// At `high` the thinking takes ~80% of the cap; a blank cap is raised so the
+// answer still has room (owner's call 2026-10-17).
+export const BYOK_HIGH_EFFORT_OUTPUT_TOKENS = 64_000;
+// The effort an OpenRouter-format key gets when its owner picked none, instead
+// of the model's own default (`max` for GLM; owner's call 2026-10-17).
+export const BYOK_DEFAULT_EFFORT = 'medium';
+// What a key's owner can pick in App Home.
+export const BYOK_EFFORTS = ['low', 'medium', 'high'] as const;
 
 export type ByokProviderId = (typeof BYOK_PROVIDER_IDS)[number];
 
@@ -140,6 +153,7 @@ export function byokAttempt(input: {
   maxOutputTokens?: number | null;
   model: string;
   provider: ByokProviderId;
+  reasoningEffort?: string | null;
 }): ModelAttempt | undefined {
   const baseURL =
     input.baseUrl?.trim() || BYOK_PROVIDERS[input.provider].baseUrl;
@@ -155,5 +169,8 @@ export function byokAttempt(input: {
       : {}),
     model: input.model,
     provider: byokProviderName(input.provider),
+    ...(input.reasoningEffort
+      ? { reasoningEffort: input.reasoningEffort }
+      : {}),
   };
 }

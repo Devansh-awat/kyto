@@ -44,6 +44,9 @@ export const userModelCredentials = pgTable(
     // = kyto's default. A reasoning model can spend a small cap on thinking
     // alone and answer nothing (issue #73), so the key's owner picks it.
     maxOutputTokens: integer('max_output_tokens'),
+    // The key owner's reasoning effort (`low`/`medium`/`high`); null = kyto's
+    // default (BYOK_DEFAULT_EFFORT). Sent only on OpenRouter-format endpoints.
+    reasoningEffort: text('reasoning_effort'),
     lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()

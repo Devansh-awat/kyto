@@ -132,6 +132,7 @@ export async function resolveUserRouting({
       maxOutputTokens: credential.maxOutputTokens,
       model: credential.model,
       provider: credential.provider,
+      reasoningEffort: credential.reasoningEffort,
     });
     if (!attempt) {
       continue;

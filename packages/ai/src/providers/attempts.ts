@@ -37,6 +37,8 @@ export interface ModelAttempt {
   maxOutputTokens?: number;
   model: string;
   provider: string;
+  /** A BYOK key owner's own effort; unset = BYOK_DEFAULT_EFFORT. */
+  reasoningEffort?: string;
 }
 
 /**

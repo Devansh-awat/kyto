@@ -1,9 +1,12 @@
 import {
+  BYOK_DEFAULT_EFFORT,
+  BYOK_DEFAULT_OUTPUT_TOKENS,
+  BYOK_EFFORTS,
+  BYOK_HIGH_EFFORT_OUTPUT_TOKENS,
   BYOK_MAX_OUTPUT_TOKENS,
   BYOK_MIN_OUTPUT_TOKENS,
   BYOK_PROVIDER_IDS,
   BYOK_PROVIDERS,
-  MAX_OUTPUT_TOKENS,
   personas,
 } from '@repo/ai';
 import type {
@@ -31,6 +34,11 @@ import {
 import { IDENTITY_TYPES, type IdentityType } from '@/lib/identity';
 import type { SlackBlock, SlackHomeView, SlackModalView } from '@/types/views';
 import type { ErasePreview } from './erase';
+
+const effortOption = (effort: string) => ({
+  text: plainText(effort[0]?.toUpperCase() + effort.slice(1)),
+  value: effort,
+});
 
 /** One channel group as App Home shows it: names resolved, ids kept for actions. */
 export interface RenderedChannelGroup {
@@ -195,7 +203,7 @@ function modelKeyBlocks(credentials: UserModelCredential[]): SlackBlock[] {
           value: credential.provider,
         },
         text: mrkdwn(
-          `*${escapeSlackText(label)}* — \`${escapeSlackText(credential.model)}\` · key ${escapeSlackText(credential.keyPreview)}${credential.maxOutputTokens ? ` · max ${credential.maxOutputTokens} tokens` : ''} · ${badge}`
+          `*${escapeSlackText(label)}* — \`${escapeSlackText(credential.model)}\` · key ${escapeSlackText(credential.keyPreview)}${credential.maxOutputTokens ? ` · max ${credential.maxOutputTokens} tokens` : ''} · ${credential.reasoningEffort ?? BYOK_DEFAULT_EFFORT} effort · ${badge}`
         ),
         type: 'section',
       },
@@ -1155,14 +1163,30 @@ export function buildModelKeyModal(
           ...(credential?.maxOutputTokens
             ? { initial_value: String(credential.maxOutputTokens) }
             : {}),
-          placeholder: plainText(String(MAX_OUTPUT_TOKENS)),
+          placeholder: plainText(String(BYOK_DEFAULT_OUTPUT_TOKENS)),
           type: 'plain_text_input',
         },
         hint: plainText(
-          `Optional. The most a reply may use, thinking included (${BYOK_MIN_OUTPUT_TOKENS}-${BYOK_MAX_OUTPUT_TOKENS}; blank = ${MAX_OUTPUT_TOKENS}). Raise it if a reasoning model thinks until it runs out and answers nothing. It is billed to your key.`
+          `Optional. The most a reply may use, thinking included (${BYOK_MIN_OUTPUT_TOKENS}-${BYOK_MAX_OUTPUT_TOKENS}; blank = ${BYOK_DEFAULT_OUTPUT_TOKENS}, or ${BYOK_HIGH_EFFORT_OUTPUT_TOKENS} at high effort). Raise it if a reasoning model thinks until it runs out and answers nothing. It is billed to your key.`
         ),
         label: plainText('Max output tokens'),
         optional: true,
+        type: 'input',
+      },
+      {
+        block_id: 'byok_effort',
+        element: {
+          action_id: 'effort',
+          initial_option: effortOption(
+            credential?.reasoningEffort ?? BYOK_DEFAULT_EFFORT
+          ),
+          options: BYOK_EFFORTS.map(effortOption),
+          type: 'static_select',
+        },
+        hint: plainText(
+          'How hard the model thinks before answering. Higher is slower and uses more of your tokens; a --reasoning flag on a message still wins. Sent to Hack Club and OpenRouter keys only.'
+        ),
+        label: plainText('Reasoning effort'),
         type: 'input',
       },
     ],

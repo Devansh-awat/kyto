@@ -42,6 +42,11 @@ import {
   type ModelAttempt,
   PRIMARY_MODEL,
 } from './providers/attempts';
+import {
+  BYOK_DEFAULT_EFFORT,
+  BYOK_DEFAULT_OUTPUT_TOKENS,
+  BYOK_HIGH_EFFORT_OUTPUT_TOKENS,
+} from './providers/byok';
 import { CHATGPT_PROVIDER } from './providers/chatgpt';
 import { reportSpend } from './spend';
 import { stabilizeToolOrder } from './tool-order';
@@ -463,6 +468,18 @@ export function streamAttempt({
       return;
     }
   };
+  let defaultOutputTokens =
+    reasoningEffort === 'high'
+      ? HIGH_EFFORT_MAX_OUTPUT_TOKENS
+      : MAX_OUTPUT_TOKENS;
+  // A key owner's blank cap gets room for its thinking: it's their key. Their
+  // own effort counts when the caller chose none (the request tuner sends it).
+  if (attempt.byokProvider !== undefined) {
+    defaultOutputTokens =
+      (reasoningEffort ?? attempt.reasoningEffort) === 'high'
+        ? BYOK_HIGH_EFFORT_OUTPUT_TOKENS
+        : BYOK_DEFAULT_OUTPUT_TOKENS;
+  }
   const result = streamText({
     ...promptInput,
     abortSignal,
@@ -472,11 +489,7 @@ export function streamAttempt({
     ...(attempt.provider === HACKCLUB_PROVIDER ||
     attempt.byokProvider !== undefined
       ? {
-          maxOutputTokens:
-            attempt.maxOutputTokens ??
-            (reasoningEffort === 'high'
-              ? HIGH_EFFORT_MAX_OUTPUT_TOKENS
-              : MAX_OUTPUT_TOKENS),
+          maxOutputTokens: attempt.maxOutputTokens ?? defaultOutputTokens,
         }
       : {}),
     // We run our own fallback chain across providers, so the SDK's default of 3
@@ -870,7 +883,12 @@ function tunedFetch({
     serviceTier === 'flex' &&
     attempt.provider === HACKCLUB_PROVIDER &&
     attempt.model.startsWith('openai/');
-  const reasoningEffort = effort ?? pickReasoningEffort({ attempt }).effort;
+  const byokDefaultEffort =
+    effort === undefined && OPENROUTER_FORMAT_BYOK.has(attempt.provider);
+  // A `--reasoning` flag or the low-effort retry wins over the key's own pick.
+  const reasoningEffort = byokDefaultEffort
+    ? (attempt.reasoningEffort ?? BYOK_DEFAULT_EFFORT)
+    : (effort ?? pickReasoningEffort({ attempt }).effort);
   if (attempt.provider === HACKCLUB_PROVIDER) {
     holder.reasoningEffort = reasoningEffort;
   }
@@ -889,7 +907,7 @@ function tunedFetch({
           : undefined,
         toolOrder,
         {
-          explicitEffort: effort !== undefined,
+          explicitEffort: effort !== undefined || byokDefaultEffort,
           flex,
           historyMessages,
           reasoningEffort,
@@ -1125,9 +1143,9 @@ export function tuneBody(
       }
       changed = true;
     }
-    // A BYOK key on an OpenRouter-format endpoint gets an effort only when the
-    // caller chose one: unset, GLM thinks at its own default until the output
-    // cap and returns no text at all (issue #73).
+    // A BYOK key on an OpenRouter-format endpoint gets the caller's effort, or
+    // BYOK_DEFAULT_EFFORT: unset, GLM thinks at its own default (`max`) until
+    // the output cap and returns no text at all (issues #73, #95).
     const takesReasoning =
       attempt.provider === HACKCLUB_PROVIDER ||
       (explicitEffort && OPENROUTER_FORMAT_BYOK.has(attempt.provider));

@@ -98,6 +98,7 @@ CREATE INDEX IF NOT EXISTS model_spend_created_idx ON model_spend (created_at); 
 CREATE INDEX IF NOT EXISTS model_spend_thread_idx ON model_spend (thread_id); -- 2026-10-14, thread-scoped !spend
 ALTER TABLE inflight_turns ADD COLUMN IF NOT EXISTS effects jsonb NOT NULL DEFAULT '[]'::jsonb; -- 2026-10-11
 ALTER TYPE reminder_recurrence ADD VALUE IF NOT EXISTS 'event'; -- 2026-10-11
+ALTER TABLE user_model_credentials ADD COLUMN IF NOT EXISTS reasoning_effort text; -- 2026-10-17, a BYOK key's own effort (#95)
 ALTER TABLE reminders ADD COLUMN IF NOT EXISTS trigger jsonb; ALTER TABLE reminders ADD COLUMN IF NOT EXISTS webhook_secret text; ALTER TABLE reminders ADD COLUMN IF NOT EXISTS last_fired_at timestamptz; -- 2026-10-11
 ALTER TABLE thread_model_choices ADD COLUMN IF NOT EXISTS memory_mode text; -- 2026-10-11
 ALTER TABLE user_model_credentials ADD COLUMN IF NOT EXISTS max_output_tokens integer; -- 2026-10-12

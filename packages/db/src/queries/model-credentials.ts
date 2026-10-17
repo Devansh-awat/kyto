@@ -24,6 +24,7 @@ const publicColumns = {
   maxOutputTokens: userModelCredentials.maxOutputTokens,
   model: userModelCredentials.model,
   provider: userModelCredentials.provider,
+  reasoningEffort: userModelCredentials.reasoningEffort,
   serviceFallback: userModelCredentials.serviceFallback,
   updatedAt: userModelCredentials.updatedAt,
   userId: userModelCredentials.userId,
@@ -64,6 +65,7 @@ export async function upsertUserModelCredential(input: {
   maxOutputTokens?: number | null;
   model: string;
   provider: string;
+  reasoningEffort?: string | null;
   serviceFallback?: boolean;
   userId: string;
 }): Promise<void> {
@@ -76,6 +78,7 @@ export async function upsertUserModelCredential(input: {
       maxOutputTokens: input.maxOutputTokens ?? null,
       model: input.model,
       provider: input.provider,
+      reasoningEffort: input.reasoningEffort ?? null,
       serviceFallback: input.serviceFallback ?? false,
       userId: input.userId,
       // A new key (or a rotation) invalidates whatever the last check said.
@@ -89,6 +92,7 @@ export async function upsertUserModelCredential(input: {
         keyPreview: input.keyPreview,
         maxOutputTokens: input.maxOutputTokens ?? null,
         model: input.model,
+        reasoningEffort: input.reasoningEffort ?? null,
         ...(input.serviceFallback === undefined
           ? {}
           : { serviceFallback: input.serviceFallback }),
@@ -108,6 +112,7 @@ export async function updateUserModelCredentialConfig(input: {
   maxOutputTokens?: number | null;
   model: string;
   provider: string;
+  reasoningEffort?: string | null;
   userId: string;
 }): Promise<void> {
   await db
@@ -116,6 +121,7 @@ export async function updateUserModelCredentialConfig(input: {
       baseUrl: input.baseUrl ?? null,
       maxOutputTokens: input.maxOutputTokens ?? null,
       model: input.model,
+      reasoningEffort: input.reasoningEffort ?? null,
     })
     .where(
       and(
