@@ -250,6 +250,9 @@ const PERCENT = 100;
  * effort, over every model call (turns, subagents, Kevinton, reminders, the
  * digest, …; `source` keeps one), as one six-row table. Haiku's cost is what
  * Hack Club bills (30% off, it is pinned to Anthropic), luna's is list price.
+ * No answer length: that follows the question, not the model (owner's call
+ * 2026-10-17). The waits are split by request because a call's first request
+ * processes the whole prompt and its later ones only the new tool result.
  */
 export async function describeEffortStats(
   args: string
@@ -281,12 +284,12 @@ export async function describeEffortStats(
         (entry) => entry.model === model && entry.effort === effort
       );
       if (!cell) {
-        return `| ${name} | 0 | – | – | – | – | – | – | – |`;
+        return `| ${name} | 0 | – | – | – | – | – | – | – | – |`;
       }
       const discount =
         model === PRIMARY_MODEL ? 1 - HACKCLUB_CLAUDE_DISCOUNT : 1;
       const failed = cell.erroredCalls + cell.abortedCalls;
-      return `| ${name} | ${cell.calls}${failed > 0 ? ` (${failed} failed)` : ''} | $${f(cell.costPerCall === null ? null : cell.costPerCall * discount, 4)} | ${f(cell.cacheReadShare === null ? null : cell.cacheReadShare * PERCENT)}% | ${s(cell.medianCallMs)} (p90 ${s(cell.p90CallMs)}) | ${f(cell.stepsPerCall, 1)} | ${f(cell.perCall.reasoningTokens)} | ${f(cell.perCall.textTokens)} | ${f(cell.answerTokensPerSecond)} |`;
+      return `| ${name} | ${cell.calls}${failed > 0 ? ` (${failed} failed)` : ''} | $${f(cell.costPerCall === null ? null : cell.costPerCall * discount, 4)} | ${f(cell.cacheReadShare === null ? null : cell.cacheReadShare * PERCENT)}% | ${s(cell.medianCallMs)} (p90 ${s(cell.p90CallMs)}) | ${f(cell.stepsPerCall, 1)} | ${f(cell.perThinkingStep.reasoningTokens)} | ${s(cell.firstRequest.ttftMs)} / ${s(cell.laterRequests.ttftMs)} | ${s(cell.firstRequest.thinkMs)} / ${s(cell.laterRequests.thinkMs)} | ${f(cell.answerTokensPerSecond)} |`;
     })
   );
   const title = `*Haiku vs luna by effort, ${scope}* (Hack Club prices, haiku's 30% off applied)`;
@@ -294,8 +297,8 @@ export async function describeEffortStats(
     markdown: [
       title,
       '',
-      '| model · effort | calls | $/call | cached | call median | steps/call | thinking tok/call | answer tok/call | answer tok/s |',
-      '|---|---|---|---|---|---|---|---|---|',
+      '| model · effort | calls | $/call | cached | call median | steps/call | thinking tok/thinking step | first token, 1st / later request | answer starts, 1st / later request | answer tok/s |',
+      '|---|---|---|---|---|---|---|---|---|---|',
       ...rows,
     ].join('\n'),
     text: title,
