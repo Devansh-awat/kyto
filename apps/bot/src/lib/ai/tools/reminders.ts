@@ -100,13 +100,23 @@ function describeTrigger(trigger: ReminderTrigger | null): string {
     const matching = trigger.pattern
       ? ` matching ${trigger.regex ? `/${trigger.pattern}/i` : `"${trigger.pattern}"`}`
       : '';
-    return `on each new message${from} in <#${trigger.channel}>${matching}`;
+    const thread = trigger.threadTs ? ' in one thread' : '';
+    return `on each new message${from}${thread} in <#${trigger.channel}>${matching}`;
   }
   if (trigger.source === 'slack_reaction') {
     const emoji = trigger.emoji ? `:${trigger.emoji}:` : 'any reaction';
     const from = trigger.fromUser ? ` from <@${trigger.fromUser}>` : '';
     const on = trigger.messageTs ? ' on one message' : '';
-    return `on ${emoji}${from}${on} in <#${trigger.channel}>`;
+    const thread = trigger.threadTs ? ' in one thread' : '';
+    if (trigger.minReactions) {
+      const what = trigger.emoji ? `${emoji} reactions` : 'reactions';
+      return `once per message reaching ${trigger.minReactions} ${what}${on}${thread} in <#${trigger.channel}>`;
+    }
+    return `on ${emoji}${from}${on}${thread} in <#${trigger.channel}>`;
+  }
+  if (trigger.source === 'slack_replies') {
+    const which = trigger.threadTs ? 'when one thread' : 'once per thread';
+    return `${which} reaching ${trigger.minReplies} replies in <#${trigger.channel}>`;
   }
   if (trigger.source === 'github') {
     return `on GitHub webhook events${trigger.events?.length ? ` (${trigger.events.join(', ')})` : ''}`;
@@ -115,6 +125,8 @@ function describeTrigger(trigger: ReminderTrigger | null): string {
 }
 
 const SLACK_ID = /^[A-Z0-9]{6,}$/;
+const SLACK_TS = /^\d{9,}\.\d+$/;
+const MAX_THRESHOLD = 10_000;
 
 export function scheduleEventReminderTool({ message }: { message: Message }) {
   const isOwner = isOwnerOf(message);
@@ -123,14 +135,22 @@ export function scheduleEventReminderTool({ message }: { message: Message }) {
 
 Triggers (\`on\`):
 - 'slack_message': a new message in \`watchChannel\`, optionally only \`fromUser\` and only matching \`pattern\` (case-insensitive text, or a regex with \`regex: true\`). kyto must be in that channel, and the asker must be able to read it.
-- 'slack_reaction': a reaction added in \`watchChannel\`, optionally only \`emoji\` (name, no colons), \`fromUser\`, or on one message (\`messageTs\`).
+- 'slack_reaction': a reaction added in \`watchChannel\`, optionally only \`emoji\` (name, no colons), \`fromUser\`, on one message (\`messageTs\`) or in one thread (\`threadTs\`). With \`minReactions\` it fires ONCE per message, when that message's reactions reach the number (of \`emoji\` when set, else of every emoji) — "when a message gets 12 reactions".
+- 'slack_replies': fires ONCE per thread in \`watchChannel\` when its replies reach \`minReplies\`; \`threadTs\` watches just that one thread.
+- 'slack_message' also takes \`threadTs\` to watch only one thread (its root message counts).
 - 'webhook': you get back a secret URL; anything that POSTs to it fires the reminder. Give the URL ONLY to the person who asked, in this thread: anyone holding it can fire it.
 - 'github': you get back a URL and a secret for the repo's Settings → Webhooks (content type application/json); only GitHub-signed calls fire it. \`githubEvents\` narrows it ("push", "pull_request.opened", "issues", "release.published").
 
-An 'agent' reminder receives the event (the message text, the reaction, the webhook body) as untrusted data to act on. Fires are spaced at least a minute apart (10 minutes for 'agent', 5 for 'bash'); a burst of events fires once. Cancel, pause, resume and list work as for any reminder.`,
+An 'agent' reminder receives the event (the message text, the reaction, the webhook body) as untrusted data to act on. Fires are spaced at least a minute apart (10 minutes for 'agent', 5 for 'bash'); a burst of events fires once. Count triggers (\`minReactions\`, 'slack_replies') skip that spacing: each message or thread fires once, ever. Cancel, pause, resume and list work as for any reminder.`,
     inputSchema: z.object({
       on: z
-        .enum(['slack_message', 'slack_reaction', 'webhook', 'github'])
+        .enum([
+          'slack_message',
+          'slack_reaction',
+          'slack_replies',
+          'webhook',
+          'github',
+        ])
         .describe('What fires it.'),
       text: z
         .string()
@@ -196,6 +216,28 @@ An 'agent' reminder receives the event (the message text, the reaction, the webh
         .string()
         .optional()
         .describe("'slack_reaction': only reactions on this message's ts."),
+      minReactions: z
+        .number()
+        .int()
+        .min(2)
+        .max(MAX_THRESHOLD)
+        .optional()
+        .describe(
+          "'slack_reaction': fire once per message when its reactions reach this many."
+        ),
+      minReplies: z
+        .number()
+        .int()
+        .min(1)
+        .max(MAX_THRESHOLD)
+        .optional()
+        .describe("'slack_replies' (required): the reply count that fires it."),
+      threadTs: z
+        .string()
+        .optional()
+        .describe(
+          'Slack triggers: only this one thread (the root message ts, e.g. 1760000000.123456).'
+        ),
       githubEvents: z
         .array(z.string().min(1).max(60))
         .max(20)
@@ -242,7 +284,11 @@ An 'agent' reminder receives the event (the message text, the reaction, the webh
         });
         await refreshEventReminders();
         const where = targetChannel ? `in <#${targetChannel}>` : 'via DM';
-        const summary = `Set up a ${kind} reminder ${describeTrigger(built.trigger)}, posting ${where}. Fires at most once every ${EVENT_COOLDOWN_SECONDS_BY_KIND[kind] / 60} min.`;
+        const counted =
+          built.trigger.source === 'slack_replies' ||
+          (built.trigger.source === 'slack_reaction' &&
+            built.trigger.minReactions);
+        const summary = `Set up a ${kind} reminder ${describeTrigger(built.trigger)}, posting ${where}. ${counted ? 'Fires once per message or thread.' : `Fires at most once every ${EVENT_COOLDOWN_SECONDS_BY_KIND[kind] / 60} min.`}`;
         if (!needsSecret) {
           return { id: reminder.id, success: true, summary };
         }
@@ -288,9 +334,12 @@ async function buildTrigger({
     fromUser?: string;
     githubEvents?: string[];
     messageTs?: string;
+    minReactions?: number;
+    minReplies?: number;
     on: ReminderTrigger['source'];
     pattern?: string;
     regex?: boolean;
+    threadTs?: string;
     watchChannel?: string;
   };
   message: Message;
@@ -310,6 +359,16 @@ async function buildTrigger({
   }
   if (!input.watchChannel) {
     return { error: 'A Slack trigger needs watchChannel.' };
+  }
+  if (input.threadTs && !SLACK_TS.test(input.threadTs)) {
+    return { error: 'threadTs must be a message ts like 1760000000.123456.' };
+  }
+  if (input.on === 'slack_replies' && !input.minReplies) {
+    return { error: "'slack_replies' needs minReplies." };
+  }
+  // A count is of everyone's reactions, so "only from this person" means nothing.
+  if (input.minReactions && input.fromUser) {
+    return { error: 'minReactions counts everyone; drop fromUser.' };
   }
   const channel = toRawSlackChannelId(input.watchChannel);
   const fromUser = input.fromUser?.replace(/^<@|>$/g, '');
@@ -349,6 +408,17 @@ async function buildTrigger({
         ...(fromUser ? { fromUser } : {}),
         ...(input.pattern ? { pattern: input.pattern } : {}),
         ...(input.regex ? { regex: true } : {}),
+        ...(input.threadTs ? { threadTs: input.threadTs } : {}),
+      },
+    };
+  }
+  if (input.on === 'slack_replies') {
+    return {
+      trigger: {
+        channel,
+        minReplies: input.minReplies ?? 1,
+        source: 'slack_replies',
+        ...(input.threadTs ? { threadTs: input.threadTs } : {}),
       },
     };
   }
@@ -359,6 +429,8 @@ async function buildTrigger({
       ...(input.emoji ? { emoji: input.emoji.replaceAll(':', '') } : {}),
       ...(fromUser ? { fromUser } : {}),
       ...(input.messageTs ? { messageTs: input.messageTs } : {}),
+      ...(input.minReactions ? { minReactions: input.minReactions } : {}),
+      ...(input.threadTs ? { threadTs: input.threadTs } : {}),
     },
   };
 }

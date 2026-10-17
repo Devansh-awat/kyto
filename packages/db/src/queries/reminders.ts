@@ -5,6 +5,7 @@ import {
   type Reminder,
   type ReminderKind,
   type ReminderTrigger,
+  reminderEventMarks,
   reminders,
 } from '../schema';
 import { computeNextRun, type ReminderSchedule } from './reminder-schedule';
@@ -337,5 +338,24 @@ export async function claimEventFire({
       )
     )
     .returning({ id: reminders.id });
+  return claimed.length > 0;
+}
+
+/**
+ * Claim one message or thread for a threshold trigger; false when it has
+ * already fired for it.
+ */
+export async function claimEventMark({
+  key,
+  reminderId,
+}: {
+  key: string;
+  reminderId: string;
+}): Promise<boolean> {
+  const claimed = await db
+    .insert(reminderEventMarks)
+    .values({ key, reminderId })
+    .onConflictDoNothing()
+    .returning({ key: reminderEventMarks.key });
   return claimed.length > 0;
 }

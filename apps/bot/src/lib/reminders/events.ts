@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import {
   claimEventFire,
+  claimEventMark,
   getReminder,
   listActiveEventReminders,
   type Reminder,
@@ -93,10 +94,16 @@ export function patternMatches({
 }
 
 async function fire({
+  onceKey,
   reminder,
   payload,
   summary,
 }: {
+  /**
+   * A threshold trigger's message or thread: it fires once per key, so the
+   * burst cooldown would only drop a second message crossing it.
+   */
+  onceKey?: string;
   payload: string;
   reminder: Reminder;
   summary: string;
@@ -104,8 +111,18 @@ async function fire({
   if (!bot) {
     return;
   }
+  if (
+    onceKey &&
+    !(await claimEventMark({ key: onceKey, reminderId: reminder.id }).catch(
+      () => false
+    ))
+  ) {
+    return;
+  }
   const claimed = await claimEventFire({
-    cooldownMs: EVENT_COOLDOWN_SECONDS_BY_KIND[reminder.kind] * 1000,
+    cooldownMs: onceKey
+      ? 0
+      : EVENT_COOLDOWN_SECONDS_BY_KIND[reminder.kind] * 1000,
     reminder,
   }).catch(() => false);
   if (!claimed) {
@@ -161,6 +178,7 @@ const messageEventSchema = z.looseObject({
   channel: z.string(),
   subtype: z.string().optional(),
   text: z.string().optional(),
+  thread_ts: z.string().optional(),
   ts: z.string(),
   user: z.string().optional(),
 });
@@ -186,10 +204,21 @@ export async function onSlackMessage(rawEvent: unknown): Promise<void> {
   if (!parsed.success) {
     return;
   }
-  const { bot_id: botId, channel, subtype, text = '', ts, user } = parsed.data;
+  const {
+    bot_id: botId,
+    channel,
+    subtype,
+    text = '',
+    thread_ts: threadTs,
+    ts,
+    user,
+  } = parsed.data;
   // kyto's own posts never trigger one, so two reminders can't feed each other.
   if (!MESSAGE_SUBTYPES.has(subtype) || isKyto(user, botId)) {
     return;
+  }
+  if (threadTs && threadTs !== ts) {
+    await onThreadReply({ channel, threadTs });
   }
   const body = text.replace(/^\s*(?:<@[A-Z0-9]+>\s*)*/, '');
   if (body.startsWith('##') || /^!secret\b/i.test(body)) {
@@ -201,6 +230,7 @@ export async function onSlackMessage(rawEvent: unknown): Promise<void> {
     return (
       trigger?.source === 'slack_message' &&
       trigger.channel === channel &&
+      (!trigger.threadTs || trigger.threadTs === (threadTs ?? ts)) &&
       (!trigger.fromUser ||
         trigger.fromUser === user ||
         trigger.fromUser === botId) &&
@@ -228,6 +258,91 @@ export async function onSlackMessage(rawEvent: unknown): Promise<void> {
   }
 }
 
+/**
+ * A message's text for a fire's payload: a person's words go into a model run
+ * only with their consent (the opt-in), a bot's post is fair game, and a
+ * `##` message is invisible to kyto.
+ */
+async function consentedText(message: {
+  bot_id?: string;
+  text?: string;
+  user?: string;
+}): Promise<string | undefined> {
+  const text = message.text ?? '';
+  if (!text || text.trimStart().startsWith('##')) {
+    return;
+  }
+  if (message.user && !message.bot_id && !(await isUserAllowed(message.user))) {
+    return;
+  }
+  return text;
+}
+
+const repliesSchema = z.looseObject({
+  messages: z
+    .array(
+      z.looseObject({
+        bot_id: z.string().optional(),
+        reply_count: z.number().optional(),
+        text: z.string().optional(),
+        user: z.string().optional(),
+      })
+    )
+    .optional(),
+});
+
+/** A reply landed in a thread: has it reached a `slack_replies` count? */
+async function onThreadReply({
+  channel,
+  threadTs,
+}: {
+  channel: string;
+  threadTs: string;
+}): Promise<void> {
+  const matching = cache.filter((reminder) => {
+    const trigger = reminder.trigger;
+    return (
+      trigger?.source === 'slack_replies' &&
+      trigger.channel === channel &&
+      (!trigger.threadTs || trigger.threadTs === threadTs)
+    );
+  });
+  if (matching.length === 0) {
+    return;
+  }
+  const parsed = repliesSchema.safeParse(
+    await slack.webClient.conversations
+      .replies({ channel, limit: 1, ts: threadTs })
+      .catch(() => undefined)
+  );
+  const root = parsed.success ? parsed.data.messages?.[0] : undefined;
+  const replies = root?.reply_count;
+  if (!(root && replies)) {
+    return;
+  }
+  const reached = matching.filter(
+    (reminder) =>
+      reminder.trigger?.source === 'slack_replies' &&
+      replies >= reminder.trigger.minReplies
+  );
+  if (reached.length === 0) {
+    return;
+  }
+  const link = await permalink(channel, threadTs);
+  const text = await consentedText(root);
+  for (const reminder of reached) {
+    if (!(await creatorMayWatch({ channel, reminder }))) {
+      continue;
+    }
+    await fire({
+      onceKey: threadTs,
+      payload: `the thread ${link} in <#${channel}> reached ${replies} replies${text ? `; its first message:\n${text}` : ''}`,
+      reminder,
+      summary: `triggered by a thread reaching ${replies} replies: ${link}`,
+    });
+  }
+}
+
 const reactionEventSchema = z.looseObject({
   item: z.looseObject({
     channel: z.string().optional(),
@@ -236,6 +351,47 @@ const reactionEventSchema = z.looseObject({
   }),
   reaction: z.string(),
   user: z.string(),
+});
+
+// Skin tones arrive as `+1::skin-tone-2`; a trigger on `+1` means all of them.
+const sameEmoji = (name: string, wanted: string) =>
+  name === wanted || name.startsWith(`${wanted}::`);
+
+/** How many reactions a message has: of `emoji` when given, else of all. */
+export function reactionCount({
+  emoji,
+  reactions,
+}: {
+  emoji?: string;
+  reactions: { count?: number; name?: string }[];
+}): number {
+  let total = 0;
+  for (const reaction of reactions) {
+    if (!emoji || sameEmoji(reaction.name ?? '', emoji)) {
+      total += reaction.count ?? 0;
+    }
+  }
+  return total;
+}
+
+const reactedMessageSchema = z.looseObject({
+  message: z
+    .looseObject({
+      bot_id: z.string().optional(),
+      reactions: z
+        .array(
+          z.looseObject({
+            count: z.number().optional(),
+            name: z.string().optional(),
+          })
+        )
+        .optional(),
+      text: z.string().optional(),
+      thread_ts: z.string().optional(),
+      ts: z.string().optional(),
+      user: z.string().optional(),
+    })
+    .optional(),
 });
 
 /** A Slack `reaction_added` event. */
@@ -257,7 +413,7 @@ export async function onSlackReaction(rawEvent: unknown): Promise<void> {
     return (
       trigger?.source === 'slack_reaction' &&
       trigger.channel === channel &&
-      (!trigger.emoji || trigger.emoji === reaction) &&
+      (!trigger.emoji || sameEmoji(reaction, trigger.emoji)) &&
       (!trigger.fromUser || trigger.fromUser === user) &&
       (!trigger.messageTs || trigger.messageTs === ts)
     );
@@ -265,15 +421,59 @@ export async function onSlackReaction(rawEvent: unknown): Promise<void> {
   if (matching.length === 0) {
     return;
   }
+  // A count or a thread needs the message itself: one read for every trigger.
+  const needsMessage = matching.some(
+    (reminder) =>
+      reminder.trigger?.source === 'slack_reaction' &&
+      (reminder.trigger.minReactions || reminder.trigger.threadTs)
+  );
+  const fetched = needsMessage
+    ? reactedMessageSchema.safeParse(
+        await slack.webClient.reactions
+          .get({ channel, full: true, timestamp: ts })
+          .catch(() => undefined)
+      )
+    : undefined;
+  const message = fetched?.success ? fetched.data.message : undefined;
   const link = await permalink(channel, ts);
   for (const reminder of matching) {
+    const trigger = reminder.trigger;
+    if (trigger?.source !== 'slack_reaction') {
+      continue;
+    }
+    if (
+      trigger.threadTs &&
+      trigger.threadTs !== (message?.thread_ts ?? message?.ts)
+    ) {
+      continue;
+    }
+    const count = trigger.minReactions
+      ? reactionCount({
+          emoji: trigger.emoji,
+          reactions: message?.reactions ?? [],
+        })
+      : 0;
+    if (trigger.minReactions && count < trigger.minReactions) {
+      continue;
+    }
     if (!(await creatorMayWatch({ channel, reminder }))) {
       continue;
     }
+    if (!trigger.minReactions) {
+      await fire({
+        payload: `<@${user}> reacted :${reaction}: to ${link} in <#${channel}>`,
+        reminder,
+        summary: `triggered by <@${user}> reacting :${reaction}: to ${link}`,
+      });
+      continue;
+    }
+    const what = trigger.emoji ? `:${trigger.emoji}: reactions` : 'reactions';
+    const text = message ? await consentedText(message) : undefined;
     await fire({
-      payload: `<@${user}> reacted :${reaction}: to ${link} in <#${channel}>`,
+      onceKey: ts,
+      payload: `${link} in <#${channel}> reached ${count} ${what} (latest :${reaction}: from <@${user}>)${text ? `; the message:\n${text}` : ''}`,
       reminder,
-      summary: `triggered by <@${user}> reacting :${reaction}: to ${link}`,
+      summary: `triggered by a message reaching ${count} ${what}: ${link}`,
     });
   }
 }

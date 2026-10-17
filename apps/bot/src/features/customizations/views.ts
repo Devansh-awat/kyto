@@ -64,6 +64,7 @@ const EVENT_SOURCE_LABELS: Record<string, string> = {
   github: 'on a GitHub webhook',
   slack_message: 'on new messages',
   slack_reaction: 'on reactions',
+  slack_replies: 'on thread replies',
   webhook: 'on a webhook call',
 };
 

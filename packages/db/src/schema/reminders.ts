@@ -5,6 +5,7 @@ import {
   jsonb,
   pgEnum,
   pgTable,
+  primaryKey,
   text,
   timestamp,
 } from 'drizzle-orm/pg-core';
@@ -45,6 +46,8 @@ export type ReminderTrigger =
       /** Case-insensitive substring, or a regex when `regex` is set. */
       pattern?: string;
       regex?: boolean;
+      /** Only messages in this one thread (its root ts; the root counts). */
+      threadTs?: string;
     }
   | {
       source: 'slack_reaction';
@@ -54,6 +57,21 @@ export type ReminderTrigger =
       fromUser?: string;
       /** Only reactions on this one message. */
       messageTs?: string;
+      /**
+       * Fire once per message when its reactions reach this many (of `emoji`
+       * when set, else of every emoji), instead of on each reaction.
+       */
+      minReactions?: number;
+      /** Only reactions on messages in this one thread. */
+      threadTs?: string;
+    }
+  | {
+      /** Fire once per thread when its replies reach `minReplies`. */
+      source: 'slack_replies';
+      channel: string;
+      minReplies: number;
+      /** Only this one thread. */
+      threadTs?: string;
     }
   | { source: 'webhook' }
   | {
@@ -125,6 +143,23 @@ export const reminders = pgTable(
     index('reminders_due_idx').on(table.active, table.nextRunAt),
     index('reminders_user_idx').on(table.userId),
   ]
+);
+
+// A threshold trigger fires once per message or thread: the row is claimed
+// before the fire, so the 13th reaction, a removed-and-re-added 12th, or a
+// restart in between never fires it again.
+export const reminderEventMarks = pgTable(
+  'reminder_event_marks',
+  {
+    reminderId: text('reminder_id')
+      .notNull()
+      .references(() => reminders.id, { onDelete: 'cascade' }),
+    key: text('key').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.reminderId, table.key] })]
 );
 
 export type Reminder = typeof reminders.$inferSelect;
