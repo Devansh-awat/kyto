@@ -233,7 +233,11 @@ export function searchSlackTool({ message }: { message: Message }) {
           'Search text. Supports Slack modifiers like from:@user, in:#channel, in:@user (DM), has:link, has:star, before:2026-01-01, after:2026-01-01, is:thread, filename:name, ext:filetype.'
         ),
     }),
-    execute: rememberRepeatReads(async ({ cursor, order, query }) => {
+    execute: rememberRepeatReads(async ({ cursor, order, query: asked }) => {
+      // `in:C0123ABCD` (a bare id) matches nothing and says so with an empty
+      // ok, which read as "not in that channel"; `in:<#C0123ABCD>` and
+      // `in:#name` both work (checked 2026-10-17).
+      const query = asked.replace(/\bin:([CGD][A-Z0-9]{8,})\b/g, 'in:<#$1>');
       const userId = message.author.userId;
       const currentChannel = slack.channelIdFromThreadId(message.threadId);
       const parsedRaw = actionTokenSchema.safeParse(message.raw);

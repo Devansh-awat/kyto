@@ -35,26 +35,39 @@ interface TodoList {
 // a person): one move after they settle, not one per message.
 const MOVE_DEBOUNCE_MS = 1500;
 const KEEP_MS = 24 * 60 * 60 * 1000;
-const MARKS: Record<TodoStatus, string> = {
-  done: '✅',
-  in_progress: '▶️',
-  pending: '⬜',
+// Slack's own plan block (the look of kyto's Thinking cards: a check, a
+// spinner, an empty circle), which a plain post accepts too (checked
+// 2026-10-17 with 30 items of 200 chars). It replaced emoji lines the owner
+// found ugly.
+const PLAN_STATUS: Record<TodoStatus, string> = {
+  done: 'complete',
+  in_progress: 'in_progress',
+  pending: 'pending',
 };
 
 const lists = new Map<string, TodoList>();
 
-function render(items: TodoItem[]): string {
+function render(items: TodoItem[]): {
+  blocks: unknown[];
+  fallbackText: string;
+} {
   const done = items.filter((item) => item.status === 'done').length;
-  const lines = items.map(({ status, text }) => {
-    const line = text.replaceAll('\n', ' ');
-    if (status === 'done') {
-      return `${MARKS.done} ~~${line}~~`;
-    }
-    return status === 'in_progress'
-      ? `${MARKS.in_progress} **${line}**`
-      : `${MARKS.pending} ${line}`;
-  });
-  return `**To-do** (${done}/${items.length})\n${lines.join('\n')}`;
+  const title = `To-do · ${done}/${items.length}`;
+  const current = items.find((item) => item.status === 'in_progress');
+  return {
+    blocks: [
+      {
+        tasks: items.map(({ status, text }, index) => ({
+          status: PLAN_STATUS[status],
+          task_id: `todo-${index}`,
+          title: text.replaceAll('\n', ' '),
+        })),
+        title,
+        type: 'plan',
+      },
+    ],
+    fallbackText: current ? `${title}: ${current.text}` : title,
+  };
 }
 
 function enqueue(list: TodoList, step: () => Promise<void>): Promise<void> {
@@ -78,10 +91,7 @@ async function repost(list: TodoList): Promise<void> {
       })
       .catch(() => undefined);
   }
-  const sent = await list.thread.post({
-    fallbackText: 'to-do list',
-    markdown: render(list.items),
-  });
+  const sent = await list.thread.post(render(list.items));
   list.ts = sent.id || undefined;
 }
 
@@ -112,10 +122,7 @@ export async function setTodos({
     // Edited in place while it is still the newest message: a repost on every
     // tick would ping the thread each time.
     if (list.ts && wasLive && !list.moving) {
-      await list.thread.update(list.ts, {
-        fallbackText: 'to-do list',
-        markdown: render(list.items),
-      });
+      await list.thread.update(list.ts, render(list.items));
       return;
     }
     await repost(list);

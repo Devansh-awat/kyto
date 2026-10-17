@@ -24,9 +24,9 @@ function fakeThread(id: string) {
       },
     },
     id,
-    post: ({ markdown }: { markdown: string }) => {
+    post: ({ fallbackText }: { fallbackText: string }) => {
       next += 1;
-      calls.push(`post ${next} ${markdown.split('\n')[0]}`);
+      calls.push(`post ${next} ${fallbackText}`);
       return Promise.resolve({ id: `${next}.0` });
     },
     update: (ts: string) => {
@@ -65,10 +65,10 @@ describe('to-do list', () => {
     await wait(1700);
     await endTodoTurn({ shutdown: false, threadId: 'slack:C1:1.0' });
     expect(calls).toEqual([
-      'post 101 **To-do** (0/2)',
+      'post 101 To-do · 0/2: a',
       'update 101.0',
       'delete 101.0',
-      'post 102 **To-do** (1/2)',
+      'post 102 To-do · 1/2: b',
     ]);
     // Unfinished: it stays for the next turn.
     expect(leftoverTodos('slack:C1:1.0')).toHaveLength(2);
@@ -78,7 +78,7 @@ describe('to-do list', () => {
     const { calls, thread } = fakeThread('slack:C1:2.0');
     await setTodos({ items: [{ status: 'done', text: 'a' }], thread });
     await endTodoTurn({ shutdown: false, threadId: 'slack:C1:2.0' });
-    expect(calls).toEqual(['post 101 **To-do** (1/1)', 'delete 101.0']);
+    expect(calls).toEqual(['post 101 To-do · 1/1', 'delete 101.0']);
     expect(leftoverTodos('slack:C1:2.0')).toBeUndefined();
   });
 });
