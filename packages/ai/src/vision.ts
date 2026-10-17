@@ -1,15 +1,10 @@
-// Describe images with a vision model so a TEXT-ONLY primary (deepseek-v4-flash,
-// served by a Cloudflare endpoint that 404s on image input) can still "see" what
-// a user attached: Gemini looks at the pixels and returns a thorough text
-// description, which is fed to the primary as ordinary text. One extra Gemini
-// call per image-carrying turn, on the owner's key (separate quota) — far
-// cheaper than burning a doomed primary attempt on every screenshot.
+// Describe images as text: for a text-only model, and for `viewImage` with a
+// specific question (a dedicated look at the pixels answers it better than the
+// turn's model glancing at the image mid-task). Runs on haiku or luna like every
+// non-turn call, Gemini behind them.
 
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { generateText } from 'ai';
-import type { ImageInput } from './agent';
-import type { ModelAttempt } from './providers/attempts';
-import { reportSpend } from './spend';
+import { type ImageInput, streamAttempt } from './agent';
+import { drawnAttempts, visionAttempt } from './providers/attempts';
 
 // Cap how many images one turn describes, so a bulk upload can't fan out into a
 // huge multi-image vision call. The rest are still on disk in the sandbox for a
@@ -30,12 +25,10 @@ const DESCRIBE_INSTRUCTION =
  * images, or to no description — never to a broken turn).
  */
 export async function describeImages({
-  attempt,
   images,
   question,
   signal,
 }: {
-  attempt: ModelAttempt;
   images: ImageInput[];
   /**
    * A specific thing to look for ("what does the error message say?", "how many
@@ -51,44 +44,39 @@ export async function describeImages({
   if (usable.length === 0) {
     return null;
   }
-  const model = createOpenAICompatible({
-    apiKey: attempt.apiKey,
-    baseURL: attempt.baseURL,
-    name: attempt.provider,
-  }).chatModel(attempt.model);
-  try {
-    const { steps, text } = await generateText({
-      abortSignal: signal,
-      messages: [
-        {
-          content: [
-            {
-              text: question
-                ? `${DESCRIBE_INSTRUCTION}\n\nThe assistant asked specifically: "${question}" — answer that FIRST, directly and completely, then give the description.`
-                : DESCRIBE_INSTRUCTION,
-              type: 'text' as const,
-            },
-            ...usable.map((image) => ({
-              data: image.bytes,
-              mediaType: image.mediaType,
-              type: 'file' as const,
-            })),
-          ],
-          role: 'user' as const,
-        },
-      ],
-      model,
-    });
-    reportSpend({
-      effort: undefined,
-      model: attempt.model,
-      provider: attempt.provider,
-      source: 'vision',
-      steps,
-    });
-    const trimmed = text.trim();
-    return trimmed.length > 0 ? trimmed : null;
-  } catch {
-    return null;
+  // Haiku or luna at random like every non-turn call (owner's call
+  // 2026-10-17); Gemini, then its dedicated vision model, behind them.
+  const attempts = [
+    ...drawnAttempts(),
+    ...(visionAttempt ? [visionAttempt] : []),
+  ].filter(
+    (attempt, index, all) =>
+      all.findIndex((other) => other.model === attempt.model) === index
+  );
+  for (const attempt of attempts) {
+    try {
+      const result = streamAttempt({
+        abortSignal: signal,
+        attempt,
+        holder: {},
+        images: usable,
+        prompt: question
+          ? `The assistant asked specifically: "${question}". Answer that FIRST, directly and completely, then give the description.`
+          : 'Describe the image(s).',
+        source: 'vision',
+        system: DESCRIBE_INSTRUCTION,
+        tools: {},
+      });
+      const text = (await result.text).trim();
+      if (text) {
+        return text;
+      }
+    } catch {
+      // The next model.
+    }
+    if (signal?.aborted) {
+      return null;
+    }
   }
+  return null;
 }

@@ -2,6 +2,7 @@ import {
   doublePrecision,
   index,
   integer,
+  jsonb,
   pgTable,
   serial,
   text,
@@ -30,6 +31,11 @@ export const modelSpend = pgTable(
     outputTokens: integer('output_tokens').notNull(),
     /** Part of outputTokens: thinking. 0 where the provider reports none. */
     reasoningTokens: integer('reasoning_tokens').notNull().default(0),
+    /**
+     * Per-step timing and amounts in tokens, chars and words (@repo/ai
+     * call-stats), from 2026-10-17; null before, or when nothing was measured.
+     */
+    stats: jsonb('stats').$type<{ steps: object[] }>(),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),

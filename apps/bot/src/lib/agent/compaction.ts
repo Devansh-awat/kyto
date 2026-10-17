@@ -1,4 +1,4 @@
-import { compactionAttempt, streamAttempt } from '@repo/ai';
+import { drawnAttempts, streamAttempt } from '@repo/ai';
 import {
   getThreadSummary,
   pruneThreadSummaries,
@@ -91,9 +91,6 @@ async function summarize({
   messages: CompactableMessage[];
   previous?: string;
 }): Promise<string | undefined> {
-  if (!compactionAttempt) {
-    return;
-  }
   const transcript = messages
     .map((message) => {
       const text = clamp(message.rendered, MAX_MESSAGE_CHARS);
@@ -115,32 +112,42 @@ async function summarize({
     '',
     `Return the updated digest only, under ${SUMMARY_MAX_CHARS} characters. Keep everything from the earlier digest that is still true and still matters.`,
   ].join('\n');
-  try {
-    const result = streamAttempt({
-      source: 'compaction',
-      abortSignal: AbortSignal.timeout(SUMMARY_TIMEOUT_MS),
-      attempt: compactionAttempt,
-      // Nothing reads the resolved model back off a compaction pass.
-      holder: {},
-      prompt,
-      system: SUMMARY_SYSTEM,
-      // The ONE model call kyto makes with no tools, and the exception is
-      // deliberate: SUMMARY_SYSTEM is a standalone summarizer prompt that never
-      // mentions a toolset, so there is no contradiction for a model to narrate
-      // (which is what "never launch a model without tools" exists to prevent —
-      // see lib/ai/stream/tool-complaints.ts). Handing it kyto's real tools would
-      // instead invite a background digest job to start calling them.
-      tools: {},
-    });
-    // Belt anyway: the digest is injected into later prompts as
-    // <earlier_in_this_thread>, so a stray complaint here would be read back as
-    // history by every subsequent turn of the thread.
-    const text = stripToolComplaints((await result.text).trim()).trim();
-    return text ? (clamp(text, SUMMARY_MAX_CHARS) ?? text) : undefined;
-  } catch (error) {
-    logger.warn({ err: error }, '[compaction] summary failed');
-    return;
+  // Haiku or luna at random like every non-turn call (owner's call
+  // 2026-10-17), Gemini behind them.
+  for (const attempt of drawnAttempts()) {
+    try {
+      const result = streamAttempt({
+        source: 'compaction',
+        abortSignal: AbortSignal.timeout(SUMMARY_TIMEOUT_MS),
+        attempt,
+        // Nothing reads the resolved model back off a compaction pass.
+        holder: {},
+        prompt,
+        system: SUMMARY_SYSTEM,
+        // The ONE model call kyto makes with no tools, and the exception is
+        // deliberate: SUMMARY_SYSTEM is a standalone summarizer prompt that
+        // never mentions a toolset, so there is no contradiction for a model
+        // to narrate (which is what "never launch a model without tools"
+        // exists to prevent — see lib/ai/stream/tool-complaints.ts). Handing
+        // it kyto's real tools would instead invite a background digest job to
+        // start calling them.
+        tools: {},
+      });
+      // Belt anyway: the digest is injected into later prompts as
+      // <earlier_in_this_thread>, so a stray complaint here would be read
+      // back as history by every subsequent turn of the thread.
+      const text = stripToolComplaints((await result.text).trim()).trim();
+      if (text) {
+        return clamp(text, SUMMARY_MAX_CHARS) ?? text;
+      }
+    } catch (error) {
+      logger.warn(
+        { err: error, model: attempt.model },
+        '[compaction] summary failed'
+      );
+    }
   }
+  return;
 }
 
 /** This thread's digest so far, or undefined if it has none (or it aged out). */

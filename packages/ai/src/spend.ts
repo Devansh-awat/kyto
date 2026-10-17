@@ -1,3 +1,4 @@
+import type { CallStats } from './call-stats';
 import { stepsCacheWrites, stepsCostUsd } from './usage-cost';
 
 /**
@@ -18,6 +19,8 @@ export interface SpendRecord {
   /** Part of `outputTokens`: thinking, shown or hidden. */
   reasoningTokens: number;
   source: string;
+  /** Per-step timing and amounts (call-stats.ts); absent if none was measured. */
+  stats?: CallStats;
 }
 
 let sink: ((record: SpendRecord) => void) | undefined;
@@ -31,12 +34,14 @@ export function reportSpend({
   model,
   provider,
   source,
+  stats,
   steps,
 }: {
   effort: string | undefined;
   model: string;
   provider: string;
   source: string;
+  stats?: CallStats;
   steps: readonly {
     usage: {
       inputTokenDetails?: { cacheReadTokens?: number };
@@ -71,5 +76,6 @@ export function reportSpend({
     provider,
     reasoningTokens,
     source,
+    ...(stats ? { stats } : {}),
   });
 }

@@ -219,24 +219,23 @@ export const subagentAttempts: ModelAttempt[] = [
   ...geminiAttempts,
 ];
 
+/**
+ * Haiku and luna in a random order, then Gemini as the floor: what every model
+ * call that isn't a live turn runs on (owner's call 2026-10-17, so subagents,
+ * Kevinton, reminders, reviews, curation, the thread digest, summaries and
+ * image descriptions all feed the haiku-vs-luna comparison, each effort drawn
+ * by streamAttempt). Drawn per RUN; a live turn keeps its per-THREAD arm
+ * (experimentAttempt), because each model has its own prompt cache.
+ */
+export function drawnAttempts(): ModelAttempt[] {
+  const luna = catalogAttempt(LUNA_MODEL);
+  const pair =
+    Math.random() < 0.5 ? [PRIMARY_ATTEMPT, luna] : [luna, PRIMARY_ATTEMPT];
+  return [...pair, ...geminiAttempts];
+}
+
 /** The subagent's primary model; undefined = no subagent model configured. */
 export const subagentAttempt: ModelAttempt | undefined = subagentAttempts[0];
-
-// Compaction (lib/agent/compaction) deliberately did NOT follow the subagent
-// onto the primary. It is a different job: one pass digests up to 200 thread
-// messages, a long-idle thread catches up over MANY passes, and it runs in the
-// BACKGROUND where nobody is watching the bill — so on a shared daily cap a
-// single 25k-message backlog could spend the day on bookkeeping. It keeps the
-// Gemini key first and only falls to HackClub's former primary if there is no
-// Gemini key at all. Owner's call, 2026-08-21.
-export const compactionAttempts: ModelAttempt[] = [
-  ...geminiAttempts,
-  catalogAttempt(FORMER_PRIMARY_MODEL),
-];
-
-/** The model compaction runs on; undefined = no compaction model configured. */
-export const compactionAttempt: ModelAttempt | undefined =
-  compactionAttempts[0];
 
 // The HackClub rungs kyto falls back to, and the whole list is CHEAP ON PURPOSE
 // (owner's call, 2026-07-27). It used to be the owner's arena top 19 in rank

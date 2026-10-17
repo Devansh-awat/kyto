@@ -134,6 +134,16 @@ export function createCardBudget({
       open.set(id, { kind, title });
       return true;
     },
+    /**
+     * A card outside the budget that is always shown (the attempt's model
+     * card), tracked so the message it is in closes it like any other: one
+     * left open through a rotation was drawn as "Something went wrong" on a
+     * turn that worked.
+     */
+    track({ id, title }: { id: string; title: string }): void {
+      shown.add(id);
+      open.set(id, { kind: 'reasoning', title });
+    },
     /** Whether this card was rendered into the CURRENT plan message. */
     isVisible(id: string): boolean {
       return shown.has(id);

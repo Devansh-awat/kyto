@@ -5,7 +5,6 @@ import {
   modelSupportsVision,
   PRIMARY_ATTEMPT,
   type SandboxContext,
-  visionAttempt,
 } from '@repo/ai';
 import { tool } from 'ai';
 import { z } from 'zod';
@@ -93,9 +92,8 @@ export function viewImageTool({
       // is the point of "ask gemini what text is in the picture".
       const needsDescription =
         !modelSupportsVision(PRIMARY_ATTEMPT.model) || Boolean(question);
-      if (needsDescription && visionAttempt) {
+      if (needsDescription) {
         const description = await describeImages({
-          attempt: visionAttempt,
           images: [image],
           question,
         });

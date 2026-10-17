@@ -1,4 +1,4 @@
-import { streamAttempt, subagentAttempts } from '@repo/ai';
+import { drawnAttempts, streamAttempt, subagentAttempts } from '@repo/ai';
 import {
   type CurationChange,
   deleteMemory,
@@ -49,7 +49,7 @@ function renderMemories(memories: Memory[]): string {
 
 /** The model's plan, parsed out of its reply, or null when it gave none. */
 async function proposePlan(memories: Memory[]) {
-  for (const attempt of subagentAttempts) {
+  for (const attempt of drawnAttempts()) {
     try {
       const result = streamAttempt({
         source: 'memory-curation',

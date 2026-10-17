@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import {
+  drawnAttempts,
   type ModelAttempt,
   type SandboxContext,
   streamAttempt,
@@ -92,6 +93,11 @@ interface SubagentJob {
   contextTokens?: number;
   /** Its own run, kept whole once it finishes, for `resume`. */
   conversation?: ModelMessage[];
+  /**
+   * The model that run answered on: a resume tries it first, since the kept
+   * reasoning and the prompt cache are that model's.
+   */
+  conversationModel?: string;
   /** When the latest run finished; the forget timer checks it's still that run. */
   finishedAt?: number;
   id: string;
@@ -267,6 +273,7 @@ export function runSubagentTool({
       const label = record.name ?? name;
       const prior = record.conversation;
       const priorTokens = record.contextTokens;
+      const priorModel = record.conversationModel;
       record.conversation = undefined;
       // depthStore.run STARTS the job and returns its promise. Foreground
       // (default): await it and hand the report back to the parent model as this
@@ -305,6 +312,7 @@ export function runSubagentTool({
           // The run that wrote the report, kept for a later `resume`.
           let conversation: ModelMessage[] | undefined;
           let contextTokens: number | undefined;
+          let answeredOn: string | undefined;
           let ranTools = false;
           let report = '';
           // Text from an attempt that then THREW: kept only as a last resort, so
@@ -360,7 +368,16 @@ export function runSubagentTool({
               // of subagents reporting nothing back, so an attempt that produces
               // NO report (empty stream, or a thrown provider error) falls through
               // to the next model instead of failing the delegation.
-              for (const [index, attempt] of subagentAttempts.entries()) {
+              // Haiku or luna at random (drawnAttempts); a resume leads with
+              // the model its kept run is on.
+              const drawn = drawnAttempts();
+              const roster = priorModel
+                ? [
+                    ...drawn.filter((option) => option.model === priorModel),
+                    ...drawn.filter((option) => option.model !== priorModel),
+                  ]
+                : drawn;
+              for (const [index, attempt] of roster.entries()) {
                 const modelTaskId = `model-${index}`;
                 const modelTitle = index > 0 ? 'Model · fallback' : 'Model';
                 yield card(modelTaskId, modelTitle, 'in_progress');
@@ -419,6 +436,7 @@ export function runSubagentTool({
                       ...messages,
                     ];
                     contextTokens = measuredSize({ priorTokens, steps });
+                    answeredOn = attempt.model;
                   }
                 } catch (error) {
                   lastError = error;
@@ -509,6 +527,7 @@ export function runSubagentTool({
             // A failed resume keeps the run it was resuming.
             record.conversation = conversation ?? prior;
             record.contextTokens = conversation ? contextTokens : priorTokens;
+            record.conversationModel = conversation ? answeredOn : priorModel;
             // Only tear down the per-turn MCP/tool connections. The sandbox is the
             // parent's — the parent pauses it at turn end, so don't destroy it here.
             await close?.().catch(() => undefined);

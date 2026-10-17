@@ -1,5 +1,4 @@
 import {
-  effortStats,
   listTurnTimings,
   pruneTurnTimings,
   recordTurnTiming,
@@ -108,37 +107,4 @@ export function startTimingsReaper(): void {
     );
   prune();
   setInterval(prune, PRUNE_INTERVAL_MS).unref();
-}
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-const DEFAULT_EFFORT_DAYS = 7;
-// Turn timings are kept 30 days.
-const MAX_EFFORT_DAYS = 30;
-
-/**
- * `!effort [days]` (owner only): the effort experiment per model × effort,
- * drawn and chosen efforts together (each cell says how many were drawn).
- */
-export async function describeEffortStats(args: string): Promise<string> {
-  const days = Math.min(
-    Math.max(Number(args.match(/\d+/)?.[0]) || DEFAULT_EFFORT_DAYS, 1),
-    MAX_EFFORT_DAYS
-  );
-  const cells = await effortStats({
-    since: new Date(Date.now() - days * DAY_MS),
-  });
-  if (cells.length === 0) {
-    return `No turns in the last ${days} days.`;
-  }
-  const round = (value: number | null, digits = 0) =>
-    value === null ? '?' : value.toFixed(digits);
-  const lines = cells.map((cell) =>
-    [
-      `*${cell.model} · ${cell.effort}* (${cell.turns} turns, ${cell.drawn} drawn${cell.up + cell.down > 0 ? `, ${cell.up}👍 ${cell.down}👎` : ''})`,
-      `  time: median ${seconds(cell.medianTotalMs ?? undefined) ?? '?'} (p90 ${seconds(cell.p90TotalMs ?? undefined) ?? '?'}), model ${seconds(cell.medianModelMs ?? undefined) ?? '?'} · cost $${round(cell.avgCostUsd, 4)}/turn · ${round(cell.steps, 1)} steps · reply ${round(cell.replyChars)} chars`,
-      `  thinking: ${round(cell.tokensPerTurn)} tokens/turn, ${round(cell.tokensPerThinkingStep)}/thinking step, ${round(cell.reasoningShare === null ? null : cell.reasoningShare * 100)}% of output · ${round(cell.thinkMsPerStep === null ? null : cell.thinkMsPerStep / 1000, 1)}s before answering per step · ${round(cell.tokensPerThinkSecond)} tok/s`,
-      `  shown: ${round(cell.charsPerBlock)} chars/block, ${round(cell.charsPerToken, 2)} chars/token, ${round(cell.reasoningCharsPerSecond)} chars/s`,
-    ].join('\n')
-  );
-  return `*Effort experiment, last ${days} days* (drawn and chosen efforts together; turns before 2026-10-16 have no thinking numbers)\n${lines.join('\n')}`;
 }

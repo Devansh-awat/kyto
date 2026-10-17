@@ -185,7 +185,13 @@ rotation runs on a DEADLINE (raced against the next chunk), not on chunk
 arrival: a 10-min opencode call sends nothing, so the stream used to expire
 under its in-flight card and render "Something went wrong" (issue #30). A
 `message_not_in_streaming_state` on a card append opens a new message instead of
-latching text-only for the rest of the turn.
+latching text-only for the rest of the turn. **The attempt's model card is
+tracked by the card budget** (`cards.track`, 2026-10-17): it stays open until the
+first reply text, so a tool-only stretch past 4.5 min (a 3-min OpenCode run) left
+it `in_progress` in the rotated-out message, which Slack drew as "Something went
+wrong" on a turn that worked. A rotation also tells the segmenter
+(`segmenter.newMessage()`), so a later update for a card the old message closed is
+dropped instead of landing in the new one as a stray row.
 A single card too big even for an empty message (`msg_too_long`) is re-sent
 with its title/details/output cut, else dropped alone — only reply TEXT still
 latches text-only (cutting it would lose words).

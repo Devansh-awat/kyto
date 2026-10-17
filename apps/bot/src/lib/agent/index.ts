@@ -12,7 +12,6 @@ import {
   streamAttempt,
   systemPrompt,
   UPGRADE_ATTEMPTS,
-  visionAttempt,
 } from '@repo/ai';
 import { comparePrefix, type PrefixUnit } from '@repo/ai/cache-probe';
 import { stepsCacheWrites, stepsCostUsd } from '@repo/ai/usage-cost';
@@ -805,7 +804,7 @@ async function executeTurn(
           costUsd: turnUsage?.costUsd,
           experimentModel: experimentArm?.model,
           reasoningEffort: handledEffort,
-          // `!effort` compares only random draws (lib/turn-timings).
+          // Kept for !timings; !effort reads model_spend (lib/spend).
           reasoningRandom: handledEffortRandom,
         },
       });
@@ -1108,11 +1107,9 @@ async function executeTurn(
     let modelImages = attachmentImages;
     if (
       attachmentImages.length > 0 &&
-      !modelSupportsVision(PRIMARY_ATTEMPT.model) &&
-      visionAttempt
+      !modelSupportsVision(PRIMARY_ATTEMPT.model)
     ) {
       visionDescription = await describeImages({
-        attempt: visionAttempt,
         images: attachmentImages,
         signal: controller.signal,
       });
@@ -1320,6 +1317,7 @@ async function executeTurn(
           return;
         }
         modelTaskDone = true;
+        cards.finish(modelTaskId);
         // The model name is already shown as the in_progress `details` (below);
         // Slack keeps that line, so DON'T also send it as `output` here or the
         // card renders the model twice. Just mark the task complete.
@@ -1461,6 +1459,7 @@ async function executeTurn(
         const modelDetails = effort
           ? `${currentAttempt.model} · ${effort.effort} reasoning${effort.random ? ' (random)' : ''}`
           : currentAttempt.model;
+        cards.track({ id: modelTaskId, title: modelTaskTitle });
         yield {
           details: modelDetails,
           id: modelTaskId,
@@ -2691,7 +2690,12 @@ async function executeTurn(
         },
         // A rotation cuts a new plan message just like a split does, but from
         // inside the harness, where the budget is not visible.
-        onRotate: () => cards.endMessage(),
+        // The segmenter must learn of the cut too, or a later update for a
+        // card the old message closed lands in the new one as a stray row.
+        onRotate: () => {
+          segmenter.newMessage();
+          return cards.endMessage();
+        },
         // Each new message of the reply is the thread's newest: a live to-do
         // list moves under it.
         onNewMessage: () => moveTodosDown(threadId),

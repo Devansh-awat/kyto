@@ -17,6 +17,7 @@ import {
   type PrefixUnit,
   prefixUnits,
 } from './cache-probe';
+import { createCallMeter } from './call-stats';
 import {
   applyTrim,
   COMPACT_AT,
@@ -377,6 +378,7 @@ export function streamAttempt({
   );
   const carriedKeepFrom =
     lastCarriedCall === -1 ? promptIndex : promptIndex + 1 + lastCarriedCall;
+  const meter = createCallMeter();
   const billSteps = (steps: Parameters<typeof reportSpend>[0]['steps']) =>
     reportSpend({
       effort: holder.reasoningEffort ?? reasoningEffort,
@@ -385,6 +387,7 @@ export function streamAttempt({
         ? `byok:${attempt.byokProvider}`
         : attempt.provider,
       source,
+      stats: meter.summary(),
       steps,
     });
   const priceStep = LONG_CONTEXT_PRICE_STEP[attempt.model];
@@ -414,8 +417,11 @@ export function streamAttempt({
       for (const [name, definition] of Object.entries(tools)) {
         inert[name] = { ...definition, execute: undefined };
       }
+      const summaryMeter = createCallMeter();
       const summary = await generateText({
         abortSignal,
+        onLanguageModelCallEnd: (event) => summaryMeter.onEnd(event),
+        onLanguageModelCallStart: () => summaryMeter.onStart(),
         ...(activeToolNames ? { activeTools: activeToolNames } : {}),
         maxOutputTokens: COMPACT_SUMMARY_MAX_TOKENS,
         maxRetries: 1,
@@ -431,6 +437,7 @@ export function streamAttempt({
           ? `byok:${attempt.byokProvider}`
           : attempt.provider,
         source: `${source}-compaction`,
+        stats: summaryMeter.summary(),
         steps: summary.steps,
       });
       return summary.text.trim() || undefined;
@@ -628,7 +635,10 @@ export function streamAttempt({
     // An aborted attempt (a stop, the watchdog, an interrupt) was paid for
     // too, step by step.
     onAbort: ({ steps }) => billSteps(steps),
+    onChunk: ({ chunk }) => meter.onChunk(chunk.type),
     onFinish: ({ steps }) => billSteps(steps),
+    onLanguageModelCallEnd: (event) => meter.onEnd(event),
+    onLanguageModelCallStart: () => meter.onStart(),
     onStepEnd: ({ usage }) => {
       if (pendingMeasure && usage.inputTokens !== undefined) {
         onCompaction?.({

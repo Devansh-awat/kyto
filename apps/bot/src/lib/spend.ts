@@ -1,5 +1,7 @@
+import { LUNA_MODEL, PRIMARY_MODEL } from '@repo/ai';
 import { type SpendRecord, setSpendSink } from '@repo/ai/spend';
 import {
+  callStats,
   recordModelSpend,
   type SpendGroup,
   summarizeModelSpend,
@@ -235,4 +237,52 @@ export async function describeSpend({
     );
   }
   return lines.join('\n');
+}
+
+const DEFAULT_EFFORT_DAYS = 7;
+const EFFORT_MODELS = [PRIMARY_MODEL, LUNA_MODEL];
+const EFFORTS = ['low', 'medium', 'high'];
+const MS_PER_SECOND = 1000;
+const PERCENT = 100;
+
+/**
+ * `!effort [days] [source]` (owner only, 2026-10-17): haiku and luna at each
+ * effort, over every model call (turns, subagents, Kevinton, reminders, the
+ * digest, …; `source` keeps one), from the per-step stats each call records.
+ * Tokens, chars and words side by side: the two tokenizers differ.
+ */
+export async function describeEffortStats(args: string): Promise<string> {
+  const days = Math.min(
+    Math.max(Number(args.match(/\d+/)?.[0]) || DEFAULT_EFFORT_DAYS, 1),
+    MAX_SPEND_DAYS
+  );
+  const source = args.match(/[a-z][a-z-]*/)?.[0];
+  const cells = await callStats({
+    efforts: EFFORTS,
+    models: EFFORT_MODELS,
+    since: new Date(Date.now() - days * DAY_MS),
+    ...(source ? { source } : {}),
+  });
+  const scope = `last ${days} day${days === 1 ? '' : 's'}${source ? `, ${source} only` : ', every source'}`;
+  if (cells.length === 0) {
+    return `No measured haiku or luna calls in the ${scope} (calls are measured from 2026-10-17).`;
+  }
+  const f = (value: number | null, digits = 0) =>
+    value === null ? '?' : value.toFixed(digits);
+  const s = (ms: number | null) =>
+    ms === null ? '?' : `${(ms / MS_PER_SECOND).toFixed(1)}s`;
+  const lines = cells.map((cell) => {
+    const call = cell.perCall;
+    const step = cell.perThinkingStep;
+    return [
+      `*${cell.model.split('/').at(-1)} · ${cell.effort}*: ${cell.calls} calls, ${cell.steps} steps (${cell.sources.map((entry) => `${entry.source} ${entry.calls}`).join(', ')})`,
+      `  cost: $${f(cell.costPerCall, 4)}/call, $${f(cell.costTotal, 3)} total · ${f(cell.cacheReadShare === null ? null : cell.cacheReadShare * PERCENT)}% of input cached`,
+      `  time: call median ${s(cell.medianCallMs)} (p90 ${s(cell.p90CallMs)}) · ${f(cell.stepsPerCall, 1)} steps/call · step median ${s(cell.medianStepMs)} (p90 ${s(cell.p90StepMs)}) · first token ${s(cell.medianTtftMs)} · before answering ${s(cell.medianThinkMs)}`,
+      `  thinking: ${cell.thinkingSteps} of ${cell.steps} steps · ${f(cell.reasoningShare === null ? null : cell.reasoningShare * PERCENT)}% of output · per call ${f(call.reasoningTokens)} tokens / ${f(call.reasoningChars)} chars / ${f(call.reasoningWords)} words · per thinking step ${f(step.reasoningTokens)} tokens / ${f(step.reasoningChars)} chars / ${f(step.reasoningWords)} words`,
+      `  thinking speed: ${f(cell.thinkTokensPerSecond)} tokens/s before the answer (prefill included) · shown ${f(cell.shownCharsPerSecond)} chars/s, ${f(cell.shownWordsPerSecond, 1)} words/s · ${f(cell.reasoningCharsPerToken, 2)} shown chars per thinking token (haiku: ~4 = all of it shown; luna shows a separately written summary, so its ratio isn't comparable)`,
+      `  answer: per call ${f(call.textTokens)} tokens / ${f(call.textChars)} chars / ${f(call.textWords)} words of text, tool calls ${f(call.toolInputChars)} chars / ${f(call.toolInputWords)} words · ${f(cell.answerCharsPerToken, 2)} chars and ${f(cell.answerWordsPerToken, 2)} words per answer token`,
+      `  answer speed: ${f(cell.answerTokensPerSecond)} tokens/s, ${f(cell.answerCharsPerSecond)} chars/s, ${f(cell.answerWordsPerSecond, 1)} words/s`,
+    ].join('\n');
+  });
+  return `*Haiku vs luna by effort, ${scope}* (list prices; haiku costs 30% less on Hack Club)\n${lines.join('\n')}`;
 }

@@ -1,8 +1,9 @@
 import {
+  drawnAttempts,
+  type ModelAttempt,
   type SandboxContext,
   SKIP_TOOL_NAME,
   streamAttempt,
-  subagentAttempt,
   subagentSystemPrompt,
 } from '@repo/ai';
 import type { Reminder } from '@repo/db/queries';
@@ -109,7 +110,8 @@ const preview = (value: unknown): string => {
 export async function runReminderAgent(
   reminder: Reminder
 ): Promise<string | null> {
-  const attempt = subagentAttempt;
+  // Haiku or luna at random, like every non-turn call (drawnAttempts).
+  const attempt = drawnAttempts()[0];
   if (!attempt) {
     throw new Error(
       'No model is configured for agent reminders (the subagent roster is empty).'
@@ -135,7 +137,7 @@ async function synthesizeReport({
   reminderId,
 }: {
   actions: string[];
-  attempt: NonNullable<typeof subagentAttempt>;
+  attempt: ModelAttempt;
   built: { activeTools: () => string[]; tools: ToolSet };
   hints: Awaited<ReturnType<typeof requestHints>>;
   prompt: string;
@@ -174,7 +176,7 @@ async function synthesizeReport({
 
 async function runAgent(
   reminder: Reminder,
-  attempt: NonNullable<typeof subagentAttempt>
+  attempt: ModelAttempt
 ): Promise<string | null> {
   // Where the job's tools act: the thread it was created in, else the user's DM.
   // Not where its message lands — the scheduler posts that to `channelId`, else

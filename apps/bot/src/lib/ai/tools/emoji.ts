@@ -1,10 +1,5 @@
 import nodePath from 'node:path/posix';
-import {
-  describeImages,
-  type ImageInput,
-  type SandboxContext,
-  visionAttempt,
-} from '@repo/ai';
+import { describeImages, type ImageInput, type SandboxContext } from '@repo/ai';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { neutralizeBroadcast } from '@/harness/markdown';
@@ -135,7 +130,7 @@ export function lookupEmojiTool() {
           };
         }
         const bytes = new Uint8Array(await response.arrayBuffer());
-        if (bytes.byteLength > MAX_EMOJI_BYTES || !visionAttempt) {
+        if (bytes.byteLength > MAX_EMOJI_BYTES) {
           return {
             found: true,
             name: resolved.name,
@@ -149,7 +144,6 @@ export function lookupEmojiTool() {
           path: resolved.url,
         };
         const description = await describeImages({
-          attempt: visionAttempt,
           images: [image],
           question: `This is a Slack custom emoji called ":${resolved.name}:". What does it show? Answer in one or two sentences, and say what it would MEAN when someone reacts with it.`,
         });

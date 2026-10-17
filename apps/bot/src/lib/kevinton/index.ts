@@ -1,7 +1,7 @@
 import {
+  drawnAttempts,
   type SandboxContext,
   streamAttempt,
-  subagentAttempts,
   subagentSystemPrompt,
 } from '@repo/ai';
 import { stepsCostUsd } from '@repo/ai/usage-cost';
@@ -283,7 +283,7 @@ async function review({
     };
     const names = Object.keys(tools);
 
-    for (const attempt of subagentAttempts) {
+    for (const attempt of drawnAttempts()) {
       try {
         const result = streamAttempt({
           source: 'kevinton',

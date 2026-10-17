@@ -17,8 +17,8 @@ import { runBanCommand } from '@/lib/bans';
 import { createDebugSnapshot, debugSnapshotUrl } from '@/lib/debug-snapshot';
 import { type ParsedFlags, parseFlags } from '@/lib/flags';
 import logger from '@/lib/logger';
-import { describeSpend } from '@/lib/spend';
-import { describeEffortStats, describeThreadTimings } from '@/lib/turn-timings';
+import { describeEffortStats, describeSpend } from '@/lib/spend';
+import { describeThreadTimings } from '@/lib/turn-timings';
 import { errorMessage, toLogError } from '@/lib/utils/error';
 import { rawText, withoutLeadingMentions } from '@/lib/utils/message';
 

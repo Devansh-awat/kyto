@@ -1,6 +1,5 @@
-import { provider } from '@repo/ai';
-import { reportSpend } from '@repo/ai/spend';
-import { generateText, tool } from 'ai';
+import { drawnAttempts, streamAttempt } from '@repo/ai';
+import { tool } from 'ai';
 import { z } from 'zod';
 import type { KytoBot as Chat } from '@/harness/bot';
 import { slack } from '@/lib/chat';
@@ -49,18 +48,30 @@ export function summarizeThreadTool({
           return `${author}: ${message.text}`;
         })
         .join('\n');
-      const { steps, text } = await generateText({
-        model: provider.languageModel('chat-model'),
-        prompt: `${input.instructions ? `${input.instructions}\n\n` : ''}Summarize this thread clearly and concisely. Preserve decisions, open questions, and action items when present.\n\n${transcript}`,
-      });
-
-      reportSpend({
-        effort: undefined,
-        model: 'google/gemini-3-flash-preview',
-        provider: 'hackclub',
-        source: 'summarize-thread',
-        steps,
-      });
+      // Haiku or luna at random like every non-turn call (owner's call
+      // 2026-10-17), Gemini behind them.
+      let text = '';
+      for (const attempt of drawnAttempts()) {
+        try {
+          const result = streamAttempt({
+            attempt,
+            holder: {},
+            prompt: `${input.instructions ? `${input.instructions}\n\n` : ''}Summarize this thread clearly and concisely. Preserve decisions, open questions, and action items when present.\n\n${transcript}`,
+            source: 'summarize-thread',
+            system: 'You summarize Slack threads accurately and concisely.',
+            tools: {},
+          });
+          text = (await result.text).trim();
+        } catch {
+          // The next model.
+        }
+        if (text) {
+          break;
+        }
+      }
+      if (!text) {
+        return { error: 'The summary could not be written.', success: false };
+      }
       return {
         messageCount: result.messages.length,
         success: true,

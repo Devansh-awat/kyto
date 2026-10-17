@@ -117,6 +117,32 @@ describe('endMessage', () => {
   });
 });
 
+describe('track', () => {
+  test('a tracked card is closed with the message and costs no slot', () => {
+    const cards = createCardBudget({ maxReasoning: 1, maxTools: 1 });
+    cards.track({ id: 'model-0-0', title: 'Thinking' });
+    expect(cards.show({ id: 'r1', kind: 'reasoning', title: 'Thinking' })).toBe(
+      true
+    );
+    expect(cards.endMessage()).toEqual([
+      {
+        id: 'model-0-0',
+        status: 'complete',
+        title: 'Thinking',
+        type: 'task_update',
+      },
+      { id: 'r1', status: 'complete', title: 'Thinking', type: 'task_update' },
+    ]);
+  });
+
+  test('a tracked card that finished first is not closed again', () => {
+    const cards = createCardBudget();
+    cards.track({ id: 'model-0-0', title: 'Thinking' });
+    cards.finish('model-0-0');
+    expect(cards.endMessage()).toEqual([]);
+  });
+});
+
 describe('overflowRow', () => {
   test('names the kind, so the two rows are never confused', () => {
     expect(overflowRow({ count: 3, done: true, kind: 'tool' }).title).toBe(

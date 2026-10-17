@@ -1,4 +1,4 @@
-import { streamAttempt, subagentAttempts } from '@repo/ai';
+import { drawnAttempts, streamAttempt } from '@repo/ai';
 import {
   countGithubContributions,
   listGithubOpened,
@@ -352,7 +352,7 @@ async function review({
   ]
     .filter(Boolean)
     .join('\n\n');
-  for (const attempt of subagentAttempts) {
+  for (const attempt of drawnAttempts()) {
     try {
       const result = streamAttempt({
         source: 'github-review',
