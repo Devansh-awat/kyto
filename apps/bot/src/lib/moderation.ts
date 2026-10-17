@@ -27,20 +27,24 @@ const ALERT_COOLDOWN_MS = 30 * 60 * 1000;
 const recentAlerts = new Map<string, { at: number; categories: Set<string> }>();
 
 /**
- * Check one finished turn and, if anything is flagged, add the owner to the
- * channel and ping him in the thread (a `!secret` turn: in his DM, no content). It never blocks, deletes
+ * Check one finished turn and, if anything is flagged, add the owner to a
+ * public channel and ping him in the thread (a private channel or a `!secret`
+ * turn: in his DM, no message content). It never blocks, deletes
  * or bans — banning is the owner's, by hand (owner's call, 2026-10-02).
  */
 export async function moderateTurn({
   asUserAccount,
   authorUserId,
   items,
+  messageTs,
   secret,
   thread,
 }: {
   asUserAccount: boolean;
   authorUserId: string;
   items: ModerationItem[];
+  /** The flagged message, for the link a private-channel alert carries. */
+  messageTs: string;
   secret: boolean;
   thread: Thread;
 }): Promise<void> {
@@ -123,9 +127,6 @@ export async function moderateTurn({
       at: now,
       categories: new Set([...(previous?.categories ?? []), ...categories]),
     });
-    // Into the channel first, even one he left (owner's call, 2026-10-03): he
-    // can't act on a flag in a channel he can't see, and a private channel's
-    // ping doesn't notify a non-member. A DM or group DM can't take him.
     const client = asUserAccount
       ? thread.adapter.requireUserAccountClient()
       : thread.adapter.webClient;
@@ -133,6 +134,30 @@ export async function moderateTurn({
     const info = await client.conversations
       .info({ channel })
       .catch(() => undefined);
+    const lines = flags.map(
+      (flag) => `• ${flag.source}: ${flag.categories.join(', ')}`
+    );
+    // A PRIVATE channel is never joined for him (owner's call, 2026-10-17):
+    // being pulled in read to members as kyto bringing in a watcher. He gets
+    // the name and a link in his DM and opens it from his own account; a
+    // ping in the thread would notify no one outside it.
+    if (
+      info?.channel?.is_private &&
+      !(info.channel.is_im || info.channel.is_mpim)
+    ) {
+      const permalink = await client.chat
+        .getPermalink({ channel, message_ts: messageTs })
+        .then((result) => result.permalink)
+        .catch(() => undefined);
+      const dm = await bot.openDM(owner);
+      await dm.post({
+        markdown: `moderation flagged <@${authorUserId}>'s ${secret ? '`!secret` ' : ''}request to kyto in the private channel ${info.channel.name ?? '(name unknown)'} (${channel})${secret || !permalink ? '' : `: ${permalink}`}\n${lines.join('\n')}`,
+      });
+      return;
+    }
+    // A public channel: in first, even one he left (owner's call,
+    // 2026-10-03) — he can't act on a flag in a channel he can't see. A DM
+    // or group DM can't take him.
     if (info?.channel && !(info.channel.is_im || info.channel.is_mpim)) {
       await client.conversations
         .invite({ channel, users: owner })
@@ -145,9 +170,6 @@ export async function moderateTurn({
           }
         });
     }
-    const lines = flags.map(
-      (flag) => `• ${flag.source}: ${flag.categories.join(', ')}`
-    );
     const markdown = `<@${owner}> moderation flagged <@${authorUserId}>'s ${secret ? '`!secret` ' : ''}request to kyto:\n${lines.join('\n')}`;
     if (secret) {
       const dm = await bot.openDM(owner);

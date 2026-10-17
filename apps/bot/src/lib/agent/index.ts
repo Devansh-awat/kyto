@@ -764,6 +764,7 @@ async function executeTurn(
         { source: 'reply', text: moderationReply },
         ...moderationTools,
       ],
+      messageTs: message.id,
       secret,
       thread,
     });
