@@ -26,7 +26,33 @@ const responseSchema = z.object({
   }),
 });
 
-/** The running turn's message, anything queued behind it, then the new one. */
+/**
+ * Whether a message pings anyone but kyto (a person, a bot, a group or the
+ * channel). The person a turn is working for, pinging nobody else, is steering
+ * it: no Jev call, which scored the owner's own "why do agent reminders wait 10
+ * mins" 0.27 and dropped it.
+ */
+export function pingsSomeoneElse({
+  selfId,
+  text,
+}: {
+  selfId: string | undefined;
+  text: string;
+}): boolean {
+  for (const [, id] of text.matchAll(MENTION)) {
+    if (id !== selfId) {
+      return true;
+    }
+  }
+  return /<!(?:subteam\^|here|channel|everyone)/.test(text);
+}
+
+/**
+ * The recent thread (kyto's own replies included), anything queued, then the
+ * new message. Given only the turn's message and the new one, Jev couldn't
+ * tell that kyto was the one the thread was talking to (0.27 and 0.30; the
+ * same question with the thread around it: 0.92).
+ */
 export function addressedState({
   messages,
   selfId,
@@ -39,7 +65,10 @@ export function addressedState({
       const body = text.replace(MENTION, (_, id: string) =>
         id === selfId ? '@kyto' : `@${id}`
       );
-      return `${author.fullName ?? author.userName}${author.isBot ? ' (bot)' : ''}: ${body.trim()}`;
+      const name = author.isMe
+        ? 'kyto'
+        : `${author.fullName ?? author.userName}${author.isBot ? ' (bot)' : ''}`;
+      return `${name}: ${body.trim()}`;
     })
     .join('\n')
     .slice(-MAX_STATE_CHARS);

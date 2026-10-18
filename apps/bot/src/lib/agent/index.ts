@@ -33,7 +33,11 @@ import {
 } from '@/harness/markdown';
 import type { ThreadHandle } from '@/harness/thread';
 import type { Message, StreamChunk } from '@/harness/types';
-import { addressedState, isAddressedToKyto } from '@/lib/agent/addressed';
+import {
+  addressedState,
+  isAddressedToKyto,
+  pingsSomeoneElse,
+} from '@/lib/agent/addressed';
 import { createAttemptRouter } from '@/lib/agent/attempt-router';
 import {
   carriedMessages,
@@ -169,6 +173,10 @@ import type { AttemptFailure } from '@/types/attempts';
 // error message — see deepErrorText. NOT a bare "limit exceeded": an upstream
 // "Rate limit exceeded" 429 is transient, and matching it wrote the whole tier
 // off for 30 minutes for everyone (fallback-cache).
+// What Jev reads around a mid-turn message: the thread's newest messages, from
+// the in-memory copy (a miss reads Slack), but never holding the event long.
+const ADDRESSED_CONTEXT_MESSAGES = 12;
+const ADDRESSED_CONTEXT_WAIT_MS = 1500;
 const SPEND_LIMIT_PATTERN = /spending limit|insufficient credits|daily limit/i;
 const QUOTA_EXHAUSTED = /exceeded your current quota|quota exceeded/i;
 
@@ -378,22 +386,43 @@ export async function runTurn(input: {
   // A line meant for someone else must not cut kyto's answer short (#27). A
   // ping, a DM and a subagent/background wake (synthetic: no Slack `ts`) are
   // for kyto by definition; a `!secret` text never goes to Jev.
+  const selfId = input.asUserAccount ? slack.userAccountId : slack.botUserId;
   const askJev =
     !(
       input.message.isMention ||
       slack.isDM(input.thread.id) ||
       input.secret ||
       typeof input.message.raw.ts !== 'string'
-    ) && turn.message !== undefined;
+    ) &&
+    turn.message !== undefined &&
+    !(
+      input.message.author.userId === turn.message.author.userId &&
+      !pingsSomeoneElse({ selfId, text: input.message.text })
+    );
   if (askJev) {
+    const recent = await Promise.race([
+      slack
+        .fetchMessages(input.thread.id, {
+          asUserAccount: input.asUserAccount === true,
+          cached: true,
+          limit: ADDRESSED_CONTEXT_MESSAGES,
+        })
+        .then(({ messages }) => messages)
+        .catch(() => []),
+      new Promise<Message[]>((resolve) =>
+        setTimeout(() => resolve([]), ADDRESSED_CONTEXT_WAIT_MS).unref()
+      ),
+    ]);
+    const queued = [
+      ...(turn.message ? [turn.message] : []),
+      ...turn.pendingMessages.map(({ message }) => message),
+      input.message,
+    ];
+    const queuedIds = new Set(queued.map(({ id }) => id));
     const addressed = await isAddressedToKyto(
       addressedState({
-        messages: [
-          ...(turn.message ? [turn.message] : []),
-          ...turn.pendingMessages.map(({ message }) => message),
-          input.message,
-        ],
-        selfId: input.asUserAccount ? slack.userAccountId : slack.botUserId,
+        messages: [...recent.filter(({ id }) => !queuedIds.has(id)), ...queued],
+        selfId,
       })
     );
     if (!addressed) {
