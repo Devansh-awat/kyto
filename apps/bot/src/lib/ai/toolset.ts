@@ -33,6 +33,7 @@ import { listSkills } from '@/lib/skills';
 import { slackBrowserAvailable } from '@/lib/slack-browser';
 import { errorMessage } from '@/lib/utils/error';
 import {
+  hydrateLoadedTools,
   recallLoadedTools,
   rememberLoadedTools,
   threadToolOrder,
@@ -1181,6 +1182,7 @@ export async function buildTools({
     }
   }
 
+  await hydrateLoadedTools(thread.id);
   // Filtered through THIS turn's `deferred`, which is built for the person
   // speaking now — so a tool only registered for the owner, or an MCP tool from
   // someone else's server, can never be seeded onto a different user's turn
@@ -1241,7 +1243,7 @@ export async function buildTools({
       return Promise.resolve({
         loaded,
         summary: loaded.length
-          ? `Loaded: ${loaded.join(', ')}. They usually stay available on later messages in this thread, but a restart drops them. If one comes back unavailable, load it again.`
+          ? `Loaded: ${loaded.join(', ')}. They usually stay available on later messages in this thread. If one comes back unavailable, load it again.`
           : 'No matching tools.',
         unknown,
       });

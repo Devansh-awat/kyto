@@ -30,3 +30,11 @@ describe('threadToolOrder', () => {
     expect(threadToolOrder('slack:C4:1.0').names).toEqual([]);
   });
 });
+
+describe('the order setter', () => {
+  test('keeps the assigned order, as stabilizeToolOrder reassigns it', () => {
+    const order = threadToolOrder('slack:C5:1.0');
+    order.names = ['bash', 'gh'];
+    expect(threadToolOrder('slack:C5:1.0').names).toEqual(['bash', 'gh']);
+  });
+});
