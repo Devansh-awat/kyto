@@ -3,7 +3,6 @@ import {
   HACKCLUB_PROVIDER,
   LEADERBOARD_FALLBACK,
   LUNA_MODEL,
-  lunaThreadEffort,
   MAX_STEPS,
   type ModelAttempt,
   modelSupportsVision,
@@ -1133,9 +1132,7 @@ async function executeTurn(
       : lunaEffortRead.then((stored) =>
           pickPreloadTools({
             conversation: jevConversation,
-            lunaEffort:
-              z.enum(JEV_EFFORTS).safeParse(stored).data ??
-              lunaThreadEffort(threadId),
+            effort: { lunaStored: z.enum(JEV_EFFORTS).safeParse(stored).data },
           })
         );
     const conversation = [...history, messageText].join('\n\n');
@@ -1265,6 +1262,8 @@ async function executeTurn(
     const toolsWaitMs = Date.now() - toolsStart;
     const preloadStart = Date.now();
     const preload = await pendingPreload;
+    // What luna falls back to when Jev gives no pick: never lower than before.
+    const lunaStored = z.enum(JEV_EFFORTS).safeParse(await lunaEffortRead).data;
     // What the turn waited on Jev past the prompt build and the tools.
     const preloadWaitMs = Date.now() - preloadStart;
     // From the Jev calls' start, so it overlaps promptMs.
@@ -1560,11 +1559,11 @@ async function executeTurn(
                 }
               );
             }
+          } else if (currentAttempt.model === LUNA_MODEL) {
+            // Jev only, no random draw for luna (owner's call 2026-10-18).
+            effort = { by: 'default', effort: lunaStored ?? 'medium' };
           } else {
-            const drawn = pickReasoningEffort({
-              attempt: currentAttempt,
-              threadId,
-            });
+            const drawn = pickReasoningEffort({ attempt: currentAttempt });
             effort = {
               by: drawn.random ? 'random' : 'default',
               effort: drawn.effort,

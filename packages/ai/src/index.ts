@@ -1,6 +1,5 @@
 export {
   type ImageInput,
-  lunaThreadEffort,
   MAX_STEPS,
   pickReasoningEffort,
   REASONING_EFFORTS,

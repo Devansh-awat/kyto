@@ -151,8 +151,9 @@ type GroupId = keyof typeof GROUPS;
 
 // The turn's reasoning effort, in the same call (owner's ask 2026-10-17: the
 // random draw ran a malware scan at `low`). Haiku takes Jev's pick every turn.
-// Luna keeps one prompt cache PER EFFORT, so it is only ever raised from where
-// the thread is, and only when Jev is sure (owner's call).
+// Luna keeps one prompt cache PER EFFORT, so the same pick only ever RAISES a
+// thread's luna effort: a lower one is ignored (owner's call 2026-10-18,
+// replacing a random start per thread plus a separate "are you sure" raise).
 export const JEV_EFFORTS = ['low', 'medium', 'high'] as const;
 export type JevEffort = (typeof JEV_EFFORTS)[number];
 const EFFORT_CRITERIA: Record<JevEffort, string> = {
@@ -163,10 +164,6 @@ const EFFORT_CRITERIA: Record<JevEffort, string> = {
 };
 const EFFORT_INSTRUCTIONS =
   'An AI assistant in Slack is about to handle the latest message in this conversation. How much reasoning effort does doing it WELL need?';
-const KEEP = 'keep';
-// "Sure": a summary ask scored 0.58 for low → medium, a malware scan 0.78 for
-// medium → high and a debugging ask 0.92 (measured 2026-10-17).
-const LUNA_RAISE_THRESHOLD = 0.7;
 
 const isEffort = (value: string): value is JevEffort =>
   JEV_EFFORTS.some((effort) => effort === value);
@@ -183,29 +180,27 @@ const responseSchema = z.object({
 export interface EffortPicks {
   /** What haiku runs at. */
   haiku: JevEffort;
-  /** What luna runs at: `current`, or higher when Jev was sure. */
+  /** What luna runs at: the thread's stored effort, or Jev's pick if higher. */
   luna: JevEffort;
+  /** Luna's effort differs from the stored one (first pick or a raise): save it. */
   lunaRaised: boolean;
   /** Jev's own numbers, logged so its calls can be judged later. */
-  probabilities: {
-    haiku: Record<string, number>;
-    luna?: Record<string, number>;
-  };
+  probabilities: Record<string, number>;
 }
 
 /**
- * The deferred tool names Jev thinks this turn will need and (given
- * `lunaEffort`) the turn's reasoning effort;
+ * The deferred tool names Jev thinks this turn will need and (given `effort`)
+ * the turn's reasoning effort;
  * nothing of any if it could not say. `conversation` is the thread as kyto
  * sees it, the new message last.
  */
 export async function pickPreloadTools({
   conversation,
-  lunaEffort,
+  effort: askEffort,
 }: {
   conversation: string;
-  /** The effort this thread's luna attempts run at now; omit to skip effort. */
-  lunaEffort?: JevEffort;
+  /** Ask for the effort too; `lunaStored` is the thread's luna effort so far. */
+  effort?: { lunaStored: JevEffort | undefined };
 }): Promise<{
   effort?: EffortPicks;
   tools: string[];
@@ -215,9 +210,6 @@ export async function pickPreloadTools({
   if (!state) {
     return none;
   }
-  const higher = lunaEffort
-    ? JEV_EFFORTS.slice(JEV_EFFORTS.indexOf(lunaEffort) + 1)
-    : [];
   const questions: Record<string, unknown> = Object.fromEntries(
     Object.entries(GROUPS).map(([id, group]) => [
       id,
@@ -227,22 +219,10 @@ export async function pickPreloadTools({
       },
     ])
   );
-  if (lunaEffort) {
+  if (askEffort) {
     questions.effort = {
       criteria: EFFORT_CRITERIA,
       instructions: EFFORT_INSTRUCTIONS,
-      type: 'choice',
-    };
-  }
-  if (lunaEffort && higher.length > 0) {
-    questions.lunaEffort = {
-      criteria: {
-        [KEEP]: `${lunaEffort} effort is enough`,
-        ...Object.fromEntries(
-          higher.map((effort) => [effort, EFFORT_CRITERIA[effort]])
-        ),
-      },
-      instructions: `An AI assistant in Slack is about to handle the latest message in this conversation. It is currently set to ${lunaEffort} reasoning effort. Is it SURE that a higher effort is needed to do this well? Choose a higher level only if it clearly is; otherwise keep.`,
       type: 'choice',
     };
   }
@@ -276,23 +256,19 @@ export async function pickPreloadTools({
       (id) => noul(id) >= PRELOAD_THRESHOLD
     );
     let effort: EffortPicks | undefined;
-    const haiku = choiceSchema.safeParse(answers.effort).data;
-    if (lunaEffort && haiku && isEffort(haiku.choice)) {
-      const luna = choiceSchema.safeParse(answers.lunaEffort).data;
-      const raiseTo =
-        luna &&
-        isEffort(luna.choice) &&
-        (luna.probabilities[luna.choice] ?? 0) >= LUNA_RAISE_THRESHOLD
-          ? luna.choice
-          : undefined;
+    const pick = choiceSchema.safeParse(answers.effort).data;
+    if (askEffort && pick && isEffort(pick.choice)) {
+      const stored = askEffort.lunaStored;
+      const luna =
+        stored &&
+        JEV_EFFORTS.indexOf(stored) >= JEV_EFFORTS.indexOf(pick.choice)
+          ? stored
+          : pick.choice;
       effort = {
-        haiku: haiku.choice,
-        luna: raiseTo ?? lunaEffort,
-        lunaRaised: raiseTo !== undefined,
-        probabilities: {
-          haiku: haiku.probabilities,
-          ...(luna ? { luna: luna.probabilities } : {}),
-        },
+        haiku: pick.choice,
+        luna,
+        lunaRaised: luna !== stored,
+        probabilities: pick.probabilities,
       };
     }
     logger.info({ effort, picked }, '[tool-preload] jev picked tool groups');

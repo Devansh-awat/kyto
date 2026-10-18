@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import {
@@ -1012,24 +1011,16 @@ export const REASONING_EFFORTS = ['none', 'low', 'medium', 'high'] as const;
  * `none` left the draw (owner's call 2026-10-12), `high` joined it
  * (2026-10-16). Haiku draws per attempt: Anthropic caches low and medium
  * together (measured), and high is expected to share it (thinking stays on;
- * unmeasured, the `cross-turn prefix` log shows it). On luna EVERY effort has
- * its own cache, so a luna thread keeps the one effort it drew.
+ * unmeasured, the `cross-turn prefix` log shows it). A live turn's luna
+ * effort is Jev's alone (apps/bot tool-preload), never drawn here: luna keeps
+ * one cache per effort, so a thread only ever goes up.
  */
-export function pickReasoningEffort({
-  attempt,
-  threadId,
-}: {
-  attempt: ModelAttempt;
-  threadId?: string;
-}): {
+export function pickReasoningEffort({ attempt }: { attempt: ModelAttempt }): {
   effort: string;
   random: boolean;
 } {
   if (attempt.model !== LUNA_MODEL && attempt.model !== PRIMARY_MODEL) {
     return { effort: 'medium', random: false };
-  }
-  if (threadId && attempt.model === LUNA_MODEL) {
-    return { effort: lunaThreadEffort(threadId), random: true };
   }
   return {
     effort:
@@ -1038,20 +1029,6 @@ export function pickReasoningEffort({
       ] ?? 'medium',
     random: true,
   };
-}
-
-/**
- * The effort a luna thread drew: pinned per thread, because luna keeps one
- * cache per effort. Jev may raise a thread above it (apps/bot tool-preload).
- */
-export function lunaThreadEffort(
-  threadId: string
-): (typeof EXPERIMENT_EFFORTS)[number] {
-  // Salted, so it doesn't line up with the haiku/luna split, which hashes the
-  // bare thread id.
-  const byte =
-    createHash('sha256').update(`effort:${threadId}`).digest()[0] ?? 0;
-  return EXPERIMENT_EFFORTS[byte % EXPERIMENT_EFFORTS.length] ?? 'medium';
 }
 
 export function tuneBody(
