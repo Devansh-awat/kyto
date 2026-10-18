@@ -32,6 +32,11 @@ import {
 import { fetchWithGatewayRetry, type GatewayRetryInfo } from './gateway-retry';
 import { capContextImages } from './image-cap';
 import {
+  acceptNullOptionals,
+  isOpenAiModel,
+  nullableToolSchemas,
+} from './nullable-optionals';
+import {
   ANTHROPIC_ONLY_MODELS,
   GEMINI_PROVIDER,
   GLM_FLASH_MODEL,
@@ -675,7 +680,7 @@ export function streamAttempt({
       }
     },
     system: systemInput,
-    tools,
+    tools: acceptNullOptionals(tools),
   });
   // `steps` rejects only when no step finished: the call's one row then.
   result.steps.then(undefined, () =>
@@ -800,6 +805,7 @@ function codexFetch({
       // too in case an SDK update stops threading the option through.
       const payload = JSON.parse(raw) as Record<string, unknown>;
       payload.store = false;
+      nullableToolSchemas(payload);
       body = JSON.stringify(payload);
     } catch {
       // Un-parseable body: send it through unchanged rather than dropping it.
@@ -1086,6 +1092,9 @@ export function tuneBody(
     // BEFORE the probe, because this one genuinely changes the bytes we send and
     // the probe should measure what the provider actually gets.
     if (toolOrder && stabilizeToolOrder(payload, toolOrder)) {
+      changed = true;
+    }
+    if (isOpenAiModel(attempt.model) && nullableToolSchemas(payload)) {
       changed = true;
     }
     // Measured on the RAW payload, before the rewrites below: addCacheControl
