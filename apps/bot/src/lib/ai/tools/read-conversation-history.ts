@@ -121,7 +121,7 @@ export function readConversationHistoryTool({
             const connect = slackAuthorizeUrl(askerUserId);
             throw new Error(
               connect
-                ? `kyto's bot can't read that conversation. If it is one the person is in, they can connect their own Slack account and kyto will read it as them: ${connect}`
+                ? `kyto's bot can't read that conversation (a DM, or a private channel kyto isn't in), so reading its history won't work. To find something in it, use searchSlack with \`in:<#${toRawSlackChannelId(chatChannelId)}>\` and the words: it searches with the asker's own access, so it covers the private channels they are in. To read it in full, they can connect their own Slack account: ${connect}`
                 : String(refusal instanceof Error ? refusal.message : refusal)
             );
           }

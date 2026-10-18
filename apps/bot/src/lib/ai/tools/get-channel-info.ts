@@ -110,10 +110,13 @@ export function getChannelInfoTool({
         return {
           ...flaron,
           kytoCanRead: false,
-          note:
+          // A private channel kyto isn't in reached Flaron as "nonexistent", and
+          // with no next step kyto re-ran seven searches for 37s (#111).
+          note: `${
             flaron.visibility === 'private'
-              ? 'PRIVATE channel kyto is not in: only its name is known. Joining needs an invite from a member (or its managers); kyto cannot read it.'
-              : 'From the Flaron directory; kyto is not in this channel.',
+              ? 'PRIVATE channel kyto is not in: only its name is known. Joining needs an invite from a member (or its managers).'
+              : 'From the Flaron directory; kyto is not in this channel, and the bot cannot see it, so it is most likely private.'
+          } readConversationHistory will fail on it unless the asker connected their own Slack. To look inside it, use searchSlack with \`in:<#${raw}>\` once: it searches with the asker's own access, so it finds messages there only if THEY are a member. Zero results means the asker can't see it or it isn't there: say so, don't retry with variants.`,
         };
       }
     },
