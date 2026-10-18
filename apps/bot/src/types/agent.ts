@@ -14,6 +14,11 @@ export type AbortReason = 'interrupt' | 'stop' | 'shutdown';
 
 export interface ActiveTurn {
   controller: AbortController;
+  /**
+   * The latest message Jev judged not for kyto while this turn ran. It gets
+   * the turn it would have had if kyto had been idle, once this one ends.
+   */
+  deferred?: TurnInput;
   /** What the turn is answering; unset for a `!secret` turn, which no check may read. */
   message?: Message;
   pendingMessages: TurnInput[];

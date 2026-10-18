@@ -401,7 +401,15 @@ export async function runTurn(input: {
         { threadId: input.thread.id, userId: input.message.author.userId },
         '[agent] message not meant for kyto; not interrupting'
       );
-      return;
+      // Not interrupting is not ignoring: Jev said no to the owner's "why do
+      // agent reminders wait 10 mins" mid-turn, and nothing ever ran for it.
+      // Arriving seconds later it would have had its own turn (where kyto may
+      // still skip), so it gets that turn once this one ends.
+      if (getTurn({ threadId: slot }) === turn) {
+        turn.deferred = input;
+        return;
+      }
+      return runTurn(input);
     }
     // Jev took a moment: the turn may have ended, or a follow-up replaced it.
     if (getTurn({ threadId: slot }) !== turn) {
@@ -937,6 +945,22 @@ async function executeTurn(
     const unseen = activeTurn.steering.splice(0);
     if (reason === undefined || reason === 'interrupt') {
       activeTurn.pendingMessages.push(...unseen);
+    }
+    // An interrupt's follow-up reads the whole thread, the deferred message
+    // included, so it only runs on its own after a turn that ended by itself.
+    const deferred =
+      reason === undefined &&
+      unseen.length === 0 &&
+      activeTurn.pendingMessages.length === 0
+        ? activeTurn.deferred
+        : undefined;
+    if (deferred) {
+      runTurn(deferred).catch((error: unknown) => {
+        logger.error(
+          { err: error, threadId },
+          '[agent] failed to run a deferred message'
+        );
+      });
     }
     // Only an interrupt replays queued messages; a rapid burst is merged into a
     // single follow-up so steering does not drop intermediate corrections.
