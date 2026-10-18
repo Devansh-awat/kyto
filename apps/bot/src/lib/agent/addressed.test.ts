@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { Message } from '@/harness/types';
-import { addressedState, pingsSomeoneElse } from './addressed';
+import { addressedState } from './addressed';
 
 function message(name: string, text: string, isBot = false): Message {
   return {
@@ -39,32 +39,5 @@ describe('addressedState', () => {
     });
     expect(state.endsWith('kevin (bot): hi')).toBe(true);
     expect(state.length).toBe(6000);
-  });
-});
-
-describe('pingsSomeoneElse', () => {
-  const selfId = 'U0KYTO1';
-  test('a follow-up pinging nobody, or only kyto, is not for someone else', () => {
-    expect(
-      pingsSomeoneElse({ selfId, text: 'why do agent reminders wait 10 mins' })
-    ).toBe(false);
-    expect(pingsSomeoneElse({ selfId, text: '<@U0KYTO1> also check X' })).toBe(
-      false
-    );
-    expect(pingsSomeoneElse({ selfId, text: 'look at <#C028VGT0JMQ>' })).toBe(
-      false
-    );
-  });
-  test('pinging another person, bot, group or the channel is', () => {
-    expect(
-      pingsSomeoneElse({ selfId, text: '<@U0OTHER2> what do you think' })
-    ).toBe(true);
-    expect(
-      pingsSomeoneElse({ selfId, text: '<@U0KYTO1> <@U0OTHER2> both of you' })
-    ).toBe(true);
-    expect(pingsSomeoneElse({ selfId, text: '<!subteam^S123> ping' })).toBe(
-      true
-    );
-    expect(pingsSomeoneElse({ selfId, text: '<!here> look' })).toBe(true);
   });
 });

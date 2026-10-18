@@ -14,8 +14,9 @@ import { toLogError } from '@/lib/utils/error';
 
 const JEV_URL = 'https://ai.hackclub.com/proxy/v1/jev/systemone';
 const JEV_TIMEOUT_MS = 3000;
-// Low on purpose: a wrong "no" leaves a message for kyto with no turn at all,
-// a wrong "yes" is only the old behaviour (the running turn restarts).
+// Low on purpose: a wrong "yes" is only the old behaviour (the message folds
+// into the running turn, or restarts it), while a wrong "no" makes the person
+// wait for the whole turn to finish before their message gets its own.
 const ADDRESSED_THRESHOLD = 0.3;
 const MAX_STATE_CHARS = 6000;
 const MENTION = /<@([A-Z0-9]+)>/g;
@@ -25,27 +26,6 @@ const responseSchema = z.object({
     addressed: z.object({ noul: z.number().min(0).max(1) }),
   }),
 });
-
-/**
- * Whether a message pings anyone but kyto (a person, a bot, a group or the
- * channel). The person a turn is working for, pinging nobody else, is steering
- * it: no Jev call, which scored the owner's own "why do agent reminders wait 10
- * mins" 0.27 and dropped it.
- */
-export function pingsSomeoneElse({
-  selfId,
-  text,
-}: {
-  selfId: string | undefined;
-  text: string;
-}): boolean {
-  for (const [, id] of text.matchAll(MENTION)) {
-    if (id !== selfId) {
-      return true;
-    }
-  }
-  return /<!(?:subteam\^|here|channel|everyone)/.test(text);
-}
 
 /**
  * The recent thread (kyto's own replies included), anything queued, then the

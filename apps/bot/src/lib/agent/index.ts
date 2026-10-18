@@ -33,11 +33,7 @@ import {
 } from '@/harness/markdown';
 import type { ThreadHandle } from '@/harness/thread';
 import type { Message, StreamChunk } from '@/harness/types';
-import {
-  addressedState,
-  isAddressedToKyto,
-  pingsSomeoneElse,
-} from '@/lib/agent/addressed';
+import { addressedState, isAddressedToKyto } from '@/lib/agent/addressed';
 import { createAttemptRouter } from '@/lib/agent/attempt-router';
 import {
   carriedMessages,
@@ -393,12 +389,7 @@ export async function runTurn(input: {
       slack.isDM(input.thread.id) ||
       input.secret ||
       typeof input.message.raw.ts !== 'string'
-    ) &&
-    turn.message !== undefined &&
-    !(
-      input.message.author.userId === turn.message.author.userId &&
-      !pingsSomeoneElse({ selfId, text: input.message.text })
-    );
+    ) && turn.message !== undefined;
   if (askJev) {
     const recent = await Promise.race([
       slack
