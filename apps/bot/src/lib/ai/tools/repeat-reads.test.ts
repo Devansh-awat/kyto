@@ -30,4 +30,15 @@ describe('rememberRepeatReads', () => {
     await read({ a: 'boom' }).catch(() => undefined);
     expect(calls).toBe(4);
   });
+
+  test('a third identical read gets the firmer note with the count', async () => {
+    const read = rememberRepeatReads((input: { a: string }) =>
+      Promise.resolve({ got: input.a })
+    );
+    await read({ a: 'x' });
+    const second = await read({ a: 'x' });
+    const third = await read({ a: 'x' });
+    expect(second.repeat).not.toContain('times');
+    expect(third.repeat).toContain('3 times');
+  });
 });
