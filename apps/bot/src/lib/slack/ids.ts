@@ -90,9 +90,10 @@ export function toChatSlackChannelId(channelId: string): string {
   );
 }
 
-// `https://<workspace>.slack.com/archives/C123/p1777084846201899[?thread_ts=…]`
+// `https://<workspace>.slack.com/archives/C123/p1777084846201899[?thread_ts=…]`,
+// and Enterprise Grid's `<workspace>.enterprise.slack.com` (#115).
 const SLACK_PERMALINK =
-  /^https:\/\/[a-z0-9-]+\.slack\.com\/archives\/([CGD][A-Z0-9]+)\/p(\d{10})(\d{6})(?:[/?#]|$)/;
+  /^https:\/\/(?:[a-z0-9-]+\.)+slack\.com\/archives\/([CGD][A-Z0-9]+)\/p(\d{10})(\d{6})(?:[/?#]|$)/;
 const SLACK_TS = /^\d{10}\.\d{6}$/;
 
 /**

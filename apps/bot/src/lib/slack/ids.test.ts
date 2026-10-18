@@ -26,6 +26,21 @@ describe('parseSlackPermalink', () => {
     });
   });
 
+  test('an Enterprise Grid host is a permalink too', () => {
+    expect(
+      parseSlackPermalink(
+        'https://hackclub.enterprise.slack.com/archives/C0B7QEK0MQB/p1792266772304439?thread_ts=1792266772.304439&cid=C0B7QEK0MQB'
+      )
+    ).toEqual({
+      channelId: 'C0B7QEK0MQB',
+      threadTs: '1792266772.304439',
+      ts: '1792266772.304439',
+    });
+    expect(
+      parseSlackPermalink('https://evil.com.slack.com.example/archives/C1/p1')
+    ).toBe(null);
+  });
+
   test('anything else is not a permalink', () => {
     expect(parseSlackPermalink('https://example.com/archives/C1/p1')).toBe(
       null
