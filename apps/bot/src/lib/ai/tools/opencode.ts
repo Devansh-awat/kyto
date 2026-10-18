@@ -61,6 +61,10 @@ const ANSI = /\u001b\[[0-9;]*[A-Za-z]/g;
 // models work here (no account key in the sandbox), and Zen serves them only
 // to the OpenCode client — a plain API call gets `FreeTierError`.
 const DEFAULT_MODEL = 'opencode/deepseek-v4.1-flash-free';
+// luna fills an optional string with "." — `opencode run --model .` dies with
+// "Unexpected server error" before doing anything, and every run in a thread
+// failed that way. Anything that isn't `provider/model` runs the default.
+const MODEL_ID = /^[\w.-]+\/[\w./-]+$/;
 
 // A media file made with command-line tools is a bash one-liner, and the
 // description saying so wasn't enough: a two-frame GIF from three PNGs went to
@@ -114,7 +118,6 @@ export function opencodeTool({
         ),
       model: z
         .string()
-        .regex(/^[\w./-]+$/)
         .optional()
         .describe(
           `An OpenCode model id. Leave unset for the default, ${DEFAULT_MODEL}.`
@@ -215,7 +218,7 @@ export function opencodeTool({
             'SETUP_LOG=$(mktemp)',
             `( ${OPENCODE_SETUP_COMMAND}\n) 9>&- >"$SETUP_LOG" 2>&1 || { cat "$SETUP_LOG"; rm -f '${STATE_PATH}'; exit ${SETUP_FAILED_EXIT}; }`,
             `mkdir -p '${workDir}' && cd '${workDir}'`,
-            `timeout ${RUN_TIMEOUT_SECONDS} opencode run --model '${model ?? DEFAULT_MODEL}' ${resume ? '--continue' : ''} "$(cat '${briefPath}')" 9>&- 2>&1 &`,
+            `timeout ${RUN_TIMEOUT_SECONDS} opencode run --model '${model && MODEL_ID.test(model) ? model : DEFAULT_MODEL}' ${resume ? '--continue' : ''} "$(cat '${briefPath}')" 9>&- 2>&1 &`,
             'RUN_PID=$!',
             `echo "$(date +%s) ${runId} $$ $RUN_PID" > '${STATE_PATH}'`,
             'wait "$RUN_PID"',
