@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { withGhPrefixes } from '@/lib/ai/tools/gh-prefix';
 
 // Commands that are never coding work, whatever the thread is about. Jev scores
 // the WHOLE state — thread tail, the turn's earlier calls, then the call — so
@@ -330,7 +331,16 @@ export function isNotCodingCall({
     return false;
   }
   const parsed = commandInput.safeParse(input);
-  const tokens = parsed.success ? tokenize(parsed.data.command.trim()) : null;
+  // The gh tool runs `repo view …` as `gh repo view …`; judged as written, a
+  // read-only `repo view` matched nothing here and Jev refused it at 0.95.
+  if (!parsed.success) {
+    return false;
+  }
+  const command =
+    toolName === 'gh'
+      ? withGhPrefixes(parsed.data.command)
+      : parsed.data.command;
+  const tokens = tokenize(command.trim());
   if (!tokens || tokens.length === 0) {
     return false;
   }

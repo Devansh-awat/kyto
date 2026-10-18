@@ -22,6 +22,12 @@ describe('isNotCodingCall', () => {
     }
   });
 
+  test('reads a gh tool command written without its gh', () => {
+    expect(gh('repo view Devansh-awat/kyto --json name,url')).toBe(true);
+    expect(gh('pr create --repo o/r --title x --body y')).toBe(true);
+    expect(gh('repo delete o/r --yes')).toBe(false);
+  });
+
   test('skips Jev for read-only gh', () => {
     for (const command of [
       'gh issue list --repo Devansh-awat/kyto --state open',
