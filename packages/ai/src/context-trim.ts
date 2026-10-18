@@ -5,9 +5,12 @@ import type { ModelMessage } from 'ai';
 // Measured 2026-10-11: 44 Haiku requests went past it, every one a LATER step of
 // a tool-heavy turn — the replayed thread (step 0) peaked at 81k — so thread
 // compaction could not have prevented any of them; tool results piling up
-// inside one turn did it.
+// inside one turn did it. Luna bills the whole request 2x in / 1.5x out past
+// 272k (OpenAI's long-context rate); a 39-step research turn reached 185k on
+// 2026-10-18, and compacting below the step would only rewrite a cached prompt.
 export const LONG_CONTEXT_PRICE_STEP: Record<string, number> = {
   'anthropic/claude-haiku-5.5': 100_000,
+  'openai/gpt-6-luna': 272_000,
 };
 
 // Compact once a step's ACTUAL input (the provider's count, not an estimate)
