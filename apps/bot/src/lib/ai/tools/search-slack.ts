@@ -8,7 +8,7 @@ import logger from '@/lib/logger';
 import { askerSlackToken, slackAuthorizeUrl } from '@/lib/slack-oauth';
 import { toLogError } from '@/lib/utils/error';
 import { rememberRepeatReads } from './repeat-reads';
-import { markStoredSelfMention } from './utils';
+import { dmSourceNote, markStoredSelfMention } from './utils';
 
 const actionTokenSchema = z.looseObject({
   action_token: z.string().min(1).optional(),
@@ -263,7 +263,7 @@ export function searchSlackTool({ message }: { message: Message }) {
         const connect = slackAuthorizeUrl(userId);
         return ` This search could not see private channels kyto's account isn't in, nor the person's DMs, so "no results" does not mean it isn't there.${connect ? ` If it could be in one of those, they can connect their own Slack account so kyto searches as them: ${connect}` : ''}`;
       };
-      const found = ({
+      const found = async ({
         messages,
         nextCursor,
         totalMatches,
@@ -278,7 +278,16 @@ export function searchSlackTool({ message }: { message: Message }) {
           { count: messages.length, query, totalMatches, via },
           '[searchSlack] complete'
         );
+        const dmNote = await dmSourceNote({
+          channelIds: messages.map((hit) =>
+            hit && typeof hit === 'object' && 'channelId' in hit
+              ? String(hit.channelId)
+              : undefined
+          ),
+          currentThreadId: message.threadId,
+        });
         return {
+          ...(dmNote ? { dmSource: dmNote } : {}),
           messages,
           nextCursor,
           resultCount: messages.length,

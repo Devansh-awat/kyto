@@ -12,6 +12,7 @@ import { askerSlackToken, slackAuthorizeUrl } from '@/lib/slack-oauth';
 import { rememberRepeatReads } from './repeat-reads';
 import {
   assertReadableChannel,
+  dmSourceNote,
   joinChannel,
   markStoredSelfMention,
 } from './utils';
@@ -103,6 +104,11 @@ export function readConversationHistoryTool({
         }
 
         const chatChannelId = toChatSlackChannelId(resolvedChannelId);
+        const dmNote = await dmSourceNote({
+          channelIds: [toRawSlackChannelId(chatChannelId)],
+          currentThreadId,
+        });
+        const dmSource = dmNote ? { dmSource: dmNote } : {};
 
         const refusal = await assertReadableChannel(chatChannelId, {
           askerUserId,
@@ -125,14 +131,17 @@ export function readConversationHistoryTool({
                 : String(refusal instanceof Error ? refusal.message : refusal)
             );
           }
-          return await readAsAsker({
-            channel: toRawSlackChannelId(chatChannelId),
-            cursor,
-            limit,
-            oldest,
-            threadTs: resolvedThreadTs,
-            token,
-          });
+          return {
+            ...(await readAsAsker({
+              channel: toRawSlackChannelId(chatChannelId),
+              cursor,
+              limit,
+              oldest,
+              threadTs: resolvedThreadTs,
+              token,
+            })),
+            ...dmSource,
+          };
         }
 
         await joinChannel(chatChannelId);
@@ -197,6 +206,7 @@ export function readConversationHistoryTool({
             ? {}
             : { note: `The newest ${limit} messages, oldest first.` }),
           threadTs: resolvedThreadTs ?? null,
+          ...dmSource,
         };
       }
     ),
