@@ -97,6 +97,11 @@ const GIT_FETCH_RUNS = /^(?:--upload-pack|-u|--template|-c|--config)(?:=|$)/;
 // create` was refused at 0.90 and handed to OpenCode for 144s (#108). A commit
 // can't launder code: whatever it commits was judged when it was written.
 const GIT_PUBLISH = new Set(['add', 'commit', 'init', 'push']);
+// Starting the branch a PR goes out on: `git switch -c <name>` or
+// `git checkout -b <name>`, nothing else (a plain checkout can discard edits).
+// A PR chain starting `git switch -c …` was refused at 0.97 (2026-10-18).
+const GIT_NEW_BRANCH: Record<string, string> = { checkout: '-b', switch: '-c' };
+const BRANCH_NAME = /^\w[\w./-]*$/;
 // `--receive-pack`/`--exec` name a program to RUN for a local remote; an init
 // `--template` copies hooks in.
 const GIT_PUBLISH_RUNS = /^--(?:receive-pack|exec|template)(?:=|$)/;
@@ -104,6 +109,7 @@ const GIT_PUBLISH_RUNS = /^--(?:receive-pack|exec|template)(?:=|$)/;
 const GIT_WRITES = /^(?:--output|-o)/;
 
 const GH_READ: Record<string, Set<string>> = {
+  auth: new Set(['status']),
   gist: new Set(['list', 'view']),
   issue: new Set(['list', 'status', 'view']),
   label: new Set(['list']),
@@ -294,6 +300,13 @@ function isNotCodingArgv([head, ...args]: string[]): boolean {
     // `git -C dir …` is the same command run elsewhere; any other global flag
     // (`-c key=value`) could reconfigure what runs.
     const [sub, ...rest] = args[0] === '-C' ? args.slice(2) : args;
+    if (sub !== undefined && sub in GIT_NEW_BRANCH) {
+      return (
+        rest.length === 2 &&
+        rest[0] === GIT_NEW_BRANCH[sub] &&
+        BRANCH_NAME.test(rest[1] ?? '')
+      );
+    }
     if (sub === 'branch') {
       return rest.every((arg) => GIT_BRANCH_LISTS.has(arg));
     }

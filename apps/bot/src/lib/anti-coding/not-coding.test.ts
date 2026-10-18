@@ -22,6 +22,28 @@ describe('isNotCodingCall', () => {
     }
   });
 
+  test('skips Jev for starting a PR branch and checking gh auth', () => {
+    expect(
+      bash(
+        'git -C kyto switch -c fix/no-pings && git -C kyto add a.ts && git -C kyto commit -m x'
+      )
+    ).toBe(true);
+    expect(bash('git checkout -b u0123/fix')).toBe(true);
+    expect(gh('auth status; repo view Devansh-awat/kyto --json url')).toBe(
+      true
+    );
+    for (const command of [
+      'git checkout -- a.ts',
+      'git checkout main',
+      'git switch -c -x',
+      'git switch -c a b',
+      'gh auth login',
+      'gh auth token',
+    ]) {
+      expect(bash(command) || gh(command)).toBe(false);
+    }
+  });
+
   test('reads a gh tool command written without its gh', () => {
     expect(gh('repo view Devansh-awat/kyto --json name,url')).toBe(true);
     expect(gh('pr create --repo o/r --title x --body y')).toBe(true);
