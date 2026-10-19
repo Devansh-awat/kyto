@@ -1,0 +1,30 @@
+name: Deploy
+
+# Orchard's own push-to-deploy reports itself enabled and deliverable but
+# never builds on a push (checked 2026-10-19), so GitHub asks for the build.
+# Only after CI passed on main: a broken commit never reaches kyto.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: ["main"]
+
+concurrency:
+  group: deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.repository == 'Devansh-awat/kyto'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ask Orchard to rebuild kyto from main
+        env:
+          ORCHARD_DEPLOY_TOKEN: ${{ secrets.ORCHARD_DEPLOY_TOKEN }}
+        run: |
+          curl --fail-with-body -sS -X POST \
+            -H "Authorization: Bearer $ORCHARD_DEPLOY_TOKEN" \
+            https://orchard.devansh.dino.icu/apiv1/webhooks/deploy
