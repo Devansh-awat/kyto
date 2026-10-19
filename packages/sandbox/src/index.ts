@@ -1,3 +1,4 @@
+export { CODING_AGENT_SETUP_COMMAND } from './coding-agent';
 export { sandboxConfig } from './config';
 export { DISPLAY_INSTALL_COMMAND, SANDBOX_DISPLAY } from './display';
 export {
@@ -17,5 +18,4 @@ export {
   liveViewCommand,
   liveViewUrl,
 } from './live-view';
-export { OPENCODE_SETUP_COMMAND } from './opencode';
 export { killSandbox, type RunOnceResult, runOnce } from './run-once';

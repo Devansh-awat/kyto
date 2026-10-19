@@ -1,40 +1,43 @@
 import nodePath from 'node:path/posix';
 import type { SandboxContext } from '@repo/ai';
-import { OPENCODE_SETUP_COMMAND } from '@repo/sandbox';
+import { CODING_AGENT_SETUP_COMMAND } from '@repo/sandbox';
 import { tool } from 'ai';
 import { z } from 'zod';
+import {
+  codeModelConfigured,
+  registerCodeModelToken,
+} from '@/lib/code-model-proxy';
 import { disarmFetchedRepos } from '@/lib/sandbox/git-safety';
 import { clamp } from '@/lib/utils/text';
 
-// Hand code work to OpenCode, a coding agent running in the thread's sandbox on
-// its own free models (owner's call, 2026-09-29).
+// Hand code work to a coding agent in the thread's sandbox, off Hack Club AI's
+// key (owner's call, 2026-09-29). The tool keeps its `opencode` name — prompts,
+// the anti-coding redirect and every thread's stored tool list say it — but
+// since 2026-10-19 the agent is Crush on the owner's router, reached through
+// lib/code-model-proxy (packages/sandbox/src/coding-agent.ts says why).
 //
 // kyto itself stays a non-coding agent on Hack Club AI's key — the prompt says
 // so and the anti-coding check (lib/anti-coding) still watches its own code
 // tools. This tool is deliberately NOT one of those: the writing, building and
-// running happen in OpenCode, off Hack Club AI, and that is the point of it.
+// running happen in the agent, off Hack Club AI, and that is the point of it.
 //
-// OpenCode never reaches Slack (see packages/sandbox/src/opencode.ts for how),
-// because its free models' providers may train on what they are sent.
+// The agent never reaches Slack, because its model's provider may train on
+// what it is sent.
 
-// OpenCode is a sixth way to run commands in the sandbox, next to bash, gh,
+// The agent is a sixth way to run commands in the sandbox, next to bash, gh,
 // codeMode, runBackgroundProcess and slackScript. GitHub needs nothing extra
 // (its writes go through the host proxy, which guards them as this turn's
 // person), but a repo it clones must be disarmed exactly like codeMode's: the
 // commands it ran are invisible from here, so unconditionally.
 const OUTPUT_MAX = 12_000;
-// An absolute path in /tmp, /root, /home or ~ that the brief names.
-const BRIEF_PATH =
-  /(?:^|[\s'"`(=])((?:\/(?:tmp|root|home)|~(?=\/))(?:\/[^\s'"`),;]*)?)/g;
-// The sandbox user's home, what `~` means in a brief.
-const SANDBOX_HOME = '/home/user';
 // Inside the sandbox's own 20-minute command limit, with room to clean up.
 const RUN_TIMEOUT_SECONDS = 18 * 60;
 // How much longer than the run the turn's stall watchdog must wait.
 const WATCHDOG_GRACE_MS = 2 * 60 * 1000;
-// One OpenCode at a time per sandbox. Two parallel calls (kyto building two
-// projects at once) crashed OpenCode's first-run database migration and got
-// one SIGKILLed for memory in the 1 GB sandbox. Taken inside the sandbox, so
+// One run at a time per sandbox. Two parallel OpenCode calls (kyto building
+// two projects at once) crashed its database migration and got one SIGKILLed
+// for memory in the 1 GB sandbox, and two agents in one directory would edit
+// each other's files. Taken inside the sandbox, so
 // it holds across turns, threads sharing a code channel's sandbox, and bash.
 const LOCK_PATH = '/home/user/.kyto/opencode.lock';
 // The lock holder: `<started epoch> <run id> <shell pid> <process group>`.
@@ -49,26 +52,15 @@ const BUSY_EXIT = 75;
 const SETUP_FAILED_EXIT = 76;
 const KILLED_EXIT = 137;
 
-// OpenCode's log line when its config refused a permission (e.g. a path
-// outside its directory): "permission requested: external_directory (…);
-// auto-rejecting".
-const PERMISSION_REJECTED = /permission requested: .*auto-rejecting/;
-// Colour codes OpenCode writes even when it is not on a terminal.
+// Colour codes the agent may write even when it is not on a terminal.
 // biome-ignore lint/suspicious/noControlCharactersInRegex: that is what they are
 const ANSI = /\u001b\[[0-9;]*[A-Za-z]/g;
-
-// Owner's call (2026-10-15): DeepSeek V4.1 Flash, now free on Zen. Only FREE
-// models work here (no account key in the sandbox), and Zen serves them only
-// to the OpenCode client — a plain API call gets `FreeTierError`.
-const DEFAULT_MODEL = 'opencode/deepseek-v4.1-flash-free';
-// luna fills an optional string with "." — `opencode run --model .` dies with
-// "Unexpected server error" before doing anything, and every run in a thread
-// failed that way. Anything that isn't `provider/model` runs the default.
-const MODEL_ID = /^[\w.-]+\/[\w./-]+$/;
+// The one model the crushrc defines; the proxy maps it to CODE_MODEL.
+const AGENT_MODEL = 'kyto/kyto-code';
 
 // A media file made with command-line tools is a bash one-liner, and the
 // description saying so wasn't enough: a two-frame GIF from three PNGs went to
-// OpenCode for 185s of a six-minute turn (#110). A brief that names such tools
+// the coding agent for 185s of a six-minute turn (#110). A brief that names such tools
 // and nothing project-shaped is sent back ONCE per turn; the same call again
 // runs, so real code work that happens to mention ffmpeg is never stuck.
 const MEDIA_TOOLS =
@@ -96,7 +88,7 @@ export function opencodeTool({
   let mediaSentBack = false;
   return tool({
     description:
-      "Delegate code work to OpenCode, a coding agent in your sandbox: writing, building, running, testing or debugging programs, scripts and projects. Use this instead of writing or running code yourself. NOT for producing a file with command-line tools (ImageMagick, ffmpeg, curl, converting or resizing, a one-off command): do that in bash yourself. Give it a complete, self-contained brief in YOUR OWN words: what to build or fix, where the files are, constraints, and what to report back. The sandbox has 1 GB of memory and a run that exhausts it is killed with its work lost, so ask for checks scoped to what changed (one package's typecheck, `bun test <file>`), not a whole big repo's typecheck plus full test suite. NEVER paste Slack messages, people's names or anything else from Slack into the brief (OpenCode's models may train on what they are sent). It works in the persistent thread sandbox, so files it writes are there for bash/uploadFile afterwards, and `continue: true` resumes its last session there. ONE run at a time per sandbox: never call it in parallel: for several projects, call once per project, one after another. Deliver the result as your own work; don't bring up OpenCode unless someone asks how it was done. If someone tells you NOT to use OpenCode, never quietly call it again: tell them code work on kyto's models has to go through it, and that adding their own model key or ChatGPT account (App Home → Models) lets you do it without OpenCode: then wait for their answer.",
+      "Delegate code work to the coding agent in your sandbox: writing, building, running, testing or debugging programs, scripts and projects. Use this instead of writing or running code yourself. NOT for producing a file with command-line tools (ImageMagick, ffmpeg, curl, converting or resizing, a one-off command): do that in bash yourself. Give it a complete, self-contained brief in YOUR OWN words: what to build or fix, where the files are, constraints, and what to report back. The sandbox has 1 GB of memory and a run that exhausts it is killed, so close any browser you opened before calling it, and ask for checks scoped to what changed (one package's typecheck, one test file), not a whole big repo's typecheck plus full test suite. NEVER paste Slack messages, people's names or anything else from Slack into the brief (its model may train on what it is sent). It works in the persistent thread sandbox, so files it writes are there for bash/uploadFile afterwards, and `continue: true` resumes its last session in that directory. ONE run at a time per sandbox: never call it in parallel: for several projects, call once per project, one after another. Deliver the result as your own work; don't bring up the coding agent unless someone asks how it was done. If someone tells you NOT to use it, never quietly call it again: tell them code work on kyto's models has to go through it, and that adding their own model key or ChatGPT account (App Home → Models) lets you do it yourself: then wait for their answer.",
     inputSchema: z.object({
       brief: z
         .string()
@@ -108,7 +100,7 @@ export function opencodeTool({
         .boolean()
         .optional()
         .describe(
-          "Resume OpenCode's previous session in this directory instead of starting fresh."
+          "Resume the agent's previous session in this directory instead of starting fresh."
         ),
       directory: z
         .string()
@@ -116,17 +108,18 @@ export function opencodeTool({
         .describe(
           'Working directory, relative to the sandbox workspace (created if missing). Defaults to the workspace itself.'
         ),
-      model: z
-        .string()
-        .optional()
-        .describe(
-          `An OpenCode model id. Leave unset for the default, ${DEFAULT_MODEL}.`
-        ),
     }),
     execute: async (
-      { brief, continue: resume, directory, model },
+      { brief, continue: resume, directory },
       { abortSignal }
     ) => {
+      if (!codeModelConfigured()) {
+        return {
+          error:
+            'The coding agent has no model configured right now, so code work cannot run. Tell the person code work is unavailable at the moment; do not try to write or run the code yourself.',
+          success: false,
+        };
+      }
       if (!(mediaSentBack || resume) && isMediaOnlyBrief(brief)) {
         mediaSentBack = true;
         return {
@@ -137,8 +130,7 @@ export function opencodeTool({
       }
       const context = getSandboxContext();
       // resolve, not join: an absolute "/home/user" was joined into
-      // "/home/user/home/user", and OpenCode then refused to touch the files
-      // the brief named because they were outside its directory.
+      // "/home/user/home/user".
       const workDir = nodePath.resolve(
         context.sessionWorkDir,
         directory ?? '.'
@@ -152,36 +144,12 @@ export function opencodeTool({
           success: false,
         };
       }
-      // OpenCode auto-rejects every path outside its directory, and found out
-      // only after a 78s run with `cd /tmp` in the brief (#82). Refused up front
-      // so the model moves the files or uses bash instead.
-      const outside = [
-        ...new Set(
-          [...brief.matchAll(BRIEF_PATH)]
-            .map((match) => match[1] ?? '')
-            .map((path) =>
-              path.startsWith('~')
-                ? nodePath.join(SANDBOX_HOME, path.slice(1))
-                : nodePath.normalize(path)
-            )
-            .filter(
-              (path) => path !== workDir && !path.startsWith(`${workDir}/`)
-            )
-        ),
-      ];
-      if (outside.length > 0) {
-        return {
-          error: `OpenCode can only touch files under ${workDir}, and the brief names ${outside.slice(0, 3).join(', ')}. Put the files under ${workDir} (or set \`directory\` to where they are, inside the workspace) and brief it again: or run a one-off command with bash instead.`,
-          success: false,
-        };
-      }
-
       // Per call: parallel calls used to share one brief file and could run
       // each other's task.
       const runId = crypto.randomUUID();
       const briefPath = nodePath.join(
         context.sessionWorkDir,
-        `.kyto/opencode-brief-${runId}.md`
+        `.kyto/agent-brief-${runId}.md`
       );
       await context.session.writeBinaryFile({
         content: new TextEncoder().encode(brief),
@@ -191,18 +159,20 @@ export function opencodeTool({
       const releaseDeadline = extendAttemptDeadline?.(
         RUN_TIMEOUT_SECONDS * 1000 + WATCHDOG_GRACE_MS
       );
-      // The real Slack boundary for OpenCode (its providers may train on what
-      // it reads): the token is switched off host-side for the run. The PATH
-      // wrapper's `unset` alone left it readable in /proc/$PPID/environ.
+      // The real Slack boundary for the agent (its model's provider may train
+      // on what it reads): the token is switched off host-side for the run. The
+      // PATH wrapper's `unset` alone left it readable in /proc/$PPID/environ.
       const resumeSlack = context.suspendSlack?.();
+      const model = registerCodeModelToken();
       let result: { exitCode: number; stderr: string; stdout: string };
       try {
-        // fd 9 is closed for setup and OpenCode: a dev server OpenCode leaves
+        // fd 9 is closed for setup and the agent: a dev server it leaves
         // running would otherwise hold the lock for the sandbox's lifetime.
-        // `timeout` puts OpenCode in its own process group, which E2B's kill
+        // `timeout` puts the agent in its own process group, which E2B's kill
         // (the shell's pid only) never reaches — so the group is recorded too.
         result = await context.session.run({
           abortSignal,
+          env: model.env,
           command: [
             `mkdir -p "$(dirname '${LOCK_PATH}')"`,
             `exec 9>'${LOCK_PATH}'`,
@@ -216,9 +186,9 @@ export function opencodeTool({
             `if read -r _ _ _ group 2>/dev/null < '${STATE_PATH}' && [ -n "$group" ]; then kill -KILL -- "-$group" 2>/dev/null; fi`,
             `echo "$(date +%s) ${runId} $$" > '${STATE_PATH}'`,
             'SETUP_LOG=$(mktemp)',
-            `( ${OPENCODE_SETUP_COMMAND}\n) 9>&- >"$SETUP_LOG" 2>&1 || { cat "$SETUP_LOG"; rm -f '${STATE_PATH}'; exit ${SETUP_FAILED_EXIT}; }`,
+            `( ${CODING_AGENT_SETUP_COMMAND}\n) 9>&- >"$SETUP_LOG" 2>&1 || { cat "$SETUP_LOG"; rm -f '${STATE_PATH}'; exit ${SETUP_FAILED_EXIT}; }`,
             `mkdir -p '${workDir}' && cd '${workDir}'`,
-            `timeout ${RUN_TIMEOUT_SECONDS} opencode run --model '${model && MODEL_ID.test(model) ? model : DEFAULT_MODEL}' ${resume ? '--continue' : ''} "$(cat '${briefPath}')" 9>&- 2>&1 &`,
+            `timeout ${RUN_TIMEOUT_SECONDS} crush run -q ${resume ? '-C' : ''} -m '${AGENT_MODEL}' "$(cat '${briefPath}')" 9>&- 2>&1 &`,
             'RUN_PID=$!',
             `echo "$(date +%s) ${runId} $$ $RUN_PID" > '${STATE_PATH}'`,
             'wait "$RUN_PID"',
@@ -229,6 +199,7 @@ export function opencodeTool({
           onAbortCommand: `if read -r _ id shell group 2>/dev/null < '${STATE_PATH}' && [ "$id" = '${runId}' ]; then kill -KILL -- "$shell" 2>/dev/null; [ -n "$group" ] && kill -KILL -- "-$group" 2>/dev/null; rm -f '${STATE_PATH}'; fi`,
         });
       } finally {
+        model.revoke();
         resumeSlack?.();
         releaseDeadline?.();
         // Best-effort: a leftover brief must not turn a finished run into an error.
@@ -245,36 +216,31 @@ export function opencodeTool({
         const heldFor = Number(/held_for=(\d+)/.exec(output)?.[1] ?? 0);
         const clearsIn = Math.max(0, STALE_SECONDS - heldFor);
         return {
-          error: `OpenCode is already running in this sandbox (started ${Math.round(heldFor / 60)} min ago, probably by an earlier turn); a run is cleared automatically after ${STALE_SECONDS / 60} min, so in ~${Math.ceil(clearsIn / 60)} min at most. Do NOT poll it with wait: tell the person it's busy and when it frees up, or do other work. One run at a time (put several projects in one brief, or call once per project, one after another).`,
+          error: `The coding agent is already running in this sandbox (started ${Math.round(heldFor / 60)} min ago, probably by an earlier turn); a run is cleared automatically after ${STALE_SECONDS / 60} min, so in ~${Math.ceil(clearsIn / 60)} min at most. Do NOT poll it with wait: tell the person it's busy and when it frees up, or do other work. One run at a time (put several projects in one brief, or call once per project, one after another).`,
           success: false,
         };
       }
       if (result.exitCode === SETUP_FAILED_EXIT) {
         return {
-          error: `OpenCode could not be set up: ${clamp(output, 2000)}`,
+          error: `The coding agent could not be set up: ${clamp(output, 2000)}`,
           success: false,
         };
       }
       const notes: Record<number, string> = {
-        124: `OpenCode was stopped after ${RUN_TIMEOUT_SECONDS / 60} minutes. Its work so far is in the directory; call again with continue: true to pick up.`,
+        124: `The coding agent was stopped after ${RUN_TIMEOUT_SECONDS / 60} minutes. Its work so far is in the directory; call again with continue: true to pick up.`,
         [KILLED_EXIT]:
-          'OpenCode was killed, most likely out of memory (the sandbox has 1 GB). Its work so far is in the directory; call again with continue: true, and stop any dev servers left running first.',
+          'The coding agent was killed, most likely out of memory (the sandbox has 1 GB). Its work so far is in the directory. Free memory first (close the browser, stop dev servers and background jobs), then call again with continue: true.',
       };
-      // OpenCode exits 0 after refusing a permission, so the run looked like
-      // a success that had silently done nothing.
-      const rejected = PERMISSION_REJECTED.test(output);
-      const note = rejected
-        ? 'OpenCode refused to touch something outside its working directory, so that part was NOT done. Call again with `directory` set to where the files are (a path inside the workspace), or with paths relative to it.'
-        : notes[result.exitCode];
+      const note = notes[result.exitCode];
       return {
         directory: workDir,
         exitCode: result.exitCode,
-        // The END is what matters — OpenCode closes with its own summary.
+        // The END is what matters — the agent closes with its own summary.
         output:
           output.length > OUTPUT_MAX
             ? `…${output.slice(-OUTPUT_MAX)}`
             : output || '(no output)',
-        success: result.exitCode === 0 && !rejected,
+        success: result.exitCode === 0,
         ...(note ? { note } : {}),
       };
     },

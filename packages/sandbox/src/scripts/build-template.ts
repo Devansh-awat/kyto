@@ -4,6 +4,7 @@ import { parseArgs } from 'node:util';
 import { createLogger } from '@repo/logging';
 import dotenv from 'dotenv';
 import { defaultBuildLogger, Template } from 'e2b';
+import { CRUSH_INSTALL_COMMAND } from '../coding-agent';
 import { sandboxConfig } from '../config';
 import { NOVNC_URL } from '../live-view';
 
@@ -111,11 +112,11 @@ async function main(): Promise<void> {
         // HOME at build time so the first browse of a thread isn't a download.
         'npm install -g cloakbrowser',
         'bash -lc "HOME=/home/user cloakbrowser install"',
-        // OpenCode, the coding agent kyto delegates to. Pre-installed so a fresh
-        // thread's first delegation isn't a minute of npm; the tool's setup
-        // (src/opencode.ts) still installs it into an older sandbox, and writes
-        // the Slack-free wrapper and config either way.
-        'npm install -g --prefix /home/user/.kyto/opencode opencode-ai',
+        // Crush, the coding agent kyto delegates to. Pre-installed so a fresh
+        // thread's first delegation isn't a download; the tool's setup
+        // (src/coding-agent.ts) still installs it into an older sandbox, and
+        // writes the Slack-free wrapper and config either way.
+        CRUSH_INSTALL_COMMAND,
         // The live view's web client (src/live-view.ts fetches it too, for a
         // sandbox from an older template).
         `mkdir -p /opt/novnc && curl -sfL ${NOVNC_URL} | tar xz -C /opt/novnc --strip-components=1`,

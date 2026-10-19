@@ -12,6 +12,8 @@ import nodePath from 'node:path';
 // keys get placeholders; a real .env still wins, and no test needs a working
 // key. Site files always go to a scratch directory, never the real root.
 const PLACEHOLDERS: Record<string, string> = {
+  CODE_MODEL_API_KEY: 'sk-code-test',
+  CODE_MODEL_BASE_URL: 'https://code-model.test/v1',
   DATABASE_URL: 'postgres://test:test@localhost:5432/test',
   E2B_API_KEY: 'test',
   EXA_API_KEY: 'test',

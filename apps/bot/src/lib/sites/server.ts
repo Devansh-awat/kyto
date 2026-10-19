@@ -4,6 +4,7 @@ import nodePath from 'node:path';
 import { promisify } from 'node:util';
 import { env } from '@/env';
 import { handleMcpOauth } from '@/lib/ai/mcp-oauth';
+import { handleCodeModelProxy } from '@/lib/code-model-proxy';
 import { handleDashboard } from '@/lib/dashboard';
 import { ensureEmbedAssets, LIVE_EMBED_PREFIX } from '@/lib/embeds';
 import { handleGithubProxy } from '@/lib/github-proxy';
@@ -192,6 +193,13 @@ export async function startSitesServer(): Promise<void> {
         const proxied = await handleSlackProxy(request, pathname);
         if (proxied) {
           return proxied;
+        }
+
+        // The sandbox coding agent's model endpoint (secret-gated; the real
+        // key is added here, never inside the sandbox).
+        const codeModel = await handleCodeModelProxy(request, pathname);
+        if (codeModel) {
+          return codeModel;
         }
 
         // Host-side GitHub proxy: this is where the real PAT lives now, so that
