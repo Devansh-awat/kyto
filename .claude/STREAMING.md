@@ -109,10 +109,13 @@ attempt's text is dropped (not trimmed tag by tag — the arguments are the bulk
 it) and a warning names the cause, since those calls never executed.
 
 A bare action NAME the model wrote instead of calling it (`canvasRead` at the
-end of a message, #123) is cut from the end of the text before a card or the
-end (`lib/agent/leaked-tool-name.ts`, tested): camelCase names only — family
+end of a message, #123) is cut from the
+end of the text RIGHT BEFORE a tool card (`release({ beforeCard })`,
+`lib/agent/leaked-tool-name.ts`, tested): camelCase names only — family
 actions plus every tool a turn registered (`codeMode` leaked too) — on their own
-line or glued after a sentence, never mid-prose.
+line or glued to a sentence with no space. A reply that ENDS on a tool name, a
+bulleted list or "tools: codeMode" is never touched (owner: listing tools must
+work).
 
 ## "no tools loaded" never reaches the reply
 

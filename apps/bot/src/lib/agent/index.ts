@@ -2763,7 +2763,7 @@ async function executeTurn(
             continue;
           }
           // Text written before this card goes above it.
-          const text = reply?.release({ force: true }) ?? '';
+          const text = reply?.release({ beforeCard: true, force: true }) ?? '';
           if (hasBroadcastToken(text)) {
             broadcast = text;
             yield* closeMessage();

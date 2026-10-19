@@ -22,6 +22,7 @@ import { createCompactionReporter } from '@/lib/agent/compaction-card';
 import { buildPrompt } from '@/lib/agent/prompt';
 import { requestHints } from '@/lib/ai/hints';
 import { buildMcpTools } from '@/lib/ai/mcp';
+import { withMcpOauth } from '@/lib/ai/mcp-oauth';
 import { bot } from '@/lib/chat';
 import logger from '@/lib/logger';
 import { redactSecretsDeep } from '@/lib/redact';
@@ -163,10 +164,14 @@ async function logTools(): Promise<{
   if (!(env.OWNER_USER_ID && env.KEVINTON_LOGS_MCP)) {
     return none;
   }
+  // Through withMcpOauth like a turn's servers: the Orchard entry is an
+  // OAuth sign-in, and the stored row alone answered 401.
   const server = await getMcpServer({
     name: env.KEVINTON_LOGS_MCP,
     userId: env.OWNER_USER_ID,
-  }).catch(() => undefined);
+  })
+    .then((row) => (row ? withMcpOauth(row) : undefined))
+    .catch(() => undefined);
   if (!server) {
     return none;
   }

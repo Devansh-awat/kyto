@@ -18,6 +18,10 @@ describe('stripLeakedToolName', () => {
     const text = 'kyto calls canvasRead before it edits';
     expect(stripLeakedToolName(text)).toBe(text);
     expect(stripLeakedToolName('try canvasRead')).toBe('try canvasRead');
+    expect(stripLeakedToolName('tools: canvasRead')).toBe('tools: canvasRead');
+    expect(stripLeakedToolName('- canvasRead\n- canvasWrite')).toBe(
+      '- canvasRead\n- canvasWrite'
+    );
   });
 
   test('drops a registered core tool name once noted', () => {

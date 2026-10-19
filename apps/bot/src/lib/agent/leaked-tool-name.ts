@@ -5,9 +5,10 @@ import { FAMILY_OF } from '@/lib/ai/merge-tools';
 // `canvasRead` (#123) and `codeMode`. Nobody reading Slack should see one.
 //
 // Only a camelCase tool name kyto knows — the family actions plus every tool a
-// turn registered (`noteToolNames`) — and only at the very END of the text, on
-// a line of its own or glued straight after a sentence: "use canvasRead to…"
-// in the middle of prose is someone asking about it and stays.
+// turn registered (`noteToolNames`) — only at the very END of text a tool card
+// follows (reply.ts), and only on a line of its own or glued to a sentence with
+// no space ("table.canvasRead"). A bulleted list, "tools: codeMode", a name in
+// prose and a reply that ENDS on a tool name all stay.
 const known = new Set<string>();
 let trailingName: RegExp | undefined;
 
@@ -25,7 +26,7 @@ noteToolNames(FAMILY_OF.keys());
 
 export function stripLeakedToolName(text: string): string {
   trailingName ??= new RegExp(
-    `(?:^|\\n|(?<=[.!?:)\\]]))[ \\t]*\`?(?:${[...known].join('|')})\`?\\s*$`
+    `(?:(?:^|\\n)[ \\t]*|(?<=[.!?)\\]]))\`?(?:${[...known].join('|')})\`?\\s*$`
   );
   return text.replace(trailingName, '');
 }

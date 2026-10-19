@@ -215,12 +215,22 @@ export function createReply({
      * `force`d (a card is next, or the stream ended). Empty while it is still
      * being held back.
      */
-    release({ force }: { force: boolean }): string {
+    release({
+      beforeCard = false,
+      force,
+    }: {
+      /** A tool card is next: a bare tool name ending the text is a leak. */
+      beforeCard?: boolean;
+      force: boolean;
+    }): string {
       let index: number;
       if (force) {
-        // A card or the end is next: the text is whole, so a tool name the
-        // model wrote instead of calling it is at its end.
-        buffer = stripLeakedToolName(buffer);
+        // Only right before a card: the leak is the name of the call that
+        // follows. At the END of a reply a tool name is an answer ("list
+        // your tools") and stays.
+        if (beforeCard) {
+          buffer = stripLeakedToolName(buffer);
+        }
         index = buffer.length;
       } else {
         const ready =
@@ -268,7 +278,6 @@ export function createReply({
     /** Post everything still buffered (the user account, or what a failed or
      * interrupted stream left behind). */
     async flush({ thread }: { thread: Thread }): Promise<void> {
-      buffer = stripLeakedToolName(buffer);
       const text = takeLines(buffer.length);
       const reopened =
         reopenFence !== null && text.trim()
