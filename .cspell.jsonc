@@ -5,6 +5,7 @@
     "crushrc",
     "fallocate",
     "swapon",
+    "newermt",
     "ordinality",
     "unflushed",
     "magick",

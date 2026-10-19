@@ -32,6 +32,11 @@ import { clamp } from '@/lib/utils/text';
 const OUTPUT_MAX = 12_000;
 // Inside the sandbox's own 20-minute command limit, with room to clean up.
 const RUN_TIMEOUT_SECONDS = 18 * 60;
+const MAX_RUN_MINUTES = RUN_TIMEOUT_SECONDS / 60;
+// Files a stopped run touched, listed so kyto sees how far it got: `crush run
+// -q` prints only when it ends, so a timed-out run used to come back as
+// "(no output)" and was re-run blind for another 18 minutes (#124).
+const CHANGED_FILES_MAX = 30;
 // How much longer than the run the turn's stall watchdog must wait.
 const WATCHDOG_GRACE_MS = 2 * 60 * 1000;
 // One run at a time per sandbox. Two parallel OpenCode calls (kyto building
@@ -108,9 +113,18 @@ export function opencodeTool({
         .describe(
           'Working directory, relative to the sandbox workspace (created if missing). Defaults to the workspace itself.'
         ),
+      minutes: z
+        .number()
+        .int()
+        .min(1)
+        .max(MAX_RUN_MINUTES)
+        .optional()
+        .describe(
+          `Wall-clock limit for this run, in minutes (default and maximum ${MAX_RUN_MINUTES}). Set it from the person's own deadline, leaving room to check and report.`
+        ),
     }),
     execute: async (
-      { brief, continue: resume, directory },
+      { brief, continue: resume, directory, minutes },
       { abortSignal }
     ) => {
       if (!codeModelConfigured()) {
@@ -156,8 +170,10 @@ export function opencodeTool({
         path: briefPath,
       });
 
+      const runSeconds = (minutes ?? MAX_RUN_MINUTES) * 60;
+      const startedAt = Math.floor(Date.now() / 1000);
       const releaseDeadline = extendAttemptDeadline?.(
-        RUN_TIMEOUT_SECONDS * 1000 + WATCHDOG_GRACE_MS
+        runSeconds * 1000 + WATCHDOG_GRACE_MS
       );
       // The real Slack boundary for the agent (its model's provider may train
       // on what it reads): the token is switched off host-side for the run. The
@@ -188,7 +204,7 @@ export function opencodeTool({
             'SETUP_LOG=$(mktemp)',
             `( ${CODING_AGENT_SETUP_COMMAND}\n) 9>&- >"$SETUP_LOG" 2>&1 || { cat "$SETUP_LOG"; rm -f '${STATE_PATH}'; exit ${SETUP_FAILED_EXIT}; }`,
             `mkdir -p '${workDir}' && cd '${workDir}'`,
-            `timeout ${RUN_TIMEOUT_SECONDS} crush run -q ${resume ? '-C' : ''} -m '${AGENT_MODEL}' "$(cat '${briefPath}')" 9>&- 2>&1 &`,
+            `timeout ${runSeconds} crush run -q ${resume ? '-C' : ''} -m '${AGENT_MODEL}' "$(cat '${briefPath}')" 9>&- 2>&1 &`,
             'RUN_PID=$!',
             `echo "$(date +%s) ${runId} $$ $RUN_PID" > '${STATE_PATH}'`,
             'wait "$RUN_PID"',
@@ -227,11 +243,26 @@ export function opencodeTool({
         };
       }
       const notes: Record<number, string> = {
-        124: `The coding agent was stopped after ${RUN_TIMEOUT_SECONDS / 60} minutes. Its work so far is in the directory; call again with continue: true to pick up.`,
+        124: `The coding agent was stopped after ${runSeconds / 60} minutes. Its work so far is in the directory (changedFiles); call again with continue: true to pick up. If the work is a long-running job (a benchmark, a solver loop), don't hand it the run again: have it finish and smoke-test the program, then run that yourself with runBackgroundProcess.`,
         [KILLED_EXIT]:
           'The coding agent was killed, most likely out of memory (the sandbox has 1 GB). Its work so far is in the directory. Free memory first (close the browser, stop dev servers and background jobs), then call again with continue: true.',
       };
       const note = notes[result.exitCode];
+      const changed =
+        result.exitCode === 124
+          ? await Promise.resolve(
+              context.session.run({
+                command: `find '${workDir}' -type f -newermt '@${startedAt}' -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/.kyto/*' 2>/dev/null | head -${CHANGED_FILES_MAX}`,
+              })
+            )
+              .then((listed) =>
+                listed.stdout
+                  .split('\n')
+                  .filter(Boolean)
+                  .map((path) => nodePath.relative(workDir, path))
+              )
+              .catch(() => undefined)
+          : undefined;
       return {
         directory: workDir,
         exitCode: result.exitCode,
@@ -241,6 +272,7 @@ export function opencodeTool({
             ? `…${output.slice(-OUTPUT_MAX)}`
             : output || '(no output)',
         success: result.exitCode === 0,
+        ...(changed ? { changedFiles: changed } : {}),
         ...(note ? { note } : {}),
       };
     },

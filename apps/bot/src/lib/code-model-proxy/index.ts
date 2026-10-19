@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { env } from '@/env';
+import logger from '@/lib/logger';
 
 // The model endpoint of the sandbox coding agent (the `opencode` tool). The
 // agent runs IN the sandbox, but the key to the model endpoint must not: it is
@@ -22,6 +23,8 @@ const MAX_BODY_BYTES = 8 * 1024 * 1024;
 interface CodeModelToken {
   calls: number;
   expiry: number;
+  /** Short id tying one run's call lines together in the log. */
+  run: string;
 }
 
 // In-memory only: a restart ends every run anyway.
@@ -42,7 +45,11 @@ export function registerCodeModelToken(): {
   revoke: () => void;
 } {
   const secret = randomBytes(24).toString('base64url');
-  tokens.set(secret, { calls: 0, expiry: Date.now() + TOKEN_TTL_MS });
+  tokens.set(secret, {
+    calls: 0,
+    expiry: Date.now() + TOKEN_TTL_MS,
+    run: randomBytes(4).toString('hex'),
+  });
   return {
     env: {
       KYTO_CODE_MODEL_TOKEN: secret,
@@ -114,6 +121,21 @@ export async function handleCodeModelProxy(
     return error('body must be a chat completions request', 400);
   }
   token.calls += 1;
+  // "Why is the coding agent slow" had no answer: nothing said how many calls
+  // a run made or how long each took upstream. One line per call, at its end.
+  const call = token.calls;
+  const startedAt = Date.now();
+  const logCall = (fields: Record<string, unknown>) =>
+    logger.info(
+      {
+        call,
+        requestChars: raw.length,
+        run: token.run,
+        totalMs: Date.now() - startedAt,
+        ...fields,
+      },
+      '[code-model] call'
+    );
   const upstream = await fetch(
     `${env.CODE_MODEL_BASE_URL.replace(/\/+$/, '')}/${CHAT_PATH}`,
     {
@@ -125,8 +147,20 @@ export async function handleCodeModelProxy(
       method: 'POST',
       signal: request.signal,
     }
+  ).catch((fetchError: unknown) => {
+    logCall({ error: String(fetchError) });
+    throw fetchError;
+  });
+  const headersMs = Date.now() - startedAt;
+  if (!upstream.body) {
+    logCall({ headersMs, status: upstream.status });
+  }
+  const timed = upstream.body?.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      flush: () => logCall({ headersMs, status: upstream.status }),
+    })
   );
-  return new Response(upstream.body, {
+  return new Response(timed ?? null, {
     headers: {
       'Content-Type':
         upstream.headers.get('content-type') ?? 'application/json',
