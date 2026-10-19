@@ -1,8 +1,10 @@
 name: Deploy
 
 # Orchard's own push-to-deploy reports itself enabled and deliverable but
-# never builds on a push (checked 2026-10-19), so GitHub asks for the build.
-# Only after CI passed on main: a broken commit never reaches kyto.
+# never builds on a push, and its deploy-webhook token only restarts the
+# running image (both checked 2026-10-19). So GitHub asks Orchard's API for
+# a rebuild, with an Orchard API token in ORCHARD_API_TOKEN — until that
+# secret exists this does nothing. Only after CI passed on main.
 on:
   workflow_run:
     workflows: ["CI"]
@@ -23,8 +25,12 @@ jobs:
     steps:
       - name: Ask Orchard to rebuild kyto from main
         env:
-          ORCHARD_DEPLOY_TOKEN: ${{ secrets.ORCHARD_DEPLOY_TOKEN }}
+          ORCHARD_API_TOKEN: ${{ secrets.ORCHARD_API_TOKEN }}
         run: |
+          if [ -z "$ORCHARD_API_TOKEN" ]; then
+            echo "ORCHARD_API_TOKEN is not set; skipping the deploy."
+            exit 0
+          fi
           curl --fail-with-body -sS -X POST \
-            -H "Authorization: Bearer $ORCHARD_DEPLOY_TOKEN" \
-            https://orchard.devansh.dino.icu/apiv1/webhooks/deploy
+            -H "Authorization: Bearer $ORCHARD_API_TOKEN" \
+            https://orchard.devansh.dino.icu/apiv1/deployments/bba0a135-84b4-4531-92af-0e5ec69107f2/rebuild
