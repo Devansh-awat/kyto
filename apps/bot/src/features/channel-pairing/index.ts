@@ -199,6 +199,26 @@ async function sweepAll(): Promise<void> {
   }
 }
 
+/**
+ * The account just heard a ping in `channelId`. Slack sends the app nothing
+ * about a channel it isn't in, and the account's joins are otherwise found by
+ * the 5-minute poll — so a person who pinged the account and then the app
+ * straight after got Slack's own "kyto isn't in this channel". Seeing the
+ * account act there is proof enough that it is a member: pair now. Idempotent
+ * (`noteJoin` only acts on a channel new to the account).
+ */
+export async function noteAccountInChannel(channelId: string): Promise<void> {
+  if (!(slack.userAccountId && slack.botUserId)) {
+    return;
+  }
+  await noteJoin({ channelId, joined: 'user' }).catch((error: unknown) => {
+    logger.warn(
+      { ...toLogError(error), channelId },
+      '[channel-pairing] could not pair from a ping'
+    );
+  });
+}
+
 export function startChannelPairing(): void {
   // The fast path: the app sees a member join in any channel it is in — its
   // own join, or the account's.

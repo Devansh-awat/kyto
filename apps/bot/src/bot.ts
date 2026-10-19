@@ -1,4 +1,5 @@
 import { env } from '@/env';
+import { noteAccountInChannel } from '@/features/channel-pairing';
 import type { KytoBot } from '@/harness/bot';
 import type { ThreadHandle as Thread } from '@/harness/thread';
 import type { Message } from '@/harness/types';
@@ -140,6 +141,9 @@ function listen(target: KytoBot): void {
         });
     if (asUserAccount) {
       if (firstTimeForAccount(message)) {
+        noteAccountInChannel(slack.decodeThreadId(thread.id).channel).catch(
+          () => undefined
+        );
         await answerMention({ asUserAccount, message, thread });
       }
       return;
