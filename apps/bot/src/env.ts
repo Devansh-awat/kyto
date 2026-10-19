@@ -64,7 +64,7 @@ export const env = createEnv({
       .transform((value) => value === 'true'),
     // The owner's App Home MCP entry kevinton reads kyto's logs through (forced
     // read-only in lib/kevinton). Empty to give it no logs.
-    KEVINTON_LOGS_MCP: z.string().default('coolify'),
+    KEVINTON_LOGS_MCP: z.string().default('selfhosted-orchard'),
     // The model the sandbox coding agent (the `opencode` tool, lib/code-model-
     // proxy) runs on: an OpenAI-compatible endpoint OFF Hack Club AI's key. The
     // key stays on the host — the sandbox gets a per-run proxy token — and the

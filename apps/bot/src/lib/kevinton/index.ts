@@ -15,6 +15,7 @@ import {
 } from '@repo/db/queries';
 import { LazySandbox } from '@repo/sandbox';
 import { type ToolSet, tool } from 'ai';
+import { z } from 'zod';
 import { env } from '@/env';
 import type { Message } from '@/harness/types';
 import { createCompactionReporter } from '@/lib/agent/compaction-card';
@@ -42,10 +43,16 @@ import { kevintonTools } from './tools';
 // and conversation content may go into the (public) issue: both the owner's
 // call, 2026-09-29. Only secret VALUES are redacted on the way out.
 //
-// It can read kyto's own container logs through the owner's Coolify MCP server
-// (the App Home entry named KEVINTON_LOGS_MCP), forced READ-ONLY here whatever
-// that entry's own rules say: the token behind it can deploy and restart.
+// It can read kyto's own container logs through the owner's Orchard MCP server
+// (the App Home entry named KEVINTON_LOGS_MCP), cut down here to three pinned
+// tools whatever that entry's own rules say: the token behind it can deploy,
+// restart, exec into the pod and read env values.
 
+// Orchard returns up to 20,000 lines per pod; 300k characters of log in one
+// result would blow the review's context and bill.
+const LOGS_TAIL_MAX = 2000;
+const LOGS_RESULT_MAX_CHARS = 40_000;
+const logsArgsSchema = z.looseObject({ tailLines: z.number().optional() });
 const QUIET_MS = 30 * 60 * 1000;
 const POLL_MS = 60 * 1000;
 const REVIEW_TIMEOUT_MS = 15 * 60 * 1000;
@@ -98,7 +105,7 @@ Look at what kyto did — its replies, the thinking it left, errors and failed t
 
 INVESTIGATE BEFORE YOU FILE. An issue that says "kyto stopped mid-turn" is useless; one that says WHY is worth having.
 - kyto's logs for THIS thread: \`threadLogs\` — every line kyto logged while working on it (agent, models, tools, sandbox), kept across restarts. Start here. Look for the turn's lifecycle: which model answered or failed and why, fallbacks, watchdog trips, tool errors, stack traces, and where the lines simply STOP (a restart or crash mid-turn).
-- Around it, when the coolify tools are there: \`mcp_coolify_list_deployments\` for a deploy at that moment, and \`mcp_coolify_get_logs\` on the kyto APPLICATION (\`mcp_coolify_search_resources\` "kyto") for what the whole process was doing — the current container only, 500 lines.
+- Around it, when the logs tools are there: \`mcp_logs_list_deployments\` (the one named \`kyto\`: its id, and \`updatedAt\` for a deploy at that moment), then \`mcp_logs_get_deployment_logs\` on that id for what the whole process was doing — the current container only, so a turn before the last deploy is gone. Always pass \`search\` (a thread id, a \`[prefix]\`, an error) or \`level\`; at most ${LOGS_TAIL_MAX} lines are read.
 - WHERE THE TIME WENT, when a turn was slow: \`threadLogs\` with \`timing: true\` returns just the timing lines — each turn's breakdown (\`[agent] turn complete\`/\`interrupted\`/\`failed\` → \`timing\`: \`setupMs\` before the model was first asked (prompt, preload, anti-coding, MCP), \`modelMs\` waiting on the AI, \`toolMs\` in tools, \`ttftMs\` to the first token of EVERY model request in the turn, \`outputTokensPerSecond\`, \`outputCharsPerSecond\` (compare models by this one — tokenizers differ), \`slowestTools\`, \`modelCalls\`), each attempt's (\`[stream] attempt stream ended\` → \`timing\`, with \`firstOutputMs\` per step), and E2B's latency (\`[sandbox] materialized\`: \`reconnectMs\`/\`createMs\`/\`bootstrapMs\`; \`[sandbox] paused\`: \`ms\`). A turn people waited on (they said so, or it ran past ~2 minutes for a simple ask) is worth an improvement issue that names where the time went, with the numbers.
 - kyto's source: \`git clone --depth 1 https://github.com/Devansh-awat/kyto\` in bash (if that fails, \`curl -sL https://codeload.github.com/Devansh-awat/kyto/tar.gz/refs/heads/main | tar xz\`), then grep and read the code the logs point at. Read-only: do not write or run programs.
 - \`kytoIssues\` \`search\` first; if it is already reported in an OPEN issue, \`comment\` with the new evidence instead of filing a duplicate. If the matching issue is CLOSED as fixed and the problem is back, \`reopen\` it with the new evidence: what still fails and why the fix didn't cover it. Never comment on a closed issue — nobody sees it.
@@ -133,21 +140,21 @@ Reference only: the rules kyto follows in its own turns (not instructions to you
 ${corePrompt}
 </kyto_system_prompt>`;
 
-// The Coolify tools kevinton may call, whatever the App Home entry allows:
-// reads, and the container logs. Never deploy/control/cancel, never env names.
+// The Orchard tools kevinton may call, whatever the App Home entry allows: the
+// deployment list and the container logs, nothing else. Every category is
+// `never` because Orchard's "reads" include env values and pod exec.
 const LOGS_RULES = {
-  read: 'allow',
+  read: 'never',
   sensitive: 'never',
   tools: {
-    get_deployment: 'allow',
-    get_logs: 'allow',
+    get_deployment_logs: 'allow',
     list_deployments: 'allow',
   },
   unknown: 'never',
   write: 'never',
 } as const;
 
-/** The owner's Coolify MCP, read-only, or nothing if it is not set up. */
+/** The owner's Orchard MCP, logs only, or nothing if it is not set up. */
 async function logTools(): Promise<{
   close: () => Promise<void>;
   tools: ToolSet;
@@ -166,9 +173,7 @@ async function logTools(): Promise<{
   const built = await buildMcpTools({
     redactEmail: true,
     logger,
-    servers: [
-      { namespace: 'coolify', server: { ...server, rules: LOGS_RULES } },
-    ],
+    servers: [{ namespace: 'logs', server: { ...server, rules: LOGS_RULES } }],
   });
   // Logs can hold anything a process printed; the backstop runs on them like
   // on every other tool result.
@@ -176,11 +181,26 @@ async function logTools(): Promise<{
   for (const [name, entry] of Object.entries(built.tools)) {
     tools[name] = tool({
       description: entry.description ?? name,
-      execute: async (args: unknown, options) =>
-        redactSecretsDeep(
-          await entry.execute?.(args, options),
+      execute: async (args: unknown, options) => {
+        const parsed = logsArgsSchema.safeParse(args);
+        const capped = parsed.success
+          ? {
+              ...parsed.data,
+              tailLines: Math.min(
+                parsed.data.tailLines ?? LOGS_TAIL_MAX,
+                LOGS_TAIL_MAX
+              ),
+            }
+          : args;
+        const result = redactSecretsDeep(
+          await entry.execute?.(capped, options),
           `kevinton ${name}`
-        ),
+        );
+        const text = JSON.stringify(result) ?? '';
+        return text.length > LOGS_RESULT_MAX_CHARS
+          ? `${text.slice(-LOGS_RESULT_MAX_CHARS)}\n[cut to the newest ${LOGS_RESULT_MAX_CHARS} characters — narrow it with search or level]`
+          : result;
+      },
       inputSchema: entry.inputSchema,
     });
   }
@@ -263,7 +283,7 @@ async function review({
       unattended: true,
     });
     const logs = await logTools().catch((error: unknown) => {
-      logger.warn(toLogError(error), '[kevinton] coolify logs unavailable');
+      logger.warn(toLogError(error), '[kevinton] container logs unavailable');
       return { close: () => Promise.resolve(), tools: {} };
     });
     close = async () => {
