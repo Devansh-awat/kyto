@@ -226,3 +226,9 @@ When a step ends on `length`, kyto checks whether the model's last output was re
 
 The cross-turn cache probe (`cache-probe.ts`) has one unit per TOOL (`tool:<name>`), so `divergedAt` names the tool whose schema changed. As one block, `tools(27)` diverged on most of 2026-10-11's turns, which is why the first request of a turn so often read 0 from cache.
 
+
+## BYOK reasoning effort
+
+A key's `reasoning_effort` (and a `--reasoning` flag) reaches the provider only
+on OpenRouter-format endpoints (`byok-hackclub`/`byok-openrouter`); other BYOK
+endpoints run at their own default.

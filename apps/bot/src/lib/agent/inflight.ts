@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   claimAbandonedTurns,
   claimOrphanedTurns,
@@ -119,6 +119,48 @@ function compact(value: unknown, max: number): string {
   );
 }
 
+function hashInput(input: unknown): string {
+  let text: string;
+  try {
+    text = JSON.stringify(input) ?? '';
+  } catch {
+    text = String(input);
+  }
+  return createHash('sha256').update(text).digest('hex');
+}
+
+// Asking again for the same picture or speech is a fair "another one".
+const REPEATABLE_EFFECTS = new Set(['generateImage', 'textToSpeech', 'wait']);
+
+/**
+ * The turn's LAST outward action, done, with the same tool and the SAME input
+ * (before a restart included). A resumed turn wrote one canvas three times
+ * over, each in an identical back-to-back pair (#123): the ledger only TOLD
+ * the model, and a model that loses track repeats itself. Only the last one,
+ * so pin → unpin → pin still works.
+ */
+export function repeatedEffect({
+  input,
+  threadId,
+  tool,
+}: {
+  input: unknown;
+  threadId: string;
+  tool: string;
+}): InflightEffect | undefined {
+  if (REPEATABLE_EFFECTS.has(tool)) {
+    return;
+  }
+  const last = effectsByThread
+    .get(threadId)
+    ?.findLast((effect) => effect.tool !== 'wait');
+  return last?.tool === tool &&
+    last.status === 'done' &&
+    last.inputHash === hashInput(input)
+    ? last
+    : undefined;
+}
+
 /**
  * Record an outward action BEFORE it runs, and return the call that marks it
  * done or failed. A restart between the two leaves it `started`: the resumed
@@ -138,6 +180,7 @@ export function startEffect({
   const effect: InflightEffect = {
     at: new Date().toISOString(),
     input: compact(input, EFFECT_INPUT_MAX),
+    inputHash: hashInput(input),
     status: 'started',
     tool,
   };

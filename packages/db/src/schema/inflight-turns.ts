@@ -21,6 +21,8 @@ export interface InflightEffect {
   at: string;
   /** Compact, redacted input: enough to recognise it, not to redo it. */
   input: string;
+  /** sha256 of the FULL input: an identical repeat is refused (#123). */
+  inputHash?: string;
   /** Compact, redacted result — the link or id a resumed turn must quote back. */
   result?: string;
   status: 'done' | 'failed' | 'started';

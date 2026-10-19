@@ -7,6 +7,7 @@ import {
   restoreAnnotatedMentions,
 } from '@/harness/markdown';
 import type { ThreadHandle as Thread } from '@/harness/thread';
+import { stripLeakedToolName } from '@/lib/agent/leaked-tool-name';
 import { slack } from '@/lib/chat';
 import { resolveIdentity } from '@/lib/identity';
 import logger from '@/lib/logger';
@@ -217,6 +218,9 @@ export function createReply({
     release({ force }: { force: boolean }): string {
       let index: number;
       if (force) {
+        // A card or the end is next: the text is whole, so a tool name the
+        // model wrote instead of calling it is at its end.
+        buffer = stripLeakedToolName(buffer);
         index = buffer.length;
       } else {
         const ready =
@@ -264,6 +268,7 @@ export function createReply({
     /** Post everything still buffered (the user account, or what a failed or
      * interrupted stream left behind). */
     async flush({ thread }: { thread: Thread }): Promise<void> {
+      buffer = stripLeakedToolName(buffer);
       const text = takeLines(buffer.length);
       const reopened =
         reopenFence !== null && text.trim()

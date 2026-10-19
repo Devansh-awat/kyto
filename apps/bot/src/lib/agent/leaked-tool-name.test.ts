@@ -1,0 +1,26 @@
+import { describe, expect, test } from 'bun:test';
+import { stripLeakedToolName } from './leaked-tool-name';
+
+describe('stripLeakedToolName', () => {
+  test('drops a name glued to the end of a sentence', () => {
+    expect(stripLeakedToolName('Here is the comparison.canvasRead')).toBe(
+      'Here is the comparison.'
+    );
+  });
+
+  test('drops a name on its own last line', () => {
+    expect(stripLeakedToolName('Updated the canvas.\ncanvasRead\n')).toBe(
+      'Updated the canvas.'
+    );
+  });
+
+  test('keeps a name mentioned in prose', () => {
+    const text = 'kyto calls canvasRead before it edits';
+    expect(stripLeakedToolName(text)).toBe(text);
+    expect(stripLeakedToolName('try canvasRead')).toBe('try canvasRead');
+  });
+
+  test('keeps text that is not a tool name', () => {
+    expect(stripLeakedToolName('All done.')).toBe('All done.');
+  });
+});

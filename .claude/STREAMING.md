@@ -108,6 +108,11 @@ six times, because the harness never answered a call it never saw. The tell is
 attempt's text is dropped (not trimmed tag by tag — the arguments are the bulk of
 it) and a warning names the cause, since those calls never executed.
 
+A bare action NAME the model wrote instead of calling it (`canvasRead` at the
+end of a message, #123) is cut from the end of the text before a card or the
+end (`lib/agent/leaked-tool-name.ts`, tested): camelCase family action names
+only, on their own line or glued after a sentence — never mid-prose.
+
 ## "no tools loaded" never reaches the reply
 
 `lib/ai/stream/tool-complaints.ts` (tested). kyto has three PROSE-ONLY recovery
@@ -203,6 +208,15 @@ dropped instead of landing in the new one as a stray row.
 A single card too big even for an empty message (`msg_too_long`) is re-sent
 with its title/details/output cut, else dropped alone — only reply TEXT still
 latches text-only (cutting it would lose words).
+A full message's STOP carries `onRotate`'s card completions (`chat.stopStream`
+takes `chunks`): dropped, its open cards rendered "Something went wrong" over a
+reply that carried on (#123).
+
+**A stream Slack refuses outright** (`channel_type_not_supported` on a threaded
+reply in a private channel, #126) no longer loses the reply: the rest of the
+text, plus what the refused flush held, goes out as ordinary `markdown`-block
+messages (`postRefusedText`, one per message-size cut), cards dropped. The
+failure note no longer claims a "reply above" that may not exist.
 
 ## Skips
 

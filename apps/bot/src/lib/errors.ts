@@ -129,7 +129,7 @@ export function agentErrorMessage({
     return '_kyto built a malformed prompt for this turn and could not send it — that is a bug in kyto, not a model outage. starting a new thread works around it._';
   }
   if (stage === 'after_text') {
-    return '_kyto hit an error after it had already started responding. the reply above may be partial; send a follow-up and kyto can continue from the current thread state._';
+    return '_kyto hit an error while sending its reply, so the reply may be cut short or missing above. send a follow-up and kyto can continue from the current thread state._';
   }
   if (stage === 'after_progress') {
     return '_kyto hit an error after it had already shown progress. the task rows above show what completed; send a follow-up and kyto can continue from the current thread state._';

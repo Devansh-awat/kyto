@@ -17,7 +17,7 @@ import { env } from '@/env';
 import type { KytoBot } from '@/harness/bot';
 import type { ThreadHandle } from '@/harness/thread';
 import type { Message } from '@/harness/types';
-import { startEffect } from '@/lib/agent/inflight';
+import { repeatedEffect, startEffect } from '@/lib/agent/inflight';
 import { threadModelChoice } from '@/lib/agent/model-choice';
 import { buildMcpTools } from '@/lib/ai/mcp';
 import { withBuiltinMcpServers } from '@/lib/ai/mcp-builtin';
@@ -192,6 +192,11 @@ const SLACK_READ_TOOLS = new Set([
   'summarizeThread',
 ]);
 const SLACK_TOOL_BUDGET = 120;
+// An identical Slack lookup within this long is answered from the turn's own
+// copy (#119: one research turn ran the same search, same cursor, over and
+// over — 125 calls, 12 minutes). Anything outward, or a `wait`, clears the
+// copies: after those a re-read is how kyto sees what changed.
+const SLACK_READ_REUSE_MS = 5 * 60 * 1000;
 
 const CODE_TOOLS = new Set([
   'bash',
@@ -221,6 +226,7 @@ const EFFECT_TOOLS = new Set([
   'canvasDelete',
   'canvasWrite',
   'cancelReminder',
+  'codeChannel',
   'createChannel',
   'deploySite',
   'editAsUser',
@@ -230,11 +236,15 @@ const EFFECT_TOOLS = new Set([
   'embed',
   'generateImage',
   'mermaid',
+  'pauseReminder',
   'pinMessage',
   'poll',
   'postMessage',
+  'removeEmbed',
   'removeSite',
   'replyEmail',
+  'resumeReminder',
+  'scheduleEventReminder',
   'scheduleRecurringReminder',
   'scheduleReminder',
   'sendAsUser',
@@ -245,6 +255,15 @@ const EFFECT_TOOLS = new Set([
   'unpinMessage',
   'uploadFile',
 ]);
+
+function isFailedResult(result: unknown): boolean {
+  return (
+    typeof result === 'object' &&
+    result !== null &&
+    (('success' in result && result.success === false) ||
+      ('error' in result && Boolean(result.error)))
+  );
+}
 
 const PUBLIC_POSTING_TOOLS = [
   'askQuestion',
@@ -1050,6 +1069,7 @@ export async function buildTools({
   // into `core`; a core tool that never appears in `coreUsed` should be
   // deferred.
   const usage = new Map<string, number>();
+  const slackReads = new Map<string, { at: number; result: unknown }>();
   let slackCalls = 0;
   let totalCalls = 0;
   const loadedNames = new Set<string>();
@@ -1071,6 +1091,21 @@ export async function buildTools({
             error: `Not run: this run has made ${maxToolCalls} tool calls, its limit. Stop working now and write your report with what you have, saying plainly what is left undone.`,
             success: false,
           };
+        }
+        const readKey = SLACK_READ_TOOLS.has(name)
+          ? `${name} ${JSON.stringify(input) ?? ''}`
+          : undefined;
+        const earlier = readKey ? slackReads.get(readKey) : undefined;
+        if (earlier && Date.now() - earlier.at < SLACK_READ_REUSE_MS) {
+          const note = `Same ${name} call, same input, as earlier this turn: this is that result again, not a fresh read. Use it; don't repeat the call.`;
+          return typeof earlier.result === 'object' &&
+            earlier.result !== null &&
+            !Array.isArray(earlier.result)
+            ? { ...earlier.result, repeated: note }
+            : { repeated: note, result: earlier.result };
+        }
+        if (EFFECT_TOOLS.has(name)) {
+          slackReads.clear();
         }
         if (SLACK_READ_TOOLS.has(name)) {
           slackCalls += 1;
@@ -1096,20 +1131,24 @@ export async function buildTools({
         // for every tool including MCP ones (lib/redact).
         // A thrown error reaches the model as text too (an MCP server's or a
         // CLI's message can quote a credential), so it is scrubbed the same way.
+        const repeat = EFFECT_TOOLS.has(name)
+          ? repeatedEffect({ input, threadId: thread.id, tool: name })
+          : undefined;
+        if (repeat) {
+          return {
+            error: `Not run: this exact ${name} call (same input) already succeeded in this turn at ${repeat.at}${repeat.result ? ` → ${repeat.result}` : ''}. It is done; don't repeat it. To change it, call with different input.`,
+            success: false,
+          };
+        }
         const finishEffect = EFFECT_TOOLS.has(name)
           ? startEffect({ input, threadId: thread.id, tool: name })
           : undefined;
         try {
           const result = await original(input, options);
-          finishEffect?.(
-            typeof result === 'object' &&
-              result !== null &&
-              (('success' in result && result.success === false) ||
-                ('error' in result && Boolean(result.error)))
-              ? 'failed'
-              : 'done',
-            result
-          );
+          if (readKey && !isFailedResult(result)) {
+            slackReads.set(readKey, { at: Date.now(), result });
+          }
+          finishEffect?.(isFailedResult(result) ? 'failed' : 'done', result);
           // A follow-up the author sent mid-turn, or a note from the harness,
           // rides on whichever result comes back next; a result of another
           // shape leaves it queued.

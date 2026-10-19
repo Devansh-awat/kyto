@@ -174,6 +174,8 @@ export function reactionName(name: string): string {
 
 // ChatStreamer's text buffer size: fewer appendStream calls for the same text.
 const STREAM_BUFFER_CHARS = 256;
+// The plain-text twin of a refused stream's fallback post, for notifications.
+const NOTIFICATION_TEXT_CHARS = 3000;
 const startedStreamSchema = z.looseObject({ ts: z.string() });
 
 /**
@@ -1047,6 +1049,36 @@ export class SlackHarness {
     // flush stays in the buffer of a streamer that is about to be dropped, so
     // the next one is handed it, or up to a buffer's worth of reply vanishes.
     let unflushedText = '';
+    // Slack refused the stream itself (channel_type_not_supported in a private
+    // channel, #126): the reply was written and then thrown away, with "the
+    // reply above may be partial" under nothing. From then on the text goes out
+    // as ordinary messages instead, and the cards are dropped.
+    let refused = false;
+    let refusedText = '';
+    const postRefusedText = async (): Promise<void> => {
+      const text = refusedText;
+      refusedText = '';
+      currentTextChars = 0;
+      if (!text.trim()) {
+        return;
+      }
+      // apiCall: the typed postMessage has no overload for a markdown block
+      // with an optional thread.
+      const sent = await this.webClient.apiCall('chat.postMessage', {
+        blocks: [{ text, type: 'markdown' }],
+        channel,
+        text: text.slice(0, NOTIFICATION_TEXT_CHARS),
+        ...(threadTs ? { thread_ts: threadTs } : {}),
+        ...(options.username ? { username: options.username } : {}),
+        ...(options.iconEmoji ? { icon_emoji: options.iconEmoji } : {}),
+        ...(options.iconUrl ? { icon_url: options.iconUrl } : {}),
+      });
+      const ts = startedStreamSchema.safeParse(sent).data?.ts;
+      if (ts) {
+        posted.push(ts);
+      }
+      options.onNewMessage?.();
+    };
     const sendText = async (text: string): Promise<void> => {
       unflushedText += text;
       await streamer.append({ markdown_text: text });
@@ -1064,7 +1096,7 @@ export class SlackHarness {
       currentHasContent = false;
       currentTextChars = 0;
       if (carried) {
-        await sendText(carried);
+        await sendReplyText(carried);
       }
     };
     let structuredSupported = true;
@@ -1108,16 +1140,16 @@ export class SlackHarness {
       } catch (error) {
         // A FULL message is not a rejected chunk either: latching text-only
         // here dropped every later card of the turn. The chunk never landed,
-        // so it is sent again at the top of a new message. The outgoing
-        // message is full, so what onRotate would settle it with can't go
-        // there; a second rejection is a real one.
+        // so it is sent again at the top of a new message. What onRotate
+        // settles the outgoing message with rides on its STOP, which takes
+        // chunks: dropped, its open cards rendered as "Something went wrong"
+        // on a reply that went on fine (#123). A second rejection is a real one.
         if (String(error).includes(MESSAGE_FULL) && currentHasContent) {
           this.logger.warn(
             { err: error },
             '[harness] streamed message full; continuing in a new message'
           );
-          options.onRotate?.();
-          await stopStreamer({ final: false });
+          await stopStreamer({ final: false, settle: options.onRotate?.() });
           await restartStreamer();
           try {
             await send();
@@ -1165,15 +1197,27 @@ export class SlackHarness {
     };
     const stopStreamer = async ({
       final,
+      settle = [],
     }: {
       final: boolean;
+      /** Chunks that finish the message's open cards. */
+      settle?: StreamChunk[];
     }): Promise<void> => {
       if (!currentHasContent) {
         return;
       }
       const blocks = final ? await options.finalBlocks?.() : undefined;
       try {
-        await streamer.stop(blocks ? { blocks: blocks as never } : undefined);
+        await streamer.stop({
+          ...(blocks ? { blocks: blocks as never } : {}),
+          ...(settle.length > 0 && structuredSupported
+            ? {
+                chunks: settle.map((chunk) =>
+                  filterOutboundDeep(chunk)
+                ) as never,
+              }
+            : {}),
+        });
         unflushedText = '';
       } catch (error) {
         this.logger.warn({ err: error }, '[harness] stream stop failed');
@@ -1195,6 +1239,10 @@ export class SlackHarness {
     // Finalizes the current message and opens a new one that subsequent chunks
     // append to.
     const rotate = async (): Promise<void> => {
+      if (refused) {
+        await postRefusedText();
+        return;
+      }
       // Settle the outgoing message BEFORE stopping it: this is the caller's
       // only chance to finish cards it opened here, since the next append goes
       // to a message where those ids do not exist.
@@ -1215,12 +1263,34 @@ export class SlackHarness {
     // An expired or full message must not take the rest of the answer down
     // with it: the text goes again at the top of a new one.
     const sendReplyText = async (text: string): Promise<void> => {
+      if (refused) {
+        refusedText += text;
+        currentTextChars += text.length;
+        return;
+      }
       try {
         await sendText(text);
       } catch (error) {
         const full = String(error).includes(MESSAGE_FULL) && currentHasContent;
         if (!(full || String(error).includes(STREAM_EXPIRED))) {
-          throw error;
+          this.logger.warn(
+            { err: error },
+            '[harness] Slack refused the stream; reply continues as plain messages'
+          );
+          refused = true;
+          structuredSupported = false;
+          // `text` is in unflushedText, with whatever the refused flush held.
+          refusedText = unflushedText;
+          unflushedText = '';
+          currentTextChars = refusedText.length;
+          if (streamer.ts) {
+            await this.webClient
+              .apiCall('chat.stopStream', { channel, ts: streamer.ts })
+              .catch(() => undefined);
+            posted.push(streamer.ts);
+          }
+          currentHasContent = false;
+          return;
         }
         this.logger.warn(
           { err: error },
@@ -1228,10 +1298,11 @@ export class SlackHarness {
             ? '[harness] streamed message full; text continues in a new message'
             : '[harness] stream expired; text continues in a new message'
         );
-        // What onRotate would settle the old message with can't go there.
-        options.onRotate?.();
+        // What onRotate settles the old message with rides on its stop; an
+        // expired one takes nothing.
+        const settle = options.onRotate?.();
         if (full) {
-          await stopStreamer({ final: false });
+          await stopStreamer({ final: false, settle });
         } else if (streamer.ts) {
           posted.push(streamer.ts);
         }
@@ -1329,7 +1400,11 @@ export class SlackHarness {
       }
       throw error;
     } finally {
-      await stopStreamer({ final: true });
+      if (refused) {
+        await postRefusedText();
+      } else {
+        await stopStreamer({ final: true });
+      }
     }
     return posted;
   }
