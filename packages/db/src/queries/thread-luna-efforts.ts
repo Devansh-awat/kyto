@@ -1,14 +1,24 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, gt } from 'drizzle-orm';
 import { db } from '../client';
 import { threadLunaEfforts } from '../schema/thread-luna-efforts';
 
-export async function getThreadLunaEffort(
-  threadId: string
-): Promise<string | undefined> {
+/** The thread's luna effort, if luna last ran there after `since`. */
+export async function getThreadLunaEffort({
+  since,
+  threadId,
+}: {
+  since: Date;
+  threadId: string;
+}): Promise<string | undefined> {
   const [row] = await db
     .select({ effort: threadLunaEfforts.effort })
     .from(threadLunaEfforts)
-    .where(eq(threadLunaEfforts.threadId, threadId));
+    .where(
+      and(
+        eq(threadLunaEfforts.threadId, threadId),
+        gt(threadLunaEfforts.updatedAt, since)
+      )
+    );
   return row?.effort;
 }
 

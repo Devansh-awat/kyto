@@ -19,6 +19,7 @@ import { comparePrefix, type PrefixUnit } from '@repo/ai/cache-probe';
 import { stepsCacheWrites, stepsCostUsd } from '@repo/ai/usage-cost';
 import {
   getThreadLunaEffort,
+  type InflightCheckpoint,
   type InflightEffect,
   saveThreadLunaEffort,
   saveThreadPromptSize,
@@ -56,7 +57,11 @@ import {
   markRungDead,
   markTierDead,
 } from '@/lib/agent/fallback-cache';
-import { describePriorEffects, trackTurn } from '@/lib/agent/inflight';
+import {
+  checkpointTurn,
+  describePriorEffects,
+  trackTurn,
+} from '@/lib/agent/inflight';
 import {
   experimentAttempt,
   isSharedModel,
@@ -225,6 +230,9 @@ const STREAMED_TEXT_MAX = 4000;
 // 2-3 minutes before the low-effort retry answered in one (#95). Keyed by
 // thread and attempt; in memory, so a restart only costs one more cutoff.
 const THINKING_CAPPED_TTL_MS = 30 * 60 * 1000;
+// How long a luna prompt cache lives; a thread's raised luna effort is kept
+// only that long after luna last ran there.
+const LUNA_CACHE_MS = 30 * 60 * 1000;
 // A model thinking for minutes before its first word left the Thinking card
 // unchanged the whole time, which reads as stuck (#74): it is refreshed this
 // often with how long and how much it has thought.
@@ -329,6 +337,8 @@ export async function runTurn(input: {
    */
   asUserAccount?: boolean;
   message: Message;
+  /** Where a resumed turn had got to before the restart. */
+  priorCheckpoint?: InflightCheckpoint;
   /** A resumed turn's outward actions from before the restart. */
   priorEffects?: InflightEffect[];
   /** Re-running a turn a restart cut short (lib/agent/inflight). */
@@ -452,6 +462,7 @@ async function executeTurn(
   {
     asUserAccount = false,
     message,
+    priorCheckpoint,
     priorEffects = [],
     resumed = false,
     secret = false,
@@ -460,6 +471,7 @@ async function executeTurn(
   }: {
     asUserAccount?: boolean;
     message: Message;
+    priorCheckpoint?: InflightCheckpoint;
     /** A resumed turn's outward actions from before the restart. */
     priorEffects?: InflightEffect[];
     resumed?: boolean;
@@ -1087,7 +1099,13 @@ async function executeTurn(
     codingMonitor.setConversation(earlierThread);
     const codingVerdict = codingMonitor.checkTurn();
     // Luna's effort only goes up within a thread (lib/ai/tool-preload).
-    const lunaEffortRead = getThreadLunaEffort(threadId).catch(() => undefined);
+    // Only while luna's cache for the thread can still be warm: past that the
+    // raise protects nothing, and a thread once at `high` ran every later
+    // "thanks" at high (30 of 32 luna turns, 2026-10-19).
+    const lunaEffortRead = getThreadLunaEffort({
+      since: new Date(Date.now() - LUNA_CACHE_MS),
+      threadId,
+    }).catch(() => undefined);
     const promptStart = Date.now();
     const { firstReplayedId, history, jevConversation, tail } =
       await buildPrompt(turnMessage, {
@@ -1121,7 +1139,10 @@ async function executeTurn(
       messageText = `${messageText}\n\n<unanswered_earlier>These earlier messages in the thread were addressed to you, and a newer message interrupted you before you replied to them:\n${lines.join('\n')}\nAnswer them in this reply too, unless the thread has already settled them.</unanswered_earlier>`;
     }
     if (resumed) {
-      messageText = `${messageText}\n\n<resumed_after_restart>kyto restarted while answering this message and is picking it back up. Anything you already posted is in the thread above, and what your tools found before the restart is in your earlier reasoning: continue from there instead of starting over.\n${describePriorEffects(priorEffects)}</resumed_after_restart>`;
+      const found = priorCheckpoint?.results.length
+        ? 'your tool calls and their full results from before the restart come right after this message, as real calls'
+        : 'what your tools found before the restart is in your earlier reasoning';
+      messageText = `${messageText}\n\n<resumed_after_restart>kyto restarted while answering this message and is picking it back up. Anything you already posted is in the thread above, and ${found}: continue from there instead of starting over. Don't mention the restart.\n${describePriorEffects(priorEffects)}</resumed_after_restart>`;
     }
     // Tool groups and the reasoning effort, judged on the FULL
     // thread (owner's ask 2026-10-17), so it starts once the thread is read —
@@ -1207,13 +1228,21 @@ async function executeTurn(
     // Everything the user has already been shown this turn. A fallback attempt
     // that CONTINUES an interrupted turn is told about it so it picks up instead
     // of repeating itself (renderContinuation).
-    let streamedText = '';
+    // A resumed turn starts from its checkpoint: what it had already said and
+    // found carries into the first attempt exactly as a fallback's does.
+    let streamedText = priorCheckpoint?.text ?? '';
     // Tool results gathered so far this turn, deduped by tool+input. If a later
     // step truncates and the turn falls back to another model, these are
     // replayed into the fallback prompt so the new model answers from them
     // instead of re-running the same tools.
-    const gatheredResults: GatheredResult[] = [];
-    const gatheredKeys = new Set<string>();
+    const gatheredResults: GatheredResult[] = [
+      ...(priorCheckpoint?.results ?? []),
+    ];
+    const gatheredKeys = new Set<string>(
+      gatheredResults.map(
+        (result) => `${result.toolName}:${stableInput(result.input)}`
+      )
+    );
     // The last request's size as the provider counted it (input + output), so
     // a fallback carrying those results compacts its first request if needed.
     let lastMeasuredSize: number | undefined;
@@ -1366,7 +1395,9 @@ async function executeTurn(
       }
       if (isFallback && gatheredResults.length > 0) {
         blocks.push(
-          'An earlier model started this turn and was cut off. Its tool calls and their results come right after this message: carry on from them, and do not re-run them.'
+          attempts.length > 0
+            ? 'An earlier model started this turn and was cut off. Its tool calls and their results come right after this message: carry on from them, and do not re-run them.'
+            : 'You started this turn before kyto restarted. Your tool calls and their results come right after this message: carry on from them, and do not re-run them.'
         );
       }
       if (isFallback && streamedText.trim().length > 0) {
@@ -1483,7 +1514,9 @@ async function executeTurn(
       // stream ends (see isBareSkipText). Kept whole rather than capped: it is
       // only read when it is short enough to be a bare token.
       let attemptRawText = '';
-      const isFallback = attempts.length > 0;
+      // A turn resumed from a checkpoint continues like a fallback does.
+      const isFallback =
+        attempts.length > 0 || Boolean(priorCheckpoint?.results.length);
       // OpenCode only on kyto's shared key: hidden while the person's own key
       // runs, back if the turn falls back to the shared chain (owner's call,
       // 2026-10-14).
@@ -1546,19 +1579,6 @@ async function executeTurn(
             effort = { by: 'flag', effort: choice.effort };
           } else if (jevEffort) {
             effort = { by: 'jev', effort: jevEffort };
-            if (
-              currentAttempt.model === LUNA_MODEL &&
-              preload.effort?.lunaRaised
-            ) {
-              saveThreadLunaEffort({ effort: jevEffort, threadId }).catch(
-                (error: unknown) => {
-                  logger.warn(
-                    { ...toLogError(error), threadId },
-                    "[agent] could not save the thread's raised luna effort"
-                  );
-                }
-              );
-            }
           } else if (currentAttempt.model === LUNA_MODEL) {
             // Jev only, no random draw for luna (owner's call 2026-10-18).
             effort = { by: 'default', effort: lunaStored ?? 'medium' };
@@ -1569,6 +1589,23 @@ async function executeTurn(
               effort: drawn.effort,
             };
           }
+        }
+        // Saved on EVERY luna turn, raised or not: its time is what says the
+        // thread's luna cache is still warm. A flag's effort is that turn's own.
+        if (
+          currentAttempt.model === LUNA_MODEL &&
+          effort &&
+          effort.by !== 'flag' &&
+          effort.by !== 'retry'
+        ) {
+          saveThreadLunaEffort({ effort: effort.effort, threadId }).catch(
+            (error: unknown) => {
+              logger.warn(
+                { ...toLogError(error), threadId },
+                "[agent] could not save the thread's luna effort"
+              );
+            }
+          );
         }
         const modelDetails = effort
           ? `${currentAttempt.model} · ${effort.effort} reasoning${effort.by === 'jev' || effort.by === 'random' ? ` (${effort.by})` : ''}`
@@ -1802,6 +1839,13 @@ async function executeTurn(
                 }
                 gatheredKeys.add(key);
                 gatheredResults.push(info);
+                if (!secret) {
+                  checkpointTurn({
+                    results: gatheredResults,
+                    text: streamedText,
+                    threadId,
+                  });
+                }
                 moderationTools.push({
                   source: 'tool result',
                   text:
@@ -2442,14 +2486,19 @@ async function executeTurn(
           // checks redone, and the resumed turn re-posted the same jar (#99).
           // The resumed turn's prompt replays thread_thinking.
           if (abortReasonOf(controller.signal) === 'shutdown' && !secret) {
+            await checkpointTurn({
+              force: true,
+              results: gatheredResults,
+              text: streamedText,
+              threadId,
+            });
             await rememberThinking({
               blocks: [
                 ...attemptThinking,
-                'kyto restarted before this turn finished. The tool results below came before the restart; sandbox files from them are still there.',
+                'kyto restarted before this turn finished. Its tool calls and results are carried into the resumed turn; sandbox files from them are still there.',
               ],
               actions: renderActions(gatheredResults),
               messageTs: message.id,
-              observations: renderObservations(gatheredResults),
               ...(gatheredResults.some(isPrivateObservation)
                 ? { privateTo: message.author.userId }
                 : {}),

@@ -29,6 +29,17 @@ export interface InflightEffect {
   tool: string;
 }
 
+/**
+ * Where a running turn had got to: its tool calls with their results and the
+ * reply text already shown. A resumed turn continues from these as REAL
+ * messages, like a fallback model does, instead of redoing the work.
+ */
+export interface InflightCheckpoint {
+  at: string;
+  results: { input: unknown; output: unknown; toolName: string }[];
+  text: string;
+}
+
 export const inflightTurns = pgTable('inflight_turns', {
   threadId: text('thread_id').primaryKey(),
   messageId: text('message_id').notNull(),
@@ -51,6 +62,8 @@ export const inflightTurns = pgTable('inflight_turns', {
   // BEFORE it runs and marked after, so a turn resumed after a restart knows
   // which ones are done and which were cut mid-way (apps/bot/src/lib/agent/effects.ts).
   effects: jsonb('effects').$type<InflightEffect[]>().notNull().default([]),
+  // Written every minute and when a shutdown cuts the turn (agent/inflight).
+  checkpoint: jsonb('checkpoint').$type<InflightCheckpoint>(),
   startedAt: timestamp('started_at', { withTimezone: true })
     .notNull()
     .defaultNow(),

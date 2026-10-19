@@ -4,9 +4,11 @@ import {
   claimOrphanedTurns,
   finishInflightTurn,
   heartbeatInflightTurn,
+  type InflightCheckpoint,
   type InflightEffect,
   markInstanceInterrupted,
   pruneInflightTurns,
+  setInflightCheckpoint,
   setInflightEffects,
   startInflightTurn,
 } from '@repo/db/queries';
@@ -87,6 +89,7 @@ export function trackTurn({
   return async ({ cutByShutdown }) => {
     clearInterval(beat);
     effectsByThread.delete(threadId);
+    lastCheckpointAt.delete(threadId);
     // Only a turn the shutdown actually CUT stays resumable. One that finished
     // on its own inside the shutdown window keeps no row — left `interrupted`,
     // the next instance answered it a second time.
@@ -247,6 +250,67 @@ export function describePriorEffects(
   return `Outward actions this turn took before the restart:\n${lines.join('\n')}${waits}`;
 }
 
+// A checkpoint is rewritten whole, so at most once a minute — and when a
+// shutdown cuts the turn, which is the write that matters most.
+const CHECKPOINT_EVERY_MS = 60 * 1000;
+// One result as big as a whole channel directory is fine; a runaway one is
+// cut, and the resumed request is compacted past 100k tokens like a fallback.
+const CHECKPOINT_OUTPUT_MAX = 60_000;
+const lastCheckpointAt = new Map<string, number>();
+
+function boundedOutput(output: unknown): unknown {
+  const text =
+    typeof output === 'string' ? output : (JSON.stringify(output) ?? '');
+  return text.length > CHECKPOINT_OUTPUT_MAX
+    ? `${text.slice(0, CHECKPOINT_OUTPUT_MAX)}… [cut at ${CHECKPOINT_OUTPUT_MAX} characters when kyto restarted]`
+    : output;
+}
+
+/**
+ * Save where the turn has got to (owner's ask 2026-10-19: a restart must not
+ * cost the work). Before this a crash lost everything and a deploy kept only
+ * a text digest with each result cut to 6000 characters, so the resumed turn
+ * re-listed thousands of channels it had already listed. Best-effort.
+ */
+export async function checkpointTurn({
+  force = false,
+  results,
+  text,
+  threadId,
+}: {
+  force?: boolean;
+  results: InflightCheckpoint['results'];
+  text: string;
+  threadId: string;
+}): Promise<void> {
+  const now = Date.now();
+  if (
+    !force &&
+    now - (lastCheckpointAt.get(threadId) ?? 0) < CHECKPOINT_EVERY_MS
+  ) {
+    return;
+  }
+  lastCheckpointAt.set(threadId, now);
+  await setInflightCheckpoint({
+    checkpoint: {
+      at: new Date(now).toISOString(),
+      results: results.map((result) => ({
+        input: result.input,
+        output: boundedOutput(result.output),
+        toolName: result.toolName,
+      })),
+      text,
+    },
+    instanceId: INSTANCE_ID,
+    threadId,
+  }).catch((error: unknown) => {
+    logger.warn(
+      { ...toLogError(error), threadId },
+      '[inflight] checkpoint failed'
+    );
+  });
+}
+
 /** Called first thing on SIGTERM: everything running here becomes resumable. */
 export async function markShuttingDown(): Promise<void> {
   shuttingDown = true;
@@ -300,6 +364,7 @@ async function resumeOnce({
   runTurn: (input: {
     asUserAccount: boolean;
     message: Message;
+    priorCheckpoint?: InflightCheckpoint;
     priorEffects: InflightEffect[];
     resumed: boolean;
     thread: ReturnType<KytoBot['thread']>;
@@ -365,18 +430,12 @@ async function resumeOnce({
       { messageId: row.messageId, threadId: row.threadId },
       '[inflight] resuming a turn interrupted by a restart'
     );
-    // The user account talks like a person, and a person doesn't announce
-    // that they restarted.
-    if (!row.asUserAccount) {
-      await thread
-        .post({
-          markdown: '_kyto restarted mid-reply — picking this back up._',
-        })
-        .catch(() => undefined);
-    }
+    // No "restarted mid-reply" note (owner's ask 2026-10-19): the turn
+    // carries on from its checkpoint as if nothing happened.
     runTurn({
       asUserAccount: row.asUserAccount,
       message,
+      ...(row.checkpoint ? { priorCheckpoint: row.checkpoint } : {}),
       priorEffects: row.effects,
       resumed: true,
       thread,

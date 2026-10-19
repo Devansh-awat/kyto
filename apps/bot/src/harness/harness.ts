@@ -1343,6 +1343,7 @@ export class SlackHarness {
     // Unset while a chunk is being handled, so the producer is never run ahead
     // of the appends (its card budget and onRotate must see them in order).
     let pending: Promise<IteratorResult<string | StreamChunk>> | undefined;
+    let cutShort = false;
     try {
       while (true) {
         pending ??= iterator.next();
@@ -1398,12 +1399,18 @@ export class SlackHarness {
       if (!pending) {
         await iterator.return?.().catch(() => undefined);
       }
+      // A turn cut mid-card (a restart, a failure) left the card
+      // `in_progress`, drawn as "Something went wrong": its stop closes it.
+      cutShort = true;
       throw error;
     } finally {
       if (refused) {
         await postRefusedText();
       } else {
-        await stopStreamer({ final: true });
+        await stopStreamer({
+          final: true,
+          settle: cutShort ? options.onRotate?.() : undefined,
+        });
       }
     }
     return posted;

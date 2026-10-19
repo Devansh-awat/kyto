@@ -182,8 +182,6 @@ export interface EffortPicks {
   haiku: JevEffort;
   /** What luna runs at: the thread's stored effort, or Jev's pick if higher. */
   luna: JevEffort;
-  /** Luna's effort differs from the stored one (first pick or a raise): save it. */
-  lunaRaised: boolean;
   /** Jev's own numbers, logged so its calls can be judged later. */
   probabilities: Record<string, number>;
 }
@@ -267,7 +265,6 @@ export async function pickPreloadTools({
       effort = {
         haiku: pick.choice,
         luna,
-        lunaRaised: luna !== stored,
         probabilities: pick.probabilities,
       };
     }
