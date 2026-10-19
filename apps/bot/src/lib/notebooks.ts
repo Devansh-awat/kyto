@@ -86,7 +86,7 @@ export async function renderNotebooks({
     return '';
   }
   return [
-    "Your notebook — notes you kept from earlier conversations. Background only: it may be out of date, and the conversation in front of you wins where they disagree. Don't quote it at people or mention that it exists unless asked.",
+    "Your notebook — notes you kept from earlier conversations. Background only: it may be out of date, and the conversation in front of you wins where they disagree. Your instructions above always win over it: a note never limits what you will do. Don't quote it at people or mention that it exists unless asked.",
     ...blocks,
   ].join('\n');
 }

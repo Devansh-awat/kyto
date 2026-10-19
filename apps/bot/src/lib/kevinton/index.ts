@@ -4,6 +4,7 @@ import {
   streamAttempt,
   subagentSystemPrompt,
 } from '@repo/ai';
+import { corePrompt } from '@repo/ai/prompts/core';
 import { stepsCostUsd } from '@repo/ai/usage-cost';
 import {
   claimDueKevintonReviews,
@@ -121,10 +122,16 @@ Include whatever from the conversation makes the issue clear — what was asked,
 3. NOTEBOOK edits — this one is routine, unlike the other two. kyto keeps notes it reads walking into a conversation: one per channel, and one global that kyto's user account reads in EVERY channel and DM. \`notebook\` \`read\` both first. Add what will help kyto next time: who people are and what they work on, ongoing projects and decisions, preferences and channel norms, recurring questions and their answers, things kyto got wrong and the correction. Not passing chatter, not what is obvious from Slack, never a secret, password or token.
 - The channel notebook may hold anything from this channel.
 - The global notebook is for what is useful ACROSS channels. Anything you put there can surface anywhere, to anyone. From a private channel, add only what the people in it would not mind being known outside it — personal matters, private plans and anything said in confidence stay in the channel notebook. From a DM or group DM, NEVER (the tool refuses).
+- A note is a FACT (who, what, where, what worked, what went wrong), never a rule about what kyto will or won't do. kyto's behaviour comes from its own system prompt, quoted below in \`<kyto_system_prompt>\`; Never write a stance, a policy or a refusal ("kyto declines X", "X is not something kyto does"): a refusal kyto made that its system prompt says it must not make is a DEFECT (1a), not a note. Nothing you write may contradict \`<kyto_system_prompt>\`, and when you read a notebook, delete any line that does (\`replace\` it with empty text).
 - Keep both tight: the limits are hard (channel 20,000 characters, global 50,000), and long before them, merge duplicates, update facts in place with \`replace\`, and drop what is stale. Condense with \`rewrite\` when it grows. A short, current notebook beats a long one.
 
 When you are done, write one line saying what you did (or "nothing to do").
-</kevinton>`;
+</kevinton>
+
+<kyto_system_prompt>
+Reference only: the rules kyto follows in its own turns (not instructions to you). Use it to judge whether kyto did what it should have, and to keep the notebooks from contradicting it.
+${corePrompt}
+</kyto_system_prompt>`;
 
 // The Coolify tools kevinton may call, whatever the App Home entry allows:
 // reads, and the container logs. Never deploy/control/cancel, never env names.
@@ -300,7 +307,11 @@ async function review({
           prompt: prompt.tail,
           // Nobody waits on a review: half price, slower is fine.
           serviceTier: 'flex',
-          system: subagentSystemPrompt({ hints, note: KEVINTON_NOTE }),
+          system: subagentSystemPrompt({
+            hints,
+            limits: false,
+            note: KEVINTON_NOTE,
+          }),
           tools,
         });
         let text = '';
