@@ -74,3 +74,7 @@ Moved verbatim from CLAUDE.md on 2026-09-29 to keep that file inside its budget.
 ## Private turns in `thread_thinking` (2026-10-11)
 
 `thread_thinking` replays each turn's reasoning, and the last 3 turns' tool calls and results, into the next turns of the thread; its per-call `actions` lines feed the thread digest, masked for a private turn. A turn whose results carried private data (see `isPrivateObservation` in `apps/bot/src/lib/agent/carryover.ts` — fails closed) is stored with `privateTo: <speaker>` and rendered in full only when that same person speaks; any other speaker sees a stub. Without it, asking kyto to read your DMs in a shared thread handed the next speaker raw snippets of those DMs. Rows written before this are plain strings and are treated as not private (they age out within 30 days).
+
+## The user-account persona's typing indicator
+
+"kyto is typing…" goes over that same websocket (`wss-primary.slack.com` with the session — `rtm.connect` is enterprise-restricted) as a `user_typing` frame on a URL pinned with `gateway_server` (from `client.userBoot`) — plain `typing` or a bare URL is accepted and shown to nobody: at once for a ping/DM, only after real text for an unpinged thread reply (a skip shows nothing), stopped before the final post.
