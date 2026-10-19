@@ -110,8 +110,9 @@ it) and a warning names the cause, since those calls never executed.
 
 A bare action NAME the model wrote instead of calling it (`canvasRead` at the
 end of a message, #123) is cut from the end of the text before a card or the
-end (`lib/agent/leaked-tool-name.ts`, tested): camelCase family action names
-only, on their own line or glued after a sentence — never mid-prose.
+end (`lib/agent/leaked-tool-name.ts`, tested): camelCase names only — family
+actions plus every tool a turn registered (`codeMode` leaked too) — on their own
+line or glued after a sentence, never mid-prose.
 
 ## "no tools loaded" never reaches the reply
 

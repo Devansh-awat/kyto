@@ -18,6 +18,7 @@ import type { KytoBot } from '@/harness/bot';
 import type { ThreadHandle } from '@/harness/thread';
 import type { Message } from '@/harness/types';
 import { repeatedEffect, startEffect } from '@/lib/agent/inflight';
+import { noteToolNames } from '@/lib/agent/leaked-tool-name';
 import { threadModelChoice } from '@/lib/agent/model-choice';
 import { buildMcpTools } from '@/lib/ai/mcp';
 import { withBuiltinMcpServers } from '@/lib/ai/mcp-builtin';
@@ -1194,6 +1195,7 @@ export async function buildTools({
   }
   // The names the usage summary reports against, from BEFORE the merge.
   const coreNames = new Set(Object.keys(core));
+  noteToolNames([...coreNames, ...Object.keys(deferred)]);
   // One tool per family (lib/ai/merge-tools). A family is core if any of its
   // verbs was; it carries only the verbs this turn actually registered (an
   // owner-only or `!secret`-withheld one stays out).

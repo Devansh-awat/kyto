@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { stripLeakedToolName } from './leaked-tool-name';
+import { noteToolNames, stripLeakedToolName } from './leaked-tool-name';
 
 describe('stripLeakedToolName', () => {
   test('drops a name glued to the end of a sentence', () => {
@@ -18,6 +18,13 @@ describe('stripLeakedToolName', () => {
     const text = 'kyto calls canvasRead before it edits';
     expect(stripLeakedToolName(text)).toBe(text);
     expect(stripLeakedToolName('try canvasRead')).toBe('try canvasRead');
+  });
+
+  test('drops a registered core tool name once noted', () => {
+    noteToolNames(['codeMode', 'bash']);
+    expect(stripLeakedToolName('Picking it back up now.\ncodeMode\n')).toBe(
+      'Picking it back up now.'
+    );
   });
 
   test('keeps text that is not a tool name', () => {
