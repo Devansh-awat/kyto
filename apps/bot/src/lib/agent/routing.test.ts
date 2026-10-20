@@ -3,6 +3,7 @@ import type { ModelAttempt } from '@repo/ai';
 import {
   attemptKey,
   buildFallbackQueue,
+  condemnsHackclub,
   isPromptConstructionError,
   selectNextAttempt,
 } from './routing';
@@ -192,5 +193,27 @@ describe('isPromptConstructionError', () => {
     const loop = new Error('loop') as Error & { cause?: unknown };
     loop.cause = loop;
     expect(isPromptConstructionError(loop)).toBe(false);
+  });
+});
+
+describe('condemnsHackclub', () => {
+  test('a proxy 429 or 401 writes off the tier', () => {
+    expect(condemnsHackclub({ status: 429, text: 'rate limit' })).toBe(true);
+    expect(condemnsHackclub({ status: 401, text: 'unauthorized' })).toBe(true);
+  });
+
+  test('a lost request or a kyto-raised fault does not', () => {
+    expect(condemnsHackclub({ status: 504, text: '' })).toBe(false);
+    expect(condemnsHackclub({ status: undefined, text: 'empty' })).toBe(false);
+  });
+
+  // 2026-10-20: mercury's busy pool sent a turn past haiku/luna to Gemini.
+  test("one model's busy upstream pool does not", () => {
+    expect(
+      condemnsHackclub({
+        status: 429,
+        text: 'inception/mercury-3 is temporarily rate-limited upstream. "limit_source":"upstream_provider_shared_pool"',
+      })
+    ).toBe(false);
   });
 });

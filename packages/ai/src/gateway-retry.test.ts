@@ -141,7 +141,7 @@ describe('shared-pool 429s', () => {
     expect(retries).toEqual([true, true]);
   });
 
-  test('gives up after three and hands the 429 back, body intact', async () => {
+  test('gives up after two and hands the 429 back, body intact', async () => {
     const { calls, send } = bodiesFetch(
       Array.from({ length: 5 }, (): [number, string] => [429, POOL_LIMIT])
     );
@@ -154,7 +154,7 @@ describe('shared-pool 429s', () => {
       }
     );
     expect(response.status).toBe(429);
-    expect(calls()).toBe(4);
+    expect(calls()).toBe(3);
     // The fallback classifier still reads the error body.
     expect(await response.text()).toContain('rate-limited upstream');
   });

@@ -40,9 +40,10 @@ const GATEWAY_STATUSES = new Set([408, 502, 503, 504, 520, 522, 524]);
  */
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = [300, 1200];
-// The shared pool needs seconds, not milliseconds, to free up; ~10s in total
-// before the turn falls back to the next model.
-const RATE_LIMIT_RETRY_DELAY_MS = [1500, 3000, 6000];
+// The shared pool needs seconds, not milliseconds, to free up. The SDK sends a failed request once more on top (maxRetries 1), so these
+// run twice: 2026-10-20's first live mercury turn spent 45s on eight 429s
+// with three retries here. Two keep that near 15s.
+const RATE_LIMIT_RETRY_DELAY_MS = [1500, 4000];
 // OpenRouter's body for that 429: `"limit_source":"upstream_provider_shared_pool"`
 // and "… is temporarily rate-limited upstream. Please retry shortly".
 const UPSTREAM_POOL_LIMIT =
@@ -73,6 +74,14 @@ export function isGatewayStatus(status: number): boolean {
   return GATEWAY_STATUSES.has(status);
 }
 
+/**
+ * Does this error text say ONE model's upstream pool is busy? That is about
+ * the model, not the proxy: the next model on the same proxy is unaffected.
+ */
+export function isUpstreamPoolLimitText(text: string): boolean {
+  return UPSTREAM_POOL_LIMIT.test(text);
+}
+
 /** Is this a 429 from a provider's shared pool, safe to send again shortly? */
 export async function isUpstreamPoolLimit(
   response: Response
@@ -84,7 +93,7 @@ export async function isUpstreamPoolLimit(
     .clone()
     .text()
     .catch(() => '');
-  return UPSTREAM_POOL_LIMIT.test(body);
+  return isUpstreamPoolLimitText(body);
 }
 
 /**

@@ -1,7 +1,10 @@
 import type { ModelAttempt } from '@repo/ai';
 // From the env-free module on purpose: this file must stay importable (and so
 // testable) without a valid API-key environment.
-import { isGatewayStatus } from '@repo/ai/gateway-retry';
+import {
+  isGatewayStatus,
+  isUpstreamPoolLimitText,
+} from '@repo/ai/gateway-retry';
 import {
   GEMINI_PROVIDER,
   HACKCLUB_PROVIDER,
@@ -70,9 +73,24 @@ export function buildFallbackQueue(
  * per-request, hitting opus-4.8 while kimi-k2.7 and glm-5.2 answered fine
  * seconds either side. Condemning the tier on one of those is what used to send
  * a live thread straight past every HackClub rung onto Gemini.
+ *
+ * And no for one model's upstream pool being busy (`temporarily rate-limited
+ * upstream`): on 2026-10-20 mercury's sent a `--model mercury` turn past
+ * haiku, luna and GLM, all answering fine, straight to Gemini.
  */
-export function condemnsHackclub(status: number | undefined): boolean {
-  return status !== undefined && !isGatewayStatus(status);
+export function condemnsHackclub({
+  status,
+  text,
+}: {
+  status: number | undefined;
+  /** The error's text, to tell one model's busy pool from the proxy's. */
+  text: string;
+}): boolean {
+  return (
+    status !== undefined &&
+    !isGatewayStatus(status) &&
+    !isUpstreamPoolLimitText(text)
+  );
 }
 
 // Errors that mean the PROMPT WE BUILT is malformed, not that a model or a

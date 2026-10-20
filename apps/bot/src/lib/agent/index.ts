@@ -1430,7 +1430,10 @@ async function executeTurn(
       // completes the model task EXACTLY once (post-stream success or catch).
       const holder: ResolvedModelHolder = {};
       let modelTaskDone = false;
-      const completeModelTask = (): StreamChunk | undefined => {
+      const completeModelTask = (
+        /** A new model line, e.g. why the attempt failed. */
+        details?: string
+      ): StreamChunk | undefined => {
         if (modelTaskDone) {
           return;
         }
@@ -1440,6 +1443,7 @@ async function executeTurn(
         // Slack keeps that line, so DON'T also send it as `output` here or the
         // card renders the model twice. Just mark the task complete.
         return {
+          ...(details ? { details } : {}),
           id: modelTaskId,
           status: 'complete',
           title: modelTaskTitle,
@@ -1528,6 +1532,8 @@ async function executeTurn(
         onOwnKey
           ? built.activeTools().filter((name) => name !== 'opencode')
           : built.activeTools();
+      // The card's model line; the catch adds why the attempt ended to it.
+      let modelDetails = currentAttempt.model;
       try {
         activeAttempt = currentAttempt;
         reply ??= createReply({
@@ -1613,8 +1619,10 @@ async function executeTurn(
             }
           );
         }
-        const modelDetails = effort
-          ? `${currentAttempt.model} · ${effort.effort} reasoning${effort.by === 'jev' || effort.by === 'random' ? ` (${effort.by})` : ''}`
+        // Who picked the effort (Jev, the draw) stays in the logs, off the card
+        // (owner's call 2026-10-20).
+        modelDetails = effort
+          ? `${currentAttempt.model} · ${effort.effort} reasoning`
           : currentAttempt.model;
         cards.track({ id: modelTaskId, title: modelTaskTitle });
         yield {
@@ -1746,11 +1754,20 @@ async function executeTurn(
           // A replayed gateway failure is invisible otherwise — the turn just
           // takes longer. Logged so a proxy sliding from flaky to dead is
           // readable in the journal before it starts costing fallbacks.
-          onGatewayRetry: ({ delayMs, retry, status }) => {
+          onGatewayRetry: ({ delayMs, rateLimited, retry, status }) => {
+            // On the card too, or a 15s retry reads as kyto hanging.
+            thinkingProgress.push({
+              details: `${modelDetails} · ${rateLimited ? 'rate limited' : `gateway error ${status}`}, retrying (${retry})`,
+              id: modelTaskId,
+              status: 'in_progress',
+              title: modelTaskTitle,
+              type: 'task_update',
+            });
             logger.warn(
               {
                 attempt: attemptLog(currentAttempt),
                 delayMs,
+                rateLimited,
                 retry,
                 status,
                 threadId,
@@ -2380,7 +2397,18 @@ async function executeTurn(
         return;
       } catch (error) {
         {
-          const done = completeModelTask();
+          // Say on the card why this model ended, unless the turn itself was
+          // stopped; the next card is titled "Thinking · fallback".
+          const status = errorStatus(error);
+          let why = status === undefined ? 'failed' : `error ${status}`;
+          if (status === 429) {
+            why = 'rate limited';
+          }
+          const done = completeModelTask(
+            controller.signal.aborted
+              ? undefined
+              : `${modelDetails} · ${why}, falling back`
+          );
           if (done) {
             yield done;
           }
@@ -2425,7 +2453,12 @@ async function executeTurn(
         if (currentAttempt.provider === HACKCLUB_PROVIDER) {
           if (SPEND_LIMIT_PATTERN.test(thrownErrorText(error))) {
             router.markSpendLimit(thrownErrorText(error));
-          } else if (condemnsHackclub(errorStatus(error))) {
+          } else if (
+            condemnsHackclub({
+              status: errorStatus(error),
+              text: thrownErrorText(error),
+            })
+          ) {
             // A non-budget HackClub failure that the PROXY reported (it has an
             // HTTP status) and that isn't a per-request gateway drop. Enough of
             // these means the proxy is down, not just this one model, so bail
