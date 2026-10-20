@@ -231,8 +231,10 @@ const STREAMED_TEXT_MAX = 4000;
 // thread and attempt; in memory, so a restart only costs one more cutoff.
 const THINKING_CAPPED_TTL_MS = 30 * 60 * 1000;
 // How long a luna prompt cache lives; a thread's raised luna effort is kept
-// only that long after luna last ran there.
-const LUNA_CACHE_MS = 30 * 60 * 1000;
+// only that long after luna last ran there. Measured from `model_spend`
+// (2026-10-20): a thread's next luna turn read its cache up to ~9 minutes
+// later and nothing at 10 minutes or more.
+const LUNA_CACHE_MS = 10 * 60 * 1000;
 // A model thinking for minutes before its first word left the Thinking card
 // unchanged the whole time, which reads as stuck (#74): it is refreshed this
 // often with how long and how much it has thought.
