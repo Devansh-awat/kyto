@@ -23,6 +23,7 @@ export {
   LEADERBOARD_FALLBACK,
   LUNA_MODEL,
   MAX_OUTPUT_TOKENS,
+  MERCURY_MODEL,
   type ModelAttempt,
   modelSupportsVision,
   PRIMARY_ATTEMPT,

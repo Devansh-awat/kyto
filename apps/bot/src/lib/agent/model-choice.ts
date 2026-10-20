@@ -3,6 +3,7 @@ import {
   catalogAttempt,
   GLM_FLASH_MODEL,
   LUNA_MODEL,
+  MERCURY_MODEL,
   type ModelAttempt,
   PRIMARY_ATTEMPT,
   REASONING_EFFORTS,
@@ -34,18 +35,29 @@ export const MODEL_CHOICES: Record<string, ModelAttempt> = {
   haiku: PRIMARY_ATTEMPT,
   glm: catalogAttempt(GLM_FLASH_MODEL),
   luna: catalogAttempt(LUNA_MODEL),
+  mercury: catalogAttempt(MERCURY_MODEL),
 } satisfies Record<(typeof SHARED_MODEL_NAMES)[number], ModelAttempt>;
 
 /**
- * The model experiment (owner's call 2026-10-11): a thread with no `--model`
- * leads with haiku or luna, half of threads each, so the two can be compared on
- * the same traffic. Drawn per THREAD, not per turn — each model has its own
- * prompt cache, and switching models between turns would rewrite the whole
- * thread at 1.25x every time. Derived from the thread id, so it survives a
- * restart without being stored.
+ * The model experiment (owner's calls 2026-10-11, mercury 2026-10-20): a
+ * thread with no `--model` leads with haiku, luna or mercury, a third of
+ * threads each, so they can be compared on the same traffic. Drawn per THREAD,
+ * not per turn — each model has its own prompt cache, and switching models
+ * between turns would rewrite the whole thread at 1.25x every time. Derived
+ * from the thread id, so it survives a restart without being stored.
+ *
+ * Mercury's third is carved evenly out of the old haiku (even byte) and luna
+ * (odd byte) halves — byte % 6 of 4 or 5 — so every other thread keeps the
+ * model, and the warm cache, it already had.
  */
+const ARMS = 6;
+const MERCURY_ARMS = new Set([4, 5]);
+
 export function experimentAttempt(threadId: string): ModelAttempt {
   const firstByte = createHash('sha256').update(threadId).digest()[0] ?? 0;
+  if (MERCURY_ARMS.has(firstByte % ARMS)) {
+    return MODEL_CHOICES.mercury ?? PRIMARY_ATTEMPT;
+  }
   return firstByte % 2 === 0
     ? PRIMARY_ATTEMPT
     : (MODEL_CHOICES.luna ?? PRIMARY_ATTEMPT);

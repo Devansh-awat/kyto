@@ -1,4 +1,4 @@
-import { LUNA_MODEL, PRIMARY_MODEL } from '@repo/ai';
+import { LUNA_MODEL, MERCURY_MODEL, PRIMARY_MODEL } from '@repo/ai';
 import { type SpendRecord, setSpendSink } from '@repo/ai/spend';
 import {
   callStats,
@@ -240,16 +240,16 @@ export async function describeSpend({
 }
 
 const DEFAULT_EFFORT_DAYS = 7;
-const EFFORT_MODELS = [PRIMARY_MODEL, LUNA_MODEL];
+const EFFORT_MODELS = [PRIMARY_MODEL, LUNA_MODEL, MERCURY_MODEL];
 const EFFORTS = ['low', 'medium', 'high'];
 const MS_PER_SECOND = 1000;
 const PERCENT = 100;
 
 /**
- * `!effort [days] [source]` (owner only, 2026-10-17): haiku and luna at each
- * effort, over every model call (turns, subagents, Kevinton, reminders, the
- * digest, …; `source` keeps one), as one six-row table. Haiku's cost is what
- * Hack Club bills (30% off, it is pinned to Anthropic), luna's is list price.
+ * `!effort [days] [source]` (owner only, 2026-10-17): haiku, luna and mercury
+ * (2026-10-20) at each effort, over every model call (turns, subagents,
+ * Kevinton, reminders, the digest, …; `source` keeps one), as one table, three
+ * rows per model. Haiku's cost is what Hack Club bills (30% off, it is pinned to Anthropic), luna's is list price.
  * No answer length: that follows the question, not the model (owner's call
  * 2026-10-17). The waits are split by request because a call's first request
  * processes the whole prompt and its later ones only the new tool result.
@@ -270,7 +270,7 @@ export async function describeEffortStats(
   });
   const scope = `last ${days} day${days === 1 ? '' : 's'}${source ? `, ${source} only` : ', every source'}`;
   if (cells.length === 0) {
-    const text = `No measured haiku or luna calls in the ${scope} (calls are measured from 2026-10-17).`;
+    const text = `No measured haiku, luna or mercury calls in the ${scope} (calls are measured from 2026-10-17).`;
     return { markdown: text, text };
   }
   const f = (value: number | null, digits = 0) =>
@@ -292,7 +292,7 @@ export async function describeEffortStats(
       return `| ${name} | ${cell.calls}${failed > 0 ? ` (${failed} failed)` : ''} | $${f(cell.costPerCall === null ? null : cell.costPerCall * discount, 4)} | ${f(cell.cacheReadShare === null ? null : cell.cacheReadShare * PERCENT)}% | ${s(cell.medianCallMs)} (p90 ${s(cell.p90CallMs)}) | ${f(cell.stepsPerCall, 1)} | ${f(cell.perThinkingStep.reasoningTokens)} | ${s(cell.firstRequest.ttftMs)} / ${s(cell.laterRequests.ttftMs)} | ${s(cell.firstRequest.thinkMs)} / ${s(cell.laterRequests.thinkMs)} | ${f(cell.answerTokensPerSecond)} |`;
     })
   );
-  const title = `*Haiku vs luna by effort, ${scope}* (Hack Club prices, haiku's 30% off applied)`;
+  const title = `*Haiku vs luna vs mercury by effort, ${scope}* (Hack Club prices, haiku's 30% off applied)`;
   return {
     markdown: [
       title,

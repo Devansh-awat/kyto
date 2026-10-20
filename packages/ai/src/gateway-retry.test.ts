@@ -106,6 +106,76 @@ describe('fetchWithGatewayRetry', () => {
   });
 });
 
+const POOL_LIMIT =
+  '{"error":{"message":"Provider returned error","code":429,"metadata":{"raw":"inception/mercury-3 is temporarily rate-limited upstream. Please retry shortly","limit_source":"upstream_provider_shared_pool"}}}';
+
+// Hands back the given [status, body] pairs in order, then 200s.
+function bodiesFetch(replies: [number, string][]) {
+  let count = 0;
+  const send = () => {
+    const [status, body] = replies[count] ?? [200, 'ok'];
+    count += 1;
+    return Promise.resolve(new Response(body, { status }));
+  };
+  return { calls: () => count, send };
+}
+
+describe('shared-pool 429s', () => {
+  test('replays an upstream pool 429 until it clears', async () => {
+    const { calls, send } = bodiesFetch([
+      [429, POOL_LIMIT],
+      [429, POOL_LIMIT],
+    ]);
+    const retries: boolean[] = [];
+    const response = await fetchWithGatewayRetry(
+      'https://proxy/v1',
+      undefined,
+      {
+        fetchImpl: send,
+        onRetry: (info) => retries.push(info.rateLimited === true),
+        sleep: noSleep,
+      }
+    );
+    expect(response.status).toBe(200);
+    expect(calls()).toBe(3);
+    expect(retries).toEqual([true, true]);
+  });
+
+  test('gives up after three and hands the 429 back, body intact', async () => {
+    const { calls, send } = bodiesFetch(
+      Array.from({ length: 5 }, (): [number, string] => [429, POOL_LIMIT])
+    );
+    const response = await fetchWithGatewayRetry(
+      'https://proxy/v1',
+      undefined,
+      {
+        fetchImpl: send,
+        sleep: noSleep,
+      }
+    );
+    expect(response.status).toBe(429);
+    expect(calls()).toBe(4);
+    // The fallback classifier still reads the error body.
+    expect(await response.text()).toContain('rate-limited upstream');
+  });
+
+  test('never replays a 429 that says the budget is spent', async () => {
+    const { calls, send } = bodiesFetch([
+      [429, '{"error":{"message":"daily spend limit reached"}}'],
+    ]);
+    const response = await fetchWithGatewayRetry(
+      'https://proxy/v1',
+      undefined,
+      {
+        fetchImpl: send,
+        sleep: noSleep,
+      }
+    );
+    expect(response.status).toBe(429);
+    expect(calls()).toBe(1);
+  });
+});
+
 describe('isReplayableRequest', () => {
   test('accepts the shape the AI SDK actually sends', () => {
     expect(isReplayableRequest('https://proxy/v1', { body: '{}' })).toBe(true);

@@ -17,6 +17,12 @@
  * routes away on the first failure, which is why `maxRetries` stays at 1 in
  * agent.ts. Retrying a rate-limited or budget-exhausted proxy only delays the
  * fallback; retrying a dropped connection is the whole fix.
+ *
+ * One 429 is replayed too (owner's call 2026-10-20, for Mercury 3): OpenRouter's
+ * "temporarily rate-limited upstream" from a provider's SHARED pool — another
+ * tenant's burst, nothing to do with kyto's budget, and gone seconds later.
+ * Mercury's pool answered half the probes that way on its first days. A 429
+ * that says a quota or budget is spent is still left alone.
  */
 
 /**
@@ -34,6 +40,13 @@ const GATEWAY_STATUSES = new Set([408, 502, 503, 504, 520, 522, 524]);
  */
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = [300, 1200];
+// The shared pool needs seconds, not milliseconds, to free up; ~10s in total
+// before the turn falls back to the next model.
+const RATE_LIMIT_RETRY_DELAY_MS = [1500, 3000, 6000];
+// OpenRouter's body for that 429: `"limit_source":"upstream_provider_shared_pool"`
+// and "… is temporarily rate-limited upstream. Please retry shortly".
+const UPSTREAM_POOL_LIMIT =
+  /upstream_provider_shared_pool|temporarily rate-limited upstream/;
 
 export type FetchInput = string | URL | Request;
 
@@ -41,6 +54,8 @@ type FetchLike = (input: FetchInput, init?: RequestInit) => Promise<Response>;
 
 export interface GatewayRetryInfo {
   delayMs: number;
+  /** A shared-pool 429 rather than a gateway status. */
+  rateLimited?: boolean;
   /** 1-based: the retry about to be sent. */
   retry: number;
   status: number;
@@ -58,8 +73,18 @@ export function isGatewayStatus(status: number): boolean {
   return GATEWAY_STATUSES.has(status);
 }
 
-function gatewayRetryDelayMs(retry: number): number {
-  return RETRY_DELAY_MS[retry - 1] ?? RETRY_DELAY_MS.at(-1) ?? 0;
+/** Is this a 429 from a provider's shared pool, safe to send again shortly? */
+export async function isUpstreamPoolLimit(
+  response: Response
+): Promise<boolean> {
+  if (response.status !== 429) {
+    return false;
+  }
+  const body = await response
+    .clone()
+    .text()
+    .catch(() => '');
+  return UPSTREAM_POOL_LIMIT.test(body);
 }
 
 /**
@@ -117,15 +142,32 @@ export async function fetchWithGatewayRetry(
   if (!isReplayableRequest(input, init)) {
     return response;
   }
-  for (let retry = 1; retry <= MAX_RETRIES; retry++) {
-    if (!isGatewayStatus(response.status) || init?.signal?.aborted) {
+  let gatewayRetries = 0;
+  let poolRetries = 0;
+  while (!init?.signal?.aborted) {
+    const gateway = isGatewayStatus(response.status);
+    const pool = !gateway && (await isUpstreamPoolLimit(response));
+    const delays = gateway ? RETRY_DELAY_MS : RATE_LIMIT_RETRY_DELAY_MS;
+    const retry = gateway ? gatewayRetries + 1 : poolRetries + 1;
+    const limit = gateway ? MAX_RETRIES : RATE_LIMIT_RETRY_DELAY_MS.length;
+    if (!(gateway || pool) || retry > limit) {
       break;
+    }
+    if (gateway) {
+      gatewayRetries = retry;
+    } else {
+      poolRetries = retry;
     }
     // Nobody reads the error page we are about to discard; cancel it so the
     // connection is released now instead of being held until the pool times out.
     await response.body?.cancel().catch(() => undefined);
-    const delayMs = gatewayRetryDelayMs(retry);
-    options.onRetry?.({ delayMs, retry, status: response.status });
+    const delayMs = delays[retry - 1] ?? delays.at(-1) ?? 0;
+    options.onRetry?.({
+      delayMs,
+      retry,
+      status: response.status,
+      ...(pool ? { rateLimited: true } : {}),
+    });
     await sleep(delayMs, init?.signal ?? undefined);
     response = await send(input, init);
   }

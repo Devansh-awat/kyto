@@ -1,10 +1,14 @@
 // Describe images as text: for a text-only model, and for `viewImage` with a
 // specific question (a dedicated look at the pixels answers it better than the
 // turn's model glancing at the image mid-task). Runs on haiku or luna like every
-// non-turn call, Gemini behind them.
+// non-turn call (never mercury, which is text-only), Gemini behind them.
 
 import { type ImageInput, streamAttempt } from './agent';
-import { drawnAttempts, visionAttempt } from './providers/attempts';
+import {
+  drawnAttempts,
+  modelSupportsVision,
+  visionAttempt,
+} from './providers/attempts';
 
 // Cap how many images one turn describes, so a bulk upload can't fan out into a
 // huge multi-image vision call. The rest are still on disk in the sandbox for a
@@ -60,6 +64,8 @@ export async function describeImages({
     ...(visionAttempt ? [visionAttempt] : []),
   ].filter(
     (attempt, index, all) =>
+      // Mercury is in the draw but can't see.
+      modelSupportsVision(attempt.model) &&
       all.findIndex((other) => other.model === attempt.model) === index
   );
   for (const attempt of attempts) {

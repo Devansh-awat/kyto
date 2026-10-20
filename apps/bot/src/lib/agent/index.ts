@@ -4,6 +4,7 @@ import {
   LEADERBOARD_FALLBACK,
   LUNA_MODEL,
   MAX_STEPS,
+  MERCURY_MODEL,
   type ModelAttempt,
   modelSupportsVision,
   PRIMARY_ATTEMPT,
@@ -1572,9 +1573,12 @@ async function executeTurn(
           // output tokens. A `high` attempt now gets a bigger cap
           // (HIGH_EFFORT_MAX_OUTPUT_TOKENS), so the choice stands.
           // Jev's pick on haiku and luna (owner's call 2026-10-17); the draw
-          // only when Jev gave none, and every other model's medium.
+          // only when Jev gave none, and every other model's medium. Mercury
+          // takes haiku's pick: one cache across efforts (measured
+          // 2026-10-20: a `none` request read a `low` one's prefix).
           const jevEffort = {
             [LUNA_MODEL]: preload.effort?.luna,
+            [MERCURY_MODEL]: preload.effort?.haiku,
             [PRIMARY_MODEL]: preload.effort?.haiku,
           }[currentAttempt.model];
           if (choice.effort) {

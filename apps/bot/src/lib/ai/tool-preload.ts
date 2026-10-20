@@ -178,7 +178,7 @@ const responseSchema = z.object({
 });
 
 export interface EffortPicks {
-  /** What haiku runs at. */
+  /** What haiku runs at, and mercury (one cache across efforts). */
   haiku: JevEffort;
   /** What luna runs at: the thread's stored effort, or Jev's pick if higher. */
   luna: JevEffort;

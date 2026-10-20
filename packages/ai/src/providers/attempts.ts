@@ -66,6 +66,19 @@ export const LUNA_MODEL = 'openai/gpt-6-luna';
  */
 export const ANTHROPIC_ONLY_MODELS = new Set<string>([PRIMARY_MODEL]);
 
+/**
+ * Inception's Mercury 3 (owner's call 2026-10-20), the third arm of the random
+ * draw: a DIFFUSION model — it refines a whole block of tokens at once, so its
+ * stream arrives in a few large chunks rather than token by token — but on the
+ * wire it is ordinary OpenAI chat completions: parallel tool calls, reasoning
+ * efforts and implicit prompt caching (a cached read, no write premium) all
+ * verified through the proxy on 2026-10-20. $0.10/M in, $0.35/M out, 1M
+ * context. TEXT ONLY: images reach it as descriptions (streamAttempt).
+ * Inception's shared pool on Hack Club 429s often; those are retried before
+ * the turn falls back (gateway-retry).
+ */
+export const MERCURY_MODEL = 'inception/mercury-3';
+
 /** The primary before luna — smart but slow — and now the second fallback. */
 export const GLM_FLASH_MODEL = 'z-ai/glm-5.3-flash';
 
@@ -160,7 +173,8 @@ const mebboAttempts: ModelAttempt[] = env.MEBBO_API_KEY
 // Models that cannot accept image input. DeepSeek V4 Flash is served by
 // Cloudflare, which is text-only: an image turn otherwise 404s before fallback.
 // GPT-6 Luna and GLM 5.3 Flash are vision-capable, so neither is in this set.
-const TEXT_ONLY_MODELS = new Set<string>([FORMER_PRIMARY_MODEL]);
+// Mercury 3 takes text only (its OpenRouter `input_modalities`).
+const TEXT_ONLY_MODELS = new Set<string>([FORMER_PRIMARY_MODEL, MERCURY_MODEL]);
 
 /** True unless the model's endpoint is known to reject image input. */
 export function modelSupportsVision(model: string): boolean {
@@ -222,18 +236,25 @@ export const subagentAttempts: ModelAttempt[] = [
 ];
 
 /**
- * Haiku and luna in a random order, then Gemini as the floor: what every model
- * call that isn't a live turn runs on (owner's call 2026-10-17, so subagents,
- * Kevinton, reminders, reviews, curation, the thread digest, summaries and
- * image descriptions all feed the haiku-vs-luna comparison, each effort drawn
- * by streamAttempt). Drawn per RUN; a live turn keeps its per-THREAD arm
+ * Haiku, luna and mercury in a random order, then Gemini as the floor: what
+ * every model call that isn't a live turn runs on (owner's calls 2026-10-17,
+ * mercury 2026-10-20, so subagents, Kevinton, reminders, reviews, curation,
+ * the thread digest and summaries all feed the model comparison, each effort
+ * drawn by streamAttempt). Drawn per RUN; a live turn keeps its per-THREAD arm
  * (experimentAttempt), because each model has its own prompt cache.
  */
 export function drawnAttempts(): ModelAttempt[] {
-  const luna = catalogAttempt(LUNA_MODEL);
-  const pair =
-    Math.random() < 0.5 ? [PRIMARY_ATTEMPT, luna] : [luna, PRIMARY_ATTEMPT];
-  return [...pair, ...geminiAttempts];
+  // A random sort key each: every order equally likely, so each model leads
+  // a third of the runs.
+  const drawn = [
+    PRIMARY_ATTEMPT,
+    catalogAttempt(LUNA_MODEL),
+    catalogAttempt(MERCURY_MODEL),
+  ]
+    .map((attempt) => ({ attempt, key: Math.random() }))
+    .sort((a, b) => a.key - b.key)
+    .map(({ attempt }) => attempt);
+  return [...drawn, ...geminiAttempts];
 }
 
 /** The subagent's primary model; undefined = no subagent model configured. */

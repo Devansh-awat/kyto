@@ -43,7 +43,9 @@ import {
   HIGH_EFFORT_MAX_OUTPUT_TOKENS,
   LUNA_MODEL,
   MAX_OUTPUT_TOKENS,
+  MERCURY_MODEL,
   type ModelAttempt,
+  modelSupportsVision,
   PRIMARY_MODEL,
 } from './providers/attempts';
 import {
@@ -161,6 +163,88 @@ function usableImages(
     onDropped?.(dropped);
   }
   return kept;
+}
+
+/**
+ * For a text-only model (Mercury 3): every image part becomes the vision
+ * model's description of it — the raw image 404s the request, and an image
+ * turn that landed on such a model, as its draw or as a fallback, died there.
+ * One description per image for the whole attempt (`descriptions`), so every
+ * step re-sends the same bytes and the prompt cache holds.
+ */
+async function describedImageParts({
+  abortSignal,
+  descriptions,
+  messages,
+}: {
+  abortSignal?: AbortSignal;
+  descriptions: Map<unknown, string>;
+  messages: ModelMessage[];
+}): Promise<ModelMessage[]> {
+  const isImage = (part: { mediaType?: unknown; type: string }) =>
+    part.type === 'file' &&
+    typeof part.mediaType === 'string' &&
+    part.mediaType.startsWith('image/');
+  let found = false;
+  const pending: Promise<void>[] = [];
+  for (const message of messages) {
+    if (message.role !== 'user' || typeof message.content === 'string') {
+      continue;
+    }
+    for (const part of message.content) {
+      if (part.type !== 'file' || !isImage(part)) {
+        continue;
+      }
+      found = true;
+      const { data, mediaType } = part;
+      if (descriptions.has(data)) {
+        continue;
+      }
+      if (!(data instanceof Uint8Array)) {
+        descriptions.set(data, '[An image was here; it could not be read.]');
+        continue;
+      }
+      descriptions.set(data, '[An image was here; it could not be described.]');
+      // Imported here: vision.ts runs its descriptions through streamAttempt.
+      pending.push(
+        import('./vision')
+          .then(({ describeImages }) =>
+            describeImages({
+              images: [{ bytes: data, mediaType }],
+              signal: abortSignal,
+            })
+          )
+          .then((text) => {
+            if (text) {
+              descriptions.set(
+                data,
+                `[An image, described for you because you can't see images: ${text}]`
+              );
+            }
+          })
+          .catch(() => undefined)
+      );
+    }
+  }
+  if (!found) {
+    return messages;
+  }
+  await Promise.all(pending);
+  return messages.map((message) =>
+    message.role === 'user' && typeof message.content !== 'string'
+      ? {
+          ...message,
+          content: message.content.map((part) =>
+            part.type === 'file' && isImage(part)
+              ? {
+                  text: descriptions.get(part.data) ?? '[An image was here.]',
+                  type: 'text' as const,
+                }
+              : part
+          ),
+        }
+      : message
+  );
 }
 
 const MODEL_FIELD = /"model"\s*:\s*"([^"]+)"/;
@@ -345,6 +429,8 @@ export function streamAttempt({
   // cache breakpoint still lands on the trailing text block), after the
   // replayed history. With neither, keep the plain string prompt.
   const initialImages = usableImages(images ?? [], onDroppedImages);
+  const textOnly = !modelSupportsVision(attempt.model);
+  const descriptions = new Map<unknown, string>();
   const promptInput =
     initialImages.length > 0 ||
     history.length > 0 ||
@@ -523,7 +609,11 @@ export function streamAttempt({
         console.error(error);
       }
     },
-    ...(activeTools || getFreshImages || priceStep || priorInputTokens
+    ...(activeTools ||
+    getFreshImages ||
+    priceStep ||
+    priorInputTokens ||
+    textOnly
       ? {
           // Gate deferred tools per step AND inject any images the model asked to
           // view: the SDK renders images only in a user message, so a screenshot
@@ -642,6 +732,13 @@ export function streamAttempt({
                   role: 'user' as const,
                 },
               ];
+            }
+            if (textOnly) {
+              stepMessages = await describedImageParts({
+                abortSignal,
+                descriptions,
+                messages: stepMessages,
+              });
             }
             const capped = capContextImages({ messages: stepMessages });
             if (capped !== messages) {
@@ -1006,7 +1103,8 @@ export const REASONING_EFFORTS = ['none', 'low', 'medium', 'high'] as const;
 /**
  * The effort experiment (issue #36, owner's calls 2026-10-09 for luna and
  * 2026-10-10 for haiku), logged with the turn so speed and quality can be
- * compared per model and effort from thread_logs. Every other model: medium.
+ * compared per model and effort from thread_logs. Mercury joined the draw with
+ * the model experiment (2026-10-20). Every other model: medium.
  *
  * `none` left the draw (owner's call 2026-10-12), `high` joined it
  * (2026-10-16). Haiku draws per attempt: Anthropic caches low and medium
@@ -1015,11 +1113,13 @@ export const REASONING_EFFORTS = ['none', 'low', 'medium', 'high'] as const;
  * effort is Jev's alone (apps/bot tool-preload), never drawn here: luna keeps
  * one cache per effort, so a thread only ever goes up.
  */
+const EFFORT_DRAW_MODELS = new Set([LUNA_MODEL, MERCURY_MODEL, PRIMARY_MODEL]);
+
 export function pickReasoningEffort({ attempt }: { attempt: ModelAttempt }): {
   effort: string;
   random: boolean;
 } {
-  if (attempt.model !== LUNA_MODEL && attempt.model !== PRIMARY_MODEL) {
+  if (!EFFORT_DRAW_MODELS.has(attempt.model)) {
     return { effort: 'medium', random: false };
   }
   return {
