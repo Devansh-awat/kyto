@@ -8,6 +8,8 @@ describe('parseGithubCommand', () => {
       'gh pr view 12 --repo owner/name | grep title',
       'gh repo clone owner/name',
       "gh api repos/owner/name/issues --jq '.[].title'",
+      'gh api -X GET search/code -f q="e26af0e5" --jq .total_count',
+      'gh api --method=GET repos/owner/name/issues -f state=open',
       'gh search repos kyto',
       'git clone https://github.com/owner/name.git && cd name && git log',
     ]) {
@@ -21,6 +23,7 @@ describe('parseGithubCommand', () => {
       ['gh issue comment 3 -R owner/name --body hi', 'owner/name'],
       ['gh repo delete owner/name --yes', 'owner/name'],
       ['gh api -X DELETE repos/owner/name/issues/1', 'owner/name'],
+      ['gh api repos/owner/name/issues -f title=hi', 'owner/name'],
       ['git push https://github.com/owner/name.git main', 'owner/name'],
       [
         "curl -X POST -d '{}' https://api.github.com/repos/owner/name/issues",

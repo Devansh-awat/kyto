@@ -6,6 +6,7 @@ import {
 import { env } from '@/env';
 import { mrkdwn, plainText } from '@/harness/views';
 import { bot, slack } from '@/lib/chat';
+import { KEVINTON_USER_ID } from '@/lib/kevinton/identity';
 import logger from '@/lib/logger';
 import { toLogError } from '@/lib/utils/error';
 import type { ApprovalKind } from './types';
@@ -86,6 +87,12 @@ export async function requestApproval({
   summary: string;
   threadId: string;
 }): Promise<{ id: number; message: string }> {
+  // Kevinton is silent in the thread it reviews, and this posts there. Its one
+  // approval (a skill proposal) is requested under kyto's bot id, in the
+  // owner's DM.
+  if (requestedBy === KEVINTON_USER_ID) {
+    throw new Error('kevinton may not post an approval request in a thread');
+  }
   const row = await createApprovalRequest({
     detail,
     kind,

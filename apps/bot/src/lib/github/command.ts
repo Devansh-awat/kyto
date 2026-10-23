@@ -177,9 +177,16 @@ function isReadOnlyGh(tokens: string[]): boolean {
     const text = tokens.join(' ');
     const hasWriteMethod =
       /(?:-X|--method)[\s=]*(?:POST|PUT|PATCH|DELETE)/i.test(text);
-    const hasFields = tokens.some((token) =>
-      ['-f', '-F', '--field', '--raw-field', '--input'].includes(token)
-    );
+    // Fields make gh default to POST — unless the method is set to GET, which
+    // turns them into query parameters: `gh api -X GET search/code -f q=…` is
+    // a search, and calling it a write posted an approval for a "repo" named
+    // search/code. The proxy sees the real method either way.
+    const explicitGet = /(?:-X|--method)[\s=]*GET\b/i.test(text);
+    const hasFields =
+      !explicitGet &&
+      tokens.some((token) =>
+        ['-f', '-F', '--field', '--raw-field', '--input'].includes(token)
+      );
     const isGraphqlMutation =
       args.includes('graphql') && /\bmutation\b/i.test(text);
     return !(hasWriteMethod || hasFields || isGraphqlMutation);

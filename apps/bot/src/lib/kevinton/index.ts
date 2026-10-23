@@ -28,6 +28,7 @@ import logger from '@/lib/logger';
 import { redactSecretsDeep } from '@/lib/redact';
 import { openSandboxProxies } from '@/lib/sandbox/proxies';
 import { toLogError } from '@/lib/utils/error';
+import { KEVINTON_USER_ID } from './identity';
 import { kevintonTools } from './tools';
 
 // kevinton: kyto's after-the-fact reviewer (owner's ask, 2026-09-29, after
@@ -237,7 +238,7 @@ function kevintonMessage({
 }): Message {
   return {
     attachments: [],
-    author: { isBot: true, userId: 'kevinton', userName: 'kevinton' },
+    author: { isBot: true, userId: KEVINTON_USER_ID, userName: 'kevinton' },
     id: `kevinton-${Date.now()}`,
     isMention: false,
     metadata: { dateSent: new Date() },

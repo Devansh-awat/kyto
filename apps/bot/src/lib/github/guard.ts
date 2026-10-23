@@ -8,6 +8,7 @@ import {
 import { env } from '@/env';
 import { canEdit } from '@/lib/ai/tools/editors';
 import { requestApproval } from '@/lib/approvals/request';
+import { KEVINTON_USER_ID } from '@/lib/kevinton/identity';
 import logger from '@/lib/logger';
 import { isFork, kytoCanPush } from './collaborator';
 import { parseGithubCommand } from './command';
@@ -189,6 +190,19 @@ export async function guardGithubTargets({
   const targets = new Set(repos.map((repo) => repo.toLowerCase()));
   if (targets.size === 0) {
     return ALLOW_NOOP;
+  }
+  // Before any approval path: the trust gate below would post an Approve/Deny
+  // card into the turn's thread, and kevinton's turn's thread is the
+  // conversation it is reviewing — a misread search (`gh api search/code -f`)
+  // put two such cards in front of people. Approving one would also have
+  // granted GitHub write trust to a prompt-injectable reviewer. It files issues
+  // through its own tool; it never writes to GitHub through a shell.
+  if (userId === KEVINTON_USER_ID) {
+    return {
+      allowed: false,
+      reason:
+        'Refused: kevinton never writes to GitHub from a shell, and nothing was queued or posted. If this was meant to be a read the guard misjudged, it is a defect worth filing with kytoIssues; otherwise file what you found with kytoIssues.',
+    };
   }
   const command = commandText;
 
