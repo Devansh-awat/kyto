@@ -1,6 +1,7 @@
 import nodePath from 'node:path';
 import type { SandboxContext } from '@repo/ai';
 import { tool } from 'ai';
+import { extractText, getDocumentProxy } from 'unpdf';
 import { z } from 'zod';
 import type { ThreadHandle as Thread } from '@/harness/thread';
 import { slack } from '@/lib/chat';
@@ -171,7 +172,32 @@ export async function fetchUrlText({
   }
   let contentType = response.headers.get('content-type') ?? '';
   let text = '';
-  if (response.ok) {
+  // A PDF comes back as binary bytes, not text: decoding it as a string gave
+  // the model `%PDF-1.7` plus mojibake and, when a tool result holding that
+  // binary reached the restart checkpoint, broke the Postgres write (#143/#144).
+  // Pull the real text out instead.
+  if (response.ok && /application\/pdf|application\/x-pdf/i.test(contentType)) {
+    const buffer = await readCappedBytes(response);
+    try {
+      const pdf = await getDocumentProxy(new Uint8Array(buffer));
+      const extracted = await extractText(pdf, { mergePages: true });
+      text = (
+        Array.isArray(extracted.text)
+          ? extracted.text.join('\n')
+          : extracted.text
+      ).trim();
+      contentType = 'text/plain';
+    } catch (error) {
+      throw new Error(
+        `That URL is a PDF kyto couldn't read as text (${errorMessage(error)}). Download it into the sandbox and run pdftotext instead.`
+      );
+    }
+    if (!text) {
+      throw new Error(
+        "That PDF has no extractable text (it's probably scanned images). Download it into the sandbox and OCR it if you need the content."
+      );
+    }
+  } else if (response.ok) {
     const raw = await readCapped(response);
     // Strip tags for HTML so the reader gets readable text, not markup. Block
     // ends become line breaks (one 124k-char line could not be grepped or
@@ -242,6 +268,37 @@ export async function fetchUrlText({
     truncated,
     via,
   };
+}
+
+async function readCappedBytes(response: Response): Promise<ArrayBuffer> {
+  if (!response.body) {
+    return new ArrayBuffer(0);
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      chunks.push(value);
+      bytes += value.byteLength;
+      if (bytes >= MAX_BODY_BYTES) {
+        break;
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  const out = new Uint8Array(bytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out.buffer;
 }
 
 async function readCapped(response: Response): Promise<string> {

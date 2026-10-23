@@ -258,12 +258,28 @@ const CHECKPOINT_EVERY_MS = 60 * 1000;
 const CHECKPOINT_OUTPUT_MAX = 60_000;
 const lastCheckpointAt = new Map<string, number>();
 
+// Postgres jsonb rejects a NUL (\u0000) and chokes on lone UTF-16 surrogates,
+// so a tool result carrying binary (a fetchUrl of a raw PDF, #144) failed the
+// whole checkpoint write and the turn lost its restart safety net. Strip those
+// before they reach the column — a checkpoint is a best-effort snapshot, not the
+// reply, so a scrubbed byte here costs nothing.
+function scrubForJsonb(text: string): string {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: NUL is exactly what jsonb rejects.
+  return text.replace(/\u0000/g, '').replace(/[\uD800-\uDFFF]/g, '\uFFFD');
+}
+
 function boundedOutput(output: unknown): unknown {
-  const text =
+  const raw =
     typeof output === 'string' ? output : (JSON.stringify(output) ?? '');
-  return text.length > CHECKPOINT_OUTPUT_MAX
-    ? `${text.slice(0, CHECKPOINT_OUTPUT_MAX)}… [cut at ${CHECKPOINT_OUTPUT_MAX} characters when kyto restarted]`
-    : output;
+  const text =
+    raw.length > CHECKPOINT_OUTPUT_MAX
+      ? `${raw.slice(0, CHECKPOINT_OUTPUT_MAX)}… [cut at ${CHECKPOINT_OUTPUT_MAX} characters when kyto restarted]`
+      : raw;
+  const scrubbed = scrubForJsonb(text);
+  // If nothing needed scrubbing and it fit, keep the original shape (objects
+  // stay objects for the resumed turn); only fall back to the string when we
+  // actually changed something.
+  return scrubbed === raw ? output : scrubbed;
 }
 
 /**
