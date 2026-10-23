@@ -21,12 +21,21 @@ export async function replyFooter({
   durationMs,
   isChosen,
   isOwnAttempt,
+  leadAttempt,
   showFooter,
 }: {
   answeredBy: ModelAttempt;
   durationMs: number;
   isChosen: boolean;
   isOwnAttempt: boolean;
+  /**
+   * The model that was SUPPOSED to lead this turn when it wasn't the default
+   * primary: the thread's `--model` pick or the experiment's drawn arm. When
+   * that model fails and a lower rung answers, the note must name IT, not the
+   * hardcoded Haiku label — a `--model mercury` turn that fell to Haiku used to
+   * read "claude haiku 5.5 couldn't answer, so haiku did" (#130).
+   */
+  leadAttempt?: ModelAttempt;
   showFooter: boolean;
 }): Promise<ReturnType<typeof buildReplyFooter>> {
   const key = attemptKey(answeredBy);
@@ -35,10 +44,16 @@ export async function replyFooter({
     !(isOwnAttempt || isChosen) &&
     key !== attemptKey(PRIMARY_ATTEMPT) &&
     !UPGRADE_ATTEMPTS.some((candidate) => attemptKey(candidate) === key);
+  // The label of whatever led: a picked/drawn model answers under its own slug,
+  // the default chain under the friendly primary name.
+  const primaryLabel =
+    leadAttempt && attemptKey(leadAttempt) !== attemptKey(PRIMARY_ATTEMPT)
+      ? `\`${leadAttempt.model}\``
+      : PRIMARY_LABEL;
   return buildReplyFooter({
     durationMs,
     fallback: steppedDown
-      ? { model: answeredBy.model, outage, primaryLabel: PRIMARY_LABEL }
+      ? { model: answeredBy.model, outage, primaryLabel }
       : undefined,
     model: answeredBy.model,
     showFooter,
