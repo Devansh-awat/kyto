@@ -1,5 +1,10 @@
 import nodePath from 'node:path/posix';
 import { describeImages, type ImageInput, type SandboxContext } from '@repo/ai';
+import {
+  clearEmojiSubmission,
+  getEmojiSubmitter,
+  recordEmojiSubmission,
+} from '@repo/db/queries';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { neutralizeBroadcast } from '@/harness/markdown';
@@ -346,6 +351,16 @@ export function submitEmojiTool({
             // The list is now stale, and lookupEmoji is what people use to
             // check whether the thing they just asked for exists.
             cache = undefined;
+            // Remember who it was for, so they (and the owner) can remove it
+            // later even though every emoji goes in under kyto's one account.
+            await recordEmojiSubmission({ name: cleaned, requestedBy }).catch(
+              (error: unknown) => {
+                logger.warn(
+                  { error: errorMessage(error), name: cleaned },
+                  '[emoji] failed to record submitter'
+                );
+              }
+            );
             return {
               name: cleaned,
               submitted: true,
@@ -437,18 +452,25 @@ export function submitEmojiTool({
 }
 
 /**
- * Remove a custom emoji. OWNER ONLY, and registered only for him.
+ * Remove a custom emoji. Registered for EVERYONE, but gated inside: a non-owner
+ * may only remove an emoji THEY asked kyto to add (tracked in emoji_submissions).
  *
- * Two reasons it is not open like adding is. Slack only lets the account that
- * added an emoji remove it, and every emoji kyto adds goes in under the same
- * shared account — so "remove it" would mean anyone in the workspace could delete
- * anything kyto has ever added, for anyone. And removal is the destructive half:
- * an emoji someone is using in a saved message just disappears.
+ * Every emoji kyto adds goes in under its one shared user account, and Slack
+ * only lets the adding account remove one — so "anyone removes anything" is the
+ * failure to avoid. Tying removal to the recorded requester (owner's call,
+ * 2026-10-23) lets people undo their own emoji without opening the door to
+ * deleting everyone else's. The owner may remove any kyto-added emoji.
  */
-export function removeEmojiTool({ requestedBy }: { requestedBy: string }) {
+export function removeEmojiTool({
+  isOwner,
+  requestedBy,
+}: {
+  isOwner: boolean;
+  requestedBy: string;
+}) {
   return tool({
     description:
-      'Remove a custom emoji from the workspace. Only works for emoji that were added through kyto (Slack only allows the adding account to remove one), and only the bot owner may do this. Destructive and immediate: the emoji vanishes from every message already using it, so confirm the name first with lookupEmoji.',
+      'Remove a custom emoji from the workspace. Only works for emoji that were added through kyto, and (unless you are the owner) only for ones YOU asked kyto to add. Destructive and immediate: the emoji vanishes from every message already using it, so confirm the name first with lookupEmoji.',
     inputSchema: z.object({
       name: z
         .string()
@@ -461,6 +483,15 @@ export function removeEmojiTool({ requestedBy }: { requestedBy: string }) {
       if (!EMOJI_NAME.test(cleaned)) {
         return { error: 'Invalid emoji name.', removed: false };
       }
+      if (!isOwner) {
+        const submitter = await getEmojiSubmitter(cleaned).catch(() => null);
+        if (submitter !== requestedBy) {
+          return {
+            error: `\`:${cleaned}:\` isn't one kyto has a record of you adding, so only the person who asked for it (or the bot owner) can remove it. If you did add it, kyto may just not have a record of it — tell them.`,
+            removed: false,
+          };
+        }
+      }
       const result = await removeEmoji({ name: cleaned, requestedBy });
       if (!result.ok) {
         return {
@@ -472,6 +503,7 @@ export function removeEmojiTool({ requestedBy }: { requestedBy: string }) {
         };
       }
       cache = undefined;
+      await clearEmojiSubmission(cleaned).catch(() => undefined);
       return {
         name: cleaned,
         removed: true,

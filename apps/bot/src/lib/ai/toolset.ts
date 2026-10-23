@@ -948,15 +948,17 @@ export async function buildTools({
           },
         }
       : {}),
-    // Removal is the owner's alone: every emoji kyto adds goes in under HIS
-    // account (Slack has no app-level API), and Slack only lets the adding
-    // account remove one — so an open version would let anyone delete anything
-    // kyto has ever added for anyone.
-    ...(isOwner && emojiUploadConfigured()
+    // Open to everyone, but the tool only lets a non-owner remove an emoji they
+    // themselves asked kyto to add (emoji_submissions); the owner may remove
+    // any. Every emoji goes in under kyto's one account and Slack only lets the
+    // adding account remove one, so the requester-record is what keeps "remove
+    // your own" from becoming "anyone deletes anything" (owner's call 2026-10-23).
+    ...(emojiUploadConfigured()
       ? {
           removeEmoji: {
-            summary: 'remove a custom emoji kyto added',
-            tool: removeEmojiTool({ requestedBy: authorUserId }),
+            summary:
+              'remove a custom emoji kyto added (your own, or any if owner)',
+            tool: removeEmojiTool({ isOwner, requestedBy: authorUserId }),
           },
         }
       : {}),
