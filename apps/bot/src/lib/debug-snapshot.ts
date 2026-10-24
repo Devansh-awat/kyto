@@ -40,7 +40,7 @@ export async function createDebugSnapshot({
       since: new Date(Date.now() - LOG_WINDOW_MS),
       threadId,
     }),
-    getThreadThinking(threadId, MONTH_MS),
+    getThreadThinking(threadId),
     getThreadSummary(threadId, MONTH_MS),
     listThreadRevisions({
       channel,

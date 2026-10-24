@@ -120,7 +120,7 @@ content:
 
 | Store | What | Retention |
 | --- | --- | --- |
-| `thread_thinking` | Kyto's own reasoning and tool observations from the last few turns of a thread | ~30 days, daily reaper |
+| `thread_thinking` | Kyto's own reasoning and tool observations from a thread's turns (oldest summarized) | Kept for good; DM threads erased by "Your data", any thread by the owner's clean-up |
 | `thread_summaries` | Kyto's own compacted digest of the part of a thread too old to fit in its prompt | ~30 days, daily reaper |
 | `message_revisions` | What a message said before its author edited it, and the text of a deleted one — verbatim (token shapes and kyto's own secrets redacted), only for opted-in authors, only in threads kyto is part of, never `##`, never a `<>` message that didn't ping kyto, never `!secret` | 30 days, daily reaper; erased by the author's "Your data" |
 | `memories` | Notes Kyto wrote after solving something | Until deleted |

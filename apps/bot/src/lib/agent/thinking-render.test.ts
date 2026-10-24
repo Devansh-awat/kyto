@@ -1,33 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  allowanceForAge,
-  MAX_TURN_CHARS,
+  planThinkingCompaction,
   renderThinking,
-  selectWithinBudget,
   tail,
 } from './thinking-render';
 
-const turn = (label: string, size: number) => `${label}${'x'.repeat(size)}END`;
-
-describe('allowanceForAge', () => {
-  test('the newest turn keeps its full stored length', () => {
-    expect(allowanceForAge(0)).toBe(MAX_TURN_CHARS);
-  });
-
-  test('older turns decay', () => {
-    expect(allowanceForAge(1)).toBeLessThan(allowanceForAge(0));
-    expect(allowanceForAge(2)).toBeLessThan(allowanceForAge(1));
-    expect(allowanceForAge(3)).toBeLessThan(allowanceForAge(2));
-  });
-
-  test('decay bottoms out rather than shrinking to nothing', () => {
-    // A 40-turn thread must not reduce its oldest kept turn to a fragment that
-    // costs tokens and says nothing.
-    const floor = allowanceForAge(4);
-    expect(allowanceForAge(40)).toBe(floor);
-    expect(floor).toBeGreaterThan(0);
-  });
-});
+const big = (label: string, size: number) => `${label}${'x'.repeat(size)}END`;
 
 describe('tail', () => {
   test('keeps the END of a turn, not the start', () => {
@@ -44,33 +22,38 @@ describe('tail', () => {
   });
 });
 
-describe('selectWithinBudget', () => {
-  test('decays older turns while keeping the newest whole', () => {
-    const turns = [turn('oldest', 19_000), turn('newest', 19_000)];
-    const [oldest, newest] = selectWithinBudget(turns);
-    expect(newest).toBe(turns[1] as string);
-    expect((oldest as string).length).toBeLessThan((turns[0] as string).length);
+describe('planThinkingCompaction', () => {
+  test('nothing is folded under the budget', () => {
+    const turns = [{ text: 'a' }, { text: 'b', tools: 'c' }];
+    expect(planThinkingCompaction(turns, 100)).toEqual([]);
   });
 
-  test('decay is what lets more turns fit the same budget', () => {
-    // Ten full-size turns are ~190k chars; under the old no-decay rule only the
-    // first few fit the 60k budget and the rest were dropped entirely.
-    const turns = Array.from({ length: 10 }, (_, i) => turn(`t${i}`, 19_000));
-    expect(selectWithinBudget(turns).length).toBeGreaterThan(3);
+  test('tool results count toward the budget', () => {
+    const turns = [
+      { text: 'a', tools: 'x'.repeat(60) },
+      { text: 'b', tools: 'x'.repeat(60) },
+    ];
+    expect(planThinkingCompaction(turns, 100)).toEqual([0]);
   });
 
-  test('returns turns oldest-first', () => {
-    const turns = ['first', 'second', 'third'];
-    expect(selectWithinBudget(turns)).toEqual(turns);
+  test('folds the oldest back to half the budget, never the newest', () => {
+    const turns = Array.from({ length: 5 }, (_, i) => ({
+      text: big(`t${i}`, 30),
+    }));
+    // 5 × 34 = 170 > 100 → fold oldest until ≤ 50 left.
+    expect(planThinkingCompaction(turns, 100)).toEqual([0, 1, 2, 3]);
+    expect(planThinkingCompaction([{ text: big('only', 500) }], 100)).toEqual(
+      []
+    );
   });
 
-  test('always keeps the most recent turn, even alone over budget', () => {
-    expect(selectWithinBudget([turn('a', 5), turn('b', 5)], 1)).toHaveLength(1);
-  });
-
-  test('survives a sparse array', () => {
-    const sparse = ['a', undefined as unknown as string, 'b'];
-    expect(selectWithinBudget(sparse)).toEqual(['a', 'b']);
+  test('an existing summary is never folded as a turn', () => {
+    const turns = [
+      { summary: true, text: 'x'.repeat(40) },
+      { text: 'x'.repeat(40) },
+      { text: 'x'.repeat(40) },
+    ];
+    expect(planThinkingCompaction(turns, 100)).toEqual([1]);
   });
 });
 
@@ -85,24 +68,33 @@ describe('renderThinking', () => {
     expect(block).toContain('[your previous turn]');
   });
 
-  test('tells the model abbreviated turns are abbreviated', () => {
-    // Otherwise it treats a truncated head as evidence the tool returned
-    // nothing, and re-derives from a gap it cannot see.
-    expect(renderThinking(['a'])).toContain('abbreviated');
-  });
-
-  test('only the last three turns carry their tool results', () => {
+  test('every turn keeps its tool results (no last-three cut)', () => {
     const block = renderThinking(
-      Array.from({ length: 5 }, (_, index) => ({
+      Array.from({ length: 6 }, (_, index) => ({
         reasoning: `r${index}`,
         tools: `RESULTS-${index}`,
       }))
     );
-    expect(block).not.toContain('RESULTS-0');
-    expect(block).not.toContain('RESULTS-1');
-    for (const index of [2, 3, 4]) {
+    for (const index of [0, 1, 2, 3, 4, 5]) {
       expect(block).toContain(`RESULTS-${index}`);
     }
-    expect(block).toContain('r0');
+  });
+
+  test('a summary comes first and is labelled as one', () => {
+    const block = renderThinking([
+      { reasoning: 'SUMMARY', summary: true },
+      { reasoning: 'latest' },
+    ]);
+    expect(block.indexOf('SUMMARY')).toBeLessThan(block.indexOf('latest'));
+    expect(block).toContain('[summary of your earlier turns here]');
+  });
+
+  test('an overflow that compaction missed drops the oldest, keeps the newest', () => {
+    const block = renderThinking(
+      [{ reasoning: big('OLD', 80) }, { reasoning: big('NEW', 80) }],
+      100
+    );
+    expect(block).toContain('NEW');
+    expect(block).not.toContain('OLD');
   });
 });

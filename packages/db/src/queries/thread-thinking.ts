@@ -1,17 +1,13 @@
-import { eq, lt } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { db } from '../client';
 import { type StoredThinkingTurn, threadThinking } from '../schema';
 import { threadsInChannel } from './thread-ids';
 
 export type { StoredThinkingTurn, ThreadThinking } from '../schema';
 
-/**
- * The stored reasoning turns for a thread, or [] if none or the row is older
- * than maxAgeMs (a stale train of thought is worse context than none).
- */
+/** The stored reasoning turns for a thread (kept for good), or [] if none. */
 export async function getThreadThinking(
-  threadId: string,
-  maxAgeMs: number
+  threadId: string
 ): Promise<StoredThinkingTurn[]> {
   const [row] = await db
     .select()
@@ -19,9 +15,6 @@ export async function getThreadThinking(
     .where(eq(threadThinking.threadId, threadId))
     .limit(1);
   if (!row) {
-    return [];
-  }
-  if (Date.now() - row.updatedAt.getTime() > maxAgeMs) {
     return [];
   }
   return row.turns;
@@ -64,11 +57,4 @@ export async function deleteThinkingForChannel(
     .where(threadsInChannel(threadThinking.threadId, channelId))
     .returning({ threadId: threadThinking.threadId });
   return removed.length;
-}
-
-/** Reap rows whose reasoning is older than the retention window. */
-export async function pruneThreadThinking(olderThan: Date): Promise<void> {
-  await db
-    .delete(threadThinking)
-    .where(lt(threadThinking.updatedAt, olderThan));
 }

@@ -1,11 +1,10 @@
 import { jsonb, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
 
-// A thread's recent private reasoning, persisted so it survives a bot restart.
-// Slack only records what kyto SAID; the reasoning behind it lived in the plan's
-// Thinking cards and was otherwise gone, so a new turn re-derived the previous
-// turn's conclusions and dead ends. Only the last few turns are kept (the module
-// tail-clamps), and rows are reaped after ~a month so this stays a short-lived
-// train of thought, not a permanent transcript.
+// A thread's private reasoning and tool results, persisted so it survives a bot
+// restart. Slack only records what kyto SAID; the reasoning behind it lived in
+// the plan's Thinking cards and was otherwise gone, so a new turn re-derived the
+// previous turn's conclusions and dead ends. Kept for good; once it outgrows its
+// budget the oldest turns are folded into a `summary` turn (lib/agent/thinking).
 /**
  * One turn's reasoning and tool observations. A turn that read someone's
  * private data (their DMs, private channels, email, their MCP servers) carries
@@ -20,15 +19,17 @@ export type StoredThinkingTurn =
       /** The Slack message the turn answered. */
       messageTs?: string;
       privateTo?: string;
+      /** A summary of folded turns (text is the summary), not one turn. */
+      summary?: boolean;
       /** The turn's reasoning. */
       text: string;
-      /** Its tool calls and results, replayed while it is one of the last 3. */
+      /** Its tool calls and results. */
       tools?: string;
     };
 
 export const threadThinking = pgTable('thread_thinking', {
   threadId: text('thread_id').primaryKey(),
-  // The reasoning of the last few turns, oldest first (already tail-clamped).
+  // Summaries first, then turns oldest first (reasoning tail-clamped).
   turns: jsonb('turns').$type<StoredThinkingTurn[]>().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true })
     .notNull()
