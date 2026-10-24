@@ -23,7 +23,10 @@ import { startReminderScheduler } from '@/lib/reminders/scheduler';
 import { startSandboxReaper } from '@/lib/sandbox/store';
 import { flushSiteViews, startSiteAnalytics } from '@/lib/sites/analytics';
 import { startSitesServer } from '@/lib/sites/server';
-import { ensureChannelIndex } from '@/lib/slack/channel-links';
+import {
+  applyChannelChange,
+  ensureChannelIndex,
+} from '@/lib/slack/channel-links';
 import { startSpendLedger } from '@/lib/spend';
 import { flushThreadLogs, startThreadLogs } from '@/lib/thread-logs';
 import { startTimingsReaper } from '@/lib/turn-timings';
@@ -126,6 +129,11 @@ try {
   startSummaryReaper();
   // Warm the channel name→id index so the FIRST reply after a restart can
   // already turn `#some-channel` into a real link (see lib/slack/channel-links).
+  bot.onChannelChange((event) =>
+    applyChannelChange(event).catch((error: unknown) => {
+      logger.warn({ err: error, event }, '[slack] channel event not applied');
+    })
+  );
   await ensureChannelIndex();
   const botProfile = slack.botUserId
     ? await slack.webClient.users

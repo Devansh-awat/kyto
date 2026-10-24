@@ -6,6 +6,7 @@ import {
   mayReadChannel,
   PRIVATE_CHANNEL_REFUSAL,
 } from '@/lib/slack/channel-access';
+import { searchChannelDirectory } from '@/lib/slack/channel-links';
 
 // A host-side, READ-ONLY Slack proxy the sandbox can call so a script can batch
 // Slack reads (e.g. "who is in the most channels") without N LLM round-trips —
@@ -39,6 +40,17 @@ const READ_ONLY_METHODS = new Set<string>([
   'users.lookupByEmail',
   'users.profile.get',
 ]);
+
+// Not a Slack method: `slack channels` is answered from kyto's own directory
+// of public channels (lib/slack/channel-links), with no Slack call (#132).
+const DIRECTORY_METHOD = 'kyto.channels';
+const DIRECTORY_DEFAULT_LIMIT = 500;
+const DIRECTORY_MAX_LIMIT = 5000;
+const directoryArgs = z.object({
+  in_purpose: z.boolean().optional(),
+  limit: z.number().int().positive().optional(),
+  query: z.string().optional(),
+});
 
 // Where the proxy is mounted on the public sites server.
 const SLACK_PROXY_PREFIX = '/_slackapi/';
@@ -218,6 +230,32 @@ export async function handleSlackProxy(
   } catch {
     return json({ error: 'invalid_method', ok: false }, 400);
   }
+  if (method === DIRECTORY_METHOD) {
+    let raw: unknown;
+    try {
+      raw = JSON.parse((await request.text().catch(() => '')) || '{}');
+    } catch {
+      return json({ error: 'invalid_json_body', ok: false }, 400);
+    }
+    const parsed = directoryArgs.safeParse(raw);
+    if (!parsed.success) {
+      return json({ error: 'invalid_arguments', ok: false }, 400);
+    }
+    return json(
+      {
+        ok: true,
+        ...searchChannelDirectory({
+          inPurpose: parsed.data.in_purpose ?? false,
+          limit: Math.min(
+            parsed.data.limit ?? DIRECTORY_DEFAULT_LIMIT,
+            DIRECTORY_MAX_LIMIT
+          ),
+          query: parsed.data.query ?? '',
+        }),
+      },
+      200
+    );
+  }
   if (!READ_ONLY_METHODS.has(method)) {
     return json({ error: `method_not_allowed: ${method}`, ok: false }, 403);
   }
@@ -302,10 +340,12 @@ export function slackProxyEnv(
 }
 
 /**
- * Installs `slack <method> [jsonArgs]` as a real executable on PATH, and
- * `slack-history`, which pages one channel's history into a local file and
- * prints only its coverage (#122: "index the whole channel" was a hand-written
- * paging script every time, and its 12k-char stdout cap hid the messages). ANY
+ * Installs `slack <method> [jsonArgs]` as a real executable on PATH, with two
+ * subcommands: `slack history` pages one channel's history into a local file
+ * and prints only its coverage (#122: "index the whole channel" was a
+ * hand-written paging script every time, and its 12k-char stdout cap hid the
+ * messages), and `slack channels` searches kyto's public-channel directory
+ * (#132). ANY
  * command in the sandbox can query Slack read-only — the plain `bash` tool and a
  * recurring `bash` reminder, not just the `slackScript` tool (which used to
  * prepend the helper as a shell function, making it invisible everywhere else).
@@ -329,8 +369,22 @@ usage() {
 slack — query the Slack Web API, READ-ONLY, through kyto's host-side proxy.
 
   usage:  slack <api.method> ['<json arguments>']
+          slack channels [name substring] [--purpose] [--limit N]
+          slack history <channel id> [--limit N | --all] [--since YYYY-MM-DD] [--threads]
 
-  There are NO options. This is not curl and not the official Slack CLI: the
+  channels  every PUBLIC channel in the workspace, from kyto's own directory
+            (kept current from Slack's channel events; no Slack calls). Prints
+            JSON: total (all public channels), matched, complete (false while
+            the directory is still loading after a restart) and channels
+            [{id,name,members,created,purpose}], first --limit (default 500)
+            by name. --purpose also matches the substring in the purpose.
+  history   pages one channel's history (and with --threads each thread's
+            replies) into /tmp/slack-history/<channel>.jsonl, oldest first,
+            and prints ONLY a coverage summary: count, oldest/newest, whether
+            the channel was exhausted, and why it stopped. Search the file
+            with python/grep/jq afterwards; don't print it all.
+
+  Otherwise there are NO options. This is not curl and not the official Slack CLI: the
   only arguments are an API method name and, optionally, ONE single-quoted JSON
   object. It prints the raw JSON response on stdout.
 
@@ -348,6 +402,37 @@ slack — query the Slack Web API, READ-ONLY, through kyto's host-side proxy.
 KYTO_SLACK_USAGE
   printf '    %s\\n' $METHODS
 }
+
+if [ "\${1:-}" = "history" ]; then
+  shift
+  exec python3 /usr/local/lib/kyto/slack-history "$@"
+fi
+
+if [ "\${1:-}" = "channels" ]; then
+  shift
+  query=""; limit=""; purpose=false
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --purpose) purpose=true ;;
+      --limit) limit="\${2:-}"; shift ;;
+      -*) echo "slack channels: unknown option '$1'" >&2; exit 2 ;;
+      *) query="$1" ;;
+    esac
+    shift
+  done
+  case "$limit" in ''|*[!0-9]*) limit=500 ;; esac
+  if [ -z "\${KYTO_SLACK_PROXY:-}" ] || [ -z "\${KYTO_SLACK_PROXY_TOKEN:-}" ]; then
+    echo '{"ok":false,"error":"slack proxy is not available in this context"}' >&2
+    exit 1
+  fi
+  body=$(QUERY="$query" LIMIT="$limit" PURPOSE="$purpose" python3 -c 'import json,os;print(json.dumps({"query":os.environ["QUERY"],"limit":int(os.environ["LIMIT"]),"in_purpose":os.environ["PURPOSE"]=="true"}))')
+  curl -sS --max-time 60 -X POST "$KYTO_SLACK_PROXY/kyto.channels" \\
+    -H "Authorization: Bearer $KYTO_SLACK_PROXY_TOKEN" \\
+    -H 'Content-Type: application/json' \\
+    -d "$body"
+  printf '\\n'
+  exit 0
+fi
 
 if [ "$#" -eq 0 ] || [ "\${1:-}" = "--help" ] || [ "\${1:-}" = "-h" ] || [ "\${1:-}" = "help" ]; then
   usage
@@ -404,11 +489,12 @@ curl -sS --max-time 60 -X POST "$KYTO_SLACK_PROXY/$method" \\
 printf '\\n'
 KYTO_SLACK_HELPER
 chmod +x /usr/local/bin/slack
-cat > /usr/local/bin/slack-history <<'KYTO_SLACK_HISTORY'
+mkdir -p /usr/local/lib/kyto
+cat > /usr/local/lib/kyto/slack-history <<'KYTO_SLACK_HISTORY'
 #!/usr/bin/env python3
-"""slack-history - page a channel's history into a local file, read-only.
+"""slack history - page a channel's history into a local file, read-only.
 
-  usage:  slack-history <channel id> [--limit N | --all] [--since YYYY-MM-DD]
+  usage:  slack history <channel id> [--limit N | --all] [--since YYYY-MM-DD]
                         [--threads] [--out FILE]
 
 Writes one JSON object per message (oldest first) to FILE, default
@@ -497,7 +583,7 @@ def main(argv):
             else:
                 out = value
         else:
-            print(f"slack-history: unknown argument {flag!r}", file=sys.stderr)
+            print(f"slack history: unknown argument {flag!r}", file=sys.stderr)
             usage(2)
         i += 1
     out = out or f"/tmp/slack-history/{channel}.jsonl"
@@ -587,5 +673,5 @@ def main(argv):
 
 main(sys.argv[1:])
 KYTO_SLACK_HISTORY
-chmod +x /usr/local/bin/slack-history`;
+rm -f /usr/local/bin/slack-history`;
 }

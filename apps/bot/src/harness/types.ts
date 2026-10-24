@@ -174,6 +174,14 @@ export interface AgentSessionStoppedEvent {
   userId?: string;
 }
 
+/** A public channel was created, renamed, archived, unarchived or deleted. */
+export interface ChannelChangeEvent {
+  channelId: string;
+  /** When Slack sent it (created/renamed carry the new name). */
+  kind: 'archived' | 'created' | 'deleted' | 'renamed' | 'unarchived';
+  name?: string;
+}
+
 export interface MemberJoinedEvent {
   channelId: string;
   /**

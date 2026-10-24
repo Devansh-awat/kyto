@@ -143,7 +143,9 @@
     "Uxxxxxxx",
     "waku",
     "isdigit",
-    "strptime"
+    "strptime",
+    "unarchived",
+    "unarchive"
   ],
   "useGitignore": true
 }

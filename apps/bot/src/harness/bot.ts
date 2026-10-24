@@ -15,6 +15,7 @@ import type {
   AppHomeEvent,
   AssistantThreadEvent,
   Author,
+  ChannelChangeEvent,
   MemberJoinedEvent,
   Message,
   MessageShortcutEvent,
@@ -134,6 +135,9 @@ export class KytoBot {
   private readonly memberJoinedHandlers: ((
     event: MemberJoinedEvent
   ) => Promise<void>)[] = [];
+  private readonly channelChangeHandlers: ((
+    event: ChannelChangeEvent
+  ) => Promise<void>)[] = [];
 
   constructor({
     answersAs = 'app',
@@ -229,6 +233,10 @@ export class KytoBot {
     handler: (event: MemberJoinedEvent) => Promise<void>
   ): void {
     this.memberJoinedHandlers.push(handler);
+  }
+
+  onChannelChange(handler: (event: ChannelChangeEvent) => Promise<void>): void {
+    this.channelChangeHandlers.push(handler);
   }
 
   // ── Accessors ───────────────────────────────────────────────────────────
@@ -452,6 +460,35 @@ export class KytoBot {
           inviter: event.inviter ? String(event.inviter) : undefined,
           userId: String(event.user ?? ''),
         });
+        return;
+      case 'channel_created':
+      case 'channel_rename': {
+        // These two carry the channel as an object with its (new) name.
+        const channel = event.channel as { id?: string; name?: string };
+        if (channel?.id) {
+          await runAll(this.channelChangeHandlers, {
+            channelId: channel.id,
+            kind: event.type === 'channel_created' ? 'created' : 'renamed',
+            ...(channel.name ? { name: channel.name } : {}),
+          });
+        }
+        return;
+      }
+      case 'channel_archive':
+      case 'channel_unarchive':
+      case 'channel_deleted':
+        if (typeof event.channel === 'string') {
+          await runAll(this.channelChangeHandlers, {
+            channelId: event.channel,
+            kind: (
+              {
+                channel_archive: 'archived',
+                channel_deleted: 'deleted',
+                channel_unarchive: 'unarchived',
+              } as const
+            )[event.type],
+          });
+        }
         return;
       default:
         // app_mention is deliberately ignored: the matching `message` event
