@@ -254,7 +254,7 @@ function describeUploadError(code: string | undefined): string {
   switch (code) {
     case 'error_name_taken':
     case 'error_name_taken_i18n':
-      return 'That emoji name is already taken. Pick another.';
+      return "That emoji name is already taken. Do NOT invent a different name — tell whoever asked and ask what they want; don't upload the same image under a name they didn't request.";
     case 'error_bad_name_i18n':
       return 'Slack rejected that name. Use lowercase letters, digits, hyphens and underscores.';
     case 'error_bad_wide':
@@ -337,7 +337,7 @@ export function submitEmojiTool({
           );
           if (existing[cleaned]) {
             return {
-              error: `\`:${cleaned}:\` already exists in this workspace. Pick another name.`,
+              error: `\`:${cleaned}:\` already exists in this workspace. Do NOT invent a different name — tell whoever asked that the name is taken and ask what they want (a different name, or leave it). Never upload the same image under an altered name they didn't request.`,
               submitted: false,
             };
           }
