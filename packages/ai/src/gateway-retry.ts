@@ -40,10 +40,12 @@ const GATEWAY_STATUSES = new Set([408, 502, 503, 504, 520, 522, 524]);
  */
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = [300, 1200];
-// The shared pool needs seconds, not milliseconds, to free up. The SDK sends a failed request once more on top (maxRetries 1), so these
-// run twice: 2026-10-20's first live mercury turn spent 45s on eight 429s
-// with three retries here. Two keep that near 15s.
-const RATE_LIMIT_RETRY_DELAY_MS = [1500, 4000];
+// A shared-pool 429 is another tenant's burst and frees up in about a second, so
+// three quick ~1s tries beat one long wait. The budget is SHARED across the whole
+// model attempt (tunedFetch passes `poolBudget`): the SDK sends one more request
+// on top (maxRetries 1) and, without a shared counter, each replay reset this and
+// ran the backoffs twice — a trivial `--model mercury hi` spent ~29s on 429s.
+const RATE_LIMIT_RETRY_DELAY_MS = [1000, 1000, 1000];
 // OpenRouter's body for that 429: `"limit_source":"upstream_provider_shared_pool"`
 // and "… is temporarily rate-limited upstream. Please retry shortly".
 const UPSTREAM_POOL_LIMIT =
@@ -66,6 +68,13 @@ export interface GatewayRetryOptions {
   /** Injectable for tests; the global fetch otherwise. */
   fetchImpl?: FetchLike;
   onRetry?: (info: GatewayRetryInfo) => void;
+  /**
+   * Shared shared-pool-429 retry budget for one model attempt. The SDK replays
+   * a failed request once (maxRetries 1) by calling this fetch again, which
+   * resets a local counter; a caller that reuses one object across the attempt's
+   * invocations bounds the backoffs to RATE_LIMIT_RETRY_DELAY_MS.length total.
+   */
+  poolBudget?: { used: number };
   /** Injectable for tests; a real abort-aware timer otherwise. */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
@@ -152,12 +161,12 @@ export async function fetchWithGatewayRetry(
     return response;
   }
   let gatewayRetries = 0;
-  let poolRetries = 0;
+  const poolBudget = options.poolBudget ?? { used: 0 };
   while (!init?.signal?.aborted) {
     const gateway = isGatewayStatus(response.status);
     const pool = !gateway && (await isUpstreamPoolLimit(response));
     const delays = gateway ? RETRY_DELAY_MS : RATE_LIMIT_RETRY_DELAY_MS;
-    const retry = gateway ? gatewayRetries + 1 : poolRetries + 1;
+    const retry = gateway ? gatewayRetries + 1 : poolBudget.used + 1;
     const limit = gateway ? MAX_RETRIES : RATE_LIMIT_RETRY_DELAY_MS.length;
     if (!(gateway || pool) || retry > limit) {
       break;
@@ -165,7 +174,7 @@ export async function fetchWithGatewayRetry(
     if (gateway) {
       gatewayRetries = retry;
     } else {
-      poolRetries = retry;
+      poolBudget.used = retry;
     }
     // Nobody reads the error page we are about to discard; cancel it so the
     // connection is released now instead of being held until the pool times out.

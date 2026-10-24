@@ -141,9 +141,9 @@ describe('shared-pool 429s', () => {
     expect(retries).toEqual([true, true]);
   });
 
-  test('gives up after two and hands the 429 back, body intact', async () => {
+  test('gives up after three and hands the 429 back, body intact', async () => {
     const { calls, send } = bodiesFetch(
-      Array.from({ length: 5 }, (): [number, string] => [429, POOL_LIMIT])
+      Array.from({ length: 6 }, (): [number, string] => [429, POOL_LIMIT])
     );
     const response = await fetchWithGatewayRetry(
       'https://proxy/v1',
@@ -154,9 +154,36 @@ describe('shared-pool 429s', () => {
       }
     );
     expect(response.status).toBe(429);
-    expect(calls()).toBe(3);
+    expect(calls()).toBe(4);
     // The fallback classifier still reads the error body.
     expect(await response.text()).toContain('rate-limited upstream');
+  });
+
+  test('a shared poolBudget bounds retries across replays (SDK maxRetries)', async () => {
+    // Two separate fetch invocations, as the SDK's own retry does: the shared
+    // budget must stop the second from starting its own three-retry run (#130).
+    const poolBudget = { used: 0 };
+    const first = bodiesFetch(
+      Array.from({ length: 4 }, (): [number, string] => [429, POOL_LIMIT])
+    );
+    await fetchWithGatewayRetry('https://proxy/v1', undefined, {
+      fetchImpl: first.send,
+      poolBudget,
+      sleep: noSleep,
+    });
+    expect(first.calls()).toBe(4); // 1 + 3 retries exhausts the budget
+    const second = bodiesFetch([[429, POOL_LIMIT]]);
+    const response = await fetchWithGatewayRetry(
+      'https://proxy/v1',
+      undefined,
+      {
+        fetchImpl: second.send,
+        poolBudget,
+        sleep: noSleep,
+      }
+    );
+    expect(response.status).toBe(429);
+    expect(second.calls()).toBe(1); // budget spent, no further retries
   });
 
   test('never replays a 429 that says the budget is spent', async () => {

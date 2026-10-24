@@ -964,6 +964,9 @@ function tunedFetch({
   // churn against the one before it. Per-attempt closure, same as the
   // signatures above.
   const cacheProbe: { units: PrefixUnit[] } = { units: [] };
+  // Shared-pool 429 retries are counted across the whole attempt — including the
+  // SDK's own one replay — so a busy provider pool can't double the backoffs.
+  const poolBudget = { used: 0 };
   // Flex is OpenAI's tier, and Hack Club is the only provider here that passes
   // it through; anywhere else the field is at best ignored.
   const flex =
@@ -1026,6 +1029,7 @@ function tunedFetch({
     }
     let response = await fetchWithGatewayRetry(callInput, callInit, {
       onRetry: onGatewayRetry,
+      poolBudget,
     });
     // Flex does not fall back to standard capacity on its own — OpenRouter
     // surfaces the refusal instead. A turn must not walk the fallback ladder
@@ -1037,7 +1041,7 @@ function tunedFetch({
       response = await fetchWithGatewayRetry(
         callInput,
         { ...callInit, body: JSON.stringify(payload) },
-        { onRetry: onGatewayRetry }
+        { onRetry: onGatewayRetry, poolBudget }
       );
     }
     if (response.body && !holder.model && url.includes('/chat/completions')) {
