@@ -214,6 +214,17 @@ export function readConversationHistoryTool({
 }
 
 const askerMessageSchema = z.looseObject({
+  // A bot/app card's content lives here, not in `text` (#146).
+  attachments: z
+    .array(
+      z.looseObject({
+        fallback: z.string().optional(),
+        pretext: z.string().optional(),
+        text: z.string().optional(),
+        title: z.string().optional(),
+      })
+    )
+    .optional(),
   bot_id: z.string().optional(),
   edited: z.unknown().optional(),
   files: z
@@ -231,6 +242,26 @@ const askerMessageSchema = z.looseObject({
   user: z.string().optional(),
   username: z.string().optional(),
 });
+
+/** Card content (GitHub, CI, …) out of a raw Slack message's attachments. */
+function askerCardText(
+  attachments: z.infer<typeof askerMessageSchema>['attachments']
+): string {
+  if (!attachments) {
+    return '';
+  }
+  const cards: string[] = [];
+  for (const card of attachments) {
+    const pieces = [card.pretext, card.title, card.text].filter(
+      (piece): piece is string => Boolean(piece?.trim())
+    );
+    const raw = pieces.length > 0 ? pieces.join('\n') : (card.fallback ?? '');
+    if (raw.trim()) {
+      cards.push(raw.trim());
+    }
+  }
+  return cards.join('\n\n');
+}
 const askerHistorySchema = z.looseObject({
   messages: z.array(askerMessageSchema).default([]),
   response_metadata: z
@@ -344,7 +375,11 @@ function askerResult({
       })),
       id: message.ts,
       replyCount: message.reply_count,
-      text: markStoredSelfMention(message.text ?? ''),
+      text: markStoredSelfMention(
+        [message.text ?? '', askerCardText(message.attachments)]
+          .filter(Boolean)
+          .join('\n\n')
+      ),
       threadTs: message.thread_ts,
     })),
     nextCursor,

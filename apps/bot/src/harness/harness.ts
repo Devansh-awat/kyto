@@ -129,6 +129,36 @@ function collectBlocks(event: RawSlackMessage): unknown[] {
   return blocks;
 }
 
+// A bot/app card (GitHub, CI, a deploy bot, …) carries its content in secondary
+// `attachments[]` — pretext/title/text, or a plain `fallback` summary — never in
+// `event.text`. Without this a card reads as an EMPTY message, which is what sent
+// a "what did it post?" question down a slow Slack-browser detour (#146); the
+// read-only API already returns these fields.
+function extractCardText(event: RawSlackMessage): string | undefined {
+  const attachments = (event as { attachments?: unknown }).attachments;
+  if (!Array.isArray(attachments)) {
+    return;
+  }
+  const cards: string[] = [];
+  for (const attachment of attachments) {
+    const card = attachment as Record<string, unknown> | null;
+    if (!card) {
+      continue;
+    }
+    const pieces = [card.pretext, card.title, card.text].filter(
+      (piece): piece is string =>
+        typeof piece === 'string' && piece.trim() !== ''
+    );
+    const fallback = typeof card.fallback === 'string' ? card.fallback : '';
+    const raw = pieces.length > 0 ? pieces.join('\n') : fallback;
+    const rendered = mrkdwnToMarkdown(raw).trim();
+    if (rendered) {
+      cards.push(rendered);
+    }
+  }
+  return cards.length > 0 ? cards.join('\n\n') : undefined;
+}
+
 // Render any Slack `table` blocks in a message as markdown tables. Table content
 // lives only in these blocks (never in `event.text`), so without this kyto is
 // blind to pasted/posted tables.
@@ -455,9 +485,11 @@ export class SlackHarness {
     // Slack renders tables (and some rich content) as `table` blocks whose text
     // is NOT in `event.text`, so the model would otherwise be blind to them.
     // Extract any table blocks into markdown and append so kyto can read them.
-    const tables = extractTables(event);
-    const body = tables
-      ? `${mrkdwnToMarkdown(text)}\n\n${tables}`.trim()
+    const extra = [extractTables(event), extractCardText(event)]
+      .filter((part): part is string => Boolean(part))
+      .join('\n\n');
+    const body = extra
+      ? `${mrkdwnToMarkdown(text)}\n\n${extra}`.trim()
       : mrkdwnToMarkdown(text);
     return {
       attachments: this.buildAttachments(event.files ?? []),
