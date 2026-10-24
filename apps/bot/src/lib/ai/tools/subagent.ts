@@ -495,7 +495,7 @@ export function runSubagentTool({
 
             // The subagent's own message: named for it, plan-mode, and nothing in
             // the body. Streamed live, so the cards fill in as it works.
-            await slack.stream(thread.id, subagentChunks(), {
+            const postedPlan = await slack.stream(thread.id, subagentChunks(), {
               recipientTeamId: slack.teamId ?? '',
               recipientUserId: message.author.userId,
               taskDisplayMode: 'plan',
@@ -514,6 +514,16 @@ export function runSubagentTool({
                 report: '(Completed actions with no additional message.)',
                 success: true,
               };
+            }
+            // Every model failed and no tool ran: the plan card settles to a bare
+            // "Something went wrong" from an unfamiliar identity (#138). The
+            // parent still gets the error in this tool result, so take the orphan
+            // bubble back rather than leave it unexplained in the thread.
+            const { channel } = slack.decodeThreadId(thread.id);
+            for (const ts of postedPlan) {
+              await slack.webClient.chat
+                .delete({ channel, ts })
+                .catch(() => undefined);
             }
             return {
               error: lastError
