@@ -16,7 +16,7 @@ what kyto persists about a conversation is derived text, and it is bounded.
 | Table | Why it exists |
 | --- | --- |
 | `thread_subscriptions` | Per-thread state: whether kyto is following, focus mode, and small per-thread flags. |
-| `thread_thinking` | Every turn's reasoning and tool results per thread, the oldest folded into a summary past 60k chars. Slack records only what kyto *said*, so without this every turn re-derives the previous turn's conclusions. Kept for good; erased with a DM's "Your data" or the owner's thread clean-up. |
+| `thread_thinking` | Every turn's reasoning and tool results per thread, the oldest folded into a summary when the measured prompt passes the token limit. Slack records only what kyto *said*, so without this every turn re-derives the previous turn's conclusions. Kept for good; erased with a DM's "Your data" or the owner's thread clean-up. |
 | `thread_summaries` | The compacted digest of the part of a thread that no longer fits in the replay window, with how far it has been folded in. Kept ~30 days. |
 | `thread_sandboxes` | Which E2B sandbox belongs to which thread, and when it was last touched — how a paused sandbox is found again next turn, and how the reaper knows what is idle. |
 | `sandbox_sessions` | Legacy sandbox lifecycle rows from before per-thread persistence. |

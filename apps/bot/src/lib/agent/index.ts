@@ -91,7 +91,7 @@ import {
   steerTurn,
   takeSteering,
 } from '@/lib/agent/steering';
-import { rememberThinking } from '@/lib/agent/thinking';
+import { compactThinking, rememberThinking } from '@/lib/agent/thinking';
 import {
   clearTurn,
   getTurn,
@@ -1119,7 +1119,7 @@ async function executeTurn(
       threadId,
     }).catch(() => undefined);
     const promptStart = Date.now();
-    const { firstReplayedId, history, jevConversation, tail } =
+    const { firstReplayedId, history, jevConversation, tail, thinkingChars } =
       await buildPrompt(turnMessage, {
         codeChannel,
         asUserAccount,
@@ -2391,12 +2391,21 @@ async function executeTurn(
               firstReplayedId: firstReplayedId ?? null,
               inputTokens: firstInput,
               requestChars: firstRequestChars,
+              thinkingChars,
               threadId,
             }).catch((error: unknown) => {
               logger.warn(
                 { ...toLogError(error), threadId },
                 '[agent] could not store the request size'
               );
+            });
+            // Its share of a request past the token limit is folded now, in
+            // the background, from the same measurement.
+            compactThinking({
+              inputTokens: firstInput,
+              requestChars: firstRequestChars,
+              thinkingChars,
+              threadId,
             });
           }
         }

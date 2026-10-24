@@ -23,37 +23,32 @@ describe('tail', () => {
 });
 
 describe('planThinkingCompaction', () => {
-  test('nothing is folded under the budget', () => {
-    const turns = [{ text: 'a' }, { text: 'b', tools: 'c' }];
-    expect(planThinkingCompaction(turns, 100)).toEqual([]);
-  });
-
-  test('tool results count toward the budget', () => {
-    const turns = [
-      { text: 'a', tools: 'x'.repeat(60) },
-      { text: 'b', tools: 'x'.repeat(60) },
-    ];
-    expect(planThinkingCompaction(turns, 100)).toEqual([0]);
-  });
-
-  test('folds the oldest back to half the budget, never the newest', () => {
-    const turns = Array.from({ length: 5 }, (_, i) => ({
-      text: big(`t${i}`, 30),
-    }));
-    // 5 × 34 = 170 > 100 → fold oldest until ≤ 50 left.
-    expect(planThinkingCompaction(turns, 100)).toEqual([0, 1, 2, 3]);
-    expect(planThinkingCompaction([{ text: big('only', 500) }], 100)).toEqual(
+  test('nothing is folded when nothing has to go', () => {
+    expect(planThinkingCompaction([{ text: 'a' }, { text: 'b' }], 0)).toEqual(
       []
     );
   });
 
-  test('an existing summary is never folded as a turn', () => {
+  test('folds the oldest until enough chars leave, tool results counted', () => {
+    const turns = [
+      { text: 'a', tools: 'x'.repeat(59) },
+      { text: 'b', tools: 'x'.repeat(59) },
+      { text: 'c', tools: 'x'.repeat(59) },
+    ];
+    expect(planThinkingCompaction(turns, 60)).toEqual([0]);
+    expect(planThinkingCompaction(turns, 61)).toEqual([0, 1]);
+  });
+
+  test('never the newest turn, never a summary', () => {
     const turns = [
       { summary: true, text: 'x'.repeat(40) },
       { text: 'x'.repeat(40) },
       { text: 'x'.repeat(40) },
     ];
-    expect(planThinkingCompaction(turns, 100)).toEqual([1]);
+    expect(planThinkingCompaction(turns, 1000)).toEqual([1]);
+    expect(planThinkingCompaction([{ text: big('only', 500) }], 1000)).toEqual(
+      []
+    );
   });
 });
 
@@ -89,12 +84,12 @@ describe('renderThinking', () => {
     expect(block).toContain('[summary of your earlier turns here]');
   });
 
-  test('an overflow that compaction missed drops the oldest, keeps the newest', () => {
-    const block = renderThinking(
-      [{ reasoning: big('OLD', 80) }, { reasoning: big('NEW', 80) }],
-      100
-    );
-    expect(block).toContain('NEW');
-    expect(block).not.toContain('OLD');
+  test('nothing is cut at render time: the fold holds the size', () => {
+    const block = renderThinking([
+      { reasoning: big('OLD', 80_000) },
+      { reasoning: big('NEW', 80_000) },
+    ]);
+    expect(block).toContain('OLDx');
+    expect(block).toContain('NEWx');
   });
 });

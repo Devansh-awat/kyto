@@ -37,6 +37,9 @@ export const threadPromptSizes = pgTable('thread_prompt_sizes', {
   firstReplayedId: text('first_replayed_id'),
   inputTokens: integer('input_tokens').notNull(),
   requestChars: integer('request_chars').notNull(),
+  // How much of requestChars was the <your_previous_thinking> block, so the
+  // measured excess is split between history and thinking by their share.
+  thinkingChars: integer('thinking_chars').notNull().default(0),
   threadId: text('thread_id').primaryKey(),
   updatedAt: timestamp('updated_at', { withTimezone: true })
     .notNull()

@@ -75,6 +75,7 @@ export async function getThreadPromptSize(threadId: string): Promise<
       firstReplayedId: string | null;
       inputTokens: number;
       requestChars: number;
+      thinkingChars: number;
     }
   | undefined
 > {
@@ -88,6 +89,7 @@ export async function getThreadPromptSize(threadId: string): Promise<
         firstReplayedId: row.firstReplayedId,
         inputTokens: row.inputTokens,
         requestChars: row.requestChars,
+        thinkingChars: row.thinkingChars,
       }
     : undefined;
 }
@@ -96,21 +98,30 @@ export async function saveThreadPromptSize({
   firstReplayedId,
   inputTokens,
   requestChars,
+  thinkingChars,
   threadId,
 }: {
   firstReplayedId: string | null;
   inputTokens: number;
   requestChars: number;
+  thinkingChars: number;
   threadId: string;
 }): Promise<void> {
   await db
     .insert(threadPromptSizes)
-    .values({ firstReplayedId, inputTokens, requestChars, threadId })
+    .values({
+      firstReplayedId,
+      inputTokens,
+      requestChars,
+      thinkingChars,
+      threadId,
+    })
     .onConflictDoUpdate({
       set: {
         firstReplayedId,
         inputTokens,
         requestChars,
+        thinkingChars,
         updatedAt: new Date(),
       },
       target: threadPromptSizes.threadId,

@@ -8,6 +8,14 @@
 // to the newest slice and having the rest silently dropped.
 export const MAX_MESSAGES_PER_PASS = 200;
 
+// The token limit every turn's FIRST request is held to, measured by the
+// provider (never estimated). Past COMPACT_AT_TOKENS the next fold brings it
+// back to about COMPACT_TO_TOKENS — the replayed history and the
+// <your_previous_thinking> block each giving up their share. Why these
+// numbers: lib/agent/prompt.ts.
+export const COMPACT_AT_TOKENS = 90_000;
+export const COMPACT_TO_TOKENS = 60_000;
+
 /** One overflowed message, already rendered by buildPrompt. */
 export interface CompactableMessage {
   id: string;

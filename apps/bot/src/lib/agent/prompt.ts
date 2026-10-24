@@ -4,7 +4,11 @@ import { mrkdwnToMarkdown } from '@/harness/markdown';
 import type { ThreadHandle as Thread } from '@/harness/thread';
 import type { Message } from '@/harness/types';
 import { compactOverflow, loadThreadSummary } from '@/lib/agent/compaction';
-import { renderUnreadableBlock } from '@/lib/agent/compaction-plan';
+import {
+  COMPACT_AT_TOKENS,
+  COMPACT_TO_TOKENS,
+  renderUnreadableBlock,
+} from '@/lib/agent/compaction-plan';
 import { isFocusAllowed } from '@/lib/agent/focus';
 import { annotateMentions } from '@/lib/agent/mentions';
 import { recallThinking, renderThinking } from '@/lib/agent/thinking';
@@ -35,8 +39,6 @@ import {
 // summary call and a cache break). A 100-message cap used to fold a
 // 449-message working thread at a fraction of this, and its user said kyto had
 // "lost a lot of context".
-const COMPACT_AT_TOKENS = 90_000;
-const COMPACT_TO_TOKENS = 60_000;
 // Only for a thread no turn has measured yet (kyto pulled into a huge thread):
 // a ceiling so its FIRST request can't overflow the model's context window
 // and fail before anything is measured. The next turn has a real count.
@@ -250,6 +252,8 @@ export async function buildPrompt(
 ): Promise<{
   /** The first message replayed verbatim, stored with the request's size. */
   firstReplayedId?: string;
+  /** Chars of the <your_previous_thinking> block, stored with the request's size. */
+  thinkingChars: number;
   history: string[];
   /**
    * The thread as Jev judges it (lib/ai/tool-preload): what kyto sees, minus
@@ -449,9 +453,14 @@ export async function buildPrompt(
       (measured.firstReplayedId === null ||
         Number(prior[start]?.id ?? 0) <= Number(measured.firstReplayedId))
     ) {
+      // The thinking block's share of the excess is folded by
+      // compactThinking after that turn; history gives up only the rest.
+      const historyShare =
+        1 - Math.min(measured.thinkingChars / measured.requestChars, 1);
       toFold =
-        ((measured.inputTokens - COMPACT_TO_TOKENS) * measured.requestChars) /
-        measured.inputTokens;
+        (((measured.inputTokens - COMPACT_TO_TOKENS) * measured.requestChars) /
+          measured.inputTokens) *
+        historyShare;
     }
     while (toFold > 0 && start < prior.length - 1) {
       toFold -= sizes[start] ?? 0;
@@ -649,6 +658,7 @@ export async function buildPrompt(
       .filter(Boolean)
       .join('\n\n'),
     tail: [thinking, nowLine, latest, canvases].filter(Boolean).join('\n\n'),
+    thinkingChars: thinking.length,
   };
 }
 
