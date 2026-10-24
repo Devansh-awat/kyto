@@ -17,10 +17,14 @@ const rawThreadRef = z.object({
 
 // Past this, the copy is not trusted: the next read goes to Slack.
 const ENTRY_TTL_MS = 30 * 60 * 1000;
-const MAX_ENTRIES = 500;
+// A raw thread is every message as Slack sent it, blocks and files included —
+// up to a few MB for a long one — so this caps real memory, not a count.
+const MAX_ENTRIES = 150;
 
 interface Entry {
   at: number;
+  /** When the entry was created; a first read that never finished ages out by it. */
+  created: number;
   /** Events applied since the in-flight refresh started; replayed onto it. */
   journal: RawSlackMessage[];
   oldest: string | undefined;
@@ -114,6 +118,7 @@ export class ThreadCache {
     }
     this.entries.set(key, {
       at: 0,
+      created: Date.now(),
       journal: [],
       oldest: undefined,
       raw: [],
@@ -148,16 +153,40 @@ export class ThreadCache {
     this.entries.delete(key);
     this.entries.set(key, {
       at: Date.now(),
+      created: previous?.created ?? Date.now(),
       journal: [],
       oldest,
       raw: next,
       refreshing: false,
     });
-    const idlest = this.entries.keys().next().value;
-    if (this.entries.size > MAX_ENTRIES && idlest !== undefined) {
-      this.entries.delete(idlest);
-    }
+    this.sweep();
     return { drifted };
+  }
+
+  /**
+   * Expired copies used to stay resident until 500 newer threads pushed them
+   * out (get() only drops one it is asked for), and a first read that never
+   * finished kept journalling every event in its thread forever.
+   */
+  private sweep(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.entries) {
+      const age = now - (entry.at > 0 ? entry.at : entry.created);
+      if (age > ENTRY_TTL_MS) {
+        this.entries.delete(key);
+      }
+    }
+    for (const key of this.entries.keys()) {
+      if (this.entries.size <= MAX_ENTRIES) {
+        break;
+      }
+      this.entries.delete(key);
+    }
+  }
+
+  /** How many threads are held, for the memory log. */
+  get size(): number {
+    return this.entries.size;
   }
 
   /** A read that failed or stopped short: the copy can't be trusted. */

@@ -951,7 +951,16 @@ async function executeTurn(
     // until it is told the turn is over.
     const at = slack.decodeThreadId(threadId);
     if (!(asUserAccount || at.threadTs) && isNativeCodeChannel(at.channel)) {
-      await setSessionStatus({ channel: at.channel, status: 'active' });
+      // A throw here skipped endTracking below, and its 30s heartbeat interval
+      // then wrote to the DB for the life of the process.
+      await setSessionStatus({ channel: at.channel, status: 'active' }).catch(
+        (error: unknown) => {
+          logger.warn(
+            { err: error, threadId },
+            '[agent] session status failed'
+          );
+        }
+      );
     }
     if (!asUserAccount) {
       await endTodoTurn({

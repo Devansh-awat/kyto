@@ -8,7 +8,6 @@ import {
   markShuttingDown,
   startResumingOrphanedTurns,
 } from '@/lib/agent/inflight';
-import { startThinkingReaper } from '@/lib/agent/thinking';
 import { buildAllowlist } from '@/lib/allowed-users';
 import { slack, userBot } from '@/lib/chat';
 import { loadCodeChannels } from '@/lib/code-channels';
@@ -16,6 +15,7 @@ import { startDebugSnapshotReaper } from '@/lib/debug-snapshot';
 import { startKevinton } from '@/lib/kevinton';
 import logger from '@/lib/logger';
 import { startMemoryCuration } from '@/lib/memory-curation';
+import { startMemoryLog } from '@/lib/memory-log';
 import { startRevisionReaper } from '@/lib/message-revisions';
 import { redactSecrets, setRedactionAlert } from '@/lib/redact';
 import { startEventReminders } from '@/lib/reminders/events';
@@ -112,8 +112,6 @@ try {
   startEventReminders(bot);
   // Paused thread sandboxes keep costing storage; collect the idle ones.
   startSandboxReaper();
-  // Reap thread reasoning older than the retention window.
-  startThinkingReaper();
   // Earlier versions of edited messages and deleted ones, kept 30 days.
   startRevisionReaper();
   startTimingsReaper();
@@ -123,7 +121,8 @@ try {
   startMemoryCuration();
   startChannelPairing();
   startThreadLogs();
-  // Same window, same reason, for compacted thread history.
+  startMemoryLog(slack.threadCache);
+  // Compacted thread history is re-derivable from Slack: reaped after 30 days.
   startSummaryReaper();
   // Warm the channel name→id index so the FIRST reply after a restart can
   // already turn `#some-channel` into a real link (see lib/slack/channel-links).
