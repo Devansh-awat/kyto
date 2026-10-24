@@ -504,7 +504,10 @@ export async function buildTools({
     fetchUrl: fetchUrlTool({ getSandboxContext }),
     // Keyed off the constant: the stop condition that makes a skip terminal
     // matches on this exact name (see streamAttempt).
-    [SKIP_TOOL_NAME]: skipTool({ threadId: thread.id }),
+    [SKIP_TOOL_NAME]: skipTool({
+      threadId: thread.id,
+      mentionedByHuman: message.isMention && !message.author.isBot,
+    }),
     // CORE, not deferred: a model deciding "this is beyond me" cannot be asked
     // to first spend a round trip loading the tool that says so.
     ...(escalation

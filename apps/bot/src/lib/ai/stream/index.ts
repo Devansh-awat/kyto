@@ -404,8 +404,22 @@ export async function* renderStream({
           // Kept as a literal, not @repo/ai's SKIP_TOOL_NAME: importing that pulls
           // the provider/env chain into this module and takes its tests with it.
           if (part.toolName === 'skip') {
-            skipped = true;
-            onSkip?.();
+            // A skip the tool REFUSED (a direct human mention, #145) is not a
+            // real skip: leave `skipped` false and surface the result so the
+            // attempt's "ran a tool but wrote nothing" nudge makes it reply.
+            const refused =
+              (part.output as { skipped?: boolean } | undefined)?.skipped ===
+              false;
+            if (refused) {
+              onToolResult?.({
+                input: toolInputs.get(part.toolCallId),
+                output: part.output,
+                toolName: part.toolName,
+              });
+            } else {
+              skipped = true;
+              onSkip?.();
+            }
           } else {
             onToolResult?.({
               input: toolInputs.get(part.toolCallId),
