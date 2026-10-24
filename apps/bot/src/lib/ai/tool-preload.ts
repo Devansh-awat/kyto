@@ -32,7 +32,7 @@ const GROUPS = {
   },
   browser: {
     question:
-      'Will the assistant need to open and interact with a website OUTSIDE Slack in a real browser — clicking, filling forms, logging in, screenshots, or a page that needs JavaScript?',
+      'Will the assistant need to INTERACT with a website OUTSIDE Slack in a real browser — clicking, filling forms, logging in, screenshots, or a page that needs JavaScript? (No, if it only needs to READ a static page or docs — fetchUrl/curl do that.)',
     tools: ['browser'],
   },
   canvases: {
