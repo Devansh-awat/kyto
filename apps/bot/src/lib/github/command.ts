@@ -141,7 +141,7 @@ function reposInText(text: string): string[] {
 }
 
 /** Repos named by gh's own flags and bare `owner/name` arguments. */
-function reposInGhTokens(tokens: string[]): string[] {
+function reposInGhTokens(tokens: string[], isApi: boolean): string[] {
   const found: string[] = [];
   for (const [index, token] of tokens.entries()) {
     if (token === '--repo' || token === '-R') {
@@ -154,6 +154,14 @@ function reposInGhTokens(tokens: string[]): string[] {
     const flagValue = /^(?:--repo|-R)=(.+)$/.exec(token);
     if (flagValue?.[1] && SLUG.test(flagValue[1])) {
       found.push(flagValue[1]);
+      continue;
+    }
+    // `gh api`'s positional is an API PATH, not a repo: `search/code`,
+    // `rate_limit`, `user/repos` all look like `owner/name` but name no repo.
+    // Only a real `repos/owner/name` path is a target, and reposInText's
+    // API_REPO_PATH already catches that — so don't guess a repo from a bare
+    // api path, which posted a bogus approval for a "repo" called search/code.
+    if (isApi) {
       continue;
     }
     if (index > 0 && !token.startsWith('-') && SLUG.test(token)) {
@@ -237,7 +245,9 @@ export function parseGithubCommand(command: string): ParsedGithubCommand {
       mutating = true;
       pushOnly = false;
       contribution &&= isContributionGh(tokens);
-      for (const repo of [...named, ...reposInGhTokens(tokens)]) {
+      const isApi =
+        tokens.slice(1).find((token) => !token.startsWith('-')) === 'api';
+      for (const repo of [...named, ...reposInGhTokens(tokens, isApi)]) {
         repos.add(repo.toLowerCase());
       }
       for (const repo of createdRepos(tokens)) {

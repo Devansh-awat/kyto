@@ -37,6 +37,17 @@ describe('parseGithubCommand', () => {
     }
   });
 
+  test('a gh api write to a non-repo path names no repo (#136)', () => {
+    // A POST to the search endpoint is mutating-by-caution, but `search/code`
+    // is an API path, not a repo — it must not post an approval for one.
+    const parsed = parseGithubCommand('gh api -X POST search/code -f q=hi');
+    expect(parsed.mutating).toBe(true);
+    expect(parsed.repos).toEqual([]);
+    // A real repos/ path on the same command still resolves.
+    const repo = parseGithubCommand('gh api -X POST repos/owner/name/issues');
+    expect(repo.repos).toContain('owner/name');
+  });
+
   test('an unknown gh subcommand counts as a write', () => {
     expect(parseGithubCommand('gh pr frobnicate --repo o/n').mutating).toBe(
       true
