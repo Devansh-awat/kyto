@@ -132,8 +132,23 @@ function liveToken(secret: string | undefined): ProxyToken | undefined {
 // entries the requester may not read are dropped from the answer.
 const LISTING_METHODS = new Set(['conversations.list', 'users.conversations']);
 
-const conversationSchema = z.looseObject({ id: z.string().optional() });
+const conversationSchema = z.looseObject({
+  id: z.string().optional(),
+  is_im: z.boolean().optional(),
+  is_mpim: z.boolean().optional(),
+  is_private: z.boolean().optional(),
+});
 const reactionItemSchema = z.looseObject({ channel: z.string().optional() });
+
+function isPublicListing(entry: object): boolean {
+  const parsed = conversationSchema.safeParse(entry);
+  return (
+    parsed.success &&
+    parsed.data.is_private === false &&
+    parsed.data.is_im !== true &&
+    parsed.data.is_mpim !== true
+  );
+}
 
 async function readableOnly<T extends { channel?: string; id?: string }>({
   entries,
@@ -147,6 +162,14 @@ async function readableOnly<T extends { channel?: string; id?: string }>({
   const kept: T[] = [];
   for (const entry of entries) {
     const channelId = entry[key];
+    // A listing entry Slack itself marks public is readable by anyone in the
+    // workspace. Probing each one with conversations.info, one at a time, made
+    // `conversations.list` of public channels time out before it answered
+    // (#132); only the rest still need the asker's membership checked.
+    if (channelId && isPublicListing(entry)) {
+      kept.push(entry);
+      continue;
+    }
     if (
       channelId &&
       (await mayReadChannel({
@@ -279,7 +302,10 @@ export function slackProxyEnv(
 }
 
 /**
- * Installs `slack <method> [jsonArgs]` as a real executable on PATH, so ANY
+ * Installs `slack <method> [jsonArgs]` as a real executable on PATH, and
+ * `slack-history`, which pages one channel's history into a local file and
+ * prints only its coverage (#122: "index the whole channel" was a hand-written
+ * paging script every time, and its 12k-char stdout cap hid the messages). ANY
  * command in the sandbox can query Slack read-only — the plain `bash` tool and a
  * recurring `bash` reminder, not just the `slackScript` tool (which used to
  * prepend the helper as a shell function, making it invisible everywhere else).
@@ -377,5 +403,189 @@ curl -sS --max-time 60 -X POST "$KYTO_SLACK_PROXY/$method" \\
   -d "$body"
 printf '\\n'
 KYTO_SLACK_HELPER
-chmod +x /usr/local/bin/slack`;
+chmod +x /usr/local/bin/slack
+cat > /usr/local/bin/slack-history <<'KYTO_SLACK_HISTORY'
+#!/usr/bin/env python3
+"""slack-history - page a channel's history into a local file, read-only.
+
+  usage:  slack-history <channel id> [--limit N | --all] [--since YYYY-MM-DD]
+                        [--threads] [--out FILE]
+
+Writes one JSON object per message (oldest first) to FILE, default
+/tmp/slack-history/<channel>.jsonl, and prints ONLY a coverage summary:
+how many messages, the oldest/newest dates, whether the channel's history
+was exhausted, and why it stopped. Search and summarise the FILE with
+python/grep/jq afterwards instead of printing all of it.
+
+  --limit N   newest N messages (default 1000)
+  --all       page until the history is exhausted or the turn's Slack
+              call budget runs out (the summary says which)
+  --since D   stop at messages older than this date (UTC)
+  --threads   also fetch each thread's replies (one call per thread)
+"""
+import json, os, sys, time, urllib.request, urllib.error
+from datetime import datetime, timezone
+
+PAGE = 999
+
+
+def usage(code):
+    print(__doc__.strip(), file=sys.stderr if code else sys.stdout)
+    sys.exit(code)
+
+
+def call(method, args):
+    proxy = os.environ.get("KYTO_SLACK_PROXY")
+    token = os.environ.get("KYTO_SLACK_PROXY_TOKEN")
+    if not (proxy and token):
+        return {"ok": False, "error": "slack proxy is not available in this context"}
+    request = urllib.request.Request(
+        f"{proxy}/{method}",
+        data=json.dumps(args).encode(),
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return json.loads(response.read() or b"{}")
+    except urllib.error.HTTPError as error:
+        try:
+            return json.loads(error.read() or b"{}")
+        except ValueError:
+            return {"ok": False, "error": f"http {error.code}"}
+    except Exception as error:  # a network blip ends the walk, reported below
+        return {"ok": False, "error": str(error)}
+
+
+def day(ts):
+    return datetime.fromtimestamp(float(ts), timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def slim(message):
+    out = {k: message[k] for k in ("ts", "user", "bot_id", "subtype", "thread_ts", "reply_count") if k in message}
+    out["text"] = message.get("text", "")
+    files = [f.get("name") for f in message.get("files", []) if f.get("name")]
+    if files:
+        out["files"] = files
+    return out
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        usage(0)
+    channel, rest = argv[0], argv[1:]
+    limit, every, since, threads, out = 1000, False, None, False, None
+    i = 0
+    while i < len(rest):
+        flag = rest[i]
+        if flag == "--all":
+            every = True
+        elif flag == "--threads":
+            threads = True
+        elif flag in ("--limit", "--since", "--out") and i + 1 < len(rest):
+            value = rest[i + 1]
+            i += 1
+            if flag == "--limit":
+                if not value.isdigit() or int(value) < 1:
+                    usage(2)
+                limit = int(value)
+            elif flag == "--since":
+                try:
+                    since = datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp()
+                except ValueError:
+                    usage(2)
+            else:
+                out = value
+        else:
+            print(f"slack-history: unknown argument {flag!r}", file=sys.stderr)
+            usage(2)
+        i += 1
+    out = out or f"/tmp/slack-history/{channel}.jsonl"
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+
+    messages, cursor, pages, stopped, exhausted = [], None, 0, None, False
+    while True:
+        args = {"channel": channel, "limit": PAGE}
+        if cursor:
+            args["cursor"] = cursor
+        if since:
+            args["oldest"] = f"{since:.6f}"
+        page = call("conversations.history", args)
+        if not page.get("ok"):
+            stopped = page.get("error", "unknown error")
+            break
+        pages += 1
+        messages.extend(page.get("messages", []))
+        cursor = (page.get("response_metadata") or {}).get("next_cursor")
+        if not (page.get("has_more") and cursor):
+            exhausted = True
+            break
+        if not every and len(messages) >= limit:
+            stopped = f"reached --limit {limit}"
+            break
+    if not every:
+        messages = messages[:limit]
+    messages.sort(key=lambda m: float(m.get("ts", 0)))
+
+    fetched_threads, thread_stop = 0, None
+    replies = {}
+    if threads and not stopped:
+        for parent in messages:
+            if not parent.get("reply_count"):
+                continue
+            got, cursor = [], None
+            while True:
+                args = {"channel": channel, "ts": parent["ts"], "limit": PAGE}
+                if cursor:
+                    args["cursor"] = cursor
+                page = call("conversations.replies", args)
+                if not page.get("ok"):
+                    thread_stop = page.get("error", "unknown error")
+                    break
+                got.extend(m for m in page.get("messages", []) if m.get("ts") != parent["ts"])
+                cursor = (page.get("response_metadata") or {}).get("next_cursor")
+                if not (page.get("has_more") and cursor):
+                    break
+            if thread_stop:
+                break
+            replies[parent["ts"]] = got
+            fetched_threads += 1
+
+    count = 0
+    with open(out, "w") as handle:
+        for message in messages:
+            handle.write(json.dumps(slim(message), ensure_ascii=False) + "\\n")
+            count += 1
+            for reply in replies.get(message.get("ts"), []):
+                handle.write(json.dumps(slim(reply), ensure_ascii=False) + "\\n")
+                count += 1
+
+    summary = {
+        "channel": channel,
+        "file": out,
+        "messages": len(messages),
+        "linesWritten": count,
+        "oldest": day(messages[0]["ts"]) if messages else None,
+        "newest": day(messages[-1]["ts"]) if messages else None,
+        "pages": pages,
+        "exhausted": exhausted,
+        "complete": exhausted and not stopped,
+        "stoppedBecause": stopped,
+    }
+    if since:
+        summary["since"] = day(since)
+    if threads:
+        with_replies = sum(1 for m in messages if m.get("reply_count"))
+        summary["threads"] = {"withReplies": with_replies, "fetched": fetched_threads, "stoppedBecause": thread_stop}
+    print(json.dumps(summary, indent=1))
+    if not exhausted:
+        print(
+            "Not the whole channel: older history exists beyond what was fetched. Say so when you report on it.",
+            file=sys.stderr,
+        )
+
+
+main(sys.argv[1:])
+KYTO_SLACK_HISTORY
+chmod +x /usr/local/bin/slack-history`;
 }

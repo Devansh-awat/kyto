@@ -141,7 +141,9 @@
     "unreplied",
     "USLACKBOT",
     "Uxxxxxxx",
-    "waku"
+    "waku",
+    "isdigit",
+    "strptime"
   ],
   "useGitignore": true
 }

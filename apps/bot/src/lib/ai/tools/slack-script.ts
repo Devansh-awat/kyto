@@ -41,6 +41,8 @@ export function slackScriptTool({
 
 Calling convention: \`slack <method> '<json object>'\` (exactly two arguments, no flags; it is not curl and not the official Slack CLI, so \`--verbose\`, \`--help\` mid-command, or JSON left unquoted is a usage error rather than an API failure; \`slack --help\` on its own prints the usage and the method list. Allowed methods: ${readOnlySlackMethods().join(', ')}). Note there is NO search method, so counting a user's messages means paging conversations.history per channel. Example: \`slack conversations.list '{"limit":1000,"types":"public_channel"}' | jq '.channels | length'\`.
 
+To read or index a WHOLE channel ("summarize the last 10,000 messages", "read all of #x"), don't hand-write a paging loop: run \`slack-history <channel id> --limit N\` (or \`--all\`, \`--since YYYY-MM-DD\`, \`--threads\`). It writes every message to a local JSONL file and prints only a coverage summary (count, oldest/newest date, whether the history was exhausted and why it stopped), so search and count the file with python/grep instead of printing it, and when \`complete\` is false say the answer covers only that window.
+
 The same \`slack\` command is available to the plain \`bash\` tool and to recurring \`bash\` reminders (each reminder fire gets a fresh proxy token), so a scheduled script can recompute a Slack stat on every run.`,
     inputSchema: z.object({
       script: z
