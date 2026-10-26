@@ -47,6 +47,11 @@ const VERDICT_TIMEOUT_MS = 30_000;
 const VERDICT_POLL_MS = 3000;
 const VERDICT_HISTORY_SCAN = 10;
 
+// A batch is added this many at a time: one call per emoji, each a model
+// step, made fifteen emoji take 161s (#149).
+const MAX_BATCH = 20;
+const UPLOAD_CONCURRENCY = 4;
+
 let cache: { at: number; emoji: Record<string, string> } | undefined;
 
 async function emojiList(): Promise<Record<string, string>> {
@@ -250,11 +255,48 @@ async function awaitVerdict(
 }
 
 /** Slack's own `emoji.add` error codes, in words the model can act on. */
+/**
+ * A requested name that already exists. The SAME picture under it means the
+ * emoji is already there: another bot added these very files a minute earlier,
+ * and kyto put them in again as `ms-hourglass-icon` (#149). A DIFFERENT picture
+ * is a real clash, and a close name of kyto's choosing is fine, said out loud.
+ */
+async function nameTaken({
+  bytes,
+  existing,
+  name,
+}: {
+  bytes: Uint8Array;
+  existing: Record<string, string>;
+  name: string;
+}) {
+  const { url } = resolveAlias(existing, name);
+  const theirs = url
+    ? await fetch(url, { signal: AbortSignal.timeout(EMOJI_FETCH_TIMEOUT_MS) })
+        .then((response) => (response.ok ? response.arrayBuffer() : null))
+        .catch(() => null)
+    : null;
+  if (theirs && Buffer.from(theirs).equals(Buffer.from(bytes))) {
+    return {
+      alreadyThere: true,
+      name,
+      submitted: false,
+      summary: `\`:${name}:\` already exists with this exact image, so there is nothing to add: tell them it's there. Do NOT add a copy under another name.`,
+    };
+  }
+  return {
+    error: `\`:${name}:\` is already taken${url ? ` (its image: ${url})` : ''}. If that is the same picture (look at both if unsure), it is already there: say so and add nothing. If it is a different picture, add this one under a close name of your choosing (e.g. \`${name}-2\`) and tell them the name it got.`,
+    existingImage: url,
+    name,
+    submitted: false,
+  };
+}
+
 function describeUploadError(code: string | undefined): string {
   switch (code) {
     case 'error_name_taken':
     case 'error_name_taken_i18n':
-      return "That emoji name is already taken. Do NOT invent a different name — tell whoever asked and ask what they want; don't upload the same image under a name they didn't request.";
+      return 'That emoji name is already taken.';
     case 'error_bad_name_i18n':
       return 'Slack rejected that name. Use lowercase letters, digits, hyphens and underscores.';
     case 'error_bad_wide':
@@ -283,172 +325,215 @@ export function submitEmojiTool({
   requestedBy: string;
 }) {
   return tool({
-    description: `Add a new custom emoji to the workspace. Where possible kyto adds it DIRECTLY and it is live immediately; otherwise it falls back to posting the image into the emoji channel with the name as the message text, which is the exact shape the emoji bot there reads: it does the adding. The image must already be in your sandbox: generate or edit one first (generateImage), or download the one you were given. PREFER AN IMAGE WITH NO BACKGROUND: the subject cut out on transparency, no square backdrop, no border. An emoji is rendered on whatever colour the message behind it is, so an opaque rectangle looks wrong in every theme; if what you have has a background, strip it in the sandbox before submitting (ImageMagick: \`convert in.png -fuzz 12% -transparent white -trim +repage out.png\`) and use PNG, which keeps the alpha channel. Slack's limits are 128x128 pixels and 128KB, so resize it first if it is bigger (ImageMagick: \`convert in.png -resize 128x128 out.png\`); this refuses anything over 128KB rather than posting something that gets thrown away. One emoji per call: the bot rejects a message carrying more than one image. It waits for the emoji bot's reply and hands it back, so read the result before telling anyone the emoji exists: that bot sometimes asks the poster to pick an option instead of adding it, and since the poster is me and Slack has no way for an app to press another app's button, only a human in that channel can finish it.`,
+    description: `Add a new custom emoji to the workspace. Where possible kyto adds it DIRECTLY and it is live immediately; otherwise it falls back to posting the image into the emoji channel with the name as the message text, which is the exact shape the emoji bot there reads: it does the adding. The image must already be in your sandbox: generate or edit one first (generateImage), or download the one you were given. PREFER AN IMAGE WITH NO BACKGROUND: the subject cut out on transparency, no square backdrop, no border. An emoji is rendered on whatever colour the message behind it is, so an opaque rectangle looks wrong in every theme; if what you have has a background, strip it in the sandbox before submitting (ImageMagick: \`convert in.png -fuzz 12% -transparent white -trim +repage out.png\`) and use PNG, which keeps the alpha channel. Slack's limits are 128x128 pixels and 128KB, so resize it first if it is bigger (ImageMagick: \`convert in.png -resize 128x128 out.png\`); this refuses anything over 128KB rather than posting something that gets thrown away. Pass EVERY emoji of a request in one call (\`emojis\`, up to 20): they are added in parallel, which is far faster than one call each. It waits for the emoji bot's reply and hands it back, so read the result before telling anyone the emoji exists: that bot sometimes asks the poster to pick an option instead of adding it, and since the poster is me and Slack has no way for an app to press another app's button, only a human in that channel can finish it.`,
     inputSchema: z.object({
-      name: z
-        .string()
-        .min(2)
-        .max(40)
-        .describe(
-          'The emoji name, lowercase, no colons: letters, digits, - _ + only.'
-        ),
-      path: z
-        .string()
-        .describe('Sandbox path of the image file (png or gif preferred).'),
+      emojis: z
+        .array(
+          z.object({
+            name: z
+              .string()
+              .min(2)
+              .max(40)
+              .describe(
+                'The emoji name, lowercase, no colons: letters, digits, - _ + only.'
+              ),
+            path: z
+              .string()
+              .describe(
+                'Sandbox path of the image file (png or gif preferred).'
+              ),
+          })
+        )
+        .min(1)
+        .max(MAX_BATCH)
+        .describe('Every emoji to add, each with its name and image.'),
     }),
-    execute: async ({ name, path }) => {
-      const cleaned = name.replace(/:/g, '').trim().toLowerCase();
-      if (!EMOJI_NAME.test(cleaned)) {
+    execute: async ({ emojis }) => {
+      // A fresh list: one 30 minutes old missed two names another bot had
+      // added a minute earlier (#149).
+      cache = undefined;
+      // The emoji channel's bot is read one submission at a time (its verdict
+      // is found by scanning the channel), so only the direct path is parallel.
+      const parallel = emojiUploadConfigured() ? UPLOAD_CONCURRENCY : 1;
+      const results: Awaited<ReturnType<typeof submitOne>>[] = [];
+      for (let index = 0; index < emojis.length; index += parallel) {
+        results.push(
+          ...(await Promise.all(
+            emojis.slice(index, index + parallel).map(submitOne)
+          ))
+        );
+      }
+      if (results.length === 1) {
+        return results[0];
+      }
+      return {
+        added: results.filter((result) => result.submitted).length,
+        results,
+        total: results.length,
+      };
+    },
+  });
+
+  async function submitOne({ name, path }: { name: string; path: string }) {
+    const cleaned = name.replace(/:/g, '').trim().toLowerCase();
+    if (!EMOJI_NAME.test(cleaned)) {
+      return {
+        error:
+          'Invalid emoji name. Use lowercase letters, digits, hyphens, underscores or plus signs, 2-40 characters.',
+        submitted: false,
+      };
+    }
+    try {
+      const context = getSandboxContext();
+      const resolved = nodePath.normalize(
+        path.startsWith('/')
+          ? path
+          : nodePath.join(context.sessionWorkDir, path)
+      );
+      const bytes = await Promise.resolve(
+        context.session.readBinaryFile({ path: resolved })
+      ).catch(() => null);
+      if (!bytes) {
         return {
-          error:
-            'Invalid emoji name. Use lowercase letters, digits, hyphens, underscores or plus signs, 2-40 characters.',
+          error: `No file found at ${path}.`,
           submitted: false,
         };
       }
-      try {
-        const context = getSandboxContext();
-        const resolved = nodePath.normalize(
-          path.startsWith('/')
-            ? path
-            : nodePath.join(context.sessionWorkDir, path)
+      if (bytes.byteLength > EMOJI_MAX_UPLOAD_BYTES) {
+        return {
+          error: `That image is ${Math.round(bytes.byteLength / 1024)}KB; Slack's limit for a custom emoji is 128KB (and 128x128 pixels). Resize it in the sandbox and try again.`,
+          submitted: false,
+        };
+      }
+      const extension = nodePath.extname(resolved) || '.png';
+      // The direct path, when kyto's user-account session is configured: add it
+      // ourselves rather than posting into a channel and hoping a bot picks
+      // it up. Everything below is the fallback for when it is not.
+      if (emojiUploadConfigured()) {
+        const existing = await emojiList().catch(
+          (): Record<string, string> => ({})
         );
-        const bytes = await Promise.resolve(
-          context.session.readBinaryFile({ path: resolved })
-        ).catch(() => null);
-        if (!bytes) {
-          return {
-            error: `No file found at ${path}.`,
-            submitted: false,
-          };
+        if (existing[cleaned]) {
+          return await nameTaken({ bytes, existing, name: cleaned });
         }
-        if (bytes.byteLength > EMOJI_MAX_UPLOAD_BYTES) {
-          return {
-            error: `That image is ${Math.round(bytes.byteLength / 1024)}KB; Slack's limit for a custom emoji is 128KB (and 128x128 pixels). Resize it in the sandbox and try again.`,
-            submitted: false,
-          };
-        }
-        const extension = nodePath.extname(resolved) || '.png';
-        // The direct path, when kyto's user-account session is configured: add it
-        // ourselves rather than posting into a channel and hoping a bot picks
-        // it up. Everything below is the fallback for when it is not.
-        if (emojiUploadConfigured()) {
-          const existing = await emojiList().catch(
-            (): Record<string, string> => ({})
-          );
-          if (existing[cleaned]) {
-            return {
-              error: `\`:${cleaned}:\` already exists in this workspace. Do NOT invent a different name — tell whoever asked that the name is taken and ask what they want (a different name, or leave it). Never upload the same image under an altered name they didn't request.`,
-              submitted: false,
-            };
-          }
-          const result = await addEmoji({
-            bytes,
-            filename: `${cleaned}${extension}`,
-            name: cleaned,
-            requestedBy,
-          });
-          if (result.ok) {
-            // The list is now stale, and lookupEmoji is what people use to
-            // check whether the thing they just asked for exists.
-            cache = undefined;
-            // Remember who it was for, so they (and the owner) can remove it
-            // later even though every emoji goes in under kyto's one account.
-            await recordEmojiSubmission({ name: cleaned, requestedBy }).catch(
-              (error: unknown) => {
-                logger.warn(
-                  { error: errorMessage(error), name: cleaned },
-                  '[emoji] failed to record submitter'
-                );
-              }
-            );
-            return {
-              name: cleaned,
-              submitted: true,
-              summary: `Added \`:${cleaned}:\` to the workspace for <@${requestedBy}>. It is live now: anyone can use it.`,
-            };
-          }
-          return {
-            error: describeUploadError(result.error),
-            submitted: false,
-          };
-        }
-        if (!channelId) {
-          return {
-            error:
-              'Kyto cannot add emoji right now: its emoji session is not configured and this workspace has no emoji-request channel set. Tell the user to ask the bot owner.',
-            submitted: false,
-          };
-        }
-        await slack.webClient.filesUploadV2({
-          channel_id: channelId,
-          file_uploads: [
-            {
-              file: Buffer.from(bytes),
-              filename: `${cleaned}${extension}`,
-            },
-          ],
-          // The message text must be the BARE NAME and nothing else — that is
-          // what the emoji bot in that channel parses (verified against the
-          // channel's own history: `hedgehog`, `crack-ani`, `ember-sit-new`).
-          // No colons, no "requested by", no note: any of those and the
-          // submission is just a message nobody acts on.
-          //
-          // neutralizeBroadcast is belt and braces — EMOJI_NAME already makes a
-          // control token unrepresentable — because filesUploadV2 does NOT go
-          // through ThreadHandle.post, so the deny-by-default broadcast strip
-          // never runs on this path.
-          initial_comment: neutralizeBroadcast(cleaned),
+        const result = await addEmoji({
+          bytes,
+          filename: `${cleaned}${extension}`,
+          name: cleaned,
+          requestedBy,
         });
-        // The channel only ever sees "kyto" as the poster — the message text has
-        // to be the bare name, and a threaded "requested by …" note is not safe
-        // either (the emoji bot parses thread REPLIES too: a reply of "gng" in
-        // that channel removed an emoji that had just been added). So this log
-        // line is the entire audit trail for who asked.
-        logger.info(
-          { name: cleaned, userId: requestedBy },
-          '[emoji] submitted to the emoji channel'
-        );
-        const verdict: EmojiVerdict = await awaitVerdict(
-          channelId,
-          cleaned
-        ).catch((): EmojiVerdict => ({}));
-        // The bot sometimes ASKS instead of adding — a real in-thread message
-        // (not ephemeral, as first assumed) carrying "as is" / "remove bg" /
-        // "nvm" buttons. Slack has no API for one app to press another app's
-        // button, with a bot token or a user token, so this is where kyto stops
-        // and a human finishes it. Say that plainly rather than reporting the
-        // question as if it were a verdict.
-        if (verdict.choices && verdict.choices.length > 0) {
-          return {
-            choices: verdict.choices,
-            name: cleaned,
-            needsHuman: true,
-            permalink: verdict.permalink,
-            submitted: true,
-            summary: `Posted \`${cleaned}\`, but the emoji bot is asking how to upload it (${verdict.choices.join(' / ')}) and only a human can press those buttons: Slack gives no way for one app to click another app's button. Tell whoever asked to open ${verdict.permalink ?? 'the emoji channel'} and pick an option, and do NOT say the emoji exists until lookupEmoji finds it.`,
-          };
-        }
-        if (verdict.text) {
+        if (result.ok) {
+          // The list is now stale, and lookupEmoji is what people use to
+          // check whether the thing they just asked for exists.
+          cache = undefined;
+          // Remember who it was for, so they (and the owner) can remove it
+          // later even though every emoji goes in under kyto's one account.
+          await recordEmojiSubmission({ name: cleaned, requestedBy }).catch(
+            (error: unknown) => {
+              logger.warn(
+                { error: errorMessage(error), name: cleaned },
+                '[emoji] failed to record submitter'
+              );
+            }
+          );
           return {
             name: cleaned,
-            permalink: verdict.permalink,
-            reply: verdict.text,
             submitted: true,
-            summary: `Submitted \`${cleaned}\` for <@${requestedBy}>. The emoji bot replied: ${verdict.text}`,
+            summary: `Added \`:${cleaned}:\` to the workspace for <@${requestedBy}>. It is live now: anyone can use it.`,
           };
         }
+        if (result.error?.startsWith('error_name_taken')) {
+          cache = undefined;
+          return await nameTaken({
+            bytes,
+            existing: await emojiList().catch(
+              (): Record<string, string> => ({})
+            ),
+            name: cleaned,
+          });
+        }
+        return {
+          error: describeUploadError(result.error),
+          name: cleaned,
+          submitted: false,
+        };
+      }
+      if (!channelId) {
+        return {
+          error:
+            'Kyto cannot add emoji right now: its emoji session is not configured and this workspace has no emoji-request channel set. Tell the user to ask the bot owner.',
+          submitted: false,
+        };
+      }
+      await slack.webClient.filesUploadV2({
+        channel_id: channelId,
+        file_uploads: [
+          {
+            file: Buffer.from(bytes),
+            filename: `${cleaned}${extension}`,
+          },
+        ],
+        // The message text must be the BARE NAME and nothing else — that is
+        // what the emoji bot in that channel parses (verified against the
+        // channel's own history: `hedgehog`, `crack-ani`, `ember-sit-new`).
+        // No colons, no "requested by", no note: any of those and the
+        // submission is just a message nobody acts on.
+        //
+        // neutralizeBroadcast is belt and braces — EMOJI_NAME already makes a
+        // control token unrepresentable — because filesUploadV2 does NOT go
+        // through ThreadHandle.post, so the deny-by-default broadcast strip
+        // never runs on this path.
+        initial_comment: neutralizeBroadcast(cleaned),
+      });
+      // The channel only ever sees "kyto" as the poster — the message text has
+      // to be the bare name, and a threaded "requested by …" note is not safe
+      // either (the emoji bot parses thread REPLIES too: a reply of "gng" in
+      // that channel removed an emoji that had just been added). So this log
+      // line is the entire audit trail for who asked.
+      logger.info(
+        { name: cleaned, userId: requestedBy },
+        '[emoji] submitted to the emoji channel'
+      );
+      const verdict: EmojiVerdict = await awaitVerdict(
+        channelId,
+        cleaned
+      ).catch((): EmojiVerdict => ({}));
+      // The bot sometimes ASKS instead of adding — a real in-thread message
+      // (not ephemeral, as first assumed) carrying "as is" / "remove bg" /
+      // "nvm" buttons. Slack has no API for one app to press another app's
+      // button, with a bot token or a user token, so this is where kyto stops
+      // and a human finishes it. Say that plainly rather than reporting the
+      // question as if it were a verdict.
+      if (verdict.choices && verdict.choices.length > 0) {
+        return {
+          choices: verdict.choices,
+          name: cleaned,
+          needsHuman: true,
+          permalink: verdict.permalink,
+          submitted: true,
+          summary: `Posted \`${cleaned}\`, but the emoji bot is asking how to upload it (${verdict.choices.join(' / ')}) and only a human can press those buttons: Slack gives no way for one app to click another app's button. Tell whoever asked to open ${verdict.permalink ?? 'the emoji channel'} and pick an option, and do NOT say the emoji exists until lookupEmoji finds it.`,
+        };
+      }
+      if (verdict.text) {
         return {
           name: cleaned,
           permalink: verdict.permalink,
+          reply: verdict.text,
           submitted: true,
-          summary: `Posted \`${cleaned}\` and its image to the emoji channel for <@${requestedBy}>, but the emoji bot has not answered in that thread yet. Tell the user it is posted but not confirmed, link them to ${verdict.permalink ?? 'the emoji channel'} so they can finish it, and do NOT claim the emoji exists until lookupEmoji finds it.`,
+          summary: `Submitted \`${cleaned}\` for <@${requestedBy}>. The emoji bot replied: ${verdict.text}`,
         };
-      } catch (error) {
-        logger.warn({ err: error, name: cleaned }, '[emoji] submission failed');
-        return { error: errorMessage(error), submitted: false };
       }
-    },
-  });
+      return {
+        name: cleaned,
+        permalink: verdict.permalink,
+        submitted: true,
+        summary: `Posted \`${cleaned}\` and its image to the emoji channel for <@${requestedBy}>, but the emoji bot has not answered in that thread yet. Tell the user it is posted but not confirmed, link them to ${verdict.permalink ?? 'the emoji channel'} so they can finish it, and do NOT claim the emoji exists until lookupEmoji finds it.`,
+      };
+    } catch (error) {
+      logger.warn({ err: error, name: cleaned }, '[emoji] submission failed');
+      return { error: errorMessage(error), name: cleaned, submitted: false };
+    }
+  }
 }
 
 /**

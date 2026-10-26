@@ -100,9 +100,17 @@ export async function addEmoji({
   body.set('mode', 'data');
   body.set('name', name);
   body.set('image', new Blob([bytes]), filename);
-  const result = await callEmojiApi(EMOJI_ADD_URL, body);
-  if (result.ok) {
-    uploads.set(key, used + 1);
+  // Counted before the call and given back on failure: a batch uploads in
+  // parallel, and counting after let it run past the limit.
+  uploads.set(key, used + 1);
+  const result = await callEmojiApi(EMOJI_ADD_URL, body).catch(
+    (error: unknown) => {
+      uploads.set(key, (uploads.get(key) ?? 1) - 1);
+      throw error;
+    }
+  );
+  if (!result.ok) {
+    uploads.set(key, (uploads.get(key) ?? 1) - 1);
   }
   // Who asked matters more than usual here: the emoji is added under kyto's
   // shared user account, so this log is the only record of who it was really for.
