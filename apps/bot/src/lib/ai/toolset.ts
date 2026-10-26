@@ -198,6 +198,10 @@ const SLACK_TOOL_BUDGET = 120;
 // over — 125 calls, 12 minutes). Anything outward, or a `wait`, clears the
 // copies: after those a re-read is how kyto sees what changed.
 const SLACK_READ_REUSE_MS = 5 * 60 * 1000;
+// Web search gets the same reuse (owner's call, 2026-10-26): the same query
+// again within the window is that result again, marked as a repeat. Not across
+// turns: a new message often means "look again, it changed".
+const REUSED_READ_TOOLS = new Set([...SLACK_READ_TOOLS, 'searchWeb']);
 
 const CODE_TOOLS = new Set([
   'bash',
@@ -504,10 +508,7 @@ export async function buildTools({
     fetchUrl: fetchUrlTool({ getSandboxContext }),
     // Keyed off the constant: the stop condition that makes a skip terminal
     // matches on this exact name (see streamAttempt).
-    [SKIP_TOOL_NAME]: skipTool({
-      threadId: thread.id,
-      mentionedByHuman: message.isMention && !message.author.isBot,
-    }),
+    [SKIP_TOOL_NAME]: skipTool({ threadId: thread.id }),
     // CORE, not deferred: a model deciding "this is beyond me" cannot be asked
     // to first spend a round trip loading the tool that says so.
     ...(escalation
@@ -1098,12 +1099,12 @@ export async function buildTools({
             success: false,
           };
         }
-        const readKey = SLACK_READ_TOOLS.has(name)
+        const readKey = REUSED_READ_TOOLS.has(name)
           ? `${name} ${JSON.stringify(input) ?? ''}`
           : undefined;
         const earlier = readKey ? slackReads.get(readKey) : undefined;
         if (earlier && Date.now() - earlier.at < SLACK_READ_REUSE_MS) {
-          const note = `Same ${name} call, same input, as earlier this turn: this is that result again, not a fresh read. Use it; don't repeat the call.`;
+          const note = `Repeated ${name === 'searchWeb' || name === 'searchSlack' ? 'search' : 'call'}: same ${name} input as earlier this turn, so this is that result again, not a fresh one. Use it; don't repeat the call.`;
           return typeof earlier.result === 'object' &&
             earlier.result !== null &&
             !Array.isArray(earlier.result)
