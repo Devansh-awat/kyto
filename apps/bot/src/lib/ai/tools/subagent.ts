@@ -495,7 +495,46 @@ export function runSubagentTool({
 
             // The subagent's own message: named for it, plan-mode, and nothing in
             // the body. Streamed live, so the cards fill in as it works.
-            const postedPlan = await slack.stream(thread.id, subagentChunks(), {
+            // The cards still open in the subagent's message. A stream cut
+            // mid-run (the parent stopped or died, or the message rotated)
+            // left them `in_progress`, which Slack draws as "Something went
+            // wrong" (#138): the harness closes them with these on the cut.
+            // A card closed that way is dropped if it updates later, since it
+            // belongs to a message that is no longer streaming.
+            const openCards = new Map<string, string>();
+            const closedCards = new Set<string>();
+            async function* tracked(): AsyncGenerator<string | StreamChunk> {
+              for await (const chunk of subagentChunks()) {
+                if (typeof chunk !== 'string' && chunk.type === 'task_update') {
+                  if (closedCards.has(chunk.id)) {
+                    continue;
+                  }
+                  if (chunk.status === 'in_progress') {
+                    openCards.set(chunk.id, chunk.title);
+                  } else {
+                    openCards.delete(chunk.id);
+                  }
+                }
+                yield chunk;
+              }
+            }
+            const postedPlan = await slack.stream(thread.id, tracked(), {
+              onRotate: () => {
+                const closing = [...openCards].map(
+                  ([id, title]): StreamChunk => ({
+                    id,
+                    output: 'Stopped before it finished.',
+                    status: 'complete',
+                    title,
+                    type: 'task_update',
+                  })
+                );
+                for (const id of openCards.keys()) {
+                  closedCards.add(id);
+                }
+                openCards.clear();
+                return closing;
+              },
               recipientTeamId: slack.teamId ?? '',
               recipientUserId: message.author.userId,
               taskDisplayMode: 'plan',

@@ -21,6 +21,7 @@ describe('renderTask', () => {
       phase: 'error',
       toolName: 'mcp_orchard_get_database',
     });
-    expect(rendered.output).toBe('Something went wrong.');
+    expect(rendered.output).not.toContain('hunter2');
+    expect(rendered.output).toStartWith('Failed.');
   });
 });

@@ -15,7 +15,7 @@ import {
 import { defaultTool } from './default';
 import { generateImage } from './generate-image';
 import { getFile } from './get-file';
-import { resultErrorOutput } from './helpers';
+import { errorOutput, resultErrorOutput, value } from './helpers';
 import { leaveThread } from './leave-thread';
 import { mermaid } from './mermaid';
 import { command, file, search } from './pi';
@@ -44,10 +44,17 @@ const renderers: Record<string, TaskRendererEntry> = {
   mermaid,
   // Neutral: the plan shows that code work happened, not OpenCode's raw
   // report (long, and it names itself).
+  // A failure says what failed (kyto's own error text, never the agent's
+  // raw output): "Something went wrong" told nobody anything.
   opencode: {
-    error: () => ({ output: 'Something went wrong.' }),
+    error: ({ output }) => ({ output: errorOutput(output) }),
     request: () => ({}),
-    response: () => ({ output: 'Done.' }),
+    response: ({ output }) => ({
+      output:
+        value(output, 'success') === false
+          ? `Didn't finish (exit ${String(value(output, 'exitCode') ?? '?')}).`
+          : 'Done.',
+    }),
     title: 'Working on the code',
   },
   postMessage: message,
@@ -63,7 +70,9 @@ const renderers: Record<string, TaskRendererEntry> = {
 };
 
 const mcpTool: DefaultTaskRenderer = {
-  error: () => ({ output: 'Something went wrong.' }),
+  error: () => ({
+    output: "Failed. The server's error stays off this public card.",
+  }),
   request: defaultTool.request,
   response: () => ({ output: 'Done.' }),
 };
