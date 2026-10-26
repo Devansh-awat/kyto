@@ -8,6 +8,7 @@ import { mrkdwn, plainText } from '@/harness/views';
 import { bot, slack } from '@/lib/chat';
 import { KEVINTON_USER_ID } from '@/lib/kevinton/identity';
 import logger from '@/lib/logger';
+import { mayReadChannel } from '@/lib/slack/channel-access';
 import { toLogError } from '@/lib/utils/error';
 import type { ApprovalKind } from './types';
 
@@ -24,12 +25,20 @@ function preview(text: string): string {
     : trimmed;
 }
 
-function approvalBlocks(row: ApprovalRequest): unknown[] {
+function approvalBlocks({
+  origin,
+  row,
+}: {
+  /** Where it was asked, when the card is not posted there. */
+  origin?: string;
+  row: ApprovalRequest;
+}): unknown[] {
   const owner = env.OWNER_USER_ID ? `<@${env.OWNER_USER_ID}> ` : '';
+  const where = origin ? ` (${origin})` : '';
   return [
     {
       text: mrkdwn(
-        `${owner}:lock: *Approval needed* — <@${row.requestedBy}> asked me to ${row.summary}.\nI can't do that on my own, so it's waiting on you. There's no time limit; it stays here until you decide.`
+        `${owner}:lock: *Approval needed* — <@${row.requestedBy}> asked me${where} to ${row.summary}.\nI can't do that on my own, so it's waiting on you. There's no time limit; it stays here until you decide.`
       ),
       type: 'section',
     },
@@ -67,7 +76,8 @@ function approvalBlocks(row: ApprovalRequest): unknown[] {
  * strand every other thing the user asked for in the same message. The caller
  * tells the model the action is pending and gets on with the rest of the work.
  *
- * Public on purpose. The person who asked can see that their request exists,
+ * Public on purpose (unless the owner can't see that conversation — then the
+ * card goes to the owner's DM and the thread gets a plain line). The person who asked can see that their request exists,
  * that it was not silently dropped, and (later, in the same place) what was
  * decided. The old behaviour for a non-owner was a flat refusal the asker had
  * no way to appeal, or an ephemeral only the owner ever saw.
@@ -102,18 +112,49 @@ export async function requestApproval({
     threadId,
   });
   try {
+    const channel = slack.decodeThreadId(threadId).channel;
+    // The card goes where the OWNER can click it. Asked in someone else's DM
+    // or a private channel the owner isn't in, a card posted there was never
+    // seen (#38 and #40 sat pending for days): it goes to the owner's DM
+    // instead, and the thread gets a plain line so the asker knows it was not
+    // dropped. Fails towards the owner's DM, which is never wrong.
+    const ownerSees =
+      !env.OWNER_USER_ID ||
+      (await mayReadChannel({
+        askerUserId: env.OWNER_USER_ID,
+        channelId: channel,
+        currentChannelId: undefined,
+      }).catch(() => false));
     // `allowBroadcast` is deliberately absent: the approval message itself must
     // never ping a channel, even when what it is asking about is a broadcast.
-    const sent = await bot.thread(threadId).post({
-      blocks: approvalBlocks(row),
+    const target =
+      ownerSees || !env.OWNER_USER_ID
+        ? bot.thread(threadId)
+        : await bot.openDM(env.OWNER_USER_ID);
+    let origin: string | undefined;
+    if (!ownerSees) {
+      origin = channel.startsWith('D')
+        ? 'in their DM with me'
+        : `in <#${channel}>`;
+    }
+    const sent = await target.post({
+      blocks: approvalBlocks({ origin, row }),
       fallbackText: `Approval needed: ${row.summary}`,
     });
     if (sent.id) {
       await setApprovalMessage({
-        channel: slack.decodeThreadId(threadId).channel,
+        channel: slack.decodeThreadId(target.id).channel,
         id: row.id,
         ts: sent.id,
       });
+    }
+    if (!ownerSees) {
+      await bot
+        .thread(threadId)
+        .post({
+          markdown: `:lock: Sent to the owner for approval (request #${row.id}): ${row.summary}. Nothing happens until they decide; I'll say here when they do.`,
+        })
+        .catch(() => undefined);
     }
   } catch (error) {
     // The row still exists and is still approvable from the dashboard, so a
@@ -129,6 +170,6 @@ export async function requestApproval({
   );
   return {
     id: row.id,
-    message: `Queued for the owner's approval (request #${row.id}): ${summary}. It has been posted in this thread with Approve/Deny buttons and does NOT expire. Nothing has happened yet and you must not claim it has. Carry on with anything else that was asked; if there is nothing else, say plainly that this needs ${env.OWNER_USER_ID ? "the owner's" : 'an'} approval and stop — do not try another route around it.`,
+    message: `Queued for the owner's approval (request #${row.id}): ${summary}. The owner has been sent it with Approve/Deny buttons and it does NOT expire. Nothing has happened yet and you must not claim it has. Carry on with anything else that was asked; if there is nothing else, say plainly that this needs ${env.OWNER_USER_ID ? "the owner's" : 'an'} approval and stop — do not try another route around it.`,
   };
 }
