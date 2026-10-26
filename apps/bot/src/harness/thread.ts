@@ -39,6 +39,20 @@ function hasControlMention(text: string | undefined): boolean {
   return text !== undefined && CONTROL_MENTION.test(text);
 }
 
+const CONTROL_MENTIONS = new RegExp(CONTROL_MENTION.source, 'g');
+
+// `<!here>` → `@here`, `<!subteam^S1|@design>` → `@design`: what the token
+// reads as, for the `text` field, where `chat.update` refuses a real one.
+function plainControlMentions(text: string): string {
+  return text.replace(CONTROL_MENTIONS, (token) => {
+    const label = /\|([^>]*)>$/.exec(token)?.[1];
+    if (label) {
+      return label.startsWith('@') ? label : `@${label}`;
+    }
+    return token.startsWith('<!subteam') ? '@group' : `@${token.slice(2, -1)}`;
+  });
+}
+
 // The blocks a markdown post becomes: one `markdown` block, a `mrkdwn` section
 // when it holds a control mention, and a `rich_text` block for each line with
 // an underline, which markdown cannot draw (harness/underline).
@@ -194,6 +208,48 @@ export class ThreadHandle {
       ...(threadTs ? { thread_ts: threadTs } : {}),
       ...(post.username ? { username: post.username } : {}),
     };
+    // An allowed broadcast from the APP: Slack downgrades `<!channel>` in a
+    // bot's `text` and `blocks` to plain "@channel" that notifies nobody (#150;
+    // a person's post — the user account's — still pings). The one place it
+    // still notifies is a legacy attachment, and `chat.update` never
+    // re-notifies: so post with the mention(s) in an attachment, then update
+    // to the real message without it.
+    const mentions =
+      post.allowBroadcast && !post.fromUserAccount
+        ? JSON.stringify([args.text, blocks ?? null]).match(CONTROL_MENTIONS)
+        : null;
+    if (mentions) {
+      const plainText = plainControlMentions(args.text);
+      const pinged = [...new Set(mentions)].join(' ');
+      const first = await client.chat.postMessage({
+        ...args,
+        attachments: [
+          {
+            blocks: [
+              { text: { text: pinged, type: 'mrkdwn' }, type: 'section' },
+            ],
+            fallback: pinged,
+          },
+        ],
+        blocks: undefined,
+        text: plainText,
+      } as never);
+      await client.chat
+        .update({
+          attachments: [],
+          blocks: blocks ?? [],
+          channel,
+          text: plainText,
+          ts: first.ts ?? '',
+        } as never)
+        .catch((error: unknown) => {
+          this.logger.warn(
+            { err: error, channel },
+            '[harness] broadcast clean-up update failed'
+          );
+        });
+      return this.sent({ client, raw: first, ts: first.ts ?? '' });
+    }
     // Cast: ChatPostMessageArguments is a strict discriminated union that
     // rejects this options-spread shape even when the payload is valid.
     const result = await client.chat.postMessage(args as never);

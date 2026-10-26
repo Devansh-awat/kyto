@@ -29,7 +29,15 @@ an optional block_id (≤255 chars).
   markdown: headers, tables, task lists, code with syntax highlighting.
   Images render as links. One block may be split into several on delivery.
   Good default for LLM-formatted prose; does NOT resolve <!channel> control
-  mentions (kyto's harness posts those as section+mrkdwn instead).
+  mentions.
+- **A BOT's @channel/@here notifies nobody** from \`chat.postMessage\` \`text\`,
+  \`blocks\` or a rich_text \`broadcast\` element: Slack downgrades it to plain
+  text (a person's post still pings). The working way: post with the mention
+  in a legacy \`attachments\` block, then \`chat.update\` to the clean message
+  (mention in \`blocks\` only, \`attachments: []\`; a token in \`text\` makes the
+  update fail); an update never re-notifies. kyto's own allowed broadcasts do
+  exactly this. Advising another bot on a ping that stopped working: this,
+  not a rich_text broadcast.
 - **header**: plain_text only, ≤150 chars.
 - **context**: up to 10 small text/image elements, muted styling.
 - **divider**: \`{"type":"divider"}\`.
