@@ -11,9 +11,8 @@
 // whole account with no scopes, so it lives in the environment only — see
 // KYTO_USER_TOKEN in env.ts for everything else allowed to use it.
 //
-// A per-day cap per requester sits on top: every upload goes out under one
-// shared account, so a user who asks for two hundred emoji spends its
-// reputation, not their own.
+// No per-person cap (owner's call 2026-10-26: a pack of 12 hit the old 10/day
+// and lost two); every upload is logged with who asked.
 
 import { env } from '@/env';
 import logger from '@/lib/logger';
@@ -21,13 +20,6 @@ import logger from '@/lib/logger';
 const EMOJI_ADD_URL = 'https://slack.com/api/emoji.add';
 const EMOJI_REMOVE_URL = 'https://slack.com/api/emoji.remove';
 const UPLOAD_TIMEOUT_MS = 30_000;
-
-// How many emoji one person can add per UTC day. Deliberately in memory: it
-// resets on restart, which is the honest trade for not adding a table to hold
-// a counter. It is a spam brake, not a security boundary — the real limit is
-// that every upload is logged with who asked.
-const DAILY_LIMIT_PER_USER = 10;
-const uploads = new Map<string, number>();
 
 export function emojiUploadConfigured(): boolean {
   return Boolean(env.KYTO_USER_TOKEN && env.KYTO_USER_COOKIE);
@@ -41,10 +33,6 @@ export function emojiUploadConfigured(): boolean {
  */
 function cookieHeader(raw: string): string {
   return raw.includes('=') ? raw : `d=${raw}`;
-}
-
-function quotaKey(userId: string): string {
-  return `${userId}:${new Date().toISOString().slice(0, 10)}`;
 }
 
 interface EmojiResult {
@@ -91,27 +79,11 @@ export async function addEmoji({
   name: string;
   requestedBy: string;
 }): Promise<EmojiResult> {
-  const key = quotaKey(requestedBy);
-  const used = uploads.get(key) ?? 0;
-  if (used >= DAILY_LIMIT_PER_USER) {
-    return { error: 'kyto_daily_limit', ok: false };
-  }
   const body = new FormData();
   body.set('mode', 'data');
   body.set('name', name);
   body.set('image', new Blob([bytes]), filename);
-  // Counted before the call and given back on failure: a batch uploads in
-  // parallel, and counting after let it run past the limit.
-  uploads.set(key, used + 1);
-  const result = await callEmojiApi(EMOJI_ADD_URL, body).catch(
-    (error: unknown) => {
-      uploads.set(key, (uploads.get(key) ?? 1) - 1);
-      throw error;
-    }
-  );
-  if (!result.ok) {
-    uploads.set(key, (uploads.get(key) ?? 1) - 1);
-  }
+  const result = await callEmojiApi(EMOJI_ADD_URL, body);
   // Who asked matters more than usual here: the emoji is added under kyto's
   // shared user account, so this log is the only record of who it was really for.
   logger.info(

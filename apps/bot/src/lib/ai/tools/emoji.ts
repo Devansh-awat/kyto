@@ -305,8 +305,6 @@ function describeUploadError(code: string | undefined): string {
     case 'invalid_auth':
     case 'not_authed':
       return "Kyto's emoji session has expired: the bot owner needs to refresh it. Tell the user that, and do not retry.";
-    case 'kyto_daily_limit':
-      return 'That user has hit the daily limit for adding emoji through kyto. Tell them to try tomorrow.';
     case 'ratelimited':
       return 'Slack is rate limiting emoji uploads right now. Wait a minute and try again.';
     default:
