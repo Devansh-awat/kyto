@@ -1,0 +1,15 @@
+---
+paths:
+  - "apps/bot/src/harness/**"
+  - "apps/bot/src/lib/chat.ts"
+  - "apps/bot/src/bot.ts"
+  - "apps/bot/src/features/channel-pairing/**"
+  - "apps/bot/slack-user-events-manifest.json"
+---
+
+# kyto's user-account persona and channel pairing
+
+Part of the project notes (`.claude/CLAUDE.md`); loaded when you work on these files. Keep it current in the same change as the feature.
+
+- **The user-account persona** (`userBot` in `lib/chat.ts`, `KYTO_USER_APP_TOKEN`): an events-only Slack app installed BY kyto's user account (`apps/bot/slack-user-events-manifest.json`) delivers its DMs on a second Socket Mode connection — Slack sends it NO channel messages. Channel messages reach the account two ways, deduped by `firstTimeForAccount`: the APP's connection hands over every one that pings it or lands in a thread it follows (`answerAsAccount`), and the account's own Slack client websocket (`harness/user-gateway.ts` `listen`, held open for good, so the account shows active) covers channels the app isn't in or can't be invited to; DMs stay on the events app (only it says `channel_type: 'im'`); the same handlers and gates run (`listen` in `src/bot.ts`) and `runTurn({ asUserAccount })` answers AS that account through the session: short human replies (volatile-tail prompt line), no plan/thinking/status/footer/✅, a text-before-tools flushed as a status line, a skip posts NOTHING. One kyto per thread (`thread_subscriptions.respond_as`, last pinged wins); a message pinging only the OTHER kyto is left to it. Opt-in is a plain line (no buttons from a user). Resumed as the account after a restart (`inflight_turns.as_user_account`), silently. Its turns get their own slot (`#user` suffix in `lib/agent/turns`), so pinging both kytos runs BOTH (owner's call) instead of one interrupting the other; `stopTurn` stops both, and a subagent it started wakes it, not the app. In its turns `postMessage` defaults to `fromUserAccount` (one sender per conversation). Its posts go through the Web API `chat.postMessage` with the `xoxc-` + `d` cookie session and carry a `client_msg_id`, as the Slack client's own sends do. "kyto is typing…" is a `user_typing` frame on that websocket (GATING.md).
+- **Channel pairing** (`features/channel-pairing`, `kyto_channels`): when either kyto (app or user account) lands in a channel, it invites the other; a PRIVATE channel is DM'd to the owner instead, once per channel, as plain-text name + id + who added it (owner's call 2026-10-16). The app's own `member_joined_channel` is the fast path, and so is a ping the ACCOUNT hears in a channel (`noteAccountInChannel`, else a person pinging the account then the app got Slack's "not in the channel" for up to 5 min); a 5-min poller (`users.conversations` for both) catches the account's joins, which no event reports. Acts only on a channel NEW to that identity, once — never re-invites someone who was removed; the first-ever pass only records. Private invites need the app's `groups:write.invites`.

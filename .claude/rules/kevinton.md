@@ -1,0 +1,12 @@
+---
+paths:
+  - "apps/bot/src/lib/kevinton/**"
+  - "apps/bot/src/lib/notebooks.ts"
+  - "apps/bot/src/lib/ai/tools/notebook*"
+---
+
+# Kevinton, kyto's after-the-fact reviewer
+
+Part of the project notes (`.claude/CLAUDE.md`); loaded when you work on these files. Keep it current in the same change as the feature.
+
+- **Kevinton** (`lib/kevinton/`, `KEVINTON_ENABLED`): 30 min after ANY non-`!secret` turn (**channels, private channels, DMs, group DMs** — owner's call), a 60s poller atomically claims the thread and runs a SILENT headless kyto turn on `drawnAttempts()`. Allowlisted LOOKING tools only, synthetic non-owner author, throwaway sandbox. It may (1) file/comment on DETAILED issues — defects AND improvements (`[kevinton] improvement: …`, grounded in the conversation; owner's ask 2026-10-05) — on the PUBLIC `Devansh-awat/kyto` as `kyto-agent` (`[kevinton]` prefix, search first, ≤2/review, ≤20/day counted on GitHub; never comments on a CLOSED issue (unseen) — a recurrence of one closed as FIXED is `reopen`ed with the evidence, using the owner's `KEVINTON_REOPEN_TOKEN` for that one PATCH only; unset → a new "Recurrence of #N" issue; closed as not planned → left alone); conversation content MAY go in (owner's call), secret VALUES never (`redactSecrets`); (2) propose a skill to the owner's approval queue (`kind: 'skill'`, in the owner's DM). (3) keep kyto's **notebooks** (`lib/notebooks.ts`, `notebooks` table, its `notebook` tool): one per channel (≤20k chars, both kytos read it there) and one global (≤50k, ONLY the user-account persona reads it — everywhere). Edits past a cap are REFUSED, not truncated, so it condenses. **A note is a fact, never a stance**: kevinton runs WITHOUT the subagent Limits (their "no captcha bots" became a notebook refusal) and gets `corePrompt` as reference, deleting any line that contradicts it. **A DM/group DM never feeds the global one** (tool refuses; unknown channel type fails closed); from a private channel kevinton judges what isn't private. Rendered in the prompt tail between history and thinking (cache). **Logs**: `threadLogs` (the thread's captured lines) plus the owner's App Home Orchard MCP (`KEVINTON_LOGS_MCP`, default `selfhosted-orchard`), `LOGS_RULES` FORCED to two pinned tools (deployment list + logs) — Orchard's other "reads" print every secret value and its token can exec/restart (TOOLS.md). Never PRs, never code changes.

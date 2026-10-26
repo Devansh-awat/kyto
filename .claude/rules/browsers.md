@@ -1,0 +1,16 @@
+---
+paths:
+  - "packages/sandbox/src/live-view.ts"
+  - "apps/bot/src/lib/browser/**"
+  - "apps/bot/src/lib/ai/tools/slack-browser.ts"
+  - "apps/bot/src/lib/slack-browser/**"
+  - "apps/bot/src/lib/slack-web-proxy/**"
+  - "apps/bot/src/lib/ai/tools/browser*"
+---
+
+# Live browser view and the Slack browser
+
+Part of the project notes (`.claude/CLAUDE.md`); loaded when you work on these files. Keep it current in the same change as the feature.
+
+- **Live browser view** (`packages/sandbox/src/live-view.ts`): first browser use per turn posts the noVNC view as an in-message player (`lib/browser/live-view-post.ts`: a Slack `video` block framing a random `/embeds/live-*` page that frames the view — only kyto's domain can be embedded); the user account, which can't post a video block, posts the plain link. **`x11vnc -viewonly` on the SERVER is load-bearing** (the link is public; noVNC's flag is client-side). Liveness by port/`pgrep -x`, never `pgrep -f`. noVNC comes from its release, not Debian's package. Not on `!secret` turns.
+- **Slack browser** (`tools/slack-browser.ts` + `lib/slack-browser/` + `lib/slack-web-proxy/`, OWNER ONLY, owner's call 2026-10-02): a headless Chromium **on kyto's host, not E2B** (Slack's page froze the 1 GB sandbox), logged in as kyto's user account, for workflows and other apps' buttons. **The session never enters the browser**: its `--host-resolver-rules` send `*.slack.com` to a per-session loopback TLS proxy (trusted by SPKI pin) that adds the `d` cookie, swaps a dummy for the real `xoxc-` both ways, strips `d` from Set-Cookie and refuses ONLY signing out; Slack's CDNs resolve normally; **every other name, IP literals included, is `~NOTFOUND` — that is what keeps it off Coolify/containers/metadata, do not loosen it**. The model's command is split into argv (no shell) and must pass `slack-browser/command.ts`'s allowlist (new agent-browser commands stay out until reviewed): no files, screenshots, `read`/`vitals`, unlisted flags, relaunch flags, nor agent-browser's own `batch` (it would run its inner commands unchecked) — a batch is the tool's `next: [...]` instead (≤12, each through the same allowlist, stops at the first failure, earlier steps' output cut to a head; #98); `eval` and `wait --fn` ARE allowed (owner's call 2026-10-14: script runs in the page, which reaches only Slack and holds only the dummy token); `open` only https Slack URLs (a non-workspace id after `/client/` is refused); it STARTS in the turn's own thread (owner's ask 2026-10-13) and `thread` goes back there — a button posted as a reply exists only in the thread pane; `open <channel id> [thread ts]` / `open <message link>` are turned into client URLs by code. Thread panes, modals, popups and covered clicks are handled by code (TOOLS.md, "Slack browser panes and popups"). Every `open` reboots the Slack client, so an `open` of the page it's already on is a no-op and shell operators (`|`, `&&`) are refused. Live view = CDP screencast at `/_slackview/<random id>` (view-only by construction), posted in the thread (owner's call, knowing it shows kyto's DMs). Turn end kills the view, browser, proxy and profile (IndexedDB caches messages). A workflow it starts may still post.
