@@ -142,7 +142,7 @@ const GROUPS = {
   },
   subagent: {
     question:
-      'Is this a big multi-part task worth handing a piece of to a separate helper agent that reports back?',
+      'Does this have two or more independent parts that each take several lookups or steps (researching several things, comparing options, checking several repos, channels or sources), which helper agents could do side by side, or one long separate investigation?',
     tools: ['runSubagent', 'checkSubagent'],
   },
 } as const satisfies Record<string, { question: string; tools: string[] }>;
