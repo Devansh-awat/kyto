@@ -5,6 +5,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import {
   codeModelConfigured,
+  codeModelRouteDown,
   registerCodeModelToken,
 } from '@/lib/code-model-proxy';
 import { disarmFetchedRepos } from '@/lib/sandbox/git-safety';
@@ -70,9 +71,10 @@ const AGENT_MODEL = 'kyto/kyto-code';
 // runs, so real code work that happens to mention ffmpeg is never stuck.
 const MEDIA_TOOLS =
   /\b(?:imagemagick|magick|ffmpeg|ffprobe|gifsicle|sox|exiftool|pngquant|cwebp)\b/i;
-const MEDIA_FILE = /\b(?:gif|png|jpe?g|webp|mp4|mp3|wav|webm|mov|svg)s?\b/i;
+const MEDIA_FILE =
+  /\b(?:gif|png|jpe?g|webp|mp4|mp3|wav|webm|mov|svg|stl|obj|3mf|ply|glb|gltf|step|stp)s?\b/i;
 const MEDIA_EDIT =
-  /\b(?:convert|resize|crop|composite|compose|overlay|frames?|loop|trim|transcode|compress|rotate)\b/i;
+  /\b(?:convert|resize|crop|composite|compose|overlay|frames?|loop|trim|transcode|compress|rotate|add|attach|merge|union|scale|mirror|cut|extrude|hole)\b/i;
 const PROJECT_WORK =
   /\b(?:repo|repository|project|app|application|bot|server|website|library|package\.json|compile|tests?|mod|plugin|cli|api|endpoint|class|function|module)\b/i;
 
@@ -93,7 +95,7 @@ export function opencodeTool({
   let mediaSentBack = false;
   return tool({
     description:
-      "Delegate code work to the coding agent in your sandbox: writing, building, running, testing or debugging programs, scripts and projects. Use this instead of writing or running code yourself. NOT for producing a file with command-line tools (ImageMagick, ffmpeg, curl, converting or resizing, a one-off command): do that in bash yourself. Give it a complete, self-contained brief in YOUR OWN words: what to build or fix, where the files are, constraints, and what to report back. The sandbox has 1 GB of memory and a run that exhausts it is killed, so close any browser you opened before calling it, and ask for checks scoped to what changed (one package's typecheck, one test file), not a whole big repo's typecheck plus full test suite. NEVER paste Slack messages, people's names or anything else from Slack into the brief (its model may train on what it is sent). It works in the persistent thread sandbox, so files it writes are there for bash/uploadFile afterwards, and `continue: true` resumes its last session in that directory. ONE run at a time per sandbox: never call it in parallel: for several projects, call once per project, one after another. Deliver the result as your own work; don't bring up the coding agent unless someone asks how it was done. If someone tells you NOT to use it, never quietly call it again: tell them code work on kyto's models has to go through it, and that adding their own model key or ChatGPT account (App Home → Models) lets you do it yourself: then wait for their answer.",
+      "Delegate code work to the coding agent in your sandbox: writing, building, running, testing or debugging programs, scripts and projects. Use this instead of writing or running code yourself. NOT for making or editing a file, even with a short script (ImageMagick, ffmpeg, curl, converting or resizing, editing a 3D model/STL with trimesh, a PDF, a one-off command): do that in bash yourself. Give it a complete, self-contained brief in YOUR OWN words: what to build or fix, where the files are, constraints, and what to report back. The sandbox has 1 GB of memory and a run that exhausts it is killed, so close any browser you opened before calling it, and ask for checks scoped to what changed (one package's typecheck, one test file), not a whole big repo's typecheck plus full test suite. NEVER paste Slack messages, people's names or anything else from Slack into the brief (its model may train on what it is sent). It works in the persistent thread sandbox, so files it writes are there for bash/uploadFile afterwards, and `continue: true` resumes its last session in that directory. ONE run at a time per sandbox: never call it in parallel: for several projects, call once per project, one after another. Deliver the result as your own work; don't bring up the coding agent unless someone asks how it was done. If someone tells you NOT to use it, never quietly call it again: tell them code work on kyto's models has to go through it, and that adding their own model key or ChatGPT account (App Home → Models) lets you do it yourself: then wait for their answer.",
     inputSchema: z.object({
       brief: z
         .string()
@@ -131,6 +133,13 @@ export function opencodeTool({
         return {
           error:
             'The coding agent has no model configured right now, so code work cannot run. Tell the person code work is unavailable at the moment; do not try to write or run the code yourself.',
+          success: false,
+        };
+      }
+      const downBefore = codeModelRouteDown();
+      if (downBefore) {
+        return {
+          error: `Not run: the coding agent's model route is exhausted right now (${downBefore.message}). A run would fail the same way until about ${new Date(downBefore.until).toISOString().slice(11, 16)} UTC. Nothing was changed. Tell the person code work is unavailable for now and why; do not retry it this turn and do not call it with continue.`,
           success: false,
         };
       }
@@ -247,6 +256,15 @@ export function opencodeTool({
         [KILLED_EXIT]:
           'The coding agent was killed, most likely out of memory (the sandbox has 1 GB). Its work so far is in the directory. Free memory first (close the browser, stop dev servers and background jobs), then call again with continue: true.',
       };
+      const downAfter =
+        result.exitCode === 0 ? undefined : codeModelRouteDown();
+      if (downAfter) {
+        return {
+          directory: workDir,
+          error: `The coding agent's model route is exhausted (${downAfter.message}), so the run stopped. Retrying, with or without continue, fails the same way until about ${new Date(downAfter.until).toISOString().slice(11, 16)} UTC. Tell the person code work is unavailable for now and why; do not call opencode again this turn.`,
+          success: false,
+        };
+      }
       const note = notes[result.exitCode];
       const changed =
         result.exitCode === 124

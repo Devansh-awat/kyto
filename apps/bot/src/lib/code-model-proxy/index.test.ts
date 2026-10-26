@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { env } from '@/env';
-import { handleCodeModelProxy, registerCodeModelToken } from './index';
+import {
+  codeModelRouteDown,
+  handleCodeModelProxy,
+  registerCodeModelToken,
+} from './index';
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -85,6 +89,36 @@ describe('code-model proxy', () => {
       path
     );
     expect(response?.status).toBe(400);
+    run.revoke();
+  });
+
+  // Last: it leaves the route marked down for the rest of the module.
+  test('an exhausted route answers every later call at once (#154)', async () => {
+    let upstreamCalls = 0;
+    globalThis.fetch = (() => {
+      upstreamCalls += 1;
+      return Promise.resolve(
+        new Response(
+          '{"error":{"message":"All credentials for model x are cooling down"}}',
+          { headers: { 'content-type': 'application/json' }, status: 503 }
+        )
+      );
+    }) as unknown as typeof fetch;
+    const run = registerCodeModelToken();
+    const path = '/_codemodel/v1/chat/completions';
+    const secret = run.env.KYTO_CODE_MODEL_TOKEN ?? '';
+    const first = await handleCodeModelProxy(
+      post(path, secret, { messages: [] }),
+      path
+    );
+    expect(first?.status).toBe(503);
+    expect(codeModelRouteDown()?.message).toContain('cooling down');
+    const retry = await handleCodeModelProxy(
+      post(path, secret, { messages: [] }),
+      path
+    );
+    expect(retry?.status).toBe(400);
+    expect(upstreamCalls).toBe(1);
     run.revoke();
   });
 });

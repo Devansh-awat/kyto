@@ -30,6 +30,44 @@ interface CodeModelToken {
 // In-memory only: a restart ends every run anyway.
 const tokens = new Map<string, CodeModelToken>();
 
+// An exhausted route (the router's "All credentials … are cooling down", "Free
+// usage limit reached", a 402) answers every retry the same way, and the agent
+// retried it until its request timeout: 174s, then a blind `continue` retry
+// cost another 108s, in a turn that delivered nothing (#154). The first such
+// answer marks the route down; until then every call gets a 400 at once — a
+// status the agent does not retry — and the tool refuses to start a run.
+const ROUTE_DOWN_MS = 10 * 60 * 1000;
+// A bare 429 with no quota wording is more likely a per-minute limit.
+const RATE_LIMITED_MS = 60 * 1000;
+const QUOTA_TEXT =
+  /cooling down|usage limit|quota|insufficient[ _-]?(?:credits|balance|funds)|subscribe to|payment required/i;
+// Only the head of a streamed body is read for an error event.
+const SNIFF_CHARS = 4000;
+
+let routeDown: { message: string; until: number } | undefined;
+
+/** The coding model's route, when the last answer said it is exhausted. */
+export function codeModelRouteDown():
+  | { message: string; until: number }
+  | undefined {
+  if (routeDown && Date.now() > routeDown.until) {
+    routeDown = undefined;
+  }
+  return routeDown;
+}
+
+function noteRouteAnswer({ status, text }: { status: number; text: string }) {
+  const quota = status === 402 || QUOTA_TEXT.test(text);
+  if (quota || status === 429) {
+    routeDown = {
+      message:
+        text.replace(/\s+/g, ' ').trim().slice(0, 300) || `HTTP ${status}`,
+      until: Date.now() + (quota ? ROUTE_DOWN_MS : RATE_LIMITED_MS),
+    };
+    logger.warn({ status, text: routeDown.message }, '[code-model] route down');
+  }
+}
+
 const chatBodySchema = z.looseObject({ messages: z.array(z.unknown()) });
 
 /** Whether the coding agent has a model to run on. */
@@ -120,6 +158,13 @@ export async function handleCodeModelProxy(
   if (!body.success) {
     return error('body must be a chat completions request', 400);
   }
+  const down = codeModelRouteDown();
+  if (down) {
+    return error(
+      `the code model route is exhausted (${down.message}); retrying will fail the same way, so stop and report it`,
+      400
+    );
+  }
   token.calls += 1;
   // "Why is the coding agent slow" had no answer: nothing said how many calls
   // a run made or how long each took upstream. One line per call, at its end.
@@ -152,12 +197,39 @@ export async function handleCodeModelProxy(
     throw fetchError;
   });
   const headersMs = Date.now() - startedAt;
+  if (!upstream.ok) {
+    const text = await upstream.text().catch(() => '');
+    logCall({ headersMs, status: upstream.status });
+    noteRouteAnswer({ status: upstream.status, text });
+    return new Response(text, {
+      headers: {
+        'Content-Type':
+          upstream.headers.get('content-type') ?? 'application/json',
+      },
+      status: upstream.status,
+    });
+  }
   if (!upstream.body) {
     logCall({ headersMs, status: upstream.status });
   }
+  // A router can also answer 200 and put the quota error in the stream's
+  // first event, so the head of the body is checked too.
+  const decoder = new TextDecoder();
+  let head = '';
   const timed = upstream.body?.pipeThrough(
     new TransformStream<Uint8Array, Uint8Array>({
-      flush: () => logCall({ headersMs, status: upstream.status }),
+      flush: () => {
+        logCall({ headersMs, status: upstream.status });
+        if (/"error"/.test(head)) {
+          noteRouteAnswer({ status: upstream.status, text: head });
+        }
+      },
+      transform: (chunk, controller) => {
+        if (head.length < SNIFF_CHARS) {
+          head += decoder.decode(chunk, { stream: true });
+        }
+        controller.enqueue(chunk);
+      },
     })
   );
   return new Response(timed ?? null, {
