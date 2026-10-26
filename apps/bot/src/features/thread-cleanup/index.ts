@@ -6,7 +6,7 @@ import type { MessageShortcutEvent } from '@/harness/types';
 import { mrkdwn, plainText } from '@/harness/views';
 import { stopTurn } from '@/lib/agent/turns';
 import { bot, slack } from '@/lib/chat';
-import logger from '@/lib/logger';
+import logger, { threadLogContext } from '@/lib/logger';
 import {
   forgetDeletionOf,
   forgetThreadRevisions,
@@ -94,6 +94,16 @@ async function tell({
 }
 
 async function forgetThread(threadId: string): Promise<void> {
+  // Into the thread's OWN captured log: kevinton reviewed a thread whose reply
+  // the owner had deleted with this shortcut, saw "turn complete" and no
+  // message, and filed it as a lost reply (#152). This line only went to the
+  // container log, gone after the next deploy.
+  threadLogContext.run({ threadId }, () => {
+    logger.info(
+      { threadId },
+      "[thread-cleanup] the owner deleted message(s) here with a clean-up shortcut and cleared kyto's memory of the thread: a reply missing from this thread was deleted on purpose"
+    );
+  });
   await Promise.all([
     clearThreadThinking(threadId),
     clearThreadSummary(threadId),
