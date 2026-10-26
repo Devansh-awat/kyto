@@ -181,6 +181,10 @@ const ADDRESSED_CONTEXT_WAIT_MS = 1500;
 const SPEND_LIMIT_PATTERN = /spending limit|insufficient credits|daily limit/i;
 const QUOTA_EXHAUSTED = /exceeded your current quota|quota exceeded/i;
 
+// Tools whose result is a file posted in the thread: an attempt that ends on
+// one with no text after it is asked for the words that go with it (#142).
+const UPLOAD_TOOLS = new Set(['generateImage', 'mermaid', 'uploadFile']);
+
 // How many times a reply that hit MAX_OUTPUT_TOKENS mid-sentence may be resumed
 // before kyto stops and posts what it has. Three rounds is ~24k tokens of reply,
 // far past anything worth reading in Slack; the cap exists because a model that
@@ -1513,6 +1517,10 @@ async function executeTurn(
       // call: an output cap that falls after a narration line ("I'll rebuild the
       // canvas…") ate the tool call, not the reply.
       let lastOutputWasText = false;
+      // The attempt's last act was posting a file (a chart, an image) with no
+      // text after it: #142's chart went out with nothing saying what it
+      // showed or how far its numbers reach.
+      let endedOnUpload = false;
       let attemptFinishReason: string | undefined;
       let attemptStreamError: StreamError | undefined;
       // Trips if THIS model stops answering and starts looping (see degenerate.ts).
@@ -1828,6 +1836,7 @@ async function executeTurn(
                 errorStage = 'after_text';
                 attemptRawText += text;
                 lastOutputWasText = true;
+                endedOnUpload = false;
                 moderationReply += text;
                 streamedText = appendStreamedText(streamedText, text);
                 // Progress: reset the stall watchdog (see armWatchdog).
@@ -1864,6 +1873,7 @@ async function executeTurn(
               onToolResult: (info) => {
                 armWatchdog(ATTEMPT_TIMEOUT_MS);
                 lastOutputWasText = false;
+                endedOnUpload = UPLOAD_TOOLS.has(info.toolName);
                 codingMonitor.recordResult(info);
                 const key = `${info.toolName}:${stableInput(info.input)}`;
                 if (gatheredKeys.has(key)) {
@@ -2120,9 +2130,15 @@ async function executeTurn(
           !skipped &&
           attemptFinishReason === 'length' &&
           !lastOutputWasText;
+        const silentUpload = attemptText && !skipped && endedOnUpload;
         let nudgeWrote = false;
-        if ((!(attemptText || skipped) && attemptToolActivity) || cutInWork) {
+        if (
+          (!(attemptText || skipped) && attemptToolActivity) ||
+          cutInWork ||
+          silentUpload
+        ) {
           yield* synthesizeFinalAnswer({
+            afterUpload: silentUpload,
             cutOff: cutInWork,
             // Without it a skip in the nudge (the reply was already posted
             // with postMessage) still failed the attempt, and the next model

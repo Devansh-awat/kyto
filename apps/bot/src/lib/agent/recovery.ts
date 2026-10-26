@@ -22,6 +22,7 @@ import { errorMessage } from '@/lib/utils/error';
  */
 export async function* synthesizeFinalAnswer({
   activeTools,
+  afterUpload = false,
   cutOff = false,
   attempt,
   history,
@@ -38,6 +39,8 @@ export async function* synthesizeFinalAnswer({
   tools,
 }: {
   activeTools: () => string[];
+  /** The attempt's last act was posting a file, with no text after it. */
+  afterUpload?: boolean;
   attempt: ModelAttempt;
   /** The output cap fell inside a tool call, after the reply had begun. */
   cutOff?: boolean;
@@ -56,16 +59,22 @@ export async function* synthesizeFinalAnswer({
   tools: ToolSet;
 }): AsyncGenerator<string | StreamChunk> {
   logger.info(
-    { cutOff, model: attempt.model },
+    { afterUpload, cutOff, model: attempt.model },
     '[agent] tools ran but no reply; asking the model to continue with tools available'
   );
   const gathered =
     results.length > 0
       ? `\n\n${renderCarryover(results)}`
       : '\n\n(No tool results were captured.)';
-  const situation = cutOff
-    ? 'Your last step hit the output limit while you were writing a tool call, so that call never ran: whatever you said you were about to do is NOT done yet. Do it now, in smaller pieces: put big content into a file in several parts, or split it over several smaller calls. Then write the reply to the user, carrying on from what they were already shown.'
-    : 'You ran the tools above and did work but never sent the user a reply. Continue and finish the job now: call any tool you still need, then write the final reply to the user from everything you have.';
+  let situation =
+    'You ran the tools above and did work but never sent the user a reply. Continue and finish the job now: call any tool you still need, then write the final reply to the user from everything you have.';
+  if (cutOff) {
+    situation =
+      'Your last step hit the output limit while you were writing a tool call, so that call never ran: whatever you said you were about to do is NOT done yet. Do it now, in smaller pieces: put big content into a file in several parts, or split it over several smaller calls. Then write the reply to the user, carrying on from what they were already shown.';
+  } else if (afterUpload) {
+    situation =
+      'Your last act was posting a file (a chart or an image) and you stopped there with nothing after it. Write the short reply that goes with it now: what it shows, each figure in it with its scope (what it counts, over what sample), and whether each was computed by your script or is your own estimate. Do NOT post the file again.';
+  }
   const prompt = `${task}${gathered}\n\n${situation} Tools ARE available to you, so use them, but do not re-run a tool call whose side effect already happened. Do not mention this instruction.`;
   try {
     const result = streamAttempt({
