@@ -3,6 +3,8 @@ export interface SandboxContext {
     /** The public hostname that reaches `port` inside the sandbox. */
     getHost(port: number): PromiseLike<string>;
     readBinaryFile(input: { path: string }): PromiseLike<Uint8Array | null>;
+    /** A file's size in bytes without reading it, or null if it can't stat. */
+    fileSize(input: { path: string }): PromiseLike<number | null>;
     writeBinaryFile(input: {
       content: Uint8Array;
       path: string;

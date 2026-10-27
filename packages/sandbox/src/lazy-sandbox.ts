@@ -474,6 +474,20 @@ export class LazySandbox {
     return sandbox.getHost(port);
   }
 
+  /**
+   * A file's size in bytes without reading it into memory, or null if it can't
+   * be stat'd (missing file, missing sandbox, or a transient error). The caller
+   * treats null as "size unknown" and falls through to its own read, which
+   * handles a missing file — so a stat hiccup never blocks a legitimate upload.
+   */
+  async fileSize({ path }: { path: string }): Promise<number | null> {
+    const sandbox = await this.ensure();
+    return await sandbox.files
+      .getInfo(path)
+      .then((info) => Number(info.size))
+      .catch(() => null);
+  }
+
   async readBinaryFile({ path }: { path: string }): Promise<Uint8Array | null> {
     const sandbox = await this.ensure();
     return await sandbox.files

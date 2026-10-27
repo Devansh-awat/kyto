@@ -27,6 +27,13 @@ function localSandbox(): { context: SandboxContext; dir: string } {
         return Promise.resolve(null);
       }
     },
+    fileSize: ({ path }: { path: string }) => {
+      try {
+        return Promise.resolve(readFileSync(path).byteLength);
+      } catch {
+        return Promise.resolve(null);
+      }
+    },
     run: ({
       command,
       workingDirectory,
