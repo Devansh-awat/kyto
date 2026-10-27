@@ -43,6 +43,12 @@ import {
 // a ceiling so its FIRST request can't overflow the model's context window
 // and fail before anything is measured. The next turn has a real count.
 const UNMEASURED_MAX_CHARS = 300_000;
+// Absolute ceiling on the verbatim replay window for ANY thread, measured or
+// not. The measured fold-math lags one turn behind the content, so this is the
+// net that stops a single overshoot from shipping at the long-context rate.
+// Higher than UNMEASURED_MAX_CHARS so it never tightens that first-request cap;
+// ~120k tokens at the measured ~4 chars/token, just past haiku's 100k step.
+const MAX_WINDOW_CHARS = 480_000;
 // How far back we look beyond that cap. Everything between this and the verbatim
 // window is compacted into a summary (see lib/agent/compaction) instead of being
 // dropped on the floor, which is what used to happen: the model was handed the
@@ -462,6 +468,14 @@ export async function buildPrompt(
           measured.inputTokens) *
         historyShare;
     }
+    // Absolute backstop. The measured branch sizes the fold from the PREVIOUS
+    // turn's measurement, so a sharp jump in recent content would otherwise
+    // assemble and ship ONCE, un-folded, before the next turn re-measures and
+    // folds it — a turn on haiku pays the 5x-over-100k rate for that one
+    // request. Clamp the verbatim window to a hard ceiling regardless of what
+    // the fold-math decided; `max` so this never loosens the unmeasured cap.
+    const windowChars = sizes.slice(start).reduce((sum, size) => sum + size, 0);
+    toFold = Math.max(toFold, windowChars - MAX_WINDOW_CHARS);
     while (toFold > 0 && start < prior.length - 1) {
       toFold -= sizes[start] ?? 0;
       start += 1;
