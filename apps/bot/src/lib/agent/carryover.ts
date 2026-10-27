@@ -19,6 +19,20 @@ export const CARRYOVER_MAX_RESULTS = 12;
 export const CARRYOVER_OUTPUT_MAX = 1500;
 const CARRYOVER_INPUT_MAX = 400;
 
+// Bounds on the REAL-message carryover (`carriedMessages`). Its comment used to
+// claim "whole — streamAttempt compacts the first request when it's too big",
+// but that is false: the carried results become the first request's LAST STEP,
+// which step-0 compaction keeps VERBATIM (compactedMessages in context-trim.ts),
+// so it cannot shrink them. A 164-step attempt that fell back therefore shipped
+// all 164 tool results, full output, as one 901k-token haiku step 0 billed at
+// the 5x-over-100k rate — $0.87 in one request (2026-10-27). So bound it here:
+// keep the most recent results whole, newest-first, until this char budget, and
+// clamp any single result that alone exceeds the per-result cap. Older results
+// are dropped (the thread and the thinking store still carry them); a note tells
+// the model some were left out so it re-runs a tool if it needs the rest.
+const CARRIED_TOTAL_MAX = 60_000;
+const CARRIED_RESULT_MAX = 8000;
+
 // Bounds on the tool calls and results persisted into the thinking store and
 // replayed while the turn is one of the last three (owner's call 2026-10-16).
 // Every call is kept, each result cut to OBSERVATION_OUTPUT_MAX, and the turn
@@ -146,14 +160,32 @@ function toJson(value: unknown): JSONValue {
   }
 }
 
+/** A carried result's size, measured as the text a provider will receive. */
+function carriedSize(output: unknown): number {
+  return typeof output === 'string'
+    ? output.length
+    : JSON.stringify(output ?? null).length;
+}
+
+/** Clamp a single oversized result so one giant output can't blow the budget. */
+function clampCarriedOutput(output: unknown): unknown {
+  if (carriedSize(output) <= CARRIED_RESULT_MAX) {
+    return output;
+  }
+  const text =
+    typeof output === 'string' ? output : JSON.stringify(output ?? null);
+  return `${text.slice(0, CARRIED_RESULT_MAX)}\n…[clipped: this result was too large to carry across the fallback; re-run the tool if you need the rest]`;
+}
+
 /**
  * A fallback model's view of what the failed attempt already did: its tool
  * calls and results as REAL messages after the request, so it carries on from
  * them the way the first model would have, instead of reading a clipped text
- * summary (12 results, 1500 characters each). Whole: streamAttempt compacts
- * the first request when they make it too big. A call to a tool this turn
- * doesn't have (a hallucinated name) is left out: providers refuse a call to
- * an undefined tool.
+ * summary (12 results, 1500 characters each). Bounded to the most recent
+ * results within CARRIED_TOTAL_MAX: step-0 compaction can NOT shrink these —
+ * they land as the first request's last step, which it keeps verbatim — so the
+ * cap has to live here. A call to a tool this turn doesn't have (a hallucinated
+ * name) is left out: providers refuse a call to an undefined tool.
  */
 export function carriedMessages({
   results,
@@ -162,10 +194,25 @@ export function carriedMessages({
   results: GatheredResult[];
   toolNames: ReadonlySet<string>;
 }): ModelMessage[] {
-  const kept = results.filter((result) => toolNames.has(result.toolName));
-  if (kept.length === 0) {
+  const valid = results.filter((result) => toolNames.has(result.toolName));
+  if (valid.length === 0) {
     return [];
   }
+  // Newest-first within a char budget: a fallback from a long attempt must not
+  // re-ship every step's full output (see the constants above). A single result
+  // bigger than the per-result cap is clamped rather than dropping the rest.
+  const boundedReversed: GatheredResult[] = [];
+  let used = 0;
+  for (const result of [...valid].reverse()) {
+    const output = clampCarriedOutput(result.output);
+    const size = carriedSize(output);
+    if (boundedReversed.length > 0 && used + size > CARRIED_TOTAL_MAX) {
+      break;
+    }
+    used += size;
+    boundedReversed.push({ ...result, output });
+  }
+  const kept = boundedReversed.reverse();
   const id = (index: number) => `carried-${index + 1}`;
   return [
     {

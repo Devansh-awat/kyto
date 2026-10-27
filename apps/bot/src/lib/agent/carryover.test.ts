@@ -236,4 +236,35 @@ describe('carriedMessages', () => {
   test('nothing carried, nothing sent', () => {
     expect(carriedMessages({ results: [], toolNames: new Set() })).toEqual([]);
   });
+
+  test('bounds the carried results so a long attempt cannot blow up step 0', () => {
+    // A 164-step attempt that fell back used to ship every result's full output
+    // as one 901k-token request (2026-10-27). Keep the newest within budget.
+    const big = Array.from({ length: 200 }, (_, index) => ({
+      input: { n: index },
+      output: 'x'.repeat(5000),
+      toolName: 'bash',
+    }));
+    const messages = carriedMessages({
+      results: big,
+      toolNames: new Set(['bash']),
+    });
+    const [calls] = messages;
+    const carried = Array.isArray(calls?.content) ? calls.content.length : 0;
+    expect(carried).toBeLessThan(big.length);
+    expect(JSON.stringify(messages).length).toBeLessThan(80_000);
+    // Newest-first: the last result is kept, the first is dropped.
+    expect(JSON.stringify(messages)).toContain('"n":199');
+    expect(JSON.stringify(messages)).not.toContain('"n":0');
+  });
+
+  test('clamps a single oversized result instead of dropping everything', () => {
+    const messages = carriedMessages({
+      results: [{ input: {}, output: 'y'.repeat(50_000), toolName: 'bash' }],
+      toolNames: new Set(['bash']),
+    });
+    expect(messages).toHaveLength(2);
+    expect(JSON.stringify(messages)).toContain('clipped');
+    expect(JSON.stringify(messages).length).toBeLessThan(20_000);
+  });
 });
