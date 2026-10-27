@@ -23,6 +23,12 @@ export const modelSpend = pgTable(
     model: text('model').notNull(),
     effort: text('effort'),
     threadId: text('thread_id'),
+    /**
+     * Who the turn was for, so shared-key spend can be capped per user (a
+     * channel thread is many users, so thread_id alone can't attribute it).
+     * Null on rows written before 2026-10-27 and on thread-less background work.
+     */
+    userId: text('user_id'),
     /** List price as the provider reported it; null when it reported none. */
     costUsd: doublePrecision('cost_usd'),
     inputTokens: integer('input_tokens').notNull(),
@@ -40,7 +46,11 @@ export const modelSpend = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (table) => [index('model_spend_created_idx').on(table.createdAt)]
+  (table) => [
+    index('model_spend_created_idx').on(table.createdAt),
+    // The per-user daily shared-key cap sums one user's recent rows.
+    index('model_spend_user_created_idx').on(table.userId, table.createdAt),
+  ]
 );
 
 export type ModelSpend = typeof modelSpend.$inferSelect;

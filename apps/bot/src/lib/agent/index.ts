@@ -24,6 +24,7 @@ import {
   type InflightEffect,
   saveThreadLunaEffort,
   saveThreadPromptSize,
+  sumUserSharedSpendSince,
 } from '@repo/db/queries';
 import { LazySandbox } from '@repo/sandbox';
 import { z } from 'zod';
@@ -201,6 +202,12 @@ const MAX_TRUNCATION_RETRIES = 2;
 // the thread history above it).
 const MAX_CARRIED_UNANSWERED = 3;
 const SLOWEST_TOOLS_LOGGED = 5;
+// Per-user daily cap on the SHARED Hack Club budget (owner's call 2026-10-27,
+// $1): one user must not drain the day's allowance for everyone. Owner and
+// own-key (BYOK) users are exempt — the latter aren't spending the shared
+// budget, which is the nudge: connect a key and the cap lifts. Counted over the
+// UTC day, matching how Hack Club counts its own allowance (lib/errors).
+const DAILY_SHARED_CAP_USD = 1;
 // `--show-reasoning` cards per message from the user account (Slack allows 50
 // blocks; a thought is up to 2800 chars).
 const MAX_THOUGHT_CARDS = 10;
@@ -378,8 +385,12 @@ export async function runTurn(input: {
       run: (controller) =>
         input.secret
           ? executeTurn(input, controller)
-          : threadLogContext.run({ threadId: input.thread.id }, () =>
-              executeTurn(input, controller)
+          : threadLogContext.run(
+              {
+                threadId: input.thread.id,
+                userId: input.message.author.userId,
+              },
+              () => executeTurn(input, controller)
             ),
     });
   }
@@ -559,6 +570,38 @@ async function executeTurn(
       }),
   ]);
   const setupReadMs = Date.now() - turnStart;
+  // Per-user daily shared-key cap. Checked after routing so a BYOK user (who
+  // runs on their OWN key, `routing.own.length > 0`) is never blocked — only a
+  // user about to spend the SHARED budget is. Owner exempt; `!secret` left
+  // alone (its flow allows no ordinary post). Fails OPEN: a DB hiccup must not
+  // lock anyone out.
+  if (!(isOwner || secret) && routing.own.length === 0) {
+    const now = new Date();
+    const since = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+    );
+    const spent = await sumUserSharedSpendSince(
+      message.author.userId,
+      since
+    ).catch((error: unknown) => {
+      logger.warn(
+        { err: errorMessage(error), threadId },
+        '[spend] could not read the daily shared-key spend; allowing the turn'
+      );
+      return 0;
+    });
+    if (spent >= DAILY_SHARED_CAP_USD) {
+      logger.info(
+        { spent, threadId, userId: message.author.userId },
+        '[spend] user hit the daily shared-key cap'
+      );
+      const notice = `You've reached today's limit on kyto's shared AI budget (about $${DAILY_SHARED_CAP_USD.toFixed(2)} of usage). It resets at midnight UTC.\n\nTo keep going now, connect your own model key in kyto's App Home → *Models* — then you're not limited by the shared budget at all.`;
+      await thread.postEphemeral(message.author, notice).catch(async () => {
+        await thread.post({ markdown: notice }).catch(() => undefined);
+      });
+      return;
+    }
+  }
   // Ends whichever attempt is running (set per attempt below).
   let abortCurrentAttempt: ((reason: Error) => void) | undefined;
   // Judges the WORK, not just the message: the thread once the prompt is built,

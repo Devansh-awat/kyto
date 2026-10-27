@@ -14,6 +14,30 @@ export async function recordModelSpend(
   await db.insert(modelSpend).values(row);
 }
 
+/**
+ * One user's shared-key (Hack Club) spend since a cutoff, for the per-user
+ * daily cap. Only `provider = 'hackclub'` is the shared budget — a user's own
+ * `byok:*` key and the free Gemini floor are theirs / free and don't count.
+ */
+export async function sumUserSharedSpendSince(
+  userId: string,
+  since: Date
+): Promise<number> {
+  const [row] = await db
+    .select({
+      total: sql<string>`coalesce(sum(${modelSpend.costUsd}), 0)`,
+    })
+    .from(modelSpend)
+    .where(
+      and(
+        eq(modelSpend.userId, userId),
+        eq(modelSpend.provider, 'hackclub'),
+        gte(modelSpend.createdAt, since)
+      )
+    );
+  return Number(row?.total ?? 0);
+}
+
 export interface SpendGroup {
   cacheReadTokens: number;
   cacheWriteTokens: number;

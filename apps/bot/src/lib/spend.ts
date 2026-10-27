@@ -24,11 +24,14 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_SPEND_DAYS = 90;
 
 function save(record: SpendRecord): void {
+  const context = threadLogContext.getStore();
   recordModelSpend({
     ...record,
     // Every turn (and what it starts, subagents included) runs inside the
     // thread's log context; background work outside one is filed thread-less.
-    threadId: threadLogContext.getStore()?.threadId ?? null,
+    threadId: context?.threadId ?? null,
+    // Attributed to the turn's user so the per-user daily cap can sum it.
+    userId: context?.userId ?? null,
   }).catch((error: unknown) => {
     logger.warn(
       { err: errorMessage(error), source: record.source },

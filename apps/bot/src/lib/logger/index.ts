@@ -6,7 +6,12 @@ import { env } from '@/env';
 // (lib/agent) so EVERY line logged inside it — agent, tools, sandbox, MCP —
 // is tagged with the thread and captured for it, not just the few calls that
 // remember to pass `threadId`. lib/thread-logs persists the capture.
-export const threadLogContext = new AsyncLocalStorage<{ threadId: string }>();
+export const threadLogContext = new AsyncLocalStorage<{
+  threadId: string;
+  // Who the turn is for, so each model_spend row can be attributed to a user
+  // for the per-user daily shared-key cap. Absent for thread-less background.
+  userId?: string;
+}>();
 
 const LEVELS: Record<number, string> = {
   10: 'TRACE',
