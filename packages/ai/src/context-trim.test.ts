@@ -87,7 +87,7 @@ describe('compactedMessages', () => {
     role: 'assistant',
   };
 
-  test('keeps the summary, the request and the last step, in that order', () => {
+  test('keeps only the summary and the request, in that order', () => {
     const messages = [
       history,
       request,
@@ -96,34 +96,29 @@ describe('compactedMessages', () => {
       result('c', 9000),
     ];
     const out = compactedMessages({
-      lastStepFrom: 3,
       messages,
       request,
       summary: 'SUMMARY',
     });
-    expect(out).toHaveLength(4);
+    expect(out).toHaveLength(2);
     expect(out[0]?.content).toContain('SUMMARY');
     expect(out[1]).toBe(request);
-    expect(out[2]).toBe(call);
-    expect(out[3]).toBe(messages[4]);
   });
 
   test('a second compaction keeps the request again', () => {
     const first = compactedMessages({
-      lastStepFrom: 3,
       messages: [history, request, result('a', 9000), call, result('c', 9000)],
       request,
       summary: 'ONE',
     });
     const grown = [...first, call, result('d', 9000)];
     const second = compactedMessages({
-      lastStepFrom: first.length,
       messages: grown,
       request,
       summary: 'TWO',
     });
     expect(second[1]).toBe(request);
     expect(second[0]?.content).toContain('TWO');
-    expect(second).toHaveLength(4);
+    expect(second).toHaveLength(2);
   });
 });

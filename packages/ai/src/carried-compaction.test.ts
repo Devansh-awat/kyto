@@ -142,19 +142,19 @@ describe('a carried conversation', () => {
     expect(JSON.stringify(answer?.messages)).not.toContain('a.txt');
   });
 
-  test('a fallback keeps the request and the last tool round verbatim', async () => {
+  test('a fallback compacts its carried tool rounds too', async () => {
     await run(95_000, 'continue');
     expect(requests).toHaveLength(2);
     const answer = requests[1]?.messages ?? [];
+    // Kept verbatim, a long attempt's carried rounds went out as one 901k
+    // request (2026-10-27); only the summary and the request survive.
     expect(answer.map((message) => message.role)).toEqual([
       'system',
       'user',
       'user',
-      'assistant',
-      'tool',
     ]);
     expect(JSON.stringify(answer)).toContain('now the follow-up');
-    expect(JSON.stringify(answer)).toContain('a.txt');
+    expect(JSON.stringify(answer)).not.toContain('a.txt');
     expect(JSON.stringify(answer)).not.toContain('an older message');
   });
 });

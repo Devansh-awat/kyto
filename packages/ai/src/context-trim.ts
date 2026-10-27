@@ -23,7 +23,7 @@ export const COMPACT_AT = 0.92;
 export const TRIM_TARGET = 0.55;
 
 export const COMPACT_INSTRUCTION =
-  '[Context compaction] This conversation is about to be replaced by your summary of it, to keep the request small. Summarize EVERYTHING above except the system prompt: the thread so far and all the work done in this task. Keep: what was asked and by whom, decisions and standing instructions (word for word, with who gave them), facts, names, ids, URLs, file paths, numbers, commands run and what they showed, errors and why they happened, what is done and what is left to do. The latest request and your most recent tool calls with their results are kept verbatim after the summary, so be brief about those. Write the summary only — do not call any tool.';
+  '[Context compaction] This conversation is about to be replaced by your summary of it, to keep the request small. Summarize EVERYTHING above except the system prompt: the thread so far and all the work done in this task. Keep: what was asked and by whom, decisions and standing instructions (word for word, with who gave them), facts, names, ids, URLs, file paths, numbers, commands run and what they showed, errors and why they happened, what is done and what is left to do. Only the latest request is kept verbatim after the summary — your tool calls and their results are NOT, including the most recent ones, so give what the latest results showed in full detail. Write the summary only — do not call any tool.';
 
 export type CompactionEvent =
   | { before: number; phase: 'start'; step: number }
@@ -39,31 +39,26 @@ export type CompactionEvent =
   | { after: number; before: number; phase: 'measured'; step: number };
 
 /**
- * The messages after compaction: the summary, then — verbatim — the request
- * that started this task and the last step's own messages (the tool calls the
- * model is about to read the results of).
+ * The messages after compaction: the summary, then the request that started
+ * this task verbatim. Nothing else survives, not even the last step: kept
+ * verbatim it could be arbitrarily large (a fallback's carried tool rounds),
+ * and the summary already covers it.
  */
 export function compactedMessages({
-  lastStepFrom,
   messages,
   request,
   summary,
 }: {
-  lastStepFrom: number;
   messages: ModelMessage[];
   request: ModelMessage | undefined;
   summary: string;
 }): ModelMessage[] {
-  const lastStep = messages.slice(lastStepFrom);
   return [
     {
-      content: `<compacted_context>\nEverything before this point (the thread and the work so far) was compacted into this summary to save tokens. Run a tool again if you need exact output.\n\n${summary}\n</compacted_context>`,
+      content: `<compacted_context>\nEverything before this point (the thread and the work so far, including your latest tool results) was compacted into this summary to save tokens. Run a tool again if you need exact output.\n\n${summary}\n</compacted_context>`,
       role: 'user',
     },
-    ...(request && messages.slice(0, lastStepFrom).includes(request)
-      ? [request]
-      : []),
-    ...lastStep,
+    ...(request && messages.includes(request) ? [request] : []),
   ];
 }
 

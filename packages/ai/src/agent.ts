@@ -457,14 +457,14 @@ export function streamAttempt({
           ] satisfies ModelMessage[],
         }
       : { prompt };
-  // Where the request sits, and what a first-request compaction keeps
-  // verbatim: a resumed subagent's follow-up, or a fallback's request plus the
-  // last tool round it inherited.
+  // Where the request sits, and where the first request's unmeasured part
+  // starts: `priorInputTokens` counted the carried work up to its last tool
+  // round, so that round (or a resumed subagent's follow-up) is what it missed.
   const promptIndex = priorMessages.length + history.length;
   const lastCarriedCall = continueFrom.findLastIndex(
     (message) => message.role === 'assistant'
   );
-  const carriedKeepFrom =
+  const carriedUnmeasuredFrom =
     lastCarriedCall === -1 ? promptIndex : promptIndex + 1 + lastCarriedCall;
   const meter = createCallMeter();
   // Set once the call is billed: a call that dies before finishing any step
@@ -493,7 +493,7 @@ export function streamAttempt({
   };
   const priceStep = LONG_CONTEXT_PRICE_STEP[attempt.model];
   // How many messages the previous step's request carried: what follows them
-  // is the last step's own output, which compaction keeps verbatim.
+  // is the last step's own output, not yet in any measured usage.
   let sentLength = 0;
   // A compaction whose real effect the next request's usage will show.
   let pendingMeasure: { before: number; step: number } | undefined;
@@ -652,7 +652,7 @@ export function streamAttempt({
               : steps.at(-1)?.usage.inputTokens;
             const ceiling =
               priceStep ?? (first ? CARRIED_COMPACT_STEP : undefined);
-            const keepFrom = first ? carriedKeepFrom : sentLength;
+            const unmeasuredFrom = first ? carriedUnmeasuredFrom : sentLength;
             if (
               ceiling &&
               lastInput !== undefined &&
@@ -665,10 +665,12 @@ export function streamAttempt({
               });
               // The summary request is the last one plus what that step
               // appended. If the appended results would carry it past the
-              // step, they are cut in the summary request only: they are not
-              // cached yet, and they are kept whole after the summary anyway.
+              // step, they are cut to their heads in the summary request (they
+              // are not cached yet, so the prefix stays a cache read): one
+              // summary at the long-context rate is what this exists to stop.
               const appended =
-                lastInput + estimateMessageTokens(messages.slice(keepFrom));
+                lastInput +
+                estimateMessageTokens(messages.slice(unmeasuredFrom));
               const summary = await summarizeContext({
                 activeToolNames: activeTools?.(),
                 messages:
@@ -686,7 +688,6 @@ export function streamAttempt({
               });
               if (summary) {
                 stepMessages = compactedMessages({
-                  lastStepFrom: keepFrom,
                   messages,
                   request: first
                     ? messages[promptIndex]
