@@ -178,14 +178,15 @@ function clampCarriedOutput(output: unknown): unknown {
 }
 
 /**
- * A fallback model's view of what the failed attempt already did: its tool
- * calls and results as REAL messages after the request, so it carries on from
- * them the way the first model would have, instead of reading a clipped text
- * summary (12 results, 1500 characters each). Bounded to the most recent
- * results within CARRIED_TOTAL_MAX: step-0 compaction can NOT shrink these —
- * they land as the first request's last step, which it keeps verbatim — so the
- * cap has to live here. A call to a tool this turn doesn't have (a hallucinated
- * name) is left out: providers refuse a call to an undefined tool.
+ * A RESTARTED turn's view of what it already did (a fallback in the same
+ * process is handed the failed attempt's last request instead, see
+ * `resumeFrom`): the checkpoint's tool calls and results as REAL messages
+ * after the request, so it carries on from them instead of reading a clipped
+ * text summary. Bounded to the most recent results within CARRIED_TOTAL_MAX:
+ * the checkpoint keeps every result of the turn, and shipping them all made
+ * one 901k-token request (2026-10-27). A call to a tool this turn doesn't have
+ * (a hallucinated name) is left out: providers refuse a call to an undefined
+ * tool.
  */
 export function carriedMessages({
   results,

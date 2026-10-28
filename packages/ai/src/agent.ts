@@ -54,6 +54,7 @@ import {
   BYOK_HIGH_EFFORT_OUTPUT_TOKENS,
 } from './providers/byok';
 import { CHATGPT_PROVIDER } from './providers/chatgpt';
+import { replayableContext, type SentContext } from './sent-context';
 import { reportSpend } from './spend';
 import { stabilizeToolOrder } from './tool-order';
 
@@ -277,11 +278,13 @@ export function streamAttempt({
   onFirstRequest,
   onError,
   onGatewayRetry,
+  onSentContext,
   continueFrom = [],
   priorInputTokens,
   priorMessages = [],
   prompt,
   reasoningEffort,
+  resumeFrom,
   serviceTier,
   source = 'turn',
   system,
@@ -348,6 +351,11 @@ export function streamAttempt({
    */
   onGatewayRetry?: (info: GatewayRetryInfo) => void;
   /**
+   * Called with every request's messages exactly as sent, so a fallback can be
+   * handed precisely what this attempt last worked from (`resumeFrom`).
+   */
+  onSentContext?: (context: SentContext) => void;
+  /**
    * An earlier conversation this call continues, ahead of `history` and
    * `prompt`: a resumed subagent's own run, tool calls and results included.
    */
@@ -365,6 +373,12 @@ export function streamAttempt({
    */
   priorInputTokens?: number;
   prompt: string;
+  /**
+   * A failed attempt's last request (see onSentContext): sent as this
+   * attempt's messages in place of `priorMessages`/`history`/`continueFrom`,
+   * with `prompt` as the request, and its measured size as `priorInputTokens`.
+   */
+  resumeFrom?: SentContext;
   /**
    * Hack Club only: the effort to send, already decided by the caller (so it
    * can show it). Omitted → `pickReasoningEffort`.
@@ -412,7 +426,13 @@ export function streamAttempt({
         baseURL: attempt.baseURL,
         fetch: tunedFetch({
           attempt,
-          historyMessages: history.length,
+          // A resumed context whose history was compacted away has no
+          // replayed thread to put a breakpoint after.
+          historyMessages:
+            resumeFrom &&
+            resumeFrom.requestIndex !== priorMessages.length + history.length
+              ? 0
+              : history.length,
           holder,
           onCachePrefix,
           onFirstRequest,
@@ -431,41 +451,56 @@ export function streamAttempt({
   const initialImages = usableImages(images ?? [], onDroppedImages);
   const textOnly = !modelSupportsVision(attempt.model);
   const descriptions = new Map<unknown, string>();
+  const request: ModelMessage = {
+    content:
+      initialImages.length > 0
+        ? [
+            ...initialImages.map(imagePart),
+            { text: prompt, type: 'text' as const },
+          ]
+        : prompt,
+    role: 'user',
+  };
+  const replayed = resumeFrom
+    ? replayableContext({
+        context: resumeFrom,
+        request,
+        toolNames: new Set(Object.keys(tools)),
+      })
+    : undefined;
   const promptInput =
+    replayed ||
     initialImages.length > 0 ||
     history.length > 0 ||
     priorMessages.length > 0 ||
     continueFrom.length > 0
       ? {
-          messages: [
+          messages: replayed?.messages ?? [
             ...priorMessages,
             ...history.map((content) => ({
               content,
               role: 'user' as const,
             })),
-            {
-              content:
-                initialImages.length > 0
-                  ? [
-                      ...initialImages.map(imagePart),
-                      { text: prompt, type: 'text' as const },
-                    ]
-                  : prompt,
-              role: 'user' as const,
-            },
+            request,
             ...continueFrom,
-          ] satisfies ModelMessage[],
+          ],
         }
       : { prompt };
   // Where the request sits, and where the first request's unmeasured part
   // starts: `priorInputTokens` counted the carried work up to its last tool
   // round, so that round (or a resumed subagent's follow-up) is what it missed.
-  const promptIndex = priorMessages.length + history.length;
+  const promptIndex = replayed
+    ? replayed.requestIndex
+    : priorMessages.length + history.length;
   const lastCarriedCall = continueFrom.findLastIndex(
     (message) => message.role === 'assistant'
   );
   const carriedUnmeasuredFrom =
-    lastCarriedCall === -1 ? promptIndex : promptIndex + 1 + lastCarriedCall;
+    replayed?.unmeasuredFrom ??
+    (lastCarriedCall === -1 ? promptIndex : promptIndex + 1 + lastCarriedCall);
+  const firstInputTokens = resumeFrom
+    ? resumeFrom.inputTokens
+    : priorInputTokens;
   const meter = createCallMeter();
   // Set once the call is billed: a call that dies before finishing any step
   // gets neither onFinish nor (unless stopped) onAbort, only a rejected
@@ -613,6 +648,8 @@ export function streamAttempt({
     getFreshImages ||
     priceStep ||
     priorInputTokens ||
+    onSentContext ||
+    resumeFrom ||
     textOnly
       ? {
           // Gate deferred tools per step AND inject any images the model asked to
@@ -640,6 +677,8 @@ export function streamAttempt({
               onDroppedImages
             );
             let stepMessages = messages;
+            // Set when this step rewrote the context (a compaction).
+            let summarized: boolean | undefined;
             // Past COMPACT_AT of the price step by the provider's own count,
             // the model summarizes everything but the system prompt and
             // tools. Step 0 is the replayed thread, which thread compaction
@@ -648,7 +687,7 @@ export function streamAttempt({
             // measured by that work's last request (priorInputTokens).
             const first = stepNumber === 0;
             const lastInput = first
-              ? priorInputTokens
+              ? firstInputTokens
               : steps.at(-1)?.usage.inputTokens;
             const ceiling =
               priceStep ?? (first ? CARRIED_COMPACT_STEP : undefined);
@@ -689,9 +728,7 @@ export function streamAttempt({
               if (summary) {
                 stepMessages = compactedMessages({
                   messages,
-                  request: first
-                    ? messages[promptIndex]
-                    : initialMessages.at(-1),
+                  request: initialMessages[promptIndex],
                   summary,
                 });
               } else {
@@ -715,6 +752,7 @@ export function streamAttempt({
                 summarized: summary !== undefined,
               });
               pendingMeasure = { before: lastInput, step: stepNumber };
+              summarized = summary !== undefined;
             }
             if (fresh.length > 0) {
               const label = fresh
@@ -744,6 +782,24 @@ export function streamAttempt({
             const capped = capContextImages({ messages: stepMessages });
             if (capped !== messages) {
               result.messages = capped;
+            }
+            if (onSentContext) {
+              const sentRequest = initialMessages[promptIndex];
+              let requestIndex = sentRequest ? capped.indexOf(sentRequest) : -1;
+              if (requestIndex === -1) {
+                // Rebuilt (an image described for a text-only model): where a
+                // compaction or the original layout put it.
+                requestIndex = summarized ? 1 : promptIndex;
+              }
+              onSentContext({
+                // A rewritten context has no measured size until it is sent.
+                ...(summarized === undefined && lastInput !== undefined
+                  ? { inputTokens: lastInput }
+                  : {}),
+                measuredLength: summarized === undefined ? unmeasuredFrom : 0,
+                messages: capped,
+                requestIndex,
+              });
             }
             sentLength = capped.length;
             return result;

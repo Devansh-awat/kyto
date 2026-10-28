@@ -17,6 +17,7 @@ import {
   UPGRADE_ATTEMPTS,
 } from '@repo/ai';
 import { comparePrefix, type PrefixUnit } from '@repo/ai/cache-probe';
+import type { SentContext } from '@repo/ai/sent-context';
 import { stepsCacheWrites, stepsCostUsd } from '@repo/ai/usage-cost';
 import {
   getThreadLunaEffort,
@@ -1305,6 +1306,12 @@ async function executeTurn(
     // The last request's size as the provider counted it (input + output), so
     // a fallback carrying those results compacts its first request if needed.
     let lastMeasuredSize: number | undefined;
+    // The last request an attempt actually sent: a fallback is handed exactly
+    // that (owner's call 2026-10-27), not a rebuild from `gatheredResults`,
+    // which resurrected everything the failed model's own compaction had
+    // already summarized away. A restart has no such request in memory and
+    // still resumes from the checkpoint's results.
+    let lastSentContext: SentContext | undefined;
     // How many times the CURRENT attempt has been re-run in place because its
     // stream was cut off mid-flight (see truncatedStream below). A dropped
     // connection says nothing about the model, so it must not cost a fallback
@@ -1455,7 +1462,7 @@ async function executeTurn(
       if (isFallback && gatheredResults.length > 0) {
         blocks.push(
           attempts.length > 0
-            ? 'An earlier model started this turn and was cut off. Its tool calls and their results come right after this message: carry on from them, and do not re-run them.'
+            ? 'An earlier model started this turn and was cut off. This conversation is exactly what it was working from: its tool calls and results (or a summary of them) are here. Carry on from where it stopped, and do not re-run what it already ran.'
             : 'You started this turn before kyto restarted. Your tool calls and their results come right after this message: carry on from them, and do not re-run them.'
         );
       }
@@ -1700,6 +1707,20 @@ async function executeTurn(
           budget: cards,
           context: { attempt: attemptLog(currentAttempt), threadId },
         });
+        // What the earlier attempt already did: its last request as sent,
+        // else (a restart) its tool calls rebuilt from the checkpoint.
+        let carried: Partial<Parameters<typeof streamAttempt>[0]> = {};
+        if (isFallback && lastSentContext) {
+          carried = { resumeFrom: lastSentContext };
+        } else if (isFallback) {
+          carried = {
+            continueFrom: carriedMessages({
+              results: gatheredResults,
+              toolNames: new Set(Object.keys(built.tools)),
+            }),
+            priorInputTokens: lastMeasuredSize,
+          };
+        }
         const result = streamAttempt({
           abortSignal: AbortSignal.any([
             controller.signal,
@@ -1840,16 +1861,10 @@ async function executeTurn(
             model: currentAttempt.model,
             ownKey: onOwnKey,
           }),
-          // What the earlier attempt already did, as real tool calls.
-          ...(isFallback
-            ? {
-                continueFrom: carriedMessages({
-                  results: gatheredResults,
-                  toolNames: new Set(Object.keys(built.tools)),
-                }),
-                priorInputTokens: lastMeasuredSize,
-              }
-            : {}),
+          onSentContext: (context) => {
+            lastSentContext = context;
+          },
+          ...carried,
           system: systemPrompt({ hints }),
           toolOrder: built.toolOrder,
           tools: built.tools,
