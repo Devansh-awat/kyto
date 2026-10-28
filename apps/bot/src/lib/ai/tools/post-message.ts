@@ -29,6 +29,30 @@ interface PostTarget {
   type: 'thread' | 'channel' | 'user';
 }
 
+interface ChannelMembershipClient {
+  conversations: {
+    info(options: { channel: string }): Promise<{
+      channel?: { is_member?: boolean };
+    }>;
+    join(options: { channel: string }): Promise<unknown>;
+  };
+}
+
+/** Join a target only when the app is not already a member. */
+export async function ensureAppMembershipForPost({
+  channel,
+  client = slack.webClient,
+}: {
+  channel: string;
+  client?: ChannelMembershipClient;
+}): Promise<void> {
+  const info = await client.conversations.info({ channel });
+  if (info.channel?.is_member !== false) {
+    return;
+  }
+  await client.conversations.join({ channel });
+}
+
 /**
  * Actually deliver a post. Shared by the immediate (same-channel) path and by
  * the confirm-button handler, so a confirmed cross-channel post travels the
@@ -87,6 +111,13 @@ export async function executePostMessage(
     iconUrl: identity.iconUrl,
     username: identity.username,
   };
+  // `chat.postMessage` fails with `not_in_channel` for an owner-confirmed post
+  // to a public channel kyto has not joined yet. Check membership immediately
+  // before delivery so a post delayed behind a confirmation follows the same
+  // rule as one sent inline.
+  if (target.type !== 'user') {
+    await ensureAppMembershipForPost({ channel: rawChannelOf(target.id) });
+  }
   if (target.type === 'thread') {
     const sent = await bot.thread(target.id).post(content);
     return { messageId: sent.id, threadId: sent.threadId };

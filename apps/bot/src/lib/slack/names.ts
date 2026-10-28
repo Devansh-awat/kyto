@@ -88,11 +88,14 @@ export async function resolveChannel(
   channelId: string
 ): Promise<{ kind?: ChannelKind; name?: string }> {
   const state = bot.getState();
-  const cached = await state.get<{ kind?: ChannelKind; name?: string }>(
-    `slack:channel:${channelId}`
-  );
-  // Entries cached before `kind` existed are read again once.
-  if (cached?.kind) {
+  const cached = await state.get<{
+    id?: string;
+    kind?: ChannelKind;
+    name?: string;
+  }>(`slack:channel:${channelId}`);
+  // Entries cached before `kind` or their channel id existed are read again
+  // once. In particular, never render a cached name against a different id.
+  if (cached?.kind && cached.id === channelId) {
     return cached;
   }
   try {
@@ -111,7 +114,7 @@ export async function resolveChannel(
     } else if (conversation.is_private) {
       kind = 'private';
     }
-    const resolved = { kind, name: conversation.name };
+    const resolved = { id: channelId, kind, name: conversation.name };
     await state
       .set(`slack:channel:${channelId}`, resolved, 86_400_000)
       .catch(() => undefined);
