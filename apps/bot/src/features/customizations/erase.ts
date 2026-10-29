@@ -5,6 +5,7 @@ import {
   deleteChatgptAccount,
   deleteMemoryCurationsByAuthor,
   deleteNotebook,
+  deleteNpsResponsesForUser,
   deletePrivateMemoriesByAuthor,
   deleteRevisionsForUser,
   deleteSlackGrant,
@@ -72,6 +73,8 @@ export interface EraseResult {
     sandboxesLeft: number;
     /** Feedback they gave kyto in conversation (the submitFeedback tool). */
     submittedFeedback: number;
+    /** Their scores and comments on NPS surveys. */
+    npsResponses: number;
     /** DM threads whose compacted history (lib/agent/compaction) was deleted. */
     summarizedThreads: number;
     thinkingThreads: number;
@@ -231,6 +234,16 @@ export async function eraseUserData({
     }
   );
 
+  const npsResponses = await deleteNpsResponsesForUser(userId).catch(
+    (error: unknown) => {
+      logger.error(
+        { err: errorMessage(error), userId },
+        '[erase] failed to delete survey responses'
+      );
+      return 0;
+    }
+  );
+
   const settings = includeSettings
     ? await eraseSettings(userId)
     : {
@@ -247,6 +260,7 @@ export async function eraseUserData({
       dmNotebook,
       memoryCount,
       messageRevisions,
+      npsResponses,
       sandboxes,
       submittedFeedback,
       summarizedThreads,
@@ -263,6 +277,7 @@ export async function eraseUserData({
       dmNotebook,
       memories: memoryCount,
       messageRevisions,
+      npsResponses,
       sandboxesLeft,
       sandboxes,
       submittedFeedback,
@@ -381,6 +396,11 @@ export function summarize(result: EraseResult): string {
   if (removed.submittedFeedback > 0) {
     lines.push(
       `• ${removed.submittedFeedback} piece${removed.submittedFeedback === 1 ? '' : 's'} of feedback you gave kyto in conversation deleted`
+    );
+  }
+  if (removed.npsResponses > 0) {
+    lines.push(
+      `• ${removed.npsResponses} survey ${removed.npsResponses === 1 ? 'answer' : 'answers'} (score and comment) deleted`
     );
   }
   if (removed.dmNotebook) {

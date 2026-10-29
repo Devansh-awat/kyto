@@ -23,6 +23,7 @@ export * from './message-revisions';
 export * from './model-credentials';
 export * from './model-spend';
 export * from './notebooks';
+export * from './nps';
 export * from './opt-ins';
 export * from './reminders';
 export * from './sandbox';

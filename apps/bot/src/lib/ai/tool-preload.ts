@@ -97,8 +97,8 @@ const GROUPS = {
   },
   polls: {
     question:
-      'Will the assistant need to run a poll, or ask specific people a multiple-choice question and wait for their answer?',
-    tools: ['poll', 'askQuestion'],
+      'Will the assistant need to run a poll or an NPS survey, read survey results, or ask specific people a multiple-choice question and wait for their answer?',
+    tools: ['poll', 'askQuestion', 'npsSurvey', 'npsResults', 'closeNpsSurvey'],
   },
   reminders: {
     question:

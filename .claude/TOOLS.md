@@ -205,6 +205,31 @@ WAITS (up to 10 min) for an answer, then returns it.
   a working message. The waiting turn is in-memory — a turn doesn't survive a
   restart either.
 
+## NPS surveys (`npsSurvey`, `npsResults`, `closeNpsSurvey`)
+
+Deferred (preloaded with the `polls` group). Modelled on a Net Promoter Score
+pulse: one 0-10 "how likely are you to recommend…" question, a button per
+score. NPS = % promoters (9-10) − % detractors (0-6), −100..100; passives (7-8)
+count toward the total only (`summarizeNps`, `lib/slack/nps.ts`).
+
+- **State is in the DB** (`nps_surveys`, `nps_responses`), not message metadata
+  like `poll`: a survey has a closing date (default 7 days, ≤90) and comments
+  must never be written into a public message.
+- One row per person per survey; another click changes the score. After a
+  click a modal offers an optional **anonymous comment** (`features/nps`) —
+  a modal, not a thread reply, because a reply in a thread kyto follows starts
+  a turn.
+- **The card shows only the response count while open** (a live score nudges
+  later answers), then the final NPS once closed. Nothing closes a survey on a
+  timer: the first click after `closes_at` re-renders it closed.
+- `postTo: "channel"` follows `poll`'s rule (owner only; `resolvePollTarget`).
+  The question is `neutralizeBroadcast`ed in the one render.
+- `npsResults`: aggregates for anyone in the survey's channel (a survey from
+  another channel only for its creator/owner); **comments only for the creator
+  or the owner**, without names. `closeNpsSurvey`: creator or owner.
+- Responses are erased with "Your data". `npsSurvey`/`closeNpsSurvey` are in
+  `PUBLIC_POSTING_TOOLS` and `EFFECT_TOOLS`.
+
 ## Per-user MCP servers (`lib/ai/mcp.ts`, `lib/ai/mcp-permissions.ts`)
 
 Remote Streamable-HTTP servers a user adds in **App Home**, with a fallback to

@@ -54,6 +54,7 @@ fetch it, and a secret is never logged, prompted, or passed into a sandbox.
 | --- | --- |
 | `reminders` | One-off and recurring jobs, including the ones that run a script or a whole agent turn. |
 | `sites` | Hosted static sites and who may edit them. |
+| `nps_surveys`, `nps_responses` | NPS survey cards and each person's 0-10 score and optional comment. |
 
 ## Migrations
 

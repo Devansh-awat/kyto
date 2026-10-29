@@ -93,6 +93,7 @@ import {
   saveMemoryTool,
 } from './tools/memory';
 import { mermaidTool } from './tools/mermaid';
+import { closeNpsSurveyTool, npsResultsTool, npsSurveyTool } from './tools/nps';
 import { opencodeTool } from './tools/opencode';
 import {
   bookmarkLinkTool,
@@ -241,6 +242,7 @@ const EFFECT_TOOLS = new Set([
   'canvasDelete',
   'canvasWrite',
   'cancelReminder',
+  'closeNpsSurvey',
   'codeChannel',
   'createChannel',
   'deploySite',
@@ -252,6 +254,7 @@ const EFFECT_TOOLS = new Set([
   'generateImage',
   'mermaid',
   'pauseReminder',
+  'npsSurvey',
   'pinMessage',
   'poll',
   'postMessage',
@@ -286,6 +289,7 @@ const PUBLIC_POSTING_TOOLS = [
   'canvasDelete',
   'canvasWrite',
   'checkSubagent',
+  'closeNpsSurvey',
   'codeChannel',
   'createChannel',
   'editAsUser',
@@ -295,6 +299,7 @@ const PUBLIC_POSTING_TOOLS = [
   'joinThread',
   'leaveThread',
   'mermaid',
+  'npsSurvey',
   'pinMessage',
   'poll',
   'postMessage',
@@ -841,6 +846,18 @@ export async function buildTools({
     poll: {
       summary: 'post an interactive poll',
       tool: pollTool({ isOwner, thread }),
+    },
+    npsSurvey: {
+      summary: 'post an NPS (0-10 recommend) survey card',
+      tool: npsSurveyTool({ authorUserId, isOwner, thread }),
+    },
+    npsResults: {
+      summary: "list this channel's NPS surveys or read one's results",
+      tool: npsResultsTool({ authorUserId, isOwner, thread }),
+    },
+    closeNpsSurvey: {
+      summary: 'close an NPS survey early',
+      tool: closeNpsSurveyTool({ authorUserId, isOwner, thread }),
     },
     askQuestion: {
       summary:

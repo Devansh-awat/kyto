@@ -62,6 +62,19 @@ ALTER TABLE github_contributions OWNER TO gorkie;
 
 Not erased by "Your data", like `github_repos`/`github_trust`: it's an abuse ledger (erasing would reset a cap or a pause), and every row points at something already public on GitHub.
 
+## The `nps_surveys` / `nps_responses` tables (2026-10-29)
+
+Behind the NPS survey tools (TOOLS.md). Applied 2026-10-29 from the pod (no `psql` there: `bun` + the `postgres` client in `packages/db`), as the app's own role, which already owns every table — no `OWNER TO` needed:
+
+```sql
+CREATE TABLE IF NOT EXISTS nps_surveys (id serial PRIMARY KEY, channel_id text NOT NULL, message_ts text, question text NOT NULL, created_by text NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), closes_at timestamptz NOT NULL, closed_at timestamptz);
+CREATE INDEX IF NOT EXISTS nps_surveys_channel_idx ON nps_surveys (channel_id);
+CREATE TABLE IF NOT EXISTS nps_responses (survey_id integer NOT NULL REFERENCES nps_surveys(id) ON DELETE CASCADE, user_id text NOT NULL, score integer NOT NULL, comment text, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (survey_id, user_id));
+CREATE INDEX IF NOT EXISTS nps_responses_user_idx ON nps_responses (user_id);
+```
+
+`nps_responses` is erased per person by "Your data"; `nps_surveys` rows are a channel's, not a person's.
+
 ## Owner dashboard
 
 `lib/dashboard/`, mounted on the **sites** Bun.serve at **`/_dashboard`** (shares `SITES_PUBLIC_HOST`; the sites name regex can't produce `_dashboard`, so no collision). Server-rendered HTML, no client framework or external assets.
