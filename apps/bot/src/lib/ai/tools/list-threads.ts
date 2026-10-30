@@ -27,7 +27,7 @@ export function listThreadsTool({
         currentThreadId,
       });
 
-      await joinChannel(chatChannelId);
+      await joinChannel({ askerUserId, channelId: chatChannelId });
 
       const result = await slack.listThreads(chatChannelId, { cursor, limit });
 

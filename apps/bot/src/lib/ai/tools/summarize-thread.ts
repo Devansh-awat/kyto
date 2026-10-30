@@ -31,7 +31,7 @@ export function summarizeThreadTool({
         askerUserId,
         currentThreadId: threadId,
       });
-      await joinChannel(channelId);
+      await joinChannel({ askerUserId, channelId });
       const result = await bot
         .thread(targetThreadId)
         .adapter.fetchMessages(targetThreadId, {

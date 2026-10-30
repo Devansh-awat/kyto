@@ -1,4 +1,8 @@
-import { addKytoChannels, listKytoChannelIds } from '@repo/db/queries';
+import {
+  addKytoChannels,
+  listKytoChannelIds,
+  recordKytoJoin,
+} from '@repo/db/queries';
 import type { WebClient } from '@slack/web-api';
 import { z } from 'zod';
 import { env } from '@/env';
@@ -233,7 +237,19 @@ export function startChannelPairing(): void {
       joined = 'user';
     }
     if (joined) {
+      logger.info(
+        { channelId, inviter: inviter ?? 'none (joined by itself)', joined },
+        '[channel-pairing] kyto joined a channel'
+      );
       await noteJoin({ channelId, inviter, joined });
+      await recordKytoJoin({ channelId, identity: joined, inviter }).catch(
+        (error: unknown) => {
+          logger.warn(
+            { ...toLogError(error), channelId },
+            '[channel-pairing] could not record the join'
+          );
+        }
+      );
     }
   });
   sweepAll().catch(() => undefined);

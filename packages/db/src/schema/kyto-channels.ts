@@ -10,6 +10,11 @@ export const kytoChannels = pgTable(
     identity: text('identity').$type<'app' | 'user'>().notNull(),
     channelId: text('channel_id').notNull(),
     seenAt: timestamp('seen_at', { withTimezone: true }).notNull().defaultNow(),
+    // The latest join Slack reported live, and who did it: a removed kyto that
+    // keeps coming back is otherwise untraceable, since a channel can hide its
+    // join messages. No inviter on a join means kyto joined by itself.
+    joinedAt: timestamp('joined_at', { withTimezone: true }),
+    inviter: text('inviter'),
   },
   (table) => [primaryKey({ columns: [table.identity, table.channelId] })]
 );

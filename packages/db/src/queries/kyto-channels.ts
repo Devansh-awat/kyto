@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { db } from '../client';
 import { kytoChannels } from '../schema';
 
@@ -29,4 +29,25 @@ export async function addKytoChannels({
     .onConflictDoNothing()
     .returning({ channelId: kytoChannels.channelId });
   return rows.map((row) => row.channelId);
+}
+
+/** Stamps the latest live join of a kyto, and who added it (none: a self-join). */
+export async function recordKytoJoin({
+  channelId,
+  identity,
+  inviter,
+}: {
+  channelId: string;
+  identity: 'app' | 'user';
+  inviter?: string;
+}): Promise<void> {
+  await db
+    .update(kytoChannels)
+    .set({ inviter: inviter ?? null, joinedAt: new Date() })
+    .where(
+      and(
+        eq(kytoChannels.identity, identity),
+        eq(kytoChannels.channelId, channelId)
+      )
+    );
 }

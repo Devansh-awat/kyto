@@ -144,7 +144,7 @@ export function readConversationHistoryTool({
           };
         }
 
-        await joinChannel(chatChannelId);
+        await joinChannel({ askerUserId, channelId: chatChannelId });
 
         const result = await (resolvedThreadTs
           ? slack.fetchMessages(`${chatChannelId}:${resolvedThreadTs}`, {
