@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { neutralizeBroadcast } from '@/harness/markdown';
+import { slack } from '@/lib/chat';
 
 const POLL_VOTE_ACTION = 'poll_vote';
 const POLL_METADATA_TYPE = 'kyto_poll';
@@ -129,4 +130,27 @@ export function buildPollBlocks(state: PollState) {
       type: 'context',
     },
   ];
+}
+
+const postMessageSchema = z.looseObject({
+  error: z.string().optional(),
+  ok: z.boolean(),
+  ts: z.string().optional(),
+});
+
+/** Post a card (a poll or a survey) and return its ts; throws Slack's error. */
+export async function postSlackMessage(message: {
+  blocks: unknown[];
+  channel: string;
+  metadata?: unknown;
+  text: string;
+  thread_ts?: string;
+}): Promise<string> {
+  const posted = postMessageSchema.parse(
+    await slack.webClient.apiCall('chat.postMessage', message)
+  );
+  if (!(posted.ok && posted.ts)) {
+    throw new Error(`Slack refused the post: ${posted.error ?? 'unknown'}`);
+  }
+  return posted.ts;
 }

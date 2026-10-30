@@ -230,6 +230,26 @@ count toward the total only (`summarizeNps`, `lib/slack/nps.ts`).
 - Responses are erased with "Your data". `npsSurvey`/`closeNpsSurvey` are in
   `PUBLIC_POSTING_TOOLS` and `EFFECT_TOOLS`.
 
+## Anchored cards and `/kyto nps|poll|anchor` (2026-10-30)
+
+From prometheus's channel anchors. `poll` and `npsSurvey` take `anchor: true`;
+`/kyto nps [--anchor] [days] [question]`, `/kyto poll [--anchor] q | a | b`,
+`/kyto anchor status|off` do the same without a turn (`features/anchors`, acks
+at once, answers ephemerally).
+
+- **Gate: the owner or the channel's Slack Channel Managers** (`canAnchor`,
+  read through kyto's user-account session, GATING.md). The slash commands
+  always post top-level, so they take the same gate.
+- One anchor per channel (`channel_anchors`); a new one replaces it (the old
+  card stays, unpinned). An anchored card is top-level and pinned, and EVERY
+  new top-level message (or broadcast) reposts it underneath — delete, post,
+  pin (`onAnchorMessage` from the harness message path), debounced 1.5s and
+  serialized per channel; the ts swap is conditional on the old ts so a repost
+  racing a replacement deletes its own copy. A poll's votes are read back off
+  the card's metadata; a survey re-renders from the DB and its
+  `nps_surveys.message_ts` follows. A closed survey (or `closeNpsSurvey`) stops
+  being anchored and shows its result in place.
+
 ## Per-user MCP servers (`lib/ai/mcp.ts`, `lib/ai/mcp-permissions.ts`)
 
 Remote Streamable-HTTP servers a user adds in **App Home**, with a fallback to

@@ -1,36 +1,25 @@
 import {
   closeNpsSurvey,
-  createNpsSurvey,
-  deleteNpsSurvey,
   getNpsSurvey,
   listNpsResponses,
   listNpsSurveysInChannel,
-  setNpsSurveyMessageTs,
 } from '@repo/db/queries';
 import type { NpsSurvey } from '@repo/db/schema';
 import { tool } from 'ai';
 import { z } from 'zod';
 import type { ThreadHandle as Thread } from '@/harness/thread';
-import { slack } from '@/lib/chat';
+import { anchorCard, canAnchor, getAnchor, removeAnchor } from '@/lib/anchors';
 import logger from '@/lib/logger';
 import {
-  buildNpsBlocks,
   DEFAULT_NPS_QUESTION,
   isNpsClosed,
   summarizeNps,
 } from '@/lib/slack/nps';
-import { refreshNpsCard } from '@/lib/slack/nps-card';
+import { postNpsSurvey, refreshNpsCard } from '@/lib/slack/nps-card';
 import { errorMessage } from '@/lib/utils/error';
 import { resolvePollTarget } from './poll-target';
 
-const DAY_MS = 86_400_000;
 const MAX_DAYS = 90;
-
-const postMessageSchema = z.looseObject({
-  error: z.string().optional(),
-  ok: z.boolean(),
-  ts: z.string().optional(),
-});
 
 interface NpsActor {
   authorUserId: string;
@@ -73,44 +62,60 @@ export function npsSurveyTool(actor: NpsActor) {
         .describe(
           '"thread" (default) or "channel" for a top-level post (owner only; anyone else\'s lands in the thread).'
         ),
+      anchor: z
+        .boolean()
+        .default(false)
+        .describe(
+          'Keep it at the bottom of the channel (top-level, pinned, reposted under every new message) until it closes. Channel Managers and the owner only.'
+        ),
     }),
-    execute: async ({ days, postTo, question }) => {
+    execute: async ({ anchor, days, postTo, question }) => {
       const location = channelOf(actor.thread);
       if (!location) {
         return { error: 'Not in a Slack channel.', success: false };
       }
-      const { redirectedToThread, threadTs } = resolvePollTarget(
-        postTo,
-        actor.isOwner,
-        location.threadTs
-      );
-      try {
-        const survey = await createNpsSurvey({
+      if (
+        anchor &&
+        !(await canAnchor({
           channelId: location.channelId,
-          closesAt: new Date(Date.now() + days * DAY_MS),
+          userId: actor.authorUserId,
+        }))
+      ) {
+        return {
+          error:
+            "Only this channel's Slack Channel Managers or the bot owner can anchor a survey. Offer to post it without anchoring.",
+          success: false,
+        };
+      }
+      // An anchor lives in the channel itself, so it is always top-level.
+      const { redirectedToThread, threadTs } = anchor
+        ? { redirectedToThread: false, threadTs: undefined }
+        : resolvePollTarget(postTo, actor.isOwner, location.threadTs);
+      try {
+        const { messageTs, surveyId } = await postNpsSurvey({
+          channelId: location.channelId,
           createdBy: actor.authorUserId,
+          days,
           question: question ?? DEFAULT_NPS_QUESTION,
+          threadTs,
         });
-        const posted = postMessageSchema.parse(
-          await slack.webClient.apiCall('chat.postMessage', {
-            blocks: buildNpsBlocks({ responses: [], survey }),
-            channel: location.channelId,
-            text: `Survey: ${survey.question}`,
-            ...(threadTs && { thread_ts: threadTs }),
-          })
-        );
-        if (!(posted.ok && posted.ts)) {
-          await deleteNpsSurvey(survey.id);
-          return {
-            error: `Failed to post the survey: ${posted.error ?? 'unknown'}`,
-            success: false,
-          };
+        if (anchor) {
+          await anchorCard({
+            channelId: location.channelId,
+            createdBy: actor.authorUserId,
+            kind: 'nps',
+            messageTs,
+            surveyId,
+          });
         }
-        await setNpsSurveyMessageTs({ id: survey.id, messageTs: posted.ts });
         return {
           success: true,
-          surveyId: survey.id,
-          summary: `Posted NPS survey #${survey.id}, open for ${days} day${days === 1 ? '' : 's'}.${
+          surveyId,
+          summary: `Posted NPS survey #${surveyId}, open for ${days} day${days === 1 ? '' : 's'}.${
+            anchor
+              ? ' It is anchored: pinned and kept at the bottom of the channel until it closes.'
+              : ''
+          }${
             redirectedToThread
               ? ' It went into this thread, not the channel: only the bot owner can have me start a top-level post. Say so if it matters.'
               : ''
@@ -205,6 +210,10 @@ export function closeNpsSurveyTool(actor: NpsActor) {
           return { success: true, summary: 'It was already closed.' };
         }
         await refreshNpsCard({ ...survey, closedAt: new Date() });
+        // Nothing left to collect, so it stops following the channel.
+        if ((await getAnchor(survey.channelId))?.surveyId === surveyId) {
+          await removeAnchor(survey.channelId);
+        }
         return { success: true, summary: `Closed survey #${surveyId}.` };
       } catch (error) {
         logger.warn({ error: errorMessage(error) }, '[nps] close failed');

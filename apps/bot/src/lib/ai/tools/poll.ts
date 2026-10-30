@@ -1,22 +1,22 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import type { ThreadHandle as Thread } from '@/harness/thread';
-import { slack } from '@/lib/chat';
+import { anchorCard, canAnchor } from '@/lib/anchors';
 import logger from '@/lib/logger';
-import { buildPollBlocks, buildPollMetadata } from '@/lib/slack/poll';
+import {
+  buildPollBlocks,
+  buildPollMetadata,
+  postSlackMessage,
+} from '@/lib/slack/poll';
 import { errorMessage } from '@/lib/utils/error';
 import { resolvePollTarget } from './poll-target';
 
-const postMessageSchema = z.looseObject({
-  error: z.string().optional(),
-  ok: z.boolean(),
-  ts: z.string().optional(),
-});
-
 export function pollTool({
+  authorUserId,
   isOwner,
   thread,
 }: {
+  authorUserId: string;
   isOwner: boolean;
   thread: Thread;
 }) {
@@ -36,8 +36,14 @@ export function pollTool({
         .describe(
           'Where the poll card goes: "thread" (default) inside the current thread, or "channel" as a new top-level message in the current channel. Use it when asked to put the poll in the channel itself rather than the thread.'
         ),
+      anchor: z
+        .boolean()
+        .default(false)
+        .describe(
+          'Keep it at the bottom of the channel (top-level, pinned, reposted under every new message). Channel Managers and the owner only.'
+        ),
     }),
-    execute: async ({ options, postTo, question }) => {
+    execute: async ({ anchor, options, postTo, question }) => {
       try {
         const [platform, channelId, threadTs] = thread.id.split(':');
         if (platform !== 'slack' || !channelId) {
@@ -46,25 +52,35 @@ export function pollTool({
             success: false,
           };
         }
-
-        const { redirectedToThread, threadTs: targetThreadTs } =
-          resolvePollTarget(postTo, isOwner, threadTs);
-
-        const state = { options, question, votes: {} };
-        const posted = postMessageSchema.parse(
-          await slack.webClient.apiCall('chat.postMessage', {
-            blocks: buildPollBlocks(state),
-            channel: channelId,
-            metadata: buildPollMetadata(state),
-            text: `Poll: ${question}`,
-            ...(targetThreadTs && { thread_ts: targetThreadTs }),
-          })
-        );
-        if (!posted.ok) {
+        if (anchor && !(await canAnchor({ channelId, userId: authorUserId }))) {
           return {
-            error: `Failed to post poll: ${posted.error ?? 'unknown'}`,
+            error:
+              "Only this channel's Slack Channel Managers or the bot owner can anchor a poll. Offer to post it without anchoring.",
             success: false,
           };
+        }
+
+        // An anchor lives in the channel itself, so it is always top-level.
+        const { redirectedToThread, threadTs: targetThreadTs } = anchor
+          ? { redirectedToThread: false, threadTs: undefined }
+          : resolvePollTarget(postTo, isOwner, threadTs);
+
+        const state = { options, question, votes: {} };
+        const messageTs = await postSlackMessage({
+          blocks: buildPollBlocks(state),
+          channel: channelId,
+          metadata: buildPollMetadata(state),
+          text: `Poll: ${question}`,
+          ...(targetThreadTs && { thread_ts: targetThreadTs }),
+        });
+        if (anchor) {
+          await anchorCard({
+            channelId,
+            createdBy: authorUserId,
+            kind: 'poll',
+            messageTs,
+            surveyId: null,
+          });
         }
 
         return {
@@ -72,7 +88,7 @@ export function pollTool({
           success: true,
           summary: redirectedToThread
             ? 'Posted the poll as a reply in this thread rather than as a new message in the channel. Only the bot owner can have me start a top-level post. Say so if it matters; do not try another route.'
-            : `Posted an interactive poll with ${options.length} options.`,
+            : `Posted an interactive poll with ${options.length} options.${anchor ? ' It is anchored: pinned and kept at the bottom of the channel until someone runs /kyto anchor off.' : ''}`,
         };
       } catch (error) {
         logger.warn({ error: errorMessage(error) }, '[poll] failed');

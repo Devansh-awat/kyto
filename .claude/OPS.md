@@ -75,6 +75,14 @@ CREATE INDEX IF NOT EXISTS nps_responses_user_idx ON nps_responses (user_id);
 
 `nps_responses` is erased per person by "Your data"; `nps_surveys` rows are a channel's, not a person's.
 
+## The `channel_anchors` table (2026-10-30)
+
+One anchored poll/survey per channel (TOOLS.md). Applied from the pod as the app's role:
+
+```sql
+CREATE TABLE IF NOT EXISTS channel_anchors (channel_id text PRIMARY KEY, kind text NOT NULL, message_ts text NOT NULL, survey_id integer, created_by text NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
+```
+
 ## Owner dashboard
 
 `lib/dashboard/`, mounted on the **sites** Bun.serve at **`/_dashboard`** (shares `SITES_PUBLIC_HOST`; the sites name regex can't produce `_dashboard`, so no collision). Server-rendered HTML, no client framework or external assets.

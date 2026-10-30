@@ -845,7 +845,7 @@ export async function buildTools({
     },
     poll: {
       summary: 'post an interactive poll',
-      tool: pollTool({ isOwner, thread }),
+      tool: pollTool({ authorUserId, isOwner, thread }),
     },
     npsSurvey: {
       summary: 'post an NPS (0-10 recommend) survey card',

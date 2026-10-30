@@ -18,7 +18,7 @@
       {
         "command": "/kyto",
         "description": "Interact with Kyto (try /kyto help)",
-        "usage_hint": "help | topic-summaries",
+        "usage_hint": "help | nps | poll | anchor",
         "should_escape": true
       }
     ],

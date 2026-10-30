@@ -46,6 +46,7 @@ import '@/features/customizations';
 import '@/features/feedback';
 import '@/features/thread-cleanup';
 import '@/features/mcp-permissions';
+import { runAnchorCommand } from '@/features/anchors';
 import '@/features/nps';
 import '@/features/poll';
 
@@ -536,6 +537,9 @@ bot.onSlashCommand(async ({ channelId, command, text, userId }) => {
   const action = word.toLowerCase();
   if (action === 'ban' || action === 'unban' || action === 'bans') {
     return await runBanCommand({ action, args: rest.join(' '), userId });
+  }
+  if (action === 'nps' || action === 'poll' || action === 'anchor') {
+    return runAnchorCommand({ action, args: rest, channelId, userId });
   }
   return;
 });

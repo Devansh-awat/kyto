@@ -2,6 +2,7 @@ import type { Logger } from '@repo/logging/logger';
 import { SocketModeClient } from '@slack/socket-mode';
 import { LogLevel } from '@slack/web-api';
 import { z } from 'zod';
+import { onAnchorMessage } from '@/lib/anchors';
 import { recordRevision } from '@/lib/message-revisions';
 import { onSlackMessage, onSlackReaction } from '@/lib/reminders/events';
 import { onThreadMessage } from '@/lib/todo-list';
@@ -401,6 +402,8 @@ export class KytoBot {
         recordRevision(event);
         // A live to-do list moves under anything newer (lib/todo-list).
         onThreadMessage(event);
+        // An anchored card moves under any newer top-level message (lib/anchors).
+        onAnchorMessage(event);
         onSlackMessage(event).catch((error: unknown) => {
           this.slackLogger.warn(
             { err: error },
