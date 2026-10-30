@@ -15,6 +15,7 @@ import logger from '@/lib/logger';
 import { buildNpsBlocks, isNpsClosed } from '@/lib/slack/nps';
 import { refreshNpsCard } from '@/lib/slack/nps-card';
 import {
+  askerName,
   buildPollBlocks,
   buildPollMetadata,
   parsePollStateFromRaw,
@@ -216,6 +217,7 @@ async function repost(channelId: string): Promise<void> {
     }
     posted = await postSlackMessage({
       blocks: buildNpsBlocks({
+        askedBy: await askerName(survey.createdBy),
         responses: await listNpsResponses(survey.id),
         survey,
       }),

@@ -528,7 +528,7 @@ async function offerOptInAs({
 // `/kyto ban @someone 1d reason`, `/kyto unban @someone`, `/kyto bans`. The
 // same three run as `@kyto!ban …` (lib/commands); this is the form the owner
 // asked for, and it costs no model turn either.
-bot.onSlashCommand(async ({ channelId, command, text, userId }) => {
+bot.onSlashCommand(async ({ channelId, command, text, triggerId, userId }) => {
   // Any other command is one a code channel registered (features/code-channels).
   if (command && command !== KYTO_COMMAND) {
     return await runCodeChannelCommand({ channelId, command, text, userId });
@@ -539,7 +539,13 @@ bot.onSlashCommand(async ({ channelId, command, text, userId }) => {
     return await runBanCommand({ action, args: rest.join(' '), userId });
   }
   if (action === 'nps' || action === 'poll' || action === 'anchor') {
-    return runAnchorCommand({ action, args: rest, channelId, userId });
+    return runAnchorCommand({
+      action,
+      args: rest,
+      channelId,
+      triggerId,
+      userId,
+    });
   }
   return;
 });

@@ -4,6 +4,7 @@ import type { ThreadHandle as Thread } from '@/harness/thread';
 import { anchorCard, canAnchor } from '@/lib/anchors';
 import logger from '@/lib/logger';
 import {
+  askerName,
   buildPollBlocks,
   buildPollMetadata,
   postSlackMessage,
@@ -65,7 +66,12 @@ export function pollTool({
           ? { redirectedToThread: false, threadTs: undefined }
           : resolvePollTarget(postTo, isOwner, threadTs);
 
-        const state = { options, question, votes: {} };
+        const state = {
+          askedBy: await askerName(authorUserId),
+          options,
+          question,
+          votes: {},
+        };
         const messageTs = await postSlackMessage({
           blocks: buildPollBlocks(state),
           channel: channelId,

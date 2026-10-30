@@ -1,4 +1,5 @@
 import { neutralizeBroadcast } from '@/harness/markdown';
+import { askedByLine } from './poll';
 
 const NPS_SCORE_ACTION = 'nps_score';
 const MAX_SCORE = 10;
@@ -81,9 +82,12 @@ function closeLine(survey: { closedAt: Date | null; closesAt: Date }): string {
  * kyto (the `npsResults` tool), and to everyone once it closes.
  */
 export function buildNpsBlocks({
+  askedBy,
   responses,
   survey,
 }: {
+  /** Display name of whoever started it. */
+  askedBy?: string;
   responses: { score: number }[];
   survey: {
     closedAt: Date | null;
@@ -116,7 +120,12 @@ export function buildNpsBlocks({
       header,
       { text: { text: result, type: 'mrkdwn' }, type: 'section' },
       {
-        elements: [{ text: closeLine(survey), type: 'mrkdwn' }],
+        elements: [
+          {
+            text: `${closeLine(survey)}${askedByLine(askedBy)}`,
+            type: 'mrkdwn',
+          },
+        ],
         type: 'context',
       },
     ];
@@ -141,7 +150,7 @@ export function buildNpsBlocks({
     {
       elements: [
         {
-          text: `0 = not at all likely · 10 = extremely likely · click again to change · ${count} · ${closeLine(survey)}`,
+          text: `0 = not at all likely · 10 = extremely likely · click again to change · ${count} · ${closeLine(survey)}${askedByLine(askedBy)}`,
           type: 'mrkdwn',
         },
       ],

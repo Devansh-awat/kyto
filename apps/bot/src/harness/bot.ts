@@ -55,6 +55,8 @@ type SlashCommandHandler = (command: {
   /** With its slash: `/kyto`, or one a code channel registered. */
   command: string;
   text: string;
+  /** Opens a modal; Slack honours it for 3 seconds. */
+  triggerId?: string;
   userId: string;
 }) => Promise<string | null | undefined>;
 type ModalSubmitHandler = (
@@ -581,6 +583,8 @@ export class KytoBot {
           channelId: typeof body.channel_id === 'string' ? body.channel_id : '',
           command: typeof body.command === 'string' ? body.command : '',
           text,
+          triggerId:
+            typeof body.trigger_id === 'string' ? body.trigger_id : undefined,
           userId,
         })
       : Promise.resolve(undefined);

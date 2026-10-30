@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { neutralizeBroadcast } from '@/harness/markdown';
-import { slack } from '@/lib/chat';
+import { bot, slack } from '@/lib/chat';
 
 const POLL_VOTE_ACTION = 'poll_vote';
 const POLL_METADATA_TYPE = 'kyto_poll';
@@ -17,6 +17,8 @@ export const POLL_VOTE_ACTIONS = Array.from(
 );
 
 export interface PollState {
+  /** Display name of whoever asked for it; absent on cards from before. */
+  askedBy?: string;
   options: string[];
   question: string;
   /** Map of voter user id -> chosen option index. */
@@ -24,6 +26,7 @@ export interface PollState {
 }
 
 const pollStateSchema = z.object({
+  askedBy: z.string().optional(),
   options: z.array(z.string()).min(2).max(10),
   question: z.string(),
   votes: z.record(z.string(), z.number()),
@@ -123,7 +126,7 @@ export function buildPollBlocks(state: PollState) {
     {
       elements: [
         {
-          text: `🗳️ Click an option to vote · click again to undo · ${total} total vote${total === 1 ? '' : 's'}`,
+          text: `🗳️ Click an option to vote · click again to undo · ${total} total vote${total === 1 ? '' : 's'}${askedByLine(state.askedBy)}`,
           type: 'mrkdwn',
         },
       ],
@@ -153,4 +156,17 @@ export async function postSlackMessage(message: {
     throw new Error(`Slack refused the post: ${posted.error ?? 'unknown'}`);
   }
   return posted.ts;
+}
+
+/**
+ * Who asked for a card, by NAME. A `<@id>` mention would notify them again on
+ * every repost of an anchored card, i.e. on every message in the channel.
+ */
+export async function askerName(userId: string): Promise<string | undefined> {
+  const author = await bot.getUser(userId).catch(() => undefined);
+  return author?.fullName || author?.userName || undefined;
+}
+
+export function askedByLine(name: string | undefined): string {
+  return name ? ` · asked by ${neutralizeBroadcast(name)}` : '';
 }

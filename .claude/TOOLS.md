@@ -232,14 +232,17 @@ count toward the total only (`summarizeNps`, `lib/slack/nps.ts`).
 
 ## Anchored cards and `/kyto nps|poll|anchor` (2026-10-30)
 
-From prometheus's channel anchors. `poll` and `npsSurvey` take `anchor: true`;
-`/kyto nps [--anchor] [days] [question]`, `/kyto poll [--anchor] q | a | b`,
-`/kyto anchor status|off` do the same without a turn (`features/anchors`, acks
-at once, answers ephemerally).
+From prometheus's channel anchors. `/kyto nps` and `/kyto poll` open a FORM
+(question; days or one option per line; an "Anchor it" checkbox) and post the
+card top-level in that channel (`features/anchors`). **Anyone may post one**
+(owner's call 2026-10-30); every poll and survey card names who asked
+("asked by <display name>": a name, not a mention, or every anchored repost
+would ping them). `poll`/`npsSurvey` take `anchor: true` from chat.
+`/kyto anchor status|off` manages the channel's anchor.
 
-- **Gate: the owner or the channel's Slack Channel Managers** (`canAnchor`,
-  read through kyto's user-account session, GATING.md). The slash commands
-  always post top-level, so they take the same gate.
+- **Only ANCHORING is gated: the owner or the channel's Slack Channel Managers**
+  (`canAnchor`, read through kyto's user-account session, GATING.md), checked
+  at form submit and in the tools; `anchor off` too.
 - One anchor per channel (`channel_anchors`); a new one replaces it (the old
   card stays, unpinned). An anchored card is top-level and pinned, and EVERY
   new top-level message (or broadcast) reposts it underneath — delete, post,

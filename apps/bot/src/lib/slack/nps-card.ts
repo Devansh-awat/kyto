@@ -9,7 +9,7 @@ import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
 import { toLogError } from '@/lib/utils/error';
 import { buildNpsBlocks } from './nps';
-import { postSlackMessage } from './poll';
+import { askerName, postSlackMessage } from './poll';
 
 /** Re-render a survey card from the database (a score, a close). */
 export async function refreshNpsCard(survey: NpsSurvey): Promise<void> {
@@ -19,7 +19,11 @@ export async function refreshNpsCard(survey: NpsSurvey): Promise<void> {
   const responses = await listNpsResponses(survey.id);
   await slack.webClient
     .apiCall('chat.update', {
-      blocks: buildNpsBlocks({ responses, survey }),
+      blocks: buildNpsBlocks({
+        askedBy: await askerName(survey.createdBy),
+        responses,
+        survey,
+      }),
       channel: survey.channelId,
       text: `Survey: ${survey.question}`,
       ts: survey.messageTs,
@@ -56,7 +60,11 @@ export async function postNpsSurvey({
   });
   try {
     const messageTs = await postSlackMessage({
-      blocks: buildNpsBlocks({ responses: [], survey }),
+      blocks: buildNpsBlocks({
+        askedBy: await askerName(createdBy),
+        responses: [],
+        survey,
+      }),
       channel: channelId,
       text: `Survey: ${survey.question}`,
       ...(threadTs && { thread_ts: threadTs }),
