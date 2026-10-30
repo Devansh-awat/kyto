@@ -13,7 +13,6 @@ import { rememberRepeatReads } from './repeat-reads';
 import {
   assertReadableChannel,
   dmSourceNote,
-  joinChannel,
   markStoredSelfMention,
 } from './utils';
 
@@ -143,8 +142,6 @@ export function readConversationHistoryTool({
             ...dmSource,
           };
         }
-
-        await joinChannel({ askerUserId, channelId: chatChannelId });
 
         const result = await (resolvedThreadTs
           ? slack.fetchMessages(`${chatChannelId}:${resolvedThreadTs}`, {

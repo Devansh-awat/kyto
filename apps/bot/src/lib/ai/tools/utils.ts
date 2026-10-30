@@ -1,7 +1,4 @@
-import { z } from 'zod';
 import { bot, slack } from '@/lib/chat';
-import { KEVINTON_USER_ID } from '@/lib/kevinton/identity';
-import logger from '@/lib/logger';
 import {
   mayReadChannel,
   PRIVATE_CHANNEL_REFUSAL,
@@ -75,38 +72,6 @@ export async function assertReadableChannel(
     );
   }
   return metadata;
-}
-
-const joinResultSchema = z.looseObject({ warning: z.string().optional() });
-
-export async function joinChannel({
-  askerUserId,
-  channelId,
-}: {
-  askerUserId: string;
-  channelId: string;
-}): Promise<void> {
-  // kevinton re-reads every thread 30 minutes after it goes quiet. Joining
-  // here put kyto straight back into channels that had just removed it, every
-  // half hour, on a loop. It reads what kyto can already read, or nothing.
-  if (askerUserId === KEVINTON_USER_ID) {
-    return;
-  }
-  try {
-    const result = joinResultSchema.parse(
-      await slack.webClient.apiCall('conversations.join', {
-        channel: toRawSlackChannelId(channelId),
-      })
-    );
-    if (result.warning !== 'already_in_channel') {
-      logger.info(
-        { askerUserId, channelId },
-        '[slack] joined a channel to read it'
-      );
-    }
-  } catch {
-    return;
-  }
 }
 
 /**

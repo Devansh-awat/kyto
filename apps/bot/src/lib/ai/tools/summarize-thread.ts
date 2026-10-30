@@ -3,7 +3,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import type { KytoBot as Chat } from '@/harness/bot';
 import { slack } from '@/lib/chat';
-import { assertReadableChannel, joinChannel } from './utils';
+import { assertReadableChannel } from './utils';
 
 export function summarizeThreadTool({
   askerUserId,
@@ -31,7 +31,6 @@ export function summarizeThreadTool({
         askerUserId,
         currentThreadId: threadId,
       });
-      await joinChannel({ askerUserId, channelId });
       const result = await bot
         .thread(targetThreadId)
         .adapter.fetchMessages(targetThreadId, {

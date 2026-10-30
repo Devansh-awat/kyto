@@ -2,7 +2,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { slack } from '@/lib/chat';
 import { toChatSlackChannelId } from '@/lib/slack/ids';
-import { assertReadableChannel, joinChannel } from './utils';
+import { assertReadableChannel } from './utils';
 
 export function listThreadsTool({
   askerUserId,
@@ -26,8 +26,6 @@ export function listThreadsTool({
         askerUserId,
         currentThreadId,
       });
-
-      await joinChannel({ askerUserId, channelId: chatChannelId });
 
       const result = await slack.listThreads(chatChannelId, { cursor, limit });
 

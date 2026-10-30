@@ -9,6 +9,11 @@ import type { Author, Message, MessageAttachment, StreamChunk } from './types';
 import { hasUnderline, splitUnderlines } from './underline';
 import { UserAccountGateway } from './user-gateway';
 
+// A Slack Web API failure carries Slack's own error code here.
+const slackErrorSchema = z.looseObject({
+  data: z.looseObject({ error: z.string().optional() }).optional(),
+});
+
 // Raw Slack message event fields the harness reads.
 export interface RawSlackMessage {
   bot_id?: string;
@@ -702,19 +707,27 @@ export class SlackHarness {
       // it NEWEST first, so the walk always reaches the end — a cursor left
       // over means messages between `oldest` and the newest page were never
       // read, which callers take the same way as an unfinished thread walk.
-      for (let page = 0; page < pages; page += 1) {
-        const result = await client.conversations.history({
-          channel,
-          ...(nextCursor ? { cursor: nextCursor } : {}),
-          ...(oldest ? { oldest } : {}),
-          limit: pageSize,
-        });
-        raw = raw.concat((result.messages ?? []) as RawSlackMessage[]);
-        nextCursor = result.response_metadata?.next_cursor || undefined;
-        if (!nextCursor || (direction === 'backward' && raw.length >= limit)) {
-          break;
+      const walk = async (reader: WebClient) => {
+        for (let page = 0; page < pages; page += 1) {
+          const result = await reader.conversations.history({
+            channel,
+            ...(nextCursor ? { cursor: nextCursor } : {}),
+            ...(oldest ? { oldest } : {}),
+            limit: pageSize,
+          });
+          raw = raw.concat((result.messages ?? []) as RawSlackMessage[]);
+          nextCursor = result.response_metadata?.next_cursor || undefined;
+          if (
+            !nextCursor ||
+            (direction === 'backward' && raw.length >= limit)
+          ) {
+            break;
+          }
         }
-      }
+      };
+      await (asUserAccount
+        ? walk(client)
+        : this.readPublicChannel({ channel, read: walk }));
       raw.reverse();
       raw = direction === 'backward' ? raw.slice(-limit) : raw.slice(0, limit);
       return {
@@ -736,16 +749,26 @@ export class SlackHarness {
         messages: await this.hydrateMessages(held.slice(-limit), channel),
       };
     }
-    ({ nextCursor, raw } = useCache
-      ? await this.readThreadIntoCache({ channel, oldest, pages, threadTs })
-      : await this.readReplies({
+    const replies = (reader: WebClient) =>
+      this.readReplies({
+        channel,
+        client: reader,
+        cursor,
+        oldest,
+        pages,
+        pageSize,
+        threadTs,
+      });
+    ({ nextCursor, raw } = asUserAccount
+      ? await replies(client)
+      : await this.readPublicChannel({
           channel,
-          client,
-          cursor,
-          oldest,
-          pages,
-          pageSize,
-          threadTs,
+          // Only the app's own read feeds the cache: the user account's
+          // answer is for a channel whose events the app no longer gets.
+          read: (reader, asAccount) =>
+            useCache && !asAccount
+              ? this.readThreadIntoCache({ channel, oldest, pages, threadTs })
+              : replies(reader),
         }));
     if (direction === 'backward') {
       raw = raw.slice(-limit);
@@ -821,6 +844,48 @@ export class SlackHarness {
     }
   }
 
+  /**
+   * Runs a read as the app; when Slack refuses it because the app is not in
+   * the channel and the channel is PUBLIC, runs it again as kyto's user
+   * account, which can read any public channel without joining. Reads used to
+   * join instead, and that put kyto back into channels that had just removed
+   * it. Never for a private channel: the user account may be in ones the asker
+   * is not.
+   */
+  private async readPublicChannel<T>({
+    channel,
+    read,
+  }: {
+    channel: string;
+    read: (reader: WebClient, asAccount: boolean) => Promise<T>;
+  }): Promise<T> {
+    try {
+      return await read(this.webClient, false);
+    } catch (error) {
+      const code = slackErrorSchema.safeParse(error).data?.data?.error;
+      if (!(this.userAccountClient && code === 'not_in_channel')) {
+        throw error;
+      }
+      const info = await this.webClient.conversations
+        .info({ channel })
+        .catch(() => undefined);
+      const found = info?.channel;
+      if (
+        !found ||
+        found.is_private !== false ||
+        found.is_im ||
+        found.is_mpim
+      ) {
+        throw error;
+      }
+      this.logger.info(
+        { channel },
+        '[harness] app is not in that public channel; read it as the user account'
+      );
+      return await read(this.userAccountClient, true);
+    }
+  }
+
   private async readReplies({
     channel,
     client,
@@ -865,10 +930,14 @@ export class SlackHarness {
     const channel = channelId.startsWith('slack:')
       ? (channelId.split(':')[1] ?? channelId)
       : channelId;
-    const result = await this.webClient.conversations.history({
+    const result = await this.readPublicChannel({
       channel,
-      ...(cursor ? { cursor } : {}),
-      limit,
+      read: (reader) =>
+        reader.conversations.history({
+          channel,
+          ...(cursor ? { cursor } : {}),
+          limit,
+        }),
     });
     return {
       messages: await this.hydrateMessages(
@@ -895,10 +964,14 @@ export class SlackHarness {
     const channel = channelId.startsWith('slack:')
       ? (channelId.split(':')[1] ?? channelId)
       : channelId;
-    const result = await this.webClient.conversations.history({
+    const result = await this.readPublicChannel({
       channel,
-      ...(cursor ? { cursor } : {}),
-      limit,
+      read: (reader) =>
+        reader.conversations.history({
+          channel,
+          ...(cursor ? { cursor } : {}),
+          limit,
+        }),
     });
     const raw = ((result.messages ?? []) as RawSlackMessage[]).filter(
       (entry) => Number((entry as { reply_count?: number }).reply_count) > 0
