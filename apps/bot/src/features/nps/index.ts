@@ -73,7 +73,7 @@ bot.onAction(NPS_SCORE_ACTIONS, async (event) => {
         blocks: [
           {
             text: mrkdwn(
-              `thanks! recorded your score: *${score}*. want to say why? only the survey's creator and kyto's owner can read it, without your name.`
+              `thanks! recorded your score: *${score}*. want to say why?`
             ),
             type: 'section',
           },

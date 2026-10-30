@@ -41,7 +41,7 @@ function canManage(survey: NpsSurvey, actor: NpsActor): boolean {
 export function npsSurveyTool(actor: NpsActor) {
   return tool({
     description:
-      'Post an NPS (Net Promoter Score) survey card: one 0-10 "how likely are you to recommend…" question with a button per score. People click a score (click another to change it) and may add an anonymous comment. The card shows only the response count until it closes, then the NPS. Read results with npsResults; end it early with closeNpsSurvey.',
+      'Post an NPS (Net Promoter Score) survey card: one 0-10 "how likely are you to recommend…" question with a button per score. People click a score (click another to change it) and may add a comment. The card shows only the response count until it closes, then the NPS. Read results with npsResults; end it early with closeNpsSurvey.',
     inputSchema: z.object({
       question: z
         .string()
@@ -132,7 +132,7 @@ export function npsSurveyTool(actor: NpsActor) {
 export function npsResultsTool(actor: NpsActor) {
   return tool({
     description:
-      "NPS survey results. With no surveyId, lists this channel's recent surveys. With one: the NPS (-100..100: % promoters 9-10 minus % detractors 0-6), the breakdown and average; comments (anonymous) only for the survey's creator or the bot owner.",
+      "NPS survey results. With no surveyId, lists this channel's recent surveys. With one: the NPS (-100..100: % promoters 9-10 minus % detractors 0-6), the breakdown and average; comments, with who wrote each, only for the survey's creator or the bot owner.",
     inputSchema: z.object({
       surveyId: z.number().int().positive().optional(),
     }),
@@ -167,12 +167,17 @@ export function npsResultsTool(actor: NpsActor) {
         return {
           ...summarizeNps(responses.map((response) => response.score)),
           closesAt: survey.closesAt.toISOString(),
-          // Anonymous on purpose: the modal tells people only the creator and
-          // the owner read comments, and without their name.
+          // Who wrote each comment, for the person who asked for the survey.
           comments: canManage(survey, actor)
             ? responses.flatMap((response) =>
                 response.comment
-                  ? [{ comment: response.comment, score: response.score }]
+                  ? [
+                      {
+                        comment: response.comment,
+                        score: response.score,
+                        userId: response.userId,
+                      },
+                    ]
                   : []
               )
             : 'only the survey creator or the bot owner can read comments',

@@ -216,7 +216,7 @@ count toward the total only (`summarizeNps`, `lib/slack/nps.ts`).
   like `poll`: a survey has a closing date (default 7 days, ≤90) and comments
   must never be written into a public message.
 - One row per person per survey; another click changes the score. After a
-  click a modal offers an optional **anonymous comment** (`features/nps`) —
+  click a modal offers an optional **comment** (the modal says nothing about who reads it) (`features/nps`) —
   a modal, not a thread reply, because a reply in a thread kyto follows starts
   a turn.
 - **The card shows only the response count while open** (a live score nudges
@@ -225,8 +225,8 @@ count toward the total only (`summarizeNps`, `lib/slack/nps.ts`).
 - `postTo: "channel"` follows `poll`'s rule (owner only; `resolvePollTarget`).
   The question is `neutralizeBroadcast`ed in the one render.
 - `npsResults`: aggregates for anyone in the survey's channel (a survey from
-  another channel only for its creator/owner); **comments only for the creator
-  or the owner**, without names. `closeNpsSurvey`: creator or owner.
+  another channel only for its creator/owner); **comments, with the commenter's
+  id, only for the creator or the owner**. `closeNpsSurvey`: creator or owner.
 - Responses are erased with "Your data". `npsSurvey`/`closeNpsSurvey` are in
   `PUBLIC_POSTING_TOOLS` and `EFFECT_TOOLS`.
 
