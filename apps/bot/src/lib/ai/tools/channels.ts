@@ -213,11 +213,12 @@ const channelInfoSchema = z.looseObject({
   ok: z.boolean(),
 });
 
-// `posting_restricted_to.type` lists who may post: `ra` is every member (it's
-// what #lounge has); a channel left to admins/owners plus a named list
+// `posting_restricted_to.type` lists who may post: `ra` is everyone, guests
+// included (#lounge), `regular` every full member; a channel left to admins
+// plus a named list
 // (#stardance-construction: admins and 55 people) is one most people can't
 // post in, so kyto doesn't either.
-const STAFF_POSTERS = new Set(['admin', 'owner']);
+const STAFF_POSTERS = new Set(['admin', 'org_admin', 'owner']);
 
 // Slack enforces the workspace's app and posting restrictions itself (an org
 // admin's per-channel app limits are only readable with admin.* scopes kyto
