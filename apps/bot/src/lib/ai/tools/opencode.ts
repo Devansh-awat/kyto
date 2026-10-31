@@ -139,7 +139,7 @@ export function opencodeTool({
       const downBefore = codeModelRouteDown();
       if (downBefore) {
         return {
-          error: `Not run: the coding agent's model route is exhausted right now (${downBefore.message}). A run would fail the same way until about ${new Date(downBefore.until).toISOString().slice(11, 16)} UTC. Nothing was changed. Tell the person code work is unavailable for now and why; do not retry it this turn and do not call it with continue.`,
+          error: `Not run: the coding agent's model route is exhausted right now (${downBefore.message}). A run would fail the same way until about ${new Date(downBefore.until).toISOString().slice(11, 16)} UTC. Nothing was changed. Do not retry it this turn and do not call it with continue. Tell the person code work is unavailable for now and why, and if they still want it, \`wait\` until then (if it is soon) or schedule a \`wake\` for just after that time with the exact brief, and say when.`,
           success: false,
         };
       }
@@ -261,7 +261,7 @@ export function opencodeTool({
       if (downAfter) {
         return {
           directory: workDir,
-          error: `The coding agent's model route is exhausted (${downAfter.message}), so the run stopped. Retrying, with or without continue, fails the same way until about ${new Date(downAfter.until).toISOString().slice(11, 16)} UTC. Tell the person code work is unavailable for now and why; do not call opencode again this turn.`,
+          error: `The coding agent's model route is exhausted (${downAfter.message}), so the run stopped. Retrying, with or without continue, fails the same way until about ${new Date(downAfter.until).toISOString().slice(11, 16)} UTC. Do not call opencode again this turn. Tell the person code work is unavailable for now and why, and if they still want it, \`wait\` until then (if it is soon) or schedule a \`wake\` for just after that time with the exact brief, and say when.`,
           success: false,
         };
       }

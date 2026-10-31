@@ -13,6 +13,7 @@ import {
   deleteSummariesForChannel,
   deleteThinkingForChannel,
   deleteThreadLogsForChannel,
+  deleteThreadWakesByUser,
   deleteUserModelCredential,
   getUserCustomization,
   listMcpServers,
@@ -78,6 +79,8 @@ export interface EraseResult {
     /** DM threads whose compacted history (lib/agent/compaction) was deleted. */
     summarizedThreads: number;
     thinkingThreads: number;
+    /** Turns kyto had scheduled to come back to in their threads (wake). */
+    threadWakes: number;
   };
 }
 
@@ -244,6 +247,17 @@ export async function eraseUserData({
     }
   );
 
+  // A wake carries kyto's note on their conversation and would run as them.
+  const threadWakes = await deleteThreadWakesByUser(userId).catch(
+    (error: unknown) => {
+      logger.error(
+        { err: errorMessage(error), userId },
+        '[erase] failed to delete scheduled wakes'
+      );
+      return 0;
+    }
+  );
+
   const settings = includeSettings
     ? await eraseSettings(userId)
     : {
@@ -265,6 +279,7 @@ export async function eraseUserData({
       submittedFeedback,
       summarizedThreads,
       thinkingThreads,
+      threadWakes,
       userId,
     },
     '[erase] user erased their own data'
@@ -283,6 +298,7 @@ export async function eraseUserData({
       submittedFeedback,
       summarizedThreads,
       thinkingThreads,
+      threadWakes,
     },
   };
 }
@@ -401,6 +417,11 @@ export function summarize(result: EraseResult): string {
   if (removed.npsResponses > 0) {
     lines.push(
       `• ${removed.npsResponses} survey ${removed.npsResponses === 1 ? 'answer' : 'answers'} (score and comment) deleted`
+    );
+  }
+  if (removed.threadWakes > 0) {
+    lines.push(
+      `• ${removed.threadWakes} scheduled ${removed.threadWakes === 1 ? 'return' : 'returns'} of kyto to your threads cancelled`
     );
   }
   if (removed.dmNotebook) {

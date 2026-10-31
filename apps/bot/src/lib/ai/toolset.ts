@@ -135,6 +135,7 @@ import { uploadFileTool } from './tools/upload-file';
 import { fetchUrlTool, getPermalinkTool } from './tools/url';
 import { viewImageTool } from './tools/view-image';
 import { waitTool } from './tools/wait';
+import { wakeTool } from './tools/wake';
 import {
   createFileReads,
   editFileTool,
@@ -270,6 +271,7 @@ const EFFECT_TOOLS = new Set([
   'textToSpeech',
   'unpinMessage',
   'uploadFile',
+  'wake',
 ]);
 
 function isFailedResult(result: unknown): boolean {
@@ -665,6 +667,23 @@ export async function buildTools({
               bot,
               threadId: thread.id,
               userId: authorUserId,
+            }),
+          },
+        }),
+    // Nobody to wake for an unattended run (a subagent, a reminder job), and a
+    // `!secret` turn's wake would answer in public what was asked in private.
+    ...(unattended || secret
+      ? {}
+      : {
+          wake: {
+            summary:
+              'come back to this thread later in a new turn (schedule / list / cancel), so "I\'ll do it once X is back" really happens',
+            tool: wakeTool({
+              asUserAccount,
+              authorUserId,
+              isOwner,
+              messageId: message.id,
+              threadId: thread.id,
             }),
           },
         }),

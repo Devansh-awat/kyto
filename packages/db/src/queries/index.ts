@@ -40,5 +40,6 @@ export * from './thread-model-choices';
 export * from './thread-sandboxes';
 export * from './thread-summaries';
 export * from './thread-thinking';
+export * from './thread-wakes';
 export * from './threads';
 export * from './turn-timings';
