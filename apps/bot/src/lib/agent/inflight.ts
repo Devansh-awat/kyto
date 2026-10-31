@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
-  claimAbandonedTurns,
   claimOrphanedTurns,
   finishInflightTurn,
   heartbeatInflightTurn,
@@ -39,12 +38,6 @@ const STALE_AFTER_MS = 2 * 60 * 1000;
 // OpenCode turn still qualifies), the conversation has moved on and a resumed
 // answer would be noise. Also what the table is pruned to.
 const RESUME_WINDOW_MS = 30 * 60 * 1000;
-// Clean shutdowns a turn survives. More than one, because deploys land in
-// bursts; bounded, because a turn can itself restart kyto (the Coolify MCP),
-// and resuming that forever would be a restart loop. 3 was too few: five
-// pushes in eight minutes (2026-10-08) restarted kyto four times and dropped
-// an owner's OpenCode turn with "won't pick this up on its own".
-const MAX_RESTART_RESUMES = 8;
 // A new instance keeps looking for a while, because the old one only marks its
 // turns interrupted when IT is told to stop — after this one is already up.
 const POLL_EVERY_MS = 15_000;
@@ -389,7 +382,6 @@ async function resumeOnce({
   const now = Date.now();
   const window = {
     instanceId: INSTANCE_ID,
-    maxRestartResumes: MAX_RESTART_RESUMES,
     staleBefore: new Date(now - STALE_AFTER_MS),
     aliveAfter: new Date(now - RESUME_WINDOW_MS),
   };
@@ -397,29 +389,6 @@ async function resumeOnce({
     logger.warn(toLogError(error), '[inflight] claim failed');
     return [];
   });
-  const abandoned = await claimAbandonedTurns(window).catch(
-    (error: unknown) => {
-      logger.warn(toLogError(error), '[inflight] abandon failed');
-      return [];
-    }
-  );
-  // Out of resumes: the turn ends here, and the thread is told so — it used
-  // to just stop, mid-plan, with nothing after it.
-  for (const row of abandoned) {
-    logger.warn(
-      { resumes: row.resumes, status: row.status, threadId: row.threadId },
-      '[inflight] not resuming again; telling the thread'
-    );
-    if (!row.asUserAccount) {
-      await bot
-        .thread(row.threadId)
-        .post({
-          markdown:
-            "_kyto restarted mid-reply again and won't pick this up on its own — ping it to carry on._",
-        })
-        .catch(() => undefined);
-    }
-  }
   for (const row of claimed) {
     // A throw here (a users.info lookup failing while the message is rebuilt)
     // would strand this row and every one after it: claimed, never run.

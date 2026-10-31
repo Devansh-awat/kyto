@@ -1,4 +1,4 @@
-import { and, eq, gt, gte, lt, or, sql } from 'drizzle-orm';
+import { and, eq, gt, lt, or, sql } from 'drizzle-orm';
 import { db } from '../client';
 import {
   type InflightCheckpoint,
@@ -173,8 +173,9 @@ function orphaned({
 
 /**
  * Take ownership of turns another instance left behind: interrupted by a
- * shutdown (fewer than `maxRestartResumes` times so far), or still `running`
- * with a stale heartbeat (a crash, never resumed before). Atomic — two
+ * shutdown, or still `running` with a stale heartbeat (a crash). As many times
+ * as it takes (owner's call 2026-10-31): a crash got one resume, so a turn an
+ * OOM killed twice ended on "won't pick this up on its own". Atomic — two
  * instances polling at once can never both get the same row. Only turns last
  * alive after `aliveAfter` — measured from the heartbeat, not the start: a turn
  * that had run 39 minutes when a deploy cut it was dropped without a word
@@ -182,12 +183,10 @@ function orphaned({
  */
 export async function claimOrphanedTurns({
   instanceId,
-  maxRestartResumes,
   staleBefore,
   aliveAfter,
 }: {
   instanceId: string;
-  maxRestartResumes: number;
   staleBefore: Date;
   aliveAfter: Date;
 }): Promise<InflightTurn[]> {
@@ -203,49 +202,8 @@ export async function claimOrphanedTurns({
       and(
         gt(inflightTurns.heartbeatAt, aliveAfter),
         or(
-          and(
-            eq(inflightTurns.status, 'interrupted'),
-            lt(inflightTurns.resumes, maxRestartResumes)
-          ),
-          and(
-            orphaned({ instanceId, staleBefore }),
-            eq(inflightTurns.resumes, 0)
-          )
-        )
-      )
-    )
-    .returning();
-}
-
-/**
- * Remove the orphaned turns that will NOT be resumed (out of resumes), so the
- * caller can say so in the thread instead of the turn just stopping.
- */
-export async function claimAbandonedTurns({
-  instanceId,
-  maxRestartResumes,
-  staleBefore,
-  aliveAfter,
-}: {
-  instanceId: string;
-  maxRestartResumes: number;
-  staleBefore: Date;
-  aliveAfter: Date;
-}): Promise<InflightTurn[]> {
-  return await db
-    .delete(inflightTurns)
-    .where(
-      and(
-        gt(inflightTurns.heartbeatAt, aliveAfter),
-        or(
-          and(
-            eq(inflightTurns.status, 'interrupted'),
-            gte(inflightTurns.resumes, maxRestartResumes)
-          ),
-          and(
-            orphaned({ instanceId, staleBefore }),
-            gt(inflightTurns.resumes, 0)
-          )
+          eq(inflightTurns.status, 'interrupted'),
+          orphaned({ instanceId, staleBefore })
         )
       )
     )

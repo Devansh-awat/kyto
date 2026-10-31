@@ -51,10 +51,8 @@ export const inflightTurns = pgTable('inflight_turns', {
   instanceId: text('instance_id').notNull(),
   // Whether this run is a resumption (the turn runs quietly about it).
   resumed: boolean('resumed').notNull().default(false),
-  // How many times it has been resumed. A CRASH is resumed at most once, so a
-  // turn that crashes the process cannot crash every instance after it; a
-  // clean shutdown is not the turn's fault and is resumed a few times — two
-  // deploys a few minutes apart used to leave the turn dead after the second.
+  // How many times it has been resumed — logged only: a turn is resumed after
+  // every shutdown and every crash (owner's call 2026-10-31).
   resumes: integer('resumes').notNull().default(0),
   // Answered as kyto's Slack user account, not the app: resumed the same way.
   asUserAccount: boolean('as_user_account').notNull().default(false),
