@@ -12,6 +12,7 @@ import {
 import { isFocusAllowed } from '@/lib/agent/focus';
 import { annotateMentions, nameField } from '@/lib/agent/mentions';
 import { recallThinking, renderThinking } from '@/lib/agent/thinking';
+import { takeOrphanedCommands } from '@/lib/ai/tools/background';
 import { slack } from '@/lib/chat';
 import { parseFlags, withoutFlags } from '@/lib/flags';
 import logger from '@/lib/logger';
@@ -579,6 +580,10 @@ export async function buildPrompt(
   // system prompt + every tool schema) missed on every new turn of a thread —
   // the biggest single cached prefix, re-billed at full price each time, on a
   // shared daily cap. Down here they invalidate nothing but themselves.
+  // Kevinton's replay (includeHidden) must not use up the note meant for the
+  // next real turn.
+  const orphanedCommands =
+    thread && !includeHidden ? takeOrphanedCommands(thread.id) : [];
   const nowLine = [
     `The current date and time is ${new Date().toISOString()}.`,
     `The message you're responding to has id ${message.id}.`,
@@ -600,6 +605,10 @@ export async function buildPrompt(
           'You are answering as kyto\'s own Slack USER account: a regular member account named kyto, not the kyto app. So talk like a person in Slack does: short and casual, usually a line or two, no headings, no bullet lists unless the answer really is a list, no sign-offs or offers of more help. Nobody sees your plan, tool calls or reasoning, only what you write. On a longer task, one or two very short status lines before the answer are fine ("on it, give me a sec"); otherwise write only the answer. If the message isn\'t for you or needs no reply, call skip: nothing at all is shown. Your tools are the same as always.',
         ]
       : []),
+    ...orphanedCommands.map(
+      ({ command, id }) =>
+        `The turn before this one was interrupted while this command was running: \`${command.length > 300 ? `${command.slice(0, 300)}…` : command}\`. It wasn't stopped: it may still be running or have finished. Check it with process (action output, id "${id}") before running it again.`
+    ),
     ...(pulledInLater
       ? [
           "This message doesn't mention you, and this thread didn't start with you: someone brought you in partway, so you're seeing every reply here, most of them people talking to each other. Decide whether this one needs you: reply only if it's addressed to you, follows up on something you said, or asks something you should clearly answer. Otherwise call skip: nothing is posted.",

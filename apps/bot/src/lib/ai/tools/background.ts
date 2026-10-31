@@ -91,6 +91,8 @@ interface BackgroundProcess {
   command: string;
   errPath: string;
   exitPath: string;
+  /** Its turn was interrupted while waiting on it; the next turn is told. */
+  orphaned?: boolean;
   outPath: string;
   pid: string;
   /** A host-side watcher is polling it (see startWatching). */
@@ -105,6 +107,25 @@ const threadProcesses = new Map<
   string,
   { counter: number; processes: Map<string, BackgroundProcess> }
 >();
+
+/**
+ * Commands an interrupted turn was still waiting on, once each. The command
+ * keeps running in the sandbox (it is detached; only the WAIT was cut), but the
+ * next turn didn't know: it re-ran a finished `git clone` into the folder that
+ * clone had made, and spent calls recovering (#166).
+ */
+export function takeOrphanedCommands(
+  threadId: string
+): { command: string; id: string }[] {
+  const orphans: { command: string; id: string }[] = [];
+  for (const [id, proc] of threadProcesses.get(threadId)?.processes ?? []) {
+    if (proc.orphaned && !proc.collected) {
+      proc.orphaned = false;
+      orphans.push({ command: proc.command, id });
+    }
+  }
+  return orphans;
+}
 
 // How long a job may keep the sandbox awake after its turn ended, before kyto
 // is told time's up (owner's call 2026-10-08: 30 min, then kyto decides).
@@ -496,9 +517,17 @@ export function backgroundProcessTools({
     },
   });
 
+  function orphanManaged(id: string): void {
+    const proc = processes.get(id);
+    if (proc) {
+      proc.orphaned = true;
+    }
+  }
+
   return {
     getProcessOutput,
     killManaged,
+    orphanManaged,
     killProcess,
     runBackgroundProcess,
     startManaged,

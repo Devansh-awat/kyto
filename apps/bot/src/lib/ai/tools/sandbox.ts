@@ -201,11 +201,16 @@ async function runWithAutoBackground({
   if ('error' in started) {
     return { error: started.error, exitCode: 1 };
   }
-  const result = await background.waitManaged(
-    started.id,
-    timeoutMs ?? AUTO_BACKGROUND_MS,
-    abortSignal
-  );
+  const result = await background
+    .waitManaged(started.id, timeoutMs ?? AUTO_BACKGROUND_MS, abortSignal)
+    .catch((error: unknown) => {
+      // An interrupt cuts the wait, not the command: it keeps running, and
+      // the next turn hears about it instead of re-running it.
+      if (abortSignal?.aborted) {
+        background.orphanManaged(started.id);
+      }
+      throw error;
+    });
   if (!result.finished && timeoutMs) {
     await background.killManaged(started.id);
     return {
