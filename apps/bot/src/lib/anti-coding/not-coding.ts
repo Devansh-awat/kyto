@@ -49,8 +49,10 @@ function readDoubleQuoted(
 }
 
 const PLAIN = new Set([
+  'arch',
   'basename',
   'cat',
+  'cksum',
   'date',
   'df',
   'dirname',
@@ -58,20 +60,63 @@ const PLAIN = new Set([
   'echo',
   'false',
   'file',
+  'free',
+  'getent',
+  'grep',
+  'groups',
   'head',
   'hostname',
+  'id',
+  'journalctl',
   'ls',
+  'lsblk',
+  'lsb_release',
+  'lscpu',
+  'md5sum',
   'nproc',
+  'ps',
   'pwd',
+  'readlink',
+  'realpath',
+  'sha1sum',
+  'sha256sum',
+  'sha512sum',
   'stat',
   'tail',
+  'tree',
   'true',
   'uname',
   'uptime',
   'wc',
+  'whereis',
   'which',
   'whoami',
 ]);
+
+// System diagnostics before an install were refused at 0.94 on an "install
+// an RMM agent" thread (`id; ps -p 1; grep PRETTY_NAME /etc/os-release`,
+// `systemctl status`), then allowed at 0.81 six hours later (#26). Only the
+// verbs that look; `start`/`enable`/`restart` still go to Jev.
+const SYSTEMCTL_READ = new Set([
+  'is-active',
+  'is-enabled',
+  'is-failed',
+  'is-system-running',
+  'list-unit-files',
+  'list-units',
+  'show',
+  'status',
+]);
+// `find` is a read until one of these runs a program or writes a file.
+const FIND_ACTS =
+  /^-(?:exec|execdir|ok|okdir|delete|fprint|fprint0|fprintf|fls)$/;
+// Downloading a file to READ it (an installer before running it, a release
+// asset) is not building code. Only GETs: these flags send a body, change the
+// method or read a config file that could do either.
+const DOWNLOAD_SENDS =
+  /^(?:-d|--data(?:-\w+)?|-F|--form(?:-string)?|-T|--upload-file|-X|--request|-K|--config|--post-data|--post-file|--body-data|--body-file|--method|-e|--execute)(?:=|$)|^-[dFTXKe]./;
+// What a command's output may be piped into: these only filter what they read.
+const PIPE_FILTERS = new Set(['grep', 'head', 'tail', 'wc']);
 
 const GIT_READ = new Set(['diff', 'log', 'rev-parse', 'show', 'status']);
 // `git branch NAME` creates one, so only its listing flags count as reading.
@@ -228,11 +273,14 @@ function segmentArgv(tokens: Token[]): string[] | null {
       .slice(pipe + 1)
       .map((token) => ('word' in token ? token.word : null));
     const [name, ...args] = filter;
+    if (!(name && PIPE_FILTERS.has(name)) || args.some((arg) => arg === null)) {
+      return null;
+    }
     const count = args[0] === '-n' ? args.slice(1) : args;
     if (
-      (name !== 'head' && name !== 'tail') ||
-      count.length > 1 ||
-      (count[0] !== undefined && !TAIL_COUNT.test(count[0] ?? ''))
+      (name === 'head' || name === 'tail') &&
+      (count.length > 1 ||
+        (count[0] !== undefined && !TAIL_COUNT.test(count[0] ?? '')))
     ) {
       return null;
     }
@@ -325,6 +373,19 @@ function isNotCodingArgv([head, ...args]: string[]): boolean {
       GIT_READ.has(sub) &&
       !rest.some((arg) => GIT_WRITES.test(arg))
     );
+  }
+  if (head === 'systemctl') {
+    const verb = args.find((arg) => !arg.startsWith('-'));
+    return verb !== undefined && SYSTEMCTL_READ.has(verb);
+  }
+  if (head === 'command') {
+    return args[0] === '-v' && args.length > 1;
+  }
+  if (head === 'find') {
+    return !args.some((arg) => FIND_ACTS.test(arg));
+  }
+  if (head === 'curl' || head === 'wget') {
+    return !args.some((arg) => DOWNLOAD_SENDS.test(arg));
   }
   return PLAIN.has(head);
 }
