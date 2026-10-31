@@ -1,5 +1,6 @@
 import {
   describeImages,
+  GEMINI_PROVIDER,
   HACKCLUB_PROVIDER,
   LEADERBOARD_FALLBACK,
   LUNA_MODEL,
@@ -321,6 +322,26 @@ class SwitchToOwnModelError extends Error {
     super('Coding work: moving the turn onto the person’s own model.');
     this.name = 'SwitchToOwnModelError';
   }
+}
+
+// The owner's Gemini key is on the free tier: 250k input tokens a minute per
+// model. Handed a failed attempt's whole last request (900k-1.8M chars after a
+// 164-call luna turn), all three Gemini rungs 429'd within seconds and the turn
+// died (#158). Over this, a Gemini fallback gets the bounded rebuild a restart
+// uses (the newest tool results within CARRIED_TOTAL_MAX) instead.
+const GEMINI_INPUT_TPM = 200_000;
+// Rough, and on the safe side for code and JSON (context-trim uses the same).
+const CHARS_PER_TOKEN = 3;
+
+/** The request's size: its measured head plus an estimate of what followed. */
+function sentTokens(sent: SentContext): number {
+  const unmeasured = sent.messages.slice(
+    sent.inputTokens === undefined ? 0 : sent.measuredLength
+  );
+  return (
+    (sent.inputTokens ?? 0) +
+    Math.ceil(JSON.stringify(unmeasured).length / CHARS_PER_TOKEN)
+  );
 }
 
 class AttemptTimeoutError extends Error {
@@ -1710,7 +1731,14 @@ async function executeTurn(
         // What the earlier attempt already did: its last request as sent,
         // else (a restart) its tool calls rebuilt from the checkpoint.
         let carried: Partial<Parameters<typeof streamAttempt>[0]> = {};
-        if (isFallback && lastSentContext) {
+        if (
+          isFallback &&
+          lastSentContext &&
+          !(
+            currentAttempt.provider === GEMINI_PROVIDER &&
+            sentTokens(lastSentContext) > GEMINI_INPUT_TPM
+          )
+        ) {
           carried = { resumeFrom: lastSentContext };
         } else if (isFallback) {
           carried = {
