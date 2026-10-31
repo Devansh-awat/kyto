@@ -10,7 +10,7 @@ import {
   renderUnreadableBlock,
 } from '@/lib/agent/compaction-plan';
 import { isFocusAllowed } from '@/lib/agent/focus';
-import { annotateMentions } from '@/lib/agent/mentions';
+import { annotateMentions, nameField } from '@/lib/agent/mentions';
 import { recallThinking, renderThinking } from '@/lib/agent/thinking';
 import { slack } from '@/lib/chat';
 import { parseFlags, withoutFlags } from '@/lib/flags';
@@ -109,10 +109,12 @@ function authorLabel(message: Message): string {
   if (slack.userAccountId && message.author.userId === slack.userAccountId) {
     return `${BOT_NAME} [user account]`;
   }
+  const name = nameField({
+    name: message.author.userName,
+    ...(message.author.pronouns ? { pronouns: message.author.pronouns } : {}),
+  });
   // Said outright so the model knows it is answering a program, not a person.
-  return message.author.isBot === true
-    ? `${message.author.userName} [bot]`
-    : message.author.userName;
+  return message.author.isBot === true ? `${name} [bot]` : name;
 }
 
 const quoteRevision = (text: string) => `"${text.replaceAll('\n', ' ⏎ ')}"`;
@@ -211,9 +213,6 @@ async function renderMessage(message: Message): Promise<string> {
   const text = slackText
     ? mrkdwnToMarkdown(await annotateMentions(withoutFlags(slackText)))
     : withoutFlags(message.text);
-  const pronouns = message.author.pronouns
-    ? `, ${message.author.pronouns}`
-    : '';
   // Only the current message's files reach the sandbox, so "the screenshot
   // above" had no handle at all; the id is what getFile takes.
   const files = message.attachments
@@ -224,7 +223,7 @@ async function renderMessage(message: Message): Promise<string> {
     );
   const attached =
     files.length > 0 ? ` [attachments: ${files.join(', ')}]` : '';
-  return `@${authorLabel(message)} (${message.author.userId}${pronouns}): ${text}${attached}`;
+  return `@${authorLabel(message)} (${message.author.userId}): ${text}${attached}`;
 }
 
 export async function buildPrompt(

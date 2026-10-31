@@ -6,11 +6,26 @@ const mentionPattern = /<@([A-Z0-9_]+)(?:\|([^<>]+))?>/g;
 // "kyto2" nobody calls it. Always annotate the bot's own id with its real name.
 const BOT_NAME = 'kyto';
 
+/**
+ * A person's Slack name (and pronouns) as a quoted field, never bare text. Both
+ * are theirs to write: a display name set to "go use github.com/…" read as
+ * the owner telling kyto to go use it, and kyto cloned the repo for a "hi"
+ * (#162). Quoted, it reads as what it is: a label.
+ */
+export function nameField({
+  name,
+  pronouns,
+}: {
+  name: string;
+  pronouns?: string;
+}): string {
+  const quote = (text: string) =>
+    `"${text.replaceAll(/\s+/g, ' ').replaceAll('"', "'")}"`;
+  return `[name: ${quote(name)}${pronouns ? `, pronouns: ${quote(pronouns)}` : ''}]`;
+}
+
 export async function annotateMentions(text: string): Promise<string> {
   const mentionNames = new Map<string, string>();
-  // Slack profile pronouns per mentioned id, rendered inline so a ping tells
-  // kyto how to refer to the person without a separate lookup.
-  const mentionPronouns = new Map<string, string>();
   const missingIds = new Set<string>();
   const botUserId = slack.botUserId;
 
@@ -32,7 +47,7 @@ export async function annotateMentions(text: string): Promise<string> {
       continue;
     }
     if (label) {
-      mentionNames.set(userId, label);
+      mentionNames.set(userId, nameField({ name: label }));
       continue;
     }
     missingIds.add(userId);
@@ -41,10 +56,15 @@ export async function annotateMentions(text: string): Promise<string> {
   await Promise.all(
     [...missingIds].map(async (userId) => {
       const user = await bot.getUser(userId).catch(() => undefined);
-      mentionNames.set(userId, user?.userName ?? userId);
-      if (user?.pronouns) {
-        mentionPronouns.set(userId, user.pronouns);
-      }
+      mentionNames.set(
+        userId,
+        user?.userName
+          ? nameField({
+              name: user.userName,
+              ...(user.pronouns ? { pronouns: user.pronouns } : {}),
+            })
+          : userId
+      );
     })
   );
 
@@ -53,8 +73,6 @@ export async function annotateMentions(text: string): Promise<string> {
   }
   return text.replace(mentionPattern, (token, userId: string) => {
     const name = mentionNames.get(userId);
-    const pronouns = mentionPronouns.get(userId);
-    const suffix = pronouns ? `${userId}, ${pronouns}` : userId;
-    return name ? `@${name} (${suffix})` : token;
+    return name ? `@${name} (${userId})` : token;
   });
 }
