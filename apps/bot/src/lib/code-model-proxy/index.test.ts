@@ -92,6 +92,39 @@ describe('code-model proxy', () => {
     run.revoke();
   });
 
+  test("answers Crush's title request without calling the model", async () => {
+    let upstreamCalls = 0;
+    globalThis.fetch = (() => {
+      upstreamCalls += 1;
+      return Promise.resolve(new Response('{}'));
+    }) as unknown as typeof fetch;
+    const run = registerCodeModelToken();
+    const path = '/_codemodel/v1/chat/completions';
+    const secret = run.env.KYTO_CODE_MODEL_TOKEN ?? '';
+    const messages = [
+      {
+        content: 'You will generate a short title based on the first message.',
+        role: 'system',
+      },
+      { content: 'Generate a concise title for: fix the bug', role: 'user' },
+    ];
+    const streamed = await handleCodeModelProxy(
+      post(path, secret, { messages, stream: true }),
+      path
+    );
+    const events = await streamed?.text();
+    expect(events).toContain('"content":"Coding task"');
+    expect(events).toContain('"finish_reason":"stop"');
+    expect(events?.trimEnd().endsWith('data: [DONE]')).toBe(true);
+    const plain = await handleCodeModelProxy(
+      post(path, secret, { messages }),
+      path
+    );
+    expect(await plain?.text()).toContain('"content":"Coding task"');
+    expect(upstreamCalls).toBe(0);
+    run.revoke();
+  });
+
   // Last: it leaves the route marked down for the rest of the module.
   test('an exhausted route answers every later call at once (#154)', async () => {
     let upstreamCalls = 0;

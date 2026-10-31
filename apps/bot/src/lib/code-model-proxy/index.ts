@@ -70,6 +70,56 @@ function noteRouteAnswer({ status, text }: { status: number; text: string }) {
 
 const chatBodySchema = z.looseObject({ messages: z.array(z.unknown()) });
 
+// Crush asks its small model for a session title before every run. On the
+// coding route that streamed call came back empty, the router locked the
+// route's one account for a few seconds, and the run's real call landing in
+// that window failed with "No active credentials for provider". Nobody reads
+// the title, so it is answered here and never reaches the model.
+const TITLE_PROMPT_START = 'You will generate a short title';
+const TITLE = 'Coding task';
+const titleRequestSchema = z.looseObject({
+  messages: z.tuple(
+    [
+      z.looseObject({
+        content: z.string().startsWith(TITLE_PROMPT_START),
+        role: z.literal('system'),
+      }),
+    ],
+    z.unknown()
+  ),
+  stream: z.boolean().optional(),
+});
+
+function titleAnswer(stream: boolean): Response {
+  const base = {
+    created: Math.floor(Date.now() / 1000),
+    id: 'kyto-title',
+    model: 'kyto-code',
+  };
+  if (!stream) {
+    return json(
+      {
+        ...base,
+        choices: [
+          {
+            finish_reason: 'stop',
+            index: 0,
+            message: { content: TITLE, role: 'assistant' },
+          },
+        ],
+        object: 'chat.completion',
+      },
+      200
+    );
+  }
+  const chunk = (choice: Record<string, unknown>) =>
+    `data: ${JSON.stringify({ ...base, choices: [{ index: 0, ...choice }], object: 'chat.completion.chunk' })}\n\n`;
+  return new Response(
+    `${chunk({ delta: { content: TITLE, role: 'assistant' }, finish_reason: null })}${chunk({ delta: {}, finish_reason: 'stop' })}data: [DONE]\n\n`,
+    { headers: { 'Content-Type': 'text/event-stream' }, status: 200 }
+  );
+}
+
 /** Whether the coding agent has a model to run on. */
 export function codeModelConfigured(): boolean {
   return Boolean(
@@ -157,6 +207,10 @@ export async function handleCodeModelProxy(
   const body = chatBodySchema.safeParse(parsed);
   if (!body.success) {
     return error('body must be a chat completions request', 400);
+  }
+  const title = titleRequestSchema.safeParse(body.data);
+  if (title.success) {
+    return titleAnswer(title.data.stream ?? false);
   }
   const down = codeModelRouteDown();
   if (down) {
