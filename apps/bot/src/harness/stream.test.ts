@@ -71,4 +71,43 @@ describe('streamed reply text', () => {
     expect(messages.size).toBeGreaterThan(1);
     expect([...messages.values()].join('')).toBe(parts.join(''));
   });
+
+  test('a full message refusing its stop still settles its open cards (#30)', async () => {
+    const { harness } = fakeSlack({ limit: 5000 });
+    spyOn(harness.webClient.chat, 'stopStream').mockRejectedValue(
+      new Error('An API error occurred: msg_too_long')
+    );
+    const apiCall = spyOn(harness.webClient, 'apiCall').mockResolvedValue({
+      ok: true,
+    });
+    const card = {
+      id: 'card-1',
+      status: 'in_progress',
+      title: 'Reading',
+      type: 'task_update',
+    } as const;
+    const parts: (string | typeof card)[] = [
+      card,
+      ...Array.from(
+        { length: 40 },
+        (_, index) => `line ${index} ${'x'.repeat(290)}\n`
+      ),
+    ];
+    async function* chunks(): AsyncGenerator<string | typeof card> {
+      for await (const part of parts) {
+        yield part;
+      }
+    }
+    await harness.stream('slack:C1:1.000', chunks(), {
+      onRotate: () => [{ ...card, status: 'complete' }],
+      recipientTeamId: 'T1',
+      recipientUserId: 'U1',
+    });
+    const settling = apiCall.mock.calls.find(
+      ([method, args]) =>
+        method === 'chat.stopStream' &&
+        JSON.stringify(args).includes('"status":"complete"')
+    );
+    expect(settling).toBeDefined();
+  });
 });

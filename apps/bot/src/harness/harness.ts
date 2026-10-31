@@ -1326,13 +1326,37 @@ export class SlackHarness {
         unflushedText = '';
       } catch (error) {
         this.logger.warn({ err: error }, '[harness] stream stop failed');
-        // A full message refuses the stop too, its unsent text riding along:
-        // closed bare instead, or it spins until Slack expires it. The text
-        // stays in unflushedText for the next message.
+        // A full message refuses the stop too, its unsent text riding along.
+        // Stopped again WITHOUT that text (it stays in unflushedText for the
+        // next message) but still carrying the settle chunks: closed bare, its
+        // open cards stayed in progress, which Slack draws as "Something went
+        // wrong" on a reply that went on fine (#30, #123). Bare only if that is
+        // refused too, or it spins until Slack expires it.
         if (streamer.ts) {
-          await this.webClient
-            .apiCall('chat.stopStream', { channel, ts: streamer.ts })
-            .catch(() => undefined);
+          const ts = streamer.ts;
+          const settled =
+            settle.length > 0 && structuredSupported
+              ? await this.webClient
+                  .apiCall('chat.stopStream', {
+                    channel,
+                    chunks: settle.map((chunk) => filterOutboundDeep(chunk)),
+                    ts,
+                    ...(blocks ? { blocks } : {}),
+                  })
+                  .then(() => true)
+                  .catch((settleError: unknown) => {
+                    this.logger.warn(
+                      { err: settleError },
+                      '[harness] settling stop failed; open cards left as they were'
+                    );
+                    return false;
+                  })
+              : false;
+          if (!settled) {
+            await this.webClient
+              .apiCall('chat.stopStream', { channel, ts })
+              .catch(() => undefined);
+          }
         }
       }
       // After stop: a short message is buffered until then, so before it the
