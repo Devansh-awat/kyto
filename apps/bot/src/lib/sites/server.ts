@@ -197,7 +197,11 @@ export async function startSitesServer(): Promise<void> {
 
         // The sandbox coding agent's model endpoint (secret-gated; the real
         // key is added here, never inside the sandbox).
-        const codeModel = await handleCodeModelProxy(request, pathname);
+        const codeModel = await handleCodeModelProxy({
+          pathname,
+          request,
+          server,
+        });
         if (codeModel) {
           return codeModel;
         }

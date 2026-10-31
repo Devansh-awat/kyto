@@ -162,13 +162,23 @@ function error(message: string, status: number): Response {
  * Handle a request to the code-model proxy, or return null if the path isn't
  * ours (the caller falls through to the static sites).
  */
-export async function handleCodeModelProxy(
-  request: Request,
-  pathname: string
-): Promise<Response | null> {
+export async function handleCodeModelProxy({
+  pathname,
+  request,
+  server,
+}: {
+  pathname: string;
+  request: Request;
+  server: { timeout: (request: Request, seconds: number) => void };
+}): Promise<Response | null> {
   if (!pathname.startsWith(CODE_MODEL_PROXY_PREFIX)) {
     return null;
   }
+  // Bun.serve drops a request after 10 idle seconds. A reasoning model streams
+  // nothing while it thinks, so Bun cut the agent's stream mid-answer and Crush
+  // failed with "stream transport error: INTERNAL_ERROR". The run's own minute
+  // cap and the watchdog bound it instead.
+  server.timeout(request, 0);
   const secret = (request.headers.get('authorization') ?? '')
     .replace(/^Bearer\s+/i, '')
     .trim();

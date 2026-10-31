@@ -11,6 +11,8 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
+const server = { timeout: () => undefined };
+
 function post(path: string, secret: string, body: unknown): Request {
   return new Request(`https://host${path}`, {
     body: JSON.stringify(body),
@@ -22,7 +24,20 @@ function post(path: string, secret: string, body: unknown): Request {
 describe('code-model proxy', () => {
   test('ignores paths that are not its own', async () => {
     const request = new Request('https://host/site/page');
-    expect(await handleCodeModelProxy(request, '/site/page')).toBeNull();
+    expect(
+      await handleCodeModelProxy({ pathname: '/site/page', request, server })
+    ).toBeNull();
+  });
+
+  test('turns off the idle timeout for its own requests', async () => {
+    const timeouts: number[] = [];
+    const path = '/_codemodel/v1/chat/completions';
+    await handleCodeModelProxy({
+      pathname: path,
+      request: post(path, 'nope', { messages: [] }),
+      server: { timeout: (_request, seconds) => timeouts.push(seconds) },
+    });
+    expect(timeouts).toEqual([0]);
   });
 
   test('refuses an unknown or revoked secret', async () => {
@@ -30,20 +45,24 @@ describe('code-model proxy', () => {
     const secret = run.env.KYTO_CODE_MODEL_TOKEN ?? '';
     run.revoke();
     const path = '/_codemodel/v1/chat/completions';
-    const response = await handleCodeModelProxy(
-      post(path, secret, { messages: [] }),
-      path
-    );
+    const response = await handleCodeModelProxy({
+      pathname: path,
+      request: post(path, secret, { messages: [] }),
+      server,
+    });
     expect(response?.status).toBe(401);
   });
 
   test('serves only chat completions', async () => {
     const run = registerCodeModelToken();
     const path = '/_codemodel/v1/embeddings';
-    const response = await handleCodeModelProxy(
-      post(path, run.env.KYTO_CODE_MODEL_TOKEN ?? '', { messages: [] }),
-      path
-    );
+    const response = await handleCodeModelProxy({
+      pathname: path,
+      request: post(path, run.env.KYTO_CODE_MODEL_TOKEN ?? '', {
+        messages: [],
+      }),
+      server,
+    });
     expect(response?.status).toBe(404);
     run.revoke();
   });
@@ -64,14 +83,15 @@ describe('code-model proxy', () => {
     }) as typeof fetch;
     const run = registerCodeModelToken();
     const path = '/_codemodel/v1/chat/completions';
-    const response = await handleCodeModelProxy(
-      post(path, run.env.KYTO_CODE_MODEL_TOKEN ?? '', {
+    const response = await handleCodeModelProxy({
+      pathname: path,
+      request: post(path, run.env.KYTO_CODE_MODEL_TOKEN ?? '', {
         messages: [{ content: 'hi', role: 'user' }],
         model: 'claude-opus-5-5',
         stream: true,
       }),
-      path
-    );
+      server,
+    });
     expect(response?.status).toBe(200);
     expect(sent?.url).toBe(`${env.CODE_MODEL_BASE_URL}/chat/completions`);
     expect(sent?.auth).toBe(`Bearer ${env.CODE_MODEL_API_KEY}`);
@@ -84,10 +104,11 @@ describe('code-model proxy', () => {
   test('rejects a body that is not a chat request', async () => {
     const run = registerCodeModelToken();
     const path = '/_codemodel/v1/chat/completions';
-    const response = await handleCodeModelProxy(
-      post(path, run.env.KYTO_CODE_MODEL_TOKEN ?? '', { prompt: 'x' }),
-      path
-    );
+    const response = await handleCodeModelProxy({
+      pathname: path,
+      request: post(path, run.env.KYTO_CODE_MODEL_TOKEN ?? '', { prompt: 'x' }),
+      server,
+    });
     expect(response?.status).toBe(400);
     run.revoke();
   });
@@ -108,18 +129,20 @@ describe('code-model proxy', () => {
       },
       { content: 'Generate a concise title for: fix the bug', role: 'user' },
     ];
-    const streamed = await handleCodeModelProxy(
-      post(path, secret, { messages, stream: true }),
-      path
-    );
+    const streamed = await handleCodeModelProxy({
+      pathname: path,
+      request: post(path, secret, { messages, stream: true }),
+      server,
+    });
     const events = await streamed?.text();
     expect(events).toContain('"content":"Coding task"');
     expect(events).toContain('"finish_reason":"stop"');
     expect(events?.trimEnd().endsWith('data: [DONE]')).toBe(true);
-    const plain = await handleCodeModelProxy(
-      post(path, secret, { messages }),
-      path
-    );
+    const plain = await handleCodeModelProxy({
+      pathname: path,
+      request: post(path, secret, { messages }),
+      server,
+    });
     expect(await plain?.text()).toContain('"content":"Coding task"');
     expect(upstreamCalls).toBe(0);
     run.revoke();
@@ -140,16 +163,18 @@ describe('code-model proxy', () => {
     const run = registerCodeModelToken();
     const path = '/_codemodel/v1/chat/completions';
     const secret = run.env.KYTO_CODE_MODEL_TOKEN ?? '';
-    const first = await handleCodeModelProxy(
-      post(path, secret, { messages: [] }),
-      path
-    );
+    const first = await handleCodeModelProxy({
+      pathname: path,
+      request: post(path, secret, { messages: [] }),
+      server,
+    });
     expect(first?.status).toBe(503);
     expect(codeModelRouteDown()?.message).toContain('cooling down');
-    const retry = await handleCodeModelProxy(
-      post(path, secret, { messages: [] }),
-      path
-    );
+    const retry = await handleCodeModelProxy({
+      pathname: path,
+      request: post(path, secret, { messages: [] }),
+      server,
+    });
     expect(retry?.status).toBe(400);
     expect(upstreamCalls).toBe(1);
     run.revoke();
