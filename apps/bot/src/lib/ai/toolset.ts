@@ -49,7 +49,11 @@ import {
   canvasReadTool,
   canvasWriteTool,
 } from './tools/canvas';
-import { createChannelTool, setChannelTopicTool } from './tools/channels';
+import {
+  createChannelTool,
+  joinChannelTool,
+  setChannelTopicTool,
+} from './tools/channels';
 import { nowTool } from './tools/clock';
 import { codeChannelTool } from './tools/code-channel';
 import { codeModeTool } from './tools/code-mode';
@@ -247,6 +251,7 @@ const EFFECT_TOOLS = new Set([
   'deploySite',
   'editAsUser',
   'editReminder',
+  'joinChannel',
   // Each posts into the thread: re-run after a restart, a user got the
   // same jar twice (#99).
   'embed',
@@ -296,6 +301,7 @@ const PUBLIC_POSTING_TOOLS = [
   'embed',
   'focusMode',
   'generateImage',
+  'joinChannel',
   'joinThread',
   'leaveThread',
   'mermaid',
@@ -852,6 +858,11 @@ export async function buildTools({
     createChannel: {
       summary: 'create a Slack channel',
       tool: createChannelTool(),
+    },
+    joinChannel: {
+      summary:
+        'join a public Slack channel when asked to (channel membership, not a thread)',
+      tool: joinChannelTool({ authorUserId }),
     },
     codeChannel: {
       summary:

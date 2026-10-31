@@ -189,3 +189,110 @@ export function setChannelTopicTool({
     },
   });
 }
+
+const channelInfoSchema = z.looseObject({
+  channel: z
+    .looseObject({
+      id: z.string().optional(),
+      is_archived: z.boolean().optional(),
+      is_im: z.boolean().optional(),
+      is_member: z.boolean().optional(),
+      is_mpim: z.boolean().optional(),
+      is_private: z.boolean().optional(),
+      name: z.string().optional(),
+    })
+    .optional(),
+  error: z.string().optional(),
+  ok: z.boolean(),
+});
+
+// Slack enforces the workspace's app and posting restrictions itself (an org
+// admin's per-channel app limits are only readable with admin.* scopes kyto
+// can't get), so its answer IS the permission check. These say why in words a
+// person can act on.
+const JOIN_ERRORS: Record<string, string> = {
+  channel_not_found:
+    "no such channel, or it's private (a private channel needs someone in it to `/invite @kyto`)",
+  is_archived: 'the channel is archived',
+  method_not_supported_for_channel_type:
+    "that's not a channel kyto can join (a DM or group DM)",
+  restricted_action:
+    "the workspace's settings don't let apps join that channel. A workspace admin controls that",
+};
+
+export function joinChannelTool({ authorUserId }: { authorUserId: string }) {
+  return tool({
+    description:
+      'Join a PUBLIC Slack channel as kyto (the app), when someone asks you to join or add yourself to a channel. This is channel membership. joinThread only follows a thread. A private channel can\'t be joined: someone in it has to `/invite @kyto`. After joining, it posts "kyto was added by @whoever-asked" in the channel when the channel lets apps post. Say you joined ONLY after this returns joined: true.',
+    inputSchema: z.object({
+      channelId: z
+        .string()
+        .min(1)
+        .describe(
+          'The channel id (C…), or its <#C…|name> mention. Look an id up first if you only have a name.'
+        ),
+    }),
+    execute: async ({ channelId: raw }) => {
+      const channel = /C[A-Z0-9]{6,}/.exec(raw)?.[0];
+      if (!channel) {
+        return {
+          error: `"${raw}" isn't a channel id (C…). Find the channel's id first.`,
+          joined: false,
+        };
+      }
+      try {
+        const info = channelInfoSchema.parse(
+          await slack.webClient.apiCall('conversations.info', { channel })
+        );
+        const found = info.channel;
+        if (info.ok && found?.is_member) {
+          return { alreadyMember: true, channel, joined: true };
+        }
+        if (info.ok && (found?.is_private || found?.is_im || found?.is_mpim)) {
+          return {
+            error:
+              "That channel is private, so kyto can't join it by itself: someone in it has to `/invite @kyto`.",
+            joined: false,
+          };
+        }
+        const joined = okSchema.parse(
+          await slack.webClient.apiCall('conversations.join', { channel })
+        );
+        if (!joined.ok) {
+          const code = joined.error ?? 'unknown_error';
+          return {
+            error: `Slack refused the join (${code}): ${JOIN_ERRORS[code] ?? 'see the error code'}.`,
+            joined: false,
+          };
+        }
+        // Who brought kyto in, said in the channel itself. Trying the post IS
+        // the posting-permission check: an announcement-only or read-only
+        // channel answers restricted_action*, and the join still stands.
+        const note = okSchema.parse(
+          await slack.webClient
+            .apiCall('chat.postMessage', {
+              channel,
+              text: `kyto was added by <@${authorUserId}>`,
+            })
+            .catch((error: unknown) => ({
+              error: errorMessage(error),
+              ok: false,
+            }))
+        );
+        return {
+          channel,
+          joined: true,
+          ...(note.ok
+            ? { announced: true }
+            : {
+                announced: false,
+                announceError: `The channel didn't take the "added by" note (${note.error ?? 'unknown error'}); posting there may be restricted.`,
+              }),
+        };
+      } catch (error) {
+        logger.warn({ error: errorMessage(error) }, '[joinChannel] failed');
+        return { error: errorMessage(error), joined: false };
+      }
+    },
+  });
+}

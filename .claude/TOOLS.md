@@ -147,6 +147,10 @@ The scheduler fires due reminders **concurrently** and guards **overlapping fire
 
 `findImages` (deferred, `tools/find-images.ts`, preload group `imageHunt`, owner's call 2026-10-17 for #109): a channel's images by author and day range via `files.list` (`types: images`, ≤5 pages of 100), returning file id, title, poster, time and permalink for `getFile` → `viewImage` with a yes/no question. Gated by `mayReadChannel` like `getPermalink`; it is in `SLACK_READ_TOOLS`. `files.list` omits `shares`, so privacy comes from `conversations.info` and a failed lookup counts as private (`isPrivate: true` keeps the turn's replay to its asker). An image hunt used to be ~10 `searchSlack` calls that can't see into images (123s, a miss).
 
+## Joining a channel (`joinChannel`, deferred, preload `channelAdmin`)
+
+kyto (the app) joins a PUBLIC channel when someone asks (#167; owner's call 2026-10-31: anyone may ask, even after kyto was removed). Already a member → `alreadyMember`, nothing posted. Private / DM → refused with "`/invite @kyto`". Slack's answer to `conversations.join` IS the permission check: the org's per-channel app limits are only readable with `admin.apps:read` (an org-admin token kyto can't get), and Slack enforces them on the join (`restricted_action` and friends are mapped to words). After a join it posts `kyto was added by <@asker>` in the channel; that post is the posting-permission check too (an announcement-only channel refuses it, the join stands, and the result says the note didn't go). The model may say "joined" only on `joined: true`. Inviting OTHER people is not built yet (#170): the prompt has kyto say so in one line instead of trying gh or the browser. In `EFFECT_TOOLS` and `PUBLIC_POSTING_TOOLS`.
+
 ## Slack search
 
 `assistant.search.context` runs with the **requesting user's** own Slack access, so it reaches private channels/DMs that user is in — but only with granted scopes (`search:read.public`/`.files`/`.users`/`.private`/`.im`/`.mpim`; the last three were missing once, silently limiting every search to public channels).
