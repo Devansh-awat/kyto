@@ -200,11 +200,24 @@ const channelInfoSchema = z.looseObject({
       is_mpim: z.boolean().optional(),
       is_private: z.boolean().optional(),
       name: z.string().optional(),
+      properties: z
+        .looseObject({
+          posting_restricted_to: z
+            .looseObject({ type: z.array(z.string()).optional() })
+            .optional(),
+        })
+        .optional(),
     })
     .optional(),
   error: z.string().optional(),
   ok: z.boolean(),
 });
+
+// `posting_restricted_to.type` lists who may post: `ra` is every member (it's
+// what #lounge has); a channel left to admins/owners plus a named list
+// (#stardance-construction: admins and 55 people) is one most people can't
+// post in, so kyto doesn't either.
+const STAFF_POSTERS = new Set(['admin', 'owner']);
 
 // Slack enforces the workspace's app and posting restrictions itself (an org
 // admin's per-channel app limits are only readable with admin.* scopes kyto
@@ -223,7 +236,7 @@ const JOIN_ERRORS: Record<string, string> = {
 export function joinChannelTool({ authorUserId }: { authorUserId: string }) {
   return tool({
     description:
-      'Join a PUBLIC Slack channel as kyto (the app), when someone asks you to join or add yourself to a channel. This is channel membership. joinThread only follows a thread. A private channel can\'t be joined: someone in it has to `/invite @kyto`. After joining, it posts "kyto was added by @whoever-asked" in the channel when the channel lets apps post. Say you joined ONLY after this returns joined: true.',
+      'Join a PUBLIC Slack channel as kyto (the app), when someone asks you to join or add yourself to a channel. This is channel membership. joinThread only follows a thread. A private channel can\'t be joined: someone in it has to `/invite @kyto`. After joining, it posts "kyto was added by @whoever-asked" in the channel, unless most people can\'t post there. Say you joined ONLY after this returns joined: true.',
     inputSchema: z.object({
       channelId: z
         .string()
@@ -265,9 +278,19 @@ export function joinChannelTool({ authorUserId }: { authorUserId: string }) {
             joined: false,
           };
         }
-        // Who brought kyto in, said in the channel itself. Trying the post IS
-        // the posting-permission check: an announcement-only or read-only
-        // channel answers restricted_action*, and the join still stands.
+        // Who brought kyto in, said in the channel itself, but only where
+        // people may post: the app could post in an announcement channel, but
+        // nobody else there can.
+        const posters = found?.properties?.posting_restricted_to?.type;
+        if (posters?.every((type) => STAFF_POSTERS.has(type))) {
+          return {
+            announced: false,
+            announceSkipped:
+              'Most people can\'t post in this channel, so no "added by" note was posted.',
+            channel,
+            joined: true,
+          };
+        }
         const note = okSchema.parse(
           await slack.webClient
             .apiCall('chat.postMessage', {
