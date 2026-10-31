@@ -96,7 +96,7 @@ describe('code-model proxy', () => {
     expect(sent?.url).toBe(`${env.CODE_MODEL_BASE_URL}/chat/completions`);
     expect(sent?.auth).toBe(`Bearer ${env.CODE_MODEL_API_KEY}`);
     const body = JSON.parse(sent?.body ?? '{}');
-    expect(body.model).toBe(env.CODE_MODEL);
+    expect(env.CODE_MODEL.split(',')).toContain(body.model);
     expect(body.stream).toBe(true);
     run.revoke();
   });
@@ -113,70 +113,125 @@ describe('code-model proxy', () => {
     run.revoke();
   });
 
-  test("answers Crush's title request without calling the model", async () => {
-    let upstreamCalls = 0;
-    globalThis.fetch = (() => {
-      upstreamCalls += 1;
-      return Promise.resolve(new Response('{}'));
-    }) as unknown as typeof fetch;
+  test('adds a missing finish_reason before [DONE] and keeps the stream', async () => {
+    const events = [
+      { choices: [{ delta: { tool_calls: [{ index: 0 }] }, index: 0 }] },
+      { choices: [], usage: { completion_tokens: 10, prompt_tokens: 100 } },
+    ];
+    // Split mid-line, as a network read would.
+    const sse = `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')}data: [DONE]\n\n`;
+    const cut = Math.floor(sse.length / 2);
+    globalThis.fetch = (() =>
+      Promise.resolve(
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(sse.slice(0, cut)));
+              controller.enqueue(new TextEncoder().encode(sse.slice(cut)));
+              controller.close();
+            },
+          }),
+          { headers: { 'content-type': 'text/event-stream' } }
+        )
+      )) as unknown as typeof fetch;
     const run = registerCodeModelToken();
     const path = '/_codemodel/v1/chat/completions';
-    const secret = run.env.KYTO_CODE_MODEL_TOKEN ?? '';
-    const messages = [
-      {
-        content: 'You will generate a short title based on the first message.',
-        role: 'system',
-      },
-      { content: 'Generate a concise title for: fix the bug', role: 'user' },
-    ];
-    const streamed = await handleCodeModelProxy({
+    const response = await handleCodeModelProxy({
       pathname: path,
-      request: post(path, secret, { messages, stream: true }),
+      request: post(path, run.env.KYTO_CODE_MODEL_TOKEN ?? '', {
+        messages: [],
+        stream: true,
+      }),
       server,
     });
-    const events = await streamed?.text();
-    expect(events).toContain('"content":"Coding task"');
-    expect(events).toContain('"finish_reason":"stop"');
-    expect(events?.trimEnd().endsWith('data: [DONE]')).toBe(true);
-    const plain = await handleCodeModelProxy({
-      pathname: path,
-      request: post(path, secret, { messages }),
-      server,
-    });
-    expect(await plain?.text()).toContain('"content":"Coding task"');
-    expect(upstreamCalls).toBe(0);
+    const text = (await response?.text()) ?? '';
+    expect(text).toContain('"finish_reason":"tool_calls"');
+    expect(text.indexOf('tool_calls"')).toBeLessThan(text.indexOf('[DONE]'));
+    expect(text.trimEnd().endsWith('data: [DONE]')).toBe(true);
+    expect(text).toContain('"prompt_tokens":100');
     run.revoke();
   });
 
-  // Last: it leaves the route marked down for the rest of the module.
-  test('an exhausted route answers every later call at once (#154)', async () => {
-    let upstreamCalls = 0;
-    globalThis.fetch = (() => {
-      upstreamCalls += 1;
+  test('leaves a stream that has its finish_reason alone', async () => {
+    const sse = `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop', index: 0 }] })}\n\ndata: [DONE]\n\n`;
+    globalThis.fetch = (() =>
+      Promise.resolve(
+        new Response(sse, { headers: { 'content-type': 'text/event-stream' } })
+      )) as unknown as typeof fetch;
+    const run = registerCodeModelToken();
+    const path = '/_codemodel/v1/chat/completions';
+    const response = await handleCodeModelProxy({
+      pathname: path,
+      request: post(path, run.env.KYTO_CODE_MODEL_TOKEN ?? '', {
+        messages: [],
+        stream: true,
+      }),
+      server,
+    });
+    expect(await response?.text()).toBe(sse);
+    run.revoke();
+  });
+
+  test('alternates runs between the configured models', async () => {
+    const sent: string[] = [];
+    globalThis.fetch = ((_url: string, init: RequestInit) => {
+      sent.push(JSON.parse(String(init.body)).model);
+      return Promise.resolve(new Response('{}'));
+    }) as typeof fetch;
+    const path = '/_codemodel/v1/chat/completions';
+    for (let i = 0; i < 4; i++) {
+      const run = registerCodeModelToken();
+      await handleCodeModelProxy({
+        pathname: path,
+        request: post(path, run.env.KYTO_CODE_MODEL_TOKEN ?? '', {
+          messages: [],
+        }),
+        server,
+      });
+      run.revoke();
+    }
+    expect(sent.toSorted()).toEqual([
+      'r/claude-sonnet-5',
+      'r/claude-sonnet-5',
+      'r/glm-5.3',
+      'r/glm-5.3',
+    ]);
+    expect(sent[0]).not.toBe(sent[1]);
+  });
+
+  // Last: it leaves both models marked down for the rest of the module.
+  test('an exhausted model answers every later call at once (#154)', async () => {
+    const sent: string[] = [];
+    globalThis.fetch = ((_url: string, init: RequestInit) => {
+      sent.push(JSON.parse(String(init.body)).model);
       return Promise.resolve(
         new Response(
           '{"error":{"message":"All credentials for model x are cooling down"}}',
           { headers: { 'content-type': 'application/json' }, status: 503 }
         )
       );
-    }) as unknown as typeof fetch;
-    const run = registerCodeModelToken();
+    }) as typeof fetch;
     const path = '/_codemodel/v1/chat/completions';
-    const secret = run.env.KYTO_CODE_MODEL_TOKEN ?? '';
-    const first = await handleCodeModelProxy({
-      pathname: path,
-      request: post(path, secret, { messages: [] }),
-      server,
-    });
-    expect(first?.status).toBe(503);
+    const call = (secret: string) =>
+      handleCodeModelProxy({
+        pathname: path,
+        request: post(path, secret, { messages: [] }),
+        server,
+      });
+    const first = registerCodeModelToken();
+    const firstSecret = first.env.KYTO_CODE_MODEL_TOKEN ?? '';
+    expect((await call(firstSecret))?.status).toBe(503);
+    // The other model is still up, so a run can start.
+    expect(codeModelRouteDown()).toBeUndefined();
+    expect((await call(firstSecret))?.status).toBe(400);
+    expect(sent).toHaveLength(1);
+    const second = registerCodeModelToken();
+    expect((await call(second.env.KYTO_CODE_MODEL_TOKEN ?? ''))?.status).toBe(
+      503
+    );
+    expect(new Set(sent).size).toBe(2);
     expect(codeModelRouteDown()?.message).toContain('cooling down');
-    const retry = await handleCodeModelProxy({
-      pathname: path,
-      request: post(path, secret, { messages: [] }),
-      server,
-    });
-    expect(retry?.status).toBe(400);
-    expect(upstreamCalls).toBe(1);
-    run.revoke();
+    first.revoke();
+    second.revoke();
   });
 });

@@ -1,4 +1,7 @@
-export { CODING_AGENT_SETUP_COMMAND } from './coding-agent';
+export {
+  CODING_AGENT_RULES_PATH,
+  CODING_AGENT_SETUP_COMMAND,
+} from './coding-agent';
 export { sandboxConfig } from './config';
 export { DISPLAY_INSTALL_COMMAND, SANDBOX_DISPLAY } from './display';
 export {

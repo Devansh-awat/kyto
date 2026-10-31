@@ -68,8 +68,9 @@ export const env = createEnv({
     // The model the sandbox coding agent (the `codingAgent` tool, lib/code-model-
     // proxy) runs on: an OpenAI-compatible endpoint OFF Hack Club AI's key. The
     // key stays on the host — the sandbox gets a per-run proxy token — and the
-    // model is forced to CODE_MODEL whatever the agent asks for. Unset → the
-    // tool says code work is unavailable.
+    // model is forced to CODE_MODEL whatever the agent asks for: one model, or
+    // a comma list that runs alternate between. Unset → the tool says code
+    // work is unavailable.
     CODE_MODEL_BASE_URL: z.url().optional(),
     CODE_MODEL_API_KEY: z.string().min(1).optional(),
     CODE_MODEL: z.string().min(1).default('deepseek-flash'),

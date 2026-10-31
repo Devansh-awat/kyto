@@ -1,6 +1,9 @@
 import nodePath from 'node:path/posix';
 import type { SandboxContext } from '@repo/ai';
-import { CODING_AGENT_SETUP_COMMAND } from '@repo/sandbox';
+import {
+  CODING_AGENT_RULES_PATH,
+  CODING_AGENT_SETUP_COMMAND,
+} from '@repo/sandbox';
 import { tool } from 'ai';
 import { z } from 'zod';
 import {
@@ -12,7 +15,7 @@ import { disarmFetchedRepos } from '@/lib/sandbox/git-safety';
 import { clamp } from '@/lib/utils/text';
 
 // Hand code work to a coding agent in the thread's sandbox, off Hack Club AI's
-// key (owner's call, 2026-09-29). Since 2026-10-19 the agent is Crush on the
+// key (owner's call, 2026-09-29). Since 2026-10-31 the agent is pi on the
 // owner's router, reached through lib/code-model-proxy
 // (packages/sandbox/src/coding-agent.ts says why). Named `codingAgent`, not
 // after the CLI, since 2026-10-31: it was `opencode` long after OpenCode left.
@@ -34,8 +37,8 @@ const OUTPUT_MAX = 12_000;
 // Inside the sandbox's own 20-minute command limit, with room to clean up.
 const RUN_TIMEOUT_SECONDS = 18 * 60;
 const MAX_RUN_MINUTES = RUN_TIMEOUT_SECONDS / 60;
-// Files a stopped run touched, listed so kyto sees how far it got: `crush run
-// -q` prints only when it ends, so a timed-out run used to come back as
+// Files a stopped run touched, listed so kyto sees how far it got: `pi -p`
+// prints only when it ends, so a timed-out run used to come back as
 // "(no output)" and was re-run blind for another 18 minutes (#124).
 const CHANGED_FILES_MAX = 30;
 // How much longer than the run the turn's stall watchdog must wait.
@@ -61,8 +64,11 @@ const KILLED_EXIT = 137;
 // Colour codes the agent may write even when it is not on a terminal.
 // biome-ignore lint/suspicious/noControlCharactersInRegex: that is what they are
 const ANSI = /\u001b\[[0-9;]*[A-Za-z]/g;
-// The one model the crushrc defines; the proxy maps it to CODE_MODEL.
-const AGENT_MODEL = 'kyto/kyto-code';
+// The one model pi's models.json defines; the proxy maps it to CODE_MODEL.
+// Extensions, skills, MCP, prompt templates and themes are off: each adds to
+// every call's prompt or runs code, and a run needs none of them. `-na`
+// ignores a cloned repo's project-local pi config (it could load an extension).
+const AGENT_ARGS = `-p --provider kyto --model kyto-code --no-extensions --no-skills --no-mcp --no-prompt-templates --no-themes -na --append-system-prompt '${CODING_AGENT_RULES_PATH}'`;
 
 // A media file made with command-line tools is a bash one-liner, and the
 // description saying so wasn't enough: a two-frame GIF from three PNGs went to
@@ -213,7 +219,7 @@ export function codingAgentTool({
             'SETUP_LOG=$(mktemp)',
             `( ${CODING_AGENT_SETUP_COMMAND}\n) 9>&- >"$SETUP_LOG" 2>&1 || { cat "$SETUP_LOG"; rm -f '${STATE_PATH}'; exit ${SETUP_FAILED_EXIT}; }`,
             `mkdir -p '${workDir}' && cd '${workDir}'`,
-            `timeout ${runSeconds} crush run -q ${resume ? '-C' : ''} -m '${AGENT_MODEL}' "$(cat '${briefPath}')" 9>&- 2>&1 &`,
+            `timeout ${runSeconds} pi ${AGENT_ARGS} ${resume ? '-c' : ''} -- "$(cat '${briefPath}')" 9>&- 2>&1 &`,
             'RUN_PID=$!',
             `echo "$(date +%s) ${runId} $$ $RUN_PID" > '${STATE_PATH}'`,
             'wait "$RUN_PID"',
