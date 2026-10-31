@@ -110,7 +110,7 @@ describe('isNotCodingCall', () => {
       'gh issue create --repo o/r --title x --body y',
       'gh pr comment 3 --body thanks',
       'gh repo fork o/r --clone=false',
-      // #108: a docs-only skill repo, refused at 0.90 and sent to OpenCode.
+      // #108: a docs-only skill repo, refused at 0.90 and sent to the coding agent.
       'git init; git add SKILL.md; git commit -m "add skill"; gh repo create kyto-agent/fabric-mod-skill --public --source . --push',
       'git add -A && git commit -m x && git push',
     ]) {

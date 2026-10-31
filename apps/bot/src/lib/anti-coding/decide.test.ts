@@ -23,7 +23,7 @@ describe('decideCodingAction', () => {
     ).toBe('allow');
   });
 
-  test('coding on the shared models goes to OpenCode — owner or not', () => {
+  test('coding on the shared models goes to the coding agent — owner or not', () => {
     expect(
       decideCodingAction({ probability: CODING, usesOwnModels: false })
     ).toBe('delegate');

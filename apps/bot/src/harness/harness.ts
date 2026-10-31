@@ -1477,7 +1477,7 @@ export class SlackHarness {
       while (true) {
         pending ??= iterator.next();
         // Rotate on a deadline, not only when the next chunk arrives: a tool
-        // that runs longer than the stream lives (opencode, a long `wait`)
+        // that runs longer than the stream lives (the coding agent, a long `wait`)
         // sends nothing meanwhile, so the stream used to expire under its
         // in-flight card and the card's result landed in a dead message.
         let timer: ReturnType<typeof setTimeout> | undefined;

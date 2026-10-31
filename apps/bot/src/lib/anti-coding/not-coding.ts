@@ -139,7 +139,7 @@ const GIT_FETCH = new Set(['clone', 'fetch']);
 const GIT_FETCH_RUNS = /^(?:--upload-pack|-u|--template|-c|--config)(?:=|$)/;
 // Committing and pushing a finished document (a skill file, notes) is not
 // coding either (owner's call 2026-10-15): a docs-only `git init … gh repo
-// create` was refused at 0.90 and handed to OpenCode for 144s (#108). A commit
+// create` was refused at 0.90 and handed to the coding agent for 144s (#108). A commit
 // can't launder code: whatever it commits was judged when it was written.
 const GIT_PUBLISH = new Set(['add', 'commit', 'init', 'push']);
 // Starting the branch a PR goes out on: `git switch -c <name>` or

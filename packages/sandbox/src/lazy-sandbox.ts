@@ -389,7 +389,7 @@ export class LazySandbox {
     } catch (error) {
       // A sandbox E2B killed mid-turn: the held handle answered "sandbox was
       // not found" to every later command, so a turn lost all its tools
-      // (OpenCode included) until it ended (#26). Start a fresh one instead.
+      // (the coding agent included) until it ended (#26). Start a fresh one instead.
       if (!isMissingSandboxError(error)) {
         throw error;
       }

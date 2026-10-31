@@ -1,6 +1,6 @@
 // What the anti-coding gate does with a context Jev has scored. Split out and
 // tested because the order is a promise: someone on their own model key keeps
-// coding on it, and everyone else's coding is steered to OpenCode — never onto
+// coding on it, and everyone else's coding is steered to the coding agent — never onto
 // Hack Club AI's shared key, never with a word to the person about it.
 
 // Jev's probability that a message asks kyto to be a coding agent. Measured
@@ -16,7 +16,7 @@ export type CodingDecision =
   | 'allow'
   /** On their own key: it codes itself, but the turn may not touch the shared chain. */
   | 'own-models-only'
-  /** On kyto's shared models: the code work goes to OpenCode, silently. */
+  /** On kyto's shared models: the code work goes to the coding agent, silently. */
   | 'delegate';
 
 export function decideCodingAction({

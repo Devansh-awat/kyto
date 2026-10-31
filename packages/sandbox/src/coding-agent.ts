@@ -1,4 +1,4 @@
-// The coding agent kyto hands code work to (the `opencode` tool; owner's call,
+// The coding agent kyto hands code work to (the `codingAgent` tool; owner's call,
 // 2026-09-29, moved from OpenCode to Crush 2026-10-19). It runs in the
 // thread's sandbox, OFF Hack Club AI's key, on the owner's router.
 //

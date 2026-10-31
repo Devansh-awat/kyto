@@ -12,10 +12,10 @@ import { disarmFetchedRepos } from '@/lib/sandbox/git-safety';
 import { clamp } from '@/lib/utils/text';
 
 // Hand code work to a coding agent in the thread's sandbox, off Hack Club AI's
-// key (owner's call, 2026-09-29). The tool keeps its `opencode` name — prompts,
-// the anti-coding redirect and every thread's stored tool list say it — but
-// since 2026-10-19 the agent is Crush on the owner's router, reached through
-// lib/code-model-proxy (packages/sandbox/src/coding-agent.ts says why).
+// key (owner's call, 2026-09-29). Since 2026-10-19 the agent is Crush on the
+// owner's router, reached through lib/code-model-proxy
+// (packages/sandbox/src/coding-agent.ts says why). Named `codingAgent`, not
+// after the CLI, since 2026-10-31: it was `opencode` long after OpenCode left.
 //
 // kyto itself stays a non-coding agent on Hack Club AI's key — the prompt says
 // so and the anti-coding check (lib/anti-coding) still watches its own code
@@ -40,19 +40,19 @@ const MAX_RUN_MINUTES = RUN_TIMEOUT_SECONDS / 60;
 const CHANGED_FILES_MAX = 30;
 // How much longer than the run the turn's stall watchdog must wait.
 const WATCHDOG_GRACE_MS = 2 * 60 * 1000;
-// One run at a time per sandbox. Two parallel OpenCode calls (kyto building
+// One run at a time per sandbox. Two parallel coding-agent calls (kyto building
 // two projects at once) crashed its database migration and got one SIGKILLed
 // for memory in the 1 GB sandbox, and two agents in one directory would edit
 // each other's files. Taken inside the sandbox, so
 // it holds across turns, threads sharing a code channel's sandbox, and bash.
-const LOCK_PATH = '/home/user/.kyto/opencode.lock';
+const LOCK_PATH = '/home/user/.kyto/coding-agent.lock';
 // The lock holder: `<started epoch> <run id> <shell pid> <process group>`.
 // `timeout` counts on the sandbox's monotonic clock, which stops while it is
 // paused — a run left going when its turn ended was frozen at each pause and
 // woke for seconds per turn, so it held the lock for over an hour (verified
 // 2026-10-03). The wall clock is synced on resume, so it decides staleness,
 // and an aborted run is killed before the pause (`onAbortCommand`).
-const STATE_PATH = '/home/user/.kyto/opencode.run';
+const STATE_PATH = '/home/user/.kyto/coding-agent.run';
 const STALE_SECONDS = RUN_TIMEOUT_SECONDS + WATCHDOG_GRACE_MS / 1000;
 const BUSY_EXIT = 75;
 const SETUP_FAILED_EXIT = 76;
@@ -85,7 +85,7 @@ export function isMediaOnlyBrief(brief: string): boolean {
   return media && !PROJECT_WORK.test(brief);
 }
 
-export function opencodeTool({
+export function codingAgentTool({
   extendAttemptDeadline,
   getSandboxContext,
 }: {
@@ -147,7 +147,7 @@ export function opencodeTool({
         mediaSentBack = true;
         return {
           error:
-            'Not run: this brief makes or converts a media file with command-line tools, which you do yourself in bash: usually one command, seconds instead of minutes here. Run it with bash now (check the result, e.g. `identify` or `ffprobe`, then upload it). Only if it truly needs a program written and kept, call opencode again with the same brief and it will run.',
+            'Not run: this brief makes or converts a media file with command-line tools, which you do yourself in bash: usually one command, seconds instead of minutes here. Run it with bash now (check the result, e.g. `identify` or `ffprobe`, then upload it). Only if it truly needs a program written and kept, call codingAgent again with the same brief and it will run.',
           success: false,
         };
       }
@@ -261,7 +261,7 @@ export function opencodeTool({
       if (downAfter) {
         return {
           directory: workDir,
-          error: `The coding agent's model route is exhausted (${downAfter.message}), so the run stopped. Retrying, with or without continue, fails the same way until about ${new Date(downAfter.until).toISOString().slice(11, 16)} UTC. Do not call opencode again this turn. Tell the person code work is unavailable for now and why, and if they still want it, \`wait\` until then (if it is soon) or schedule a \`wake\` for just after that time with the exact brief, and say when.`,
+          error: `The coding agent's model route is exhausted (${downAfter.message}), so the run stopped. Retrying, with or without continue, fails the same way until about ${new Date(downAfter.until).toISOString().slice(11, 16)} UTC. Do not call codingAgent again this turn. Tell the person code work is unavailable for now and why, and if they still want it, \`wait\` until then (if it is soon) or schedule a \`wake\` for just after that time with the exact brief, and say when.`,
           success: false,
         };
       }

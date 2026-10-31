@@ -53,6 +53,7 @@ import { createChannelTool, setChannelTopicTool } from './tools/channels';
 import { nowTool } from './tools/clock';
 import { codeChannelTool } from './tools/code-channel';
 import { codeModeTool } from './tools/code-mode';
+import { codingAgentTool } from './tools/coding-agent';
 import {
   deploySiteTool,
   listSitesTool,
@@ -94,7 +95,6 @@ import {
 } from './tools/memory';
 import { mermaidTool } from './tools/mermaid';
 import { closeNpsSurveyTool, npsResultsTool, npsSurveyTool } from './tools/nps';
-import { opencodeTool } from './tools/opencode';
 import {
   bookmarkLinkTool,
   pinMessageTool,
@@ -177,7 +177,7 @@ export interface BuiltTools {
 // Every tool that can build, run or ship code — the ones the anti-coding check
 // judges before they run. Everything else (search, browse, email, Slack) is
 // general agent work and never waits on it. `deploySite` is not: hosting runs
-// no model on the shared key, and a steer to OpenCode (which cannot deploy)
+// no model on the shared key, and a steer to the coding agent (which cannot deploy)
 // would only block it. The five shells are all here:
 // `slackScript` is free-form bash despite its name. Scheduling is here because a
 // `bash`/`agent` reminder is code that runs on a timer.
@@ -472,8 +472,8 @@ export async function buildTools({
     }),
     // Where code work goes instead of kyto's own shells. NOT in CODE_TOOLS: the
     // anti-coding check watches kyto doing the coding, and this is exactly the
-    // alternative to that (see tools/opencode.ts).
-    opencode: opencodeTool({ extendAttemptDeadline, getSandboxContext }),
+    // alternative to that (see tools/coding-agent.ts).
+    codingAgent: codingAgentTool({ extendAttemptDeadline, getSandboxContext }),
     readFile: readFileTool({ getSandboxContext, reads: fileReads }),
     writeFile: writeFileTool({ getSandboxContext, reads: fileReads }),
     editFile: editFileTool({ getSandboxContext, reads: fileReads }),

@@ -159,7 +159,7 @@ const FIRST_OUTPUT = new Set([
 ]);
 // Everything the MODEL streams. Generation speed is measured to the last of
 // these in a step, not to the step's finish: tools run inside the step, and
-// counting them would make a model look slow for waiting on opencode.
+// counting them would make a model look slow for waiting on the coding agent.
 const MODEL_OUTPUT = new Set([
   ...FIRST_OUTPUT,
   'reasoning-end',

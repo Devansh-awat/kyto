@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { env } from '@/env';
 import logger from '@/lib/logger';
 
-// The model endpoint of the sandbox coding agent (the `opencode` tool). The
+// The model endpoint of the sandbox coding agent (the `codingAgent` tool). The
 // agent runs IN the sandbox, but the key to the model endpoint must not: it is
 // the owner's whole router key (every combo, paid ones included), and anything
 // the agent runs or clones could read it from the environment. So, like the

@@ -607,7 +607,7 @@ async function executeTurn(
   let abortCurrentAttempt: ((reason: Error) => void) | undefined;
   // Judges the WORK, not just the message: the thread once the prompt is built,
   // then every code-capable tool call (lib/anti-coding). A catch is silent: the
-  // model is steered to OpenCode, the person is told nothing.
+  // model is steered to the coding agent, the person is told nothing.
   const codingMonitor = createCodingMonitor({
     isOnSharedModel: () =>
       !(activeAttempt && routing.own.includes(activeAttempt)),
@@ -1148,7 +1148,7 @@ async function executeTurn(
     pendingTools.catch(() => undefined);
     closeTools = async () => (await pendingTools).close();
     // Two Jev calls at once, started BEFORE the prompt: is this coding work
-    // (then the prompt steers it to OpenCode), and which deferred tools will it
+    // (then the prompt steers it to the coding agent), and which deferred tools will it
     // need (lib/ai/tool-preload). They judge the thread as of kyto's last answer
     // plus the new message, so they cost no wait behind the Slack read. What
     // they can miss is a coding ask that only shows in messages posted since
@@ -1531,7 +1531,7 @@ async function executeTurn(
       let attemptTimer: ReturnType<typeof setTimeout> | undefined;
       // An extension is a HOLD the re-arms below cannot shorten. It used to be
       // a one-off re-arm, so a parallel tool's result put the watchdog back to
-      // 5 minutes while an 18-minute OpenCode run was still going — the turn
+      // 5 minutes while an 18-minute coding-agent run was still going — the turn
       // was aborted under it and ended silently.
       const deadlineHolds = new Set<{ until: number }>();
       const armWatchdog = (ms: number) => {
@@ -1591,13 +1591,13 @@ async function executeTurn(
       // A turn resumed from a checkpoint continues like a fallback does.
       const isFallback =
         attempts.length > 0 || Boolean(priorCheckpoint?.results.length);
-      // OpenCode only on kyto's shared key: hidden while the person's own key
+      // The coding agent only on kyto's shared key: hidden while the person's own key
       // runs, back if the turn falls back to the shared chain (owner's call,
       // 2026-10-14).
       const onOwnKey = routing.own.includes(currentAttempt);
       const attemptTools = () =>
         onOwnKey
-          ? built.activeTools().filter((name) => name !== 'opencode')
+          ? built.activeTools().filter((name) => name !== 'codingAgent')
           : built.activeTools();
       // The card's model line; the catch adds why the attempt ended to it.
       let modelDetails = currentAttempt.model;

@@ -8,7 +8,7 @@ import {
   nullableToolSchemas,
 } from './nullable-optionals';
 
-const opencodeParameters = {
+const codingAgentParameters = {
   additionalProperties: false,
   properties: {
     brief: { type: 'string' },
@@ -28,7 +28,7 @@ describe('nullableToolSchemas', () => {
     const payload: Record<string, unknown> = {
       tools: [
         {
-          function: { name: 'opencode', parameters: opencodeParameters },
+          function: { name: 'codingAgent', parameters: codingAgentParameters },
           type: 'function',
         },
       ],
@@ -59,7 +59,9 @@ describe('nullableToolSchemas', () => {
 
   test('the Responses API shape is rewritten too', () => {
     const payload: Record<string, unknown> = {
-      tools: [{ name: 'x', parameters: opencodeParameters, type: 'function' }],
+      tools: [
+        { name: 'x', parameters: codingAgentParameters, type: 'function' },
+      ],
     };
     expect(nullableToolSchemas(payload)).toBe(true);
     expect(JSON.stringify(payload)).toContain(
@@ -73,7 +75,7 @@ describe('dropNullOptionals', () => {
     expect(
       dropNullOptionals(
         { brief: null, model: null, options: { mode: null } },
-        opencodeParameters
+        codingAgentParameters
       )
     ).toEqual({ brief: null, options: {} });
   });
@@ -82,14 +84,14 @@ describe('dropNullOptionals', () => {
 describe('acceptNullOptionals', () => {
   test("a null optional passes the tool's own zod schema", async () => {
     const tools = acceptNullOptionals({
-      opencode: tool({
+      codingAgent: tool({
         inputSchema: z.object({
           brief: z.string(),
           model: z.string().optional(),
         }),
       }),
     });
-    const { validate } = asSchema(tools.opencode?.inputSchema);
+    const { validate } = asSchema(tools.codingAgent?.inputSchema);
     expect(await validate?.({ brief: 'x', model: null })).toEqual({
       success: true,
       value: { brief: 'x' },

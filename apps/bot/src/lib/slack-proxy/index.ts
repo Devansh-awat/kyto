@@ -102,7 +102,7 @@ export function revokeProxyToken(secret: string | undefined): void {
   }
 }
 
-// Tokens switched off for a while (an OpenCode run).
+// Tokens switched off for a while (a coding-agent run).
 const suspended = new Map<string, ProxyToken>();
 
 /**

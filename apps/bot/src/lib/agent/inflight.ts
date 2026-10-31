@@ -35,7 +35,7 @@ const HEARTBEAT_MS = 30_000;
 // Four missed heartbeats: that instance is gone, not just busy.
 const STALE_AFTER_MS = 2 * 60 * 1000;
 // Silent for longer than this (counted from the last heartbeat, so a long
-// OpenCode turn still qualifies), the conversation has moved on and a resumed
+// coding-agent turn still qualifies), the conversation has moved on and a resumed
 // answer would be noise. Also what the table is pruned to.
 const RESUME_WINDOW_MS = 30 * 60 * 1000;
 // A new instance keeps looking for a while, because the old one only marks its

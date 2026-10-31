@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { isMediaOnlyBrief } from './opencode';
+import { isMediaOnlyBrief } from './coding-agent';
 
 describe('isMediaOnlyBrief', () => {
   test('a one-off media file is bash work (#110)', () => {
@@ -13,7 +13,7 @@ describe('isMediaOnlyBrief', () => {
     }
   });
 
-  test('code work that touches media still goes to OpenCode', () => {
+  test('code work that touches media still goes to the coding agent', () => {
     for (const brief of [
       'Write a Node CLI that converts PNGs to WebP with sharp, with tests.',
       'In the repo at ./bot, fix the ffmpeg call in src/encode.ts so the server stops crashing.',

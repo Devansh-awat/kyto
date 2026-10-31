@@ -42,11 +42,11 @@ const renderers: Record<string, TaskRendererEntry> = {
   listThreads,
   ls: { title: 'Listing files' },
   mermaid,
-  // Neutral: the plan shows that code work happened, not OpenCode's raw
+  // Neutral: the plan shows that code work happened, not the coding agent's raw
   // report (long, and it names itself).
   // A failure says what failed (kyto's own error text, never the agent's
   // raw output): "Something went wrong" told nobody anything.
-  opencode: {
+  codingAgent: {
     error: ({ output }) => ({ output: errorOutput(output) }),
     request: () => ({}),
     response: ({ output }) => ({
