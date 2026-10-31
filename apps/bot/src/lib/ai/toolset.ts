@@ -142,6 +142,7 @@ import {
   globTool,
   grepTool,
   readFileTool,
+  shellQuote,
   writeFileTool,
 } from './tools/workspace-files';
 
@@ -224,14 +225,13 @@ const CODE_TOOLS = new Set([
 // reactions are left out: redoing those is harmless.
 const UPLOAD_WAIT_MS = 20_000;
 const UPLOAD_POLL_MS = 1000;
-// Uploads stream from the sandbox to Slack: buffered whole (heap, then a
-// Buffer copy, then the multipart form), one 385 MB pack OOM-killed the 2 GiB
-// pod four times running on 2026-10-27, each resume retrying the upload. Slack
-// itself takes files up to 1 GB. Still serialized, to keep the bandwidth sane.
+// The sandbox sends an upload to Slack itself (curl to the presigned upload
+// URL); the bytes never pass through kyto. Read into kyto's heap instead, one
+// 385 MB pack OOM-killed the 2 GiB pod four times running on 2026-10-27. Slack
+// itself takes files up to 1 GB.
 const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
-// Serializes the read+post of every uploadFile across turns so concurrent
-// uploads can't stack their buffers. A failed upload still frees the lock.
-let uploadChain: Promise<unknown> = Promise.resolve();
+// Slack's upload endpoint answers "OK - <bytes received>".
+const UPLOAD_RECEIVED = /^OK - (\d+)$/;
 
 const EFFECT_TOOLS = new Set([
   // Not outward, but a restart mid-wait must not start the wait over (#77);
@@ -589,43 +589,57 @@ export async function buildTools({
         }
         const resolvedFilename =
           filename ?? nodePath.basename(sandboxPath) ?? 'artifact';
-        // Serialized across turns so two big uploads can't run at once.
-        const run = async (): Promise<{
-          filename: string;
-          uploaded: boolean;
-        }> => {
-          // Tool calls in one step run together, so an upload sent alongside
-          // the bash that builds its file read it before it existed (six
-          // misses in one user's threads). Give a sibling a moment to write it.
-          let size = await session.fileSize({ path: sandboxPath });
-          const deadline = Date.now() + UPLOAD_WAIT_MS;
-          while (size === null && Date.now() < deadline) {
-            await Bun.sleep(UPLOAD_POLL_MS);
-            size = await session.fileSize({ path: sandboxPath });
-          }
-          if (size === null) {
-            throw new Error(`Could not find file: ${path}`);
-          }
-          if (size > MAX_UPLOAD_BYTES) {
-            const mb = Math.round(size / (1024 * 1024));
-            const limitMb = Math.round(MAX_UPLOAD_BYTES / (1024 * 1024));
-            throw new Error(
-              `That file is ${mb} MB, over Slack's ${limitMb} MB upload limit, so I can't send it to Slack. Split it into smaller parts, or host it somewhere and share a link.`
-            );
-          }
-          const stream = await session.readFileStream({ path: sandboxPath });
-          if (!stream) {
-            throw new Error(`Could not find file: ${path}`);
-          }
-          await thread.post({
-            files: [{ filename: resolvedFilename, size, stream }],
-            markdown: title ?? resolvedFilename,
-          });
-          return { filename: resolvedFilename, uploaded: true };
-        };
-        const result = uploadChain.then(run, run);
-        uploadChain = result.catch(() => undefined);
-        return await result;
+        // Tool calls in one step run together, so an upload sent alongside
+        // the bash that builds its file read it before it existed (six
+        // misses in one user's threads). Give a sibling a moment to write it.
+        let size = await session.fileSize({ path: sandboxPath });
+        const deadline = Date.now() + UPLOAD_WAIT_MS;
+        while (size === null && Date.now() < deadline) {
+          await Bun.sleep(UPLOAD_POLL_MS);
+          size = await session.fileSize({ path: sandboxPath });
+        }
+        if (size === null) {
+          throw new Error(`Could not find file: ${path}`);
+        }
+        if (size > MAX_UPLOAD_BYTES) {
+          const mb = Math.round(size / (1024 * 1024));
+          const limitMb = Math.round(MAX_UPLOAD_BYTES / (1024 * 1024));
+          throw new Error(
+            `That file is ${mb} MB, over Slack's ${limitMb} MB upload limit, so I can't send it to Slack. Split it into smaller parts, or host it somewhere and share a link.`
+          );
+        }
+        await thread.post({
+          files: [
+            {
+              filename: resolvedFilename,
+              send: async (uploadUrl) => {
+                // -T streams the file (--data-binary reads it whole into a
+                // 1 GB sandbox); -X POST is the method Slack wants.
+                const { exitCode, stderr, stdout } = await session.run({
+                  command: `curl -sS -T ${shellQuote(sandboxPath)} -X POST -H 'Content-Type: application/octet-stream' -w '\\n%{http_code}' ${shellQuote(uploadUrl)}`,
+                });
+                const [received = '', status = ''] = stdout.trim().split('\n');
+                if (exitCode !== 0 || status !== '200') {
+                  throw new Error(
+                    `Sending ${resolvedFilename} to Slack failed (curl exit ${exitCode}, HTTP ${status || 'none'}): ${(stderr || received).trim().slice(0, 300)}`
+                  );
+                }
+                // Slack accepts a body shorter than promised, and an
+                // unfinished upload expires by itself; a published truncated
+                // file does not, so check before it is completed.
+                const bytes = UPLOAD_RECEIVED.exec(received.trim())?.[1];
+                if (bytes !== String(size)) {
+                  throw new Error(
+                    `${resolvedFilename} didn't arrive whole (Slack got ${bytes ?? 'an unknown number of'} of ${size} bytes; did it change while uploading?). Nothing was posted; try again.`
+                  );
+                }
+              },
+              size,
+            },
+          ],
+          markdown: title ?? resolvedFilename,
+        });
+        return { filename: resolvedFilename, uploaded: true };
       },
     }),
   };

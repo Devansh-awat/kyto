@@ -62,9 +62,14 @@ export type StreamChunk =
 
 type PostFile =
   | { data: Uint8Array; filename: string }
-  // Streamed straight to Slack: a few hundred MB buffered whole OOM-killed
-  // the 2 GiB pod (2026-10-27).
-  | { filename: string; size: number; stream: ReadableStream<Uint8Array> };
+  // A big file never passes through kyto: `send` puts its bytes to Slack's
+  // presigned upload URL from wherever they are (the sandbox). Buffered here, a
+  // few hundred MB OOM-killed the 2 GiB pod (2026-10-27).
+  | {
+      filename: string;
+      send: (uploadUrl: string) => Promise<void>;
+      size: number;
+    };
 
 /** Everything `thread.post` accepts. A plain string means markdown. */
 export interface PostContent {

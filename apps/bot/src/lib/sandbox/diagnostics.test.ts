@@ -18,7 +18,6 @@ function localSession(): SandboxContext['session'] {
     destroy: () => Promise.resolve(),
     getHost: () => Promise.resolve('localhost'),
     readBinaryFile: () => Promise.resolve(null),
-    readFileStream: () => Promise.resolve(null),
     fileSize: () => Promise.resolve(null),
     run: ({ command }) =>
       new Promise((resolve) => {

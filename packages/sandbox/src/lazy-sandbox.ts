@@ -500,22 +500,6 @@ export class LazySandbox {
       });
   }
 
-  async readFileStream({
-    path,
-  }: {
-    path: string;
-  }): Promise<ReadableStream<Uint8Array> | null> {
-    const sandbox = await this.ensure();
-    return await sandbox.files
-      .read(path, { format: 'stream' })
-      .catch((error: unknown) => {
-        if (isMissingSandboxError(error)) {
-          return null;
-        }
-        throw error;
-      });
-  }
-
   async readTextFile({ path }: { path: string }): Promise<string | null> {
     const bytes = await this.readBinaryFile({ path });
     return bytes ? new TextDecoder().decode(bytes) : null;

@@ -286,8 +286,8 @@ export class ThreadHandle {
     threadTs: string;
   }): Promise<SentMessage> {
     // Slack's external upload, by hand rather than filesUploadV2: that one
-    // wants the whole file as a Buffer (a copy of a copy of a big file), and a
-    // streamed file must go up as it is read.
+    // wants the whole file as a Buffer, and a sandbox file goes up from the
+    // sandbox itself (`send`), never through kyto's heap.
     const client = this.adapter.webClient;
     const uploaded: { id: string; title: string }[] = [];
     for (const file of post.files ?? []) {
@@ -299,18 +299,19 @@ export class ThreadHandle {
       if (!(target.upload_url && target.file_id)) {
         throw new Error(`Slack gave no upload URL for ${file.filename}.`);
       }
-      const response = await fetch(target.upload_url, {
-        body: 'data' in file ? file.data : file.stream,
-        headers: {
-          'Content-Length': String(length),
-          'Content-Type': 'application/octet-stream',
-        },
-        method: 'POST',
-      });
-      if (!response.ok) {
-        throw new Error(
-          `Slack refused the upload of ${file.filename}: HTTP ${response.status}.`
-        );
+      if ('data' in file) {
+        const response = await fetch(target.upload_url, {
+          body: file.data,
+          headers: { 'Content-Type': 'application/octet-stream' },
+          method: 'POST',
+        });
+        if (!response.ok) {
+          throw new Error(
+            `Slack refused the upload of ${file.filename}: HTTP ${response.status}.`
+          );
+        }
+      } else {
+        await file.send(target.upload_url);
       }
       uploaded.push({ id: target.file_id, title: file.filename });
     }
