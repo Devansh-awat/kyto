@@ -27,6 +27,7 @@ function localSandbox(): { context: SandboxContext; dir: string } {
         return Promise.resolve(null);
       }
     },
+    readFileStream: () => Promise.resolve(null),
     fileSize: ({ path }: { path: string }) => {
       try {
         return Promise.resolve(readFileSync(path).byteLength);

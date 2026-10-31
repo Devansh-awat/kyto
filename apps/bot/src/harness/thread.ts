@@ -285,13 +285,42 @@ export class ThreadHandle {
     post: PostContent;
     threadTs: string;
   }): Promise<SentMessage> {
-    const uploads = post.files ?? [];
-    const result = await this.adapter.webClient.filesUploadV2({
-      channel_id: channel,
-      file_uploads: uploads.map((file) => ({
-        file: Buffer.from(file.data),
+    // Slack's external upload, by hand rather than filesUploadV2: that one
+    // wants the whole file as a Buffer (a copy of a copy of a big file), and a
+    // streamed file must go up as it is read.
+    const client = this.adapter.webClient;
+    const uploaded: { id: string; title: string }[] = [];
+    for (const file of post.files ?? []) {
+      const length = 'data' in file ? file.data.byteLength : file.size;
+      const target = await client.files.getUploadURLExternal({
         filename: file.filename,
-      })),
+        length,
+      });
+      if (!(target.upload_url && target.file_id)) {
+        throw new Error(`Slack gave no upload URL for ${file.filename}.`);
+      }
+      const response = await fetch(target.upload_url, {
+        body: 'data' in file ? file.data : file.stream,
+        headers: {
+          'Content-Length': String(length),
+          'Content-Type': 'application/octet-stream',
+        },
+        method: 'POST',
+      });
+      if (!response.ok) {
+        throw new Error(
+          `Slack refused the upload of ${file.filename}: HTTP ${response.status}.`
+        );
+      }
+      uploaded.push({ id: target.file_id, title: file.filename });
+    }
+    const [first, ...rest] = uploaded;
+    if (!first) {
+      throw new Error('A file post needs at least one file.');
+    }
+    const result = await client.files.completeUploadExternal({
+      channel_id: channel,
+      files: [first, ...rest],
       ...(post.markdown ? { initial_comment: post.markdown } : {}),
       ...(threadTs ? { thread_ts: threadTs } : {}),
     });

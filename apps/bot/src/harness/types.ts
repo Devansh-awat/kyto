@@ -60,10 +60,11 @@ export type StreamChunk =
   /** Block Kit inside a streamed message (an underlined line's rich_text). */
   | { blocks: unknown[]; type: 'blocks' };
 
-interface PostFile {
-  data: Uint8Array;
-  filename: string;
-}
+type PostFile =
+  | { data: Uint8Array; filename: string }
+  // Streamed straight to Slack: a few hundred MB buffered whole OOM-killed
+  // the 2 GiB pod (2026-10-27).
+  | { filename: string; size: number; stream: ReadableStream<Uint8Array> };
 
 /** Everything `thread.post` accepts. A plain string means markdown. */
 export interface PostContent {

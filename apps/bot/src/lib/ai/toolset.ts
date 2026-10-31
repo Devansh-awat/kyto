@@ -223,13 +223,11 @@ const CODE_TOOLS = new Set([
 // reactions are left out: redoing those is harmless.
 const UPLOAD_WAIT_MS = 20_000;
 const UPLOAD_POLL_MS = 1000;
-// An upload buffers the whole file (read into the heap, then base64 in the
-// multipart form), so a few big ones at once OOM'd the 2 GiB pod (five
-// OOMKills on 2026-10-27, uploading 120-385 MB firmware/APK packs). Cap each
-// file so one can't blow the heap, and SERIALIZE uploads so two can't buffer at
-// the same time. 500 MB fits one-at-a-time in 2 GiB and still covers a big
-// firmware dump; a bigger file needs true streaming (a later change).
-const MAX_UPLOAD_BYTES = 500 * 1024 * 1024;
+// Uploads stream from the sandbox to Slack: buffered whole (heap, then a
+// Buffer copy, then the multipart form), one 385 MB pack OOM-killed the 2 GiB
+// pod four times running on 2026-10-27, each resume retrying the upload. Slack
+// itself takes files up to 1 GB. Still serialized, to keep the bandwidth sane.
+const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
 // Serializes the read+post of every uploadFile across turns so concurrent
 // uploads can't stack their buffers. A failed upload still frees the lock.
 let uploadChain: Promise<unknown> = Promise.resolve();
@@ -587,20 +585,9 @@ export async function buildTools({
             'uploadFile can only upload files from the workspace.'
           );
         }
-        // Refuse an over-cap file BEFORE reading it: reading it is the OOM.
-        // A null size (can't stat, e.g. not written yet) falls through to the
-        // read + wait below, which handles a missing file.
-        const size = await session.fileSize({ path: sandboxPath });
-        if (size !== null && size > MAX_UPLOAD_BYTES) {
-          const mb = Math.round(size / (1024 * 1024));
-          const limitMb = Math.round(MAX_UPLOAD_BYTES / (1024 * 1024));
-          throw new Error(
-            `That file is ${mb} MB, over the ${limitMb} MB upload limit, so I can't send it to Slack. Split it into smaller parts, or host it somewhere and share a link.`
-          );
-        }
         const resolvedFilename =
           filename ?? nodePath.basename(sandboxPath) ?? 'artifact';
-        // Serialized across turns so two big uploads can't buffer at once.
+        // Serialized across turns so two big uploads can't run at once.
         const run = async (): Promise<{
           filename: string;
           uploaded: boolean;
@@ -608,17 +595,28 @@ export async function buildTools({
           // Tool calls in one step run together, so an upload sent alongside
           // the bash that builds its file read it before it existed (six
           // misses in one user's threads). Give a sibling a moment to write it.
-          let bytes = await session.readBinaryFile({ path: sandboxPath });
+          let size = await session.fileSize({ path: sandboxPath });
           const deadline = Date.now() + UPLOAD_WAIT_MS;
-          while (!bytes && Date.now() < deadline) {
+          while (size === null && Date.now() < deadline) {
             await Bun.sleep(UPLOAD_POLL_MS);
-            bytes = await session.readBinaryFile({ path: sandboxPath });
+            size = await session.fileSize({ path: sandboxPath });
           }
-          if (!bytes) {
+          if (size === null) {
+            throw new Error(`Could not find file: ${path}`);
+          }
+          if (size > MAX_UPLOAD_BYTES) {
+            const mb = Math.round(size / (1024 * 1024));
+            const limitMb = Math.round(MAX_UPLOAD_BYTES / (1024 * 1024));
+            throw new Error(
+              `That file is ${mb} MB, over Slack's ${limitMb} MB upload limit, so I can't send it to Slack. Split it into smaller parts, or host it somewhere and share a link.`
+            );
+          }
+          const stream = await session.readFileStream({ path: sandboxPath });
+          if (!stream) {
             throw new Error(`Could not find file: ${path}`);
           }
           await thread.post({
-            files: [{ data: bytes, filename: resolvedFilename }],
+            files: [{ filename: resolvedFilename, size, stream }],
             markdown: title ?? resolvedFilename,
           });
           return { filename: resolvedFilename, uploaded: true };
