@@ -556,7 +556,12 @@ export async function handleGithubProxy(
       forkRefs = [];
     }
     const guard = await guardGithubTargets({
-      commandText: `${method} ${pathname}`,
+      // This text is what the owner's approval card shows. For git the raw
+      // request read as a read: a push opens with `GET …/info/refs`, and the
+      // `?service=git-receive-pack` that makes it a push isn't in `pathname`.
+      commandText: isGit
+        ? `git push to ${target.repos.join(', ')}`
+        : `${method} ${pathname}`,
       contribution: Boolean(placed),
       creates: target.creates,
       forkRefs,
