@@ -466,6 +466,8 @@ async function contributionTarget(contribution: Contribution): Promise<{
   };
 }
 
+const forkResponseSchema = z.looseObject({ full_name: z.string() });
+
 function refusal({
   git = false,
   reason,
@@ -657,7 +659,20 @@ export async function handleGithubProxy(
       // claim there means "GitHub accepted the connection", not "the branch
       // moved". It claims a repo for its requester either way, which is the
       // conservative direction.
-      await guard.claim();
+      // Forking a repo kyto already forked under ANOTHER name (a fork of a
+      // fork) answers with that existing fork, so the name guessed from the
+      // path claimed a repo that doesn't exist; claim only what GitHub made.
+      const forked = target.fork
+        ? forkResponseSchema.safeParse(
+            await response
+              .clone()
+              .json()
+              .catch(() => null)
+          )
+        : null;
+      if (!forked || forked.data?.full_name.toLowerCase() === target.repos[0]) {
+        await guard.claim();
+      }
     }
     if (record) {
       const ok =

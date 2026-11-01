@@ -264,6 +264,16 @@ export async function guardGithubTargets({
   );
   const invitedRepos = new Set(invited.filter((repo) => repo !== null));
   const gated = thirdParty.filter((repo) => !invitedRepos.has(repo));
+  // A push to a repo kyto's account can't push to fails at GitHub whatever is
+  // approved here, so it gets no card (owner's call 2026-11-01: a push to the
+  // upstream instead of the fork DM'd him a card approving it couldn't fix).
+  if (forkRefs !== undefined && gated.length > 0) {
+    const list = gated.map((repo) => `"${repo}"`).join(', ');
+    return {
+      allowed: false,
+      reason: `Refused, and nothing was queued: kyto's GitHub account has no push access to ${list}, so GitHub would reject this push even with approval. Push to a fork instead: \`gh repo fork <owner>/<repo> --clone=false\`, then \`git push https://github.com/${GITHUB_LOGIN}/<fork>.git HEAD:${forkBranchPrefix(userId)}<branch>\` (a shared fork takes only branches under that prefix), and open the PR with \`gh pr create --repo <owner>/<repo> --head ${GITHUB_LOGIN}:${forkBranchPrefix(userId)}<branch>\`.`,
+    };
+  }
   if (gated.length > 0 && !isOwner) {
     const trust = await getGithubTrust(userId).catch((error: unknown) => {
       logger.warn({ err: error }, '[github] failed to read trust');
