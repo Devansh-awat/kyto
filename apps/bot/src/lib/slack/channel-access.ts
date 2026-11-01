@@ -25,7 +25,8 @@ async function isPublicChannel(channel: string): Promise<boolean> {
   );
 }
 
-async function isMember({
+/** Whether `userId` is in `channel`. Throws on a Slack error; callers fail closed. */
+export async function isMember({
   channel,
   userId,
 }: {

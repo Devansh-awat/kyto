@@ -19,6 +19,7 @@ import {
   blockKitProblems,
   describeBlockKitProblems,
 } from '@/lib/slack/block-kit';
+import { isMember } from '@/lib/slack/channel-access';
 import {
   isRawSlackChannelId,
   toRawSlackChannelId,
@@ -473,20 +474,24 @@ export function postMessageTool({
         (type === 'user' && !dmToRequester) ||
         (type !== 'user' && target !== currentChannel);
       // A reminder job posting to the very channel the reminder was set up to
-      // post in needs no click: the scheduler posts its final text there
-      // anyway. Anywhere else, nobody is watching to click Confirm: the ad job
-      // blocked ten minutes on an ephemeral button in a two-day-old DM thread,
-      // then its "wasn't approved" line was posted to #neighbourhood.
+      // post in needs no click, as long as its creator is in that channel
+      // (public or private: it posts as their job) and ordinary members may
+      // post there. Anywhere else, nobody is watching to click Confirm: the ad
+      // job blocked ten minutes on an ephemeral button in a two-day-old DM
+      // thread, then its "wasn't approved" line was posted to #neighbourhood.
       const reminderOwnChannel =
         reminderJob !== undefined &&
         !mirrored &&
         type === 'channel' &&
         target !== undefined &&
         target === reminderJob.channelId &&
-        (await membersCanPost(target));
+        (await membersCanPost(target)) &&
+        (await isMember({ channel: target, userId: authorUserId }).catch(
+          () => false
+        ));
       if ((crossChannel || mirrored) && reminderJob && !reminderOwnChannel) {
         return {
-          error: `This is a scheduled job with nobody watching, so a post that needs a confirm click can't be sent: only the reminder's own channel${reminderJob.channelId ? ` (<#${reminderJob.channelId}>, and only while ordinary members can post there)` : ''} is postable from here. Your final reply is posted to the job's destination by itself; to post there, just write the message as your reply.`,
+          error: `This is a scheduled job with nobody watching, so a post that needs a confirm click can't be sent: only the reminder's own channel${reminderJob.channelId ? ` (<#${reminderJob.channelId}>)` : ''} is postable from here, and only while the reminder's creator is a member of it and ordinary members can post there. Your final reply is posted to the job's destination by itself; to post there, just write the message as your reply.`,
           success: false,
         };
       }
