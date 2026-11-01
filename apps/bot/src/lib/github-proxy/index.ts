@@ -466,7 +466,24 @@ async function contributionTarget(contribution: Contribution): Promise<{
   };
 }
 
-function refusal(reason: string, status: number): Response {
+function refusal({
+  git = false,
+  reason,
+  status,
+}: {
+  git?: boolean;
+  reason: string;
+  status: number;
+}): Response {
+  // git prints a text/plain error body as `remote: …` but drops any other kind
+  // and says only "returned error: 403", so a model pushing through here never
+  // learned WHY (e.g. "push to your fork under this branch name") and gave up.
+  if (git) {
+    return new Response(`${reason}\n`, {
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      status,
+    });
+  }
   // Shaped like GitHub's own error body so `gh` prints the message rather than
   // "unexpected response". The model reads this text, so it has to say what to
   // do next, not just "denied".
@@ -515,7 +532,11 @@ export async function handleGithubProxy(
   const needsBody = !(isGit || READ_METHODS.has(method));
   const raw = needsBody ? await request.arrayBuffer() : undefined;
   if (raw && raw.byteLength > MAX_BUFFERED_BODY) {
-    return refusal('Request body is too large for the kyto GitHub proxy.', 413);
+    return refusal({
+      git: isGit,
+      reason: 'Request body is too large for the kyto GitHub proxy.',
+      status: 413,
+    });
   }
   const body = raw ? Buffer.from(raw).toString('utf8') : undefined;
   const target = await classify({ body, method, pathname, search });
@@ -525,18 +546,22 @@ export async function handleGithubProxy(
 
   if (target.write) {
     if (!target.understood) {
-      return refusal(
-        'Refused: this write does not name a repository the kyto GitHub proxy can check, so it cannot be authorized. Use the normal `gh`/`git` commands against a specific repo (a REST call under /repos/{owner}/{name}, or a GraphQL mutation that names the repository) instead of a raw call the guard cannot read. If what you wanted names no repository at all (a gist), it cannot be done from here: say so instead of trying other commands for it.',
-        403
-      );
+      return refusal({
+        git: isGit,
+        reason:
+          'Refused: this write does not name a repository the kyto GitHub proxy can check, so it cannot be authorized. Use the normal `gh`/`git` commands against a specific repo (a REST call under /repos/{owner}/{name}, or a GraphQL mutation that names the repository) instead of a raw call the guard cannot read. If what you wanted names no repository at all (a gist), it cannot be done from here: say so instead of trying other commands for it.',
+        status: 403,
+      });
     }
     if (!principal.userId) {
       // Same rule as a detached shell command: with nobody to check the write
       // against, it is refused rather than allowed.
-      return refusal(
-        'Refused: this GitHub write has no requesting user to authorize it against.',
-        403
-      );
+      return refusal({
+        git: isGit,
+        reason:
+          'Refused: this GitHub write has no requesting user to authorize it against.',
+        status: 403,
+      });
     }
     const contribution = classifyContribution({ body, method, pathname });
     const placed = contribution ? await contributionTarget(contribution) : null;
@@ -576,7 +601,7 @@ export async function handleGithubProxy(
         { method, pathname, repos: target.repos, userId: principal.userId },
         '[github-proxy] refused a write'
       );
-      return refusal(guard.reason, 403);
+      return refusal({ git: isGit, reason: guard.reason, status: 403 });
     }
     let sent:
       | ArrayBuffer
@@ -588,7 +613,11 @@ export async function handleGithubProxy(
       | undefined;
     if (guard.needsVetting) {
       if (!(contribution && placed)) {
-        return refusal('Refused: this write needs vetting it cannot get.', 403);
+        return refusal({
+          git: isGit,
+          reason: 'Refused: this write needs vetting it cannot get.',
+          status: 403,
+        });
       }
       const vetting = await vetContribution({
         baseRef: contribution.baseRef,
@@ -602,7 +631,7 @@ export async function handleGithubProxy(
         userId: principal.userId,
       });
       if (!vetting.allowed) {
-        return refusal(vetting.reason, 403);
+        return refusal({ git: isGit, reason: vetting.reason, status: 403 });
       }
       sent = new TextEncoder().encode(contribution.withText(vetting.text));
       record = vetting.record;
@@ -742,7 +771,11 @@ async function forward({
       { err: error, upstream: target.upstream },
       '[github-proxy] upstream call failed'
     );
-    return refusal('The kyto GitHub proxy could not reach GitHub.', 502);
+    return refusal({
+      git: GIT_PATH.test(new URL(target.upstream).pathname),
+      reason: 'The kyto GitHub proxy could not reach GitHub.',
+      status: 502,
+    });
   }
 }
 
