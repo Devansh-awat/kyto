@@ -9,6 +9,7 @@ import {
   restoreAnnotatedMentions,
 } from '@/harness/markdown';
 import type { PostContent } from '@/harness/types';
+import { membersCanPost } from '@/lib/ai/tools/channels';
 import { requestApproval } from '@/lib/approvals/request';
 import { slack } from '@/lib/chat';
 import { requestPostConfirmation } from '@/lib/confirm-post/request';
@@ -173,6 +174,7 @@ export function postMessageTool({
   currentThreadId,
   extendAttemptDeadline,
   isOwner,
+  reminderJob,
 }: {
   /** The turn answers as kyto's user account: posts default to it, too. */
   asUserAccount?: boolean;
@@ -181,6 +183,11 @@ export function postMessageTool({
   currentThreadId: string;
   extendAttemptDeadline?: (extraMs: number) => () => void;
   isOwner: boolean;
+  /**
+   * A reminder job is running this, with nobody watching: `channelId` is where
+   * the reminder itself posts (null = the creator's DM).
+   */
+  reminderJob?: { channelId: string | null };
 }) {
   const currentChannel = rawChannelOf(currentThreadId);
   const userAccountConfigured = Boolean(
@@ -465,7 +472,25 @@ export function postMessageTool({
       const crossChannel =
         (type === 'user' && !dmToRequester) ||
         (type !== 'user' && target !== currentChannel);
-      if (crossChannel || mirrored) {
+      // A reminder job posting to the very channel the reminder was set up to
+      // post in needs no click: the scheduler posts its final text there
+      // anyway. Anywhere else, nobody is watching to click Confirm: the ad job
+      // blocked ten minutes on an ephemeral button in a two-day-old DM thread,
+      // then its "wasn't approved" line was posted to #neighbourhood.
+      const reminderOwnChannel =
+        reminderJob !== undefined &&
+        !mirrored &&
+        type === 'channel' &&
+        target !== undefined &&
+        target === reminderJob.channelId &&
+        (await membersCanPost(target));
+      if ((crossChannel || mirrored) && reminderJob && !reminderOwnChannel) {
+        return {
+          error: `This is a scheduled job with nobody watching, so a post that needs a confirm click can't be sent: only the reminder's own channel${reminderJob.channelId ? ` (<#${reminderJob.channelId}>, and only while ordinary members can post there)` : ''} is postable from here. Your final reply is posted to the job's destination by itself; to post there, just write the message as your reply.`,
+          success: false,
+        };
+      }
+      if ((crossChannel || mirrored) && !reminderOwnChannel) {
         let where = 'this channel';
         if (crossChannel) {
           where = type === 'user' ? `a DM to <@${id}>` : `<#${target ?? id}>`;

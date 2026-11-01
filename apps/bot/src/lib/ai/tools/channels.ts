@@ -220,6 +220,26 @@ const channelInfoSchema = z.looseObject({
 // post in, so kyto doesn't either.
 const STAFF_POSTERS = new Set(['admin', 'org_admin', 'owner']);
 
+/**
+ * Whether ordinary members may start a post in this channel, i.e. it is not an
+ * announcement channel left to admins (or apps). Fails CLOSED: a channel kyto
+ * can't look up counts as not open.
+ */
+export async function membersCanPost(channel: string): Promise<boolean> {
+  try {
+    const info = channelInfoSchema.parse(
+      await slack.webClient.apiCall('conversations.info', { channel })
+    );
+    if (!info.ok) {
+      return false;
+    }
+    const posters = info.channel?.properties?.posting_restricted_to?.type;
+    return !posters?.every((type) => STAFF_POSTERS.has(type));
+  } catch {
+    return false;
+  }
+}
+
 // Slack enforces the workspace's app and posting restrictions itself (an org
 // admin's per-channel app limits are only readable with admin.* scopes kyto
 // can't get), so its answer IS the permission check. These say why in words a

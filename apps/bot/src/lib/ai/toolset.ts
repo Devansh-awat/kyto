@@ -341,6 +341,7 @@ export async function buildTools({
   maxToolCalls,
   secret = false,
   takeReminder,
+  reminderJob,
   takeSteering,
   unattended = false,
   unredactedEmail = false,
@@ -390,6 +391,12 @@ export async function buildTools({
    * "they haven't heard from you" nudge), or undefined.
    */
   takeReminder?: () => string | undefined;
+  /**
+   * A reminder job is running this turn; `channelId` is where the reminder
+   * posts (null = the creator's DM). postMessage needs it to tell a post to
+   * the job's own channel from one that would wait on a click nobody makes.
+   */
+  reminderJob?: { channelId: string | null };
   /** Answering as kyto's user account: a subagent's report wakes it, too. */
   asUserAccount?: boolean;
   /**
@@ -496,6 +503,7 @@ export async function buildTools({
       currentThreadId: thread.id,
       extendAttemptDeadline,
       isOwner,
+      ...(reminderJob ? { reminderJob } : {}),
     }),
     now: nowTool({
       askerTimezone: () =>
