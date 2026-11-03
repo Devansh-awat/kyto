@@ -12,6 +12,7 @@ import { publishHome } from '@/features/customizations/service';
 import type { ModalSubmitEvent, ModalSubmitResult } from '@/harness/types';
 import { bot, slack } from '@/lib/chat';
 import logger from '@/lib/logger';
+import { reminderChannelRefusal } from '@/lib/reminders/channel';
 import { refreshEventReminders } from '@/lib/reminders/events';
 import {
   buildSchedule,
@@ -28,19 +29,18 @@ import {
   UNIT_SECONDS,
 } from './views';
 
-// Recurring reminders, created and edited from App Home. The same rules as the
-// `reminders` tool (lib/reminders/rules): the kind's minimum interval, and a
-// named editor may re-time and reword a reminder but never change what it runs,
-// since it fires as its creator. Every id rides through the client, so access
+// Recurring AGENT reminders, created and edited from App Home; other kinds are
+// changed by asking kyto (owner's call 2026-11-03). The same rules as the
+// `reminders` tool (lib/reminders/rules + channel): the hourly floor, a channel
+// only the creator and kyto are both in, and a named editor may re-time a job
+// but never change its instructions, since it runs as its creator. Every id rides through the client, so access
 // is re-checked when the modal opens AND when it is submitted.
 
 const metadataSchema = z.object({ id: z.string().min(1) });
-const kindSchema = z.enum(['message', 'agent', 'script', 'bash']);
 const unitSchema = z.enum(
   Object.keys(EVERY_UNITS) as [EveryUnit, ...EveryUnit[]]
 );
 const TIME = /^(\d{2}):(\d{2})$/;
-const CONVERSATION_ID = /^[CG][A-Z0-9]{2,}$/;
 const userTzSchema = z.object({
   user: z.object({ tz: z.string().optional() }).optional(),
 });
@@ -69,7 +69,12 @@ async function editable({
 }): Promise<{ mayChangeRuns: boolean; reminder: Reminder } | undefined> {
   const reminder = await getReminder(id).catch(() => null);
   const isOwner = isOwnerUser(userId);
-  if (!(reminder && isReminderEditableBy(reminder, userId, isOwner))) {
+  if (
+    !(
+      reminder?.kind === 'agent' &&
+      isReminderEditableBy(reminder, userId, isOwner)
+    )
+  ) {
     return;
   }
   return { mayChangeRuns: isOwner || reminder.userId === userId, reminder };
@@ -106,7 +111,6 @@ async function openModal({
   }
   const view = buildReminderModal({
     ...(found ? { existing: found.reminder } : {}),
-    isOwner: isOwnerUser(userId),
     mayChangeRuns: found?.mayChangeRuns ?? true,
     timezone: await userTimezone(userId),
   });
@@ -242,7 +246,6 @@ bot.onModalSubmit(
   REMINDER_MODAL_CALLBACK,
   async (event: ModalSubmitEvent): Promise<ModalSubmitResult> => {
     const userId = event.user.userId;
-    const isOwner = isOwnerUser(userId);
     const id = parseMetadata(event.privateMetadata);
     const found = id ? await editable({ id, userId }) : undefined;
     if (id && !found) {
@@ -258,36 +261,15 @@ bot.onModalSubmit(
     const mayChangeRuns = found?.mayChangeRuns ?? true;
     const { values } = event;
 
-    const kind = mayChangeRuns
-      ? kindSchema.safeParse(values.reminder_kind).data
-      : existing?.kind;
-    if (!kind) {
-      return { action: 'errors', errors: { reminder_kind: 'Pick one.' } };
-    }
-    const text = values.reminder_text?.trim();
-    const command = mayChangeRuns ? values.reminder_command?.trim() : undefined;
-    const url = mayChangeRuns ? values.reminder_url?.trim() : undefined;
-    if (kind === 'bash' && !(command || existing?.command)) {
+    const kind = 'agent';
+    const text = mayChangeRuns ? values.reminder_text?.trim() : undefined;
+    if (mayChangeRuns && !text) {
       return {
         action: 'errors',
-        errors: {
-          reminder_command: 'A shell command reminder needs a command.',
-        },
+        errors: { reminder_text: 'Write the instructions.' },
       };
     }
-    if (kind === 'script' && !(url || existing?.url)) {
-      return {
-        action: 'errors',
-        errors: { reminder_url: 'A URL reminder needs a URL.' },
-      };
-    }
-    if (!(text || existing || kind === 'bash' || kind === 'script')) {
-      return {
-        action: 'errors',
-        errors: { reminder_text: 'Write the message or the instructions.' },
-      };
-    }
-    // Backstop: the modal never shows these fields to an editor.
+    // Backstop: the modal never shows an editor the instructions field.
     if (
       existing &&
       !mayChangeRuns &&
@@ -323,12 +305,18 @@ bot.onModalSubmit(
         ? undefined
         : nextSchedule;
 
-    const channel = values.reminder_channel;
-    if (isOwner && channel && !CONVERSATION_ID.test(channel)) {
-      return {
-        action: 'errors',
-        errors: { reminder_channel: 'Pick a channel, not a DM.' },
-      };
+    const channel = values.reminder_channel ?? null;
+    // Checked against the CREATOR: the job posts as theirs, so an editor can't
+    // send it somewhere its creator couldn't post.
+    const channelRefusal =
+      channel &&
+      channel !== existing?.channelId &&
+      (await reminderChannelRefusal({
+        channelId: channel,
+        userId: existing?.userId ?? userId,
+      }));
+    if (channelRefusal) {
+      return { action: 'errors', errors: { reminder_channel: channelRefusal } };
     }
     const maxRunsText = values.reminder_max_runs?.trim();
     const maxRuns = maxRunsText ? Number(maxRunsText) : null;
@@ -351,27 +339,20 @@ bot.onModalSubmit(
           maxRuns,
           ...(text ? { text } : {}),
           ...(schedule ? { schedule } : {}),
-          ...(isOwner ? { channelId: channel ?? null } : {}),
+          channelId: channel,
           ...(mayChangeRuns
-            ? {
-                command: kind === 'bash' ? (command ?? existing.command) : null,
-                editorUserIds: editors.length > 0 ? editors : null,
-                kind,
-                url: kind === 'script' ? (url ?? existing.url) : null,
-              }
+            ? { editorUserIds: editors.length > 0 ? editors : null }
             : {}),
         });
       } else if (nextSchedule) {
         saved = await createReminder({
-          channelId: isOwner ? (channel ?? null) : null,
-          command: kind === 'bash' ? (command ?? null) : null,
+          channelId: channel,
           editorUserIds: editors.length > 0 ? editors : null,
           kind,
           maxRuns,
           schedule: nextSchedule,
           text: text ?? '',
           threadId: null,
-          url: kind === 'script' ? (url ?? null) : null,
           userId,
         });
       } else {

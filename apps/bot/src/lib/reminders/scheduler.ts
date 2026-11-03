@@ -9,6 +9,7 @@ import { type ResolvedIdentity, resolveIdentity } from '@/lib/identity';
 import logger from '@/lib/logger';
 import { runReminderAgent } from '@/lib/reminders/agent';
 import { runReminderBash } from '@/lib/reminders/bash';
+import { reminderChannelRefusal } from '@/lib/reminders/channel';
 import { errorMessage } from '@/lib/utils/error';
 
 // Recurring reminders are Kyto's own durable side effect — same precedent as
@@ -98,6 +99,29 @@ export async function fireReminder({
   event?: ReminderEvent;
   reminder: Reminder;
 }): Promise<void> {
+  // Re-checked on every run, before any work: the creator may have left the
+  // channel since the reminder was set up.
+  if (stored.channelId) {
+    const refusal = await reminderChannelRefusal({
+      channelId: stored.channelId,
+      userId: stored.userId,
+    });
+    if (refusal) {
+      logger.info(
+        { reminderId: stored.id, refusal },
+        '[reminders] channel no longer allowed; not run'
+      );
+      // Not for an event reminder: a busy channel would DM on every event.
+      if (stored.recurrence !== 'event') {
+        await notifyFailure({
+          bot,
+          error: new Error(refusal),
+          reminder: stored,
+        });
+      }
+      return;
+    }
+  }
   // An agent job reads the event; every other kind just says what set it off.
   const reminder =
     event && stored.kind === 'agent'

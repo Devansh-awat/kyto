@@ -1,4 +1,4 @@
-import type { Reminder, ReminderKind } from '@repo/db/queries';
+import type { Reminder } from '@repo/db/queries';
 import { mrkdwn, plainText } from '@/harness/views';
 import type { SlackBlock, SlackModalView } from '@/types/views';
 
@@ -8,13 +8,6 @@ const SECONDS_PER_MINUTE = 60;
 const SECONDS_PER_HOUR = 60 * SECONDS_PER_MINUTE;
 const SECONDS_PER_DAY = 24 * SECONDS_PER_HOUR;
 const MINUTES_PER_HOUR = 60;
-
-const KIND_LABELS: Record<ReminderKind, string> = {
-  agent: 'Agent job — kyto follows the instructions and posts its reply',
-  bash: 'Shell command — posts its output',
-  message: 'Message — posts the text as written',
-  script: 'Fetch a URL — posts the page',
-};
 
 export const EVERY_UNITS = {
   cron: 'Custom cron expression',
@@ -107,46 +100,22 @@ function scheduleForm(
 }
 
 /**
- * Create or edit a recurring reminder from App Home. `mayChangeRuns` is false
- * for a named editor: what the reminder RUNS (kind, command, URL, an agent
- * job's instructions) stays with its creator, so those show read-only.
+ * Create or edit a recurring AGENT reminder from App Home (other kinds are
+ * changed by asking kyto; owner's call 2026-11-03). `mayChangeRuns` is false for
+ * a named editor: an agent job's instructions are what it runs, and it runs as
+ * its creator, so they show read-only.
  */
 export function buildReminderModal({
   existing,
-  isOwner,
   mayChangeRuns,
   timezone,
 }: {
   existing?: Reminder;
-  isOwner: boolean;
   mayChangeRuns: boolean;
   timezone: string;
 }): SlackModalView {
   const blocks: SlackBlock[] = [];
-  const kind = existing?.kind ?? 'message';
-
   if (mayChangeRuns) {
-    blocks.push({
-      block_id: 'reminder_kind',
-      element: {
-        action_id: 'kind',
-        initial_option: option(kind, KIND_LABELS[kind]),
-        options: Object.entries(KIND_LABELS).map(([value, text]) =>
-          option(value, text)
-        ),
-        type: 'static_select',
-      },
-      label: plainText('What it does'),
-      type: 'input',
-    });
-  } else {
-    blocks.push({
-      text: mrkdwn(`*What it does:* ${KIND_LABELS[kind]}`),
-      type: 'section',
-    });
-  }
-
-  if (mayChangeRuns || kind !== 'agent') {
     blocks.push({
       block_id: 'reminder_text',
       element: {
@@ -155,58 +124,23 @@ export function buildReminderModal({
         max_length: MAX_TEXT_CHARS,
         multiline: true,
         placeholder: plainText(
-          'e.g. Stand up and stretch — or, for an agent job: summarise yesterday’s messages in #general in three bullets.'
+          'e.g. Summarise yesterday’s messages in #general in three bullets.'
         ),
         type: 'plain_text_input',
       },
       hint: plainText(
-        'For an agent job these are the instructions it follows each run, and only its reply is posted. For a URL or a command, this goes above the output (optional there).'
+        'kyto follows these on every run, with its full toolset; only its reply is posted.'
       ),
-      label: plainText('Message or instructions'),
-      optional: kind === 'script' || kind === 'bash',
+      label: plainText('Instructions'),
       type: 'input',
     });
   } else {
     blocks.push({
       text: mrkdwn(
-        '*Instructions:* only the reminder’s creator can change an agent job’s instructions — it runs with their permissions.'
+        '*Instructions:* only the creator can change them — the job runs with their permissions.'
       ),
       type: 'section',
     });
-  }
-
-  if (mayChangeRuns) {
-    blocks.push(
-      {
-        block_id: 'reminder_url',
-        element: {
-          action_id: 'url',
-          ...(existing?.url ? { initial_value: existing.url } : {}),
-          type: 'url_text_input',
-        },
-        hint: plainText('Only for “Fetch a URL”.'),
-        label: plainText('URL'),
-        optional: true,
-        type: 'input',
-      },
-      {
-        block_id: 'reminder_command',
-        element: {
-          action_id: 'command',
-          ...(existing?.command ? { initial_value: existing.command } : {}),
-          multiline: true,
-          type: 'plain_text_input',
-        },
-        hint: plainText(
-          existing?.threadId
-            ? 'Only for “Shell command”. Runs in the sandbox of the thread this reminder was made in.'
-            : 'Only for “Shell command”. A reminder made here has no thread, so it runs in a fresh sandbox each time.'
-        ),
-        label: plainText('Command'),
-        optional: true,
-        type: 'input',
-      }
-    );
   }
 
   if (existing?.recurrence === 'event') {
@@ -232,9 +166,7 @@ export function buildReminderModal({
           ),
           type: 'static_select',
         },
-        hint: plainText(
-          'Agent jobs run at most once an hour, shell commands every 5 minutes, the rest every minute.'
-        ),
+        hint: plainText('At most once an hour: every run is a real model run.'),
         label: plainText('How often'),
         type: 'input',
       },
@@ -319,9 +251,9 @@ export function buildReminderModal({
     );
   }
 
-  blocks.push({ type: 'divider' });
-  if (isOwner) {
-    blocks.push({
+  blocks.push(
+    { type: 'divider' },
+    {
       block_id: 'reminder_channel',
       element: {
         action_id: 'channel',
@@ -331,23 +263,14 @@ export function buildReminderModal({
         filter: { exclude_bot_users: true, include: ['public', 'private'] },
         type: 'conversations_select',
       },
-      hint: plainText('Leave empty to DM the reminder’s creator.'),
+      hint: plainText(
+        'A channel you and kyto are both in. Leave empty to post in a DM to the creator.'
+      ),
       label: plainText('Post in'),
       optional: true,
       type: 'input',
-    });
-  } else {
-    blocks.push({
-      elements: [
-        mrkdwn(
-          existing?.channelId
-            ? `Posts in <#${existing.channelId}>.`
-            : 'Posts to you in a DM.'
-        ),
-      ],
-      type: 'context',
-    });
-  }
+    }
+  );
   blocks.push({
     block_id: 'reminder_max_runs',
     element: {
@@ -393,7 +316,7 @@ export function buildReminderModal({
       ? { private_metadata: JSON.stringify({ id: existing.id }) }
       : {}),
     submit: plainText('Save'),
-    title: plainText(existing ? 'Edit reminder' : 'New reminder'),
+    title: plainText(existing ? 'Edit agent job' : 'New agent job'),
     type: 'modal',
   };
 }

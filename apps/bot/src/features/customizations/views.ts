@@ -873,11 +873,11 @@ export function buildHomeView({
     {
       accessory: {
         action_id: 'home_new_reminder',
-        text: plainText('New reminder'),
+        text: plainText('New agent job'),
         type: 'button',
       },
       text: mrkdwn(
-        '*Reminders*\nRecurring reminders you created, plus any you were named an editor of. Make one here or by asking kyto.'
+        '*Reminders*\nRecurring reminders you created, plus any you were named an editor of. Agent jobs can be made and edited here; for the other kinds, ask kyto.'
       ),
       type: 'section',
     }
@@ -910,12 +910,17 @@ export function buildHomeView({
       },
       {
         elements: [
-          {
-            action_id: 'home_edit_reminder',
-            text: plainText('Edit'),
-            type: 'button',
-            value: reminder.id,
-          },
+          // Only agent jobs are edited here; other kinds by asking kyto.
+          ...(reminder.kind === 'agent'
+            ? [
+                {
+                  action_id: 'home_edit_reminder',
+                  text: plainText('Edit'),
+                  type: 'button' as const,
+                  value: reminder.id,
+                },
+              ]
+            : []),
           {
             action_id: 'home_run_reminder',
             text: plainText('Run now'),

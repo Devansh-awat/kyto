@@ -17,6 +17,7 @@ import { z } from 'zod';
 import { env } from '@/env';
 import type { Message } from '@/harness/types';
 import { slack } from '@/lib/chat';
+import { reminderChannelRefusal } from '@/lib/reminders/channel';
 import {
   EVENT_COOLDOWN_SECONDS_BY_KIND,
   refreshEventReminders,
@@ -118,9 +119,8 @@ const SLACK_TS = /^\d{9,}\.\d+$/;
 const MAX_THRESHOLD = 10_000;
 
 export function scheduleEventReminderTool({ message }: { message: Message }) {
-  const isOwner = isOwnerOf(message);
   return tool({
-    description: `Set up a reminder that fires when something HAPPENS rather than at a time. It does the same four kinds of thing a recurring reminder does ('message', 'script', 'bash', 'agent'; see action recurring), once per event, and by default DMs the person who asked (the owner may target a channel).
+    description: `Set up a reminder that fires when something HAPPENS rather than at a time. It does the same four kinds of thing a recurring reminder does ('message', 'script', 'bash', 'agent'; see action recurring), once per event, and by default DMs the person who asked (or posts in a channel they and kyto are both in).
 
 Triggers (\`on\`):
 - 'slack_message': a new message in \`watchChannel\`, optionally only \`fromUser\` and only matching \`pattern\` (case-insensitive text, or a regex with \`regex: true\`). kyto must be in that channel, and the asker must be able to read it.
@@ -166,7 +166,7 @@ An 'agent' reminder receives the event (the message text, the reaction, the webh
         .string()
         .optional()
         .describe(
-          'Owner only: post into this channel (id or #name) instead of DMing. Ignored for non-owners.'
+          'Post into this channel (id or #name) instead of DMing. Only a channel the asker and kyto are both in, where ordinary members may post.'
         ),
       editors: editorsSchema,
       maxRuns: z
@@ -249,10 +249,18 @@ An 'agent' reminder receives the event (the message text, the reaction, the webh
       if ('error' in built) {
         return { error: built.error, success: false };
       }
-      const targetChannel =
-        isOwner && input.channelId
-          ? toRawSlackChannelId(input.channelId)
-          : null;
+      const targetChannel = input.channelId
+        ? toRawSlackChannelId(input.channelId)
+        : null;
+      const channelRefusal =
+        targetChannel &&
+        (await reminderChannelRefusal({
+          channelId: targetChannel,
+          userId: message.author.userId,
+        }));
+      if (channelRefusal) {
+        return { error: channelRefusal, success: false };
+      }
       const needsSecret =
         built.trigger.source === 'webhook' || built.trigger.source === 'github';
       try {
@@ -475,9 +483,8 @@ export function scheduleRecurringReminderTool({
 }: {
   message: Message;
 }) {
-  const isOwner = isOwnerOf(message);
   return tool({
-    description: `Schedule a RECURRING task for the user who sent the current message: kyto repeatedly posts on the schedule until cancelled or its run cap is reached. By default it DMs that user; the owner may also target a channel. For a one-time reminder, use reminders (action once) instead.
+    description: `Schedule a RECURRING task for the user who sent the current message: kyto repeatedly posts on the schedule until cancelled or its run cap is reached. By default it DMs that user; it may instead post in a channel they and kyto are both in. For a one-time reminder, use reminders (action once) instead.
 
 Four kinds, each recomputing its message at fire time except 'message':
 - 'message' (default): posts \`text\` verbatim. Min interval 60s.
@@ -512,7 +519,7 @@ Only the person who asked for it can change it later, unless they name other peo
         .string()
         .optional()
         .describe(
-          'Owner only: post into this channel (id or #name) instead of DMing. Ignored for non-owners.'
+          'Post into this channel (id or #name) instead of DMing. Only a channel the asker and kyto are both in, where ordinary members may post.'
         ),
       editors: editorsSchema,
       maxRuns: z
@@ -569,10 +576,16 @@ Only the person who asked for it can change it later, unless they name other peo
         return { error: built.error, success: false };
       }
 
-      // Only the owner may aim a reminder at a channel (same admin rule as
-      // cross-channel posting); non-owners always get a DM.
-      const targetChannel =
-        isOwner && channelId ? toRawSlackChannelId(channelId) : null;
+      const targetChannel = channelId ? toRawSlackChannelId(channelId) : null;
+      const channelRefusal =
+        targetChannel &&
+        (await reminderChannelRefusal({
+          channelId: targetChannel,
+          userId: message.author.userId,
+        }));
+      if (channelRefusal) {
+        return { error: channelRefusal, success: false };
+      }
 
       try {
         const reminder = await createReminder({
@@ -641,7 +654,7 @@ You may only edit a reminder the person you are talking to created, or one they 
         .string()
         .optional()
         .describe(
-          'Owner only: post into this channel (id or #name) instead of DMing.'
+          'Post into this channel (id or #name) instead of DMing; same rule as when creating.'
         ),
       editors: editorsSchema,
       maxRuns: z
@@ -762,11 +775,22 @@ You may only edit a reminder the person you are talking to created, or one they 
       if (!parsedEditors.ok) {
         return { error: parsedEditors.error, success: false };
       }
+      // Checked against the CREATOR: the reminder posts as their job, so an
+      // editor can't send it somewhere its creator couldn't post.
+      const targetChannel = channelId ? toRawSlackChannelId(channelId) : null;
+      const channelRefusal =
+        targetChannel &&
+        (await reminderChannelRefusal({
+          channelId: targetChannel,
+          userId: existing.userId,
+        }));
+      if (channelRefusal) {
+        return { error: channelRefusal, success: false };
+      }
 
       try {
         const updated = await updateReminderRow({
-          channelId:
-            isOwner && channelId ? toRawSlackChannelId(channelId) : undefined,
+          channelId: targetChannel ?? undefined,
           command: command ?? undefined,
           editorUserIds: editors ? parsedEditors.editors : undefined,
           id,
