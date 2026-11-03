@@ -50,7 +50,34 @@ interface SlackConversationsElement {
     exclude_bot_users?: boolean;
     include?: ('im' | 'mpim' | 'private' | 'public')[];
   };
+  initial_conversation?: string;
   type: 'conversations_select';
+}
+
+interface SlackNumberInputElement {
+  action_id: string;
+  initial_value?: string;
+  is_decimal_allowed: boolean;
+  min_value?: string;
+  type: 'number_input';
+}
+
+interface SlackUrlInputElement {
+  action_id: string;
+  initial_value?: string;
+  type: 'url_text_input';
+}
+
+interface SlackTimePickerElement {
+  action_id: string;
+  initial_time?: string;
+  type: 'timepicker';
+}
+
+interface SlackMultiUsersElement {
+  action_id: string;
+  initial_users?: string[];
+  type: 'multi_users_select';
 }
 
 interface SlackMultiSelectElement {
@@ -95,8 +122,12 @@ export type SlackBlock =
         | SlackMultiConversationsElement
         | SlackConversationsElement
         | SlackMultiSelectElement
+        | SlackMultiUsersElement
+        | SlackNumberInputElement
         | SlackSelectElement
-        | SlackTextInputElement;
+        | SlackTextInputElement
+        | SlackTimePickerElement
+        | SlackUrlInputElement;
       hint?: ReturnType<typeof plainText>;
       label: ReturnType<typeof plainText>;
       optional?: boolean;

@@ -52,6 +52,7 @@ const maxHomePromptLength = 600;
 const maxPromptLength = 3000;
 const REMINDER_TEXT_MAX = 120;
 const MINUTES_PER_HOUR = 60;
+const MS_PER_SECOND = 1000;
 
 const IDENTITY_LABELS: Record<IdentityType, string> = {
   normal: 'Replies & cross-channel posts',
@@ -866,12 +867,17 @@ export function buildHomeView({
     );
   }
 
-  // Recurring reminders: list + pause/resume/cancel (per user).
+  // Recurring reminders: create, edit, run now, pause/resume, delete.
   blocks.push(
     { type: 'divider' },
     {
+      accessory: {
+        action_id: 'home_new_reminder',
+        text: plainText('New reminder'),
+        type: 'button',
+      },
       text: mrkdwn(
-        '*Reminders*\nRecurring reminders you created, plus any you were named an editor of. Create them by asking Kyto; manage them here.'
+        '*Reminders*\nRecurring reminders you created, plus any you were named an editor of. Make one here or by asking kyto.'
       ),
       type: 'section',
     }
@@ -891,15 +897,31 @@ export function buildHomeView({
     const state = reminder.active ? 'active' : 'paused';
     const creator =
       reminder.userId === userId ? '' : ` · by <@${reminder.userId}>`;
+    const next =
+      reminder.active && reminder.recurrence !== 'event'
+        ? ` · next <!date^${Math.floor(reminder.nextRunAt.getTime() / MS_PER_SECOND)}^{date_short_pretty} {time}|${reminder.nextRunAt.toISOString()}>`
+        : '';
     blocks.push(
       {
         text: mrkdwn(
-          `“${escapeSlackText(text)}”\n${reminder.kind} · ${describeReminderSchedule(reminder)} · ${target} · *${state}*${creator}`
+          `“${escapeSlackText(text)}”\n${reminder.kind} · ${describeReminderSchedule(reminder)} · ${target} · *${state}*${next}${creator}`
         ),
         type: 'section',
       },
       {
         elements: [
+          {
+            action_id: 'home_edit_reminder',
+            text: plainText('Edit'),
+            type: 'button',
+            value: reminder.id,
+          },
+          {
+            action_id: 'home_run_reminder',
+            text: plainText('Run now'),
+            type: 'button',
+            value: reminder.id,
+          },
           {
             action_id: reminder.active
               ? 'home_pause_reminder'

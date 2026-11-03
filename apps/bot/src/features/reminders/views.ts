@@ -1,0 +1,399 @@
+import type { Reminder, ReminderKind } from '@repo/db/queries';
+import { mrkdwn, plainText } from '@/harness/views';
+import type { SlackBlock, SlackModalView } from '@/types/views';
+
+export const REMINDER_MODAL_CALLBACK = 'home_reminder_save';
+const MAX_TEXT_CHARS = 3000;
+const SECONDS_PER_MINUTE = 60;
+const SECONDS_PER_HOUR = 60 * SECONDS_PER_MINUTE;
+const SECONDS_PER_DAY = 24 * SECONDS_PER_HOUR;
+const MINUTES_PER_HOUR = 60;
+
+const KIND_LABELS: Record<ReminderKind, string> = {
+  agent: 'Agent job — kyto follows the instructions and posts its reply',
+  bash: 'Shell command — posts its output',
+  message: 'Message — posts the text as written',
+  script: 'Fetch a URL — posts the page',
+};
+
+export const EVERY_UNITS = {
+  cron: 'Custom cron expression',
+  daily: 'Every day at a time',
+  days: 'Every N days',
+  hours: 'Every N hours',
+  minutes: 'Every N minutes',
+  weekly: 'Every week on a day',
+} as const;
+export type EveryUnit = keyof typeof EVERY_UNITS;
+export const UNIT_SECONDS = {
+  days: SECONDS_PER_DAY,
+  hours: SECONDS_PER_HOUR,
+  minutes: SECONDS_PER_MINUTE,
+} as const;
+
+const WEEKDAY_LABELS = [
+  'Sunday',
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+];
+
+// A daily or weekly time set here is saved as a cron in the person's own
+// timezone, so it reads back as one.
+const SIMPLE_CRON = /^(\d{1,2}) (\d{1,2}) \* \* (\*|[0-6])$/;
+
+const option = (value: string, text: string) => ({
+  text: plainText(text),
+  value,
+});
+
+const pad = (n: number): string => String(n).padStart(2, '0');
+
+interface ScheduleForm {
+  count?: number;
+  cron?: string;
+  time?: string;
+  timezone: string;
+  unit: EveryUnit;
+  weekday?: number;
+}
+
+/** The existing schedule, as the modal's fields would express it. */
+function scheduleForm(
+  reminder: Reminder | undefined,
+  timezone: string
+): ScheduleForm {
+  if (!reminder) {
+    return { count: 1, timezone, unit: 'days' };
+  }
+  if (reminder.recurrence === 'interval') {
+    const seconds = reminder.intervalSeconds ?? SECONDS_PER_DAY;
+    for (const unit of ['days', 'hours', 'minutes'] as const) {
+      if (seconds % UNIT_SECONDS[unit] === 0) {
+        return { count: seconds / UNIT_SECONDS[unit], timezone, unit };
+      }
+    }
+    return {
+      count: Math.round(seconds / SECONDS_PER_MINUTE),
+      timezone,
+      unit: 'minutes',
+    };
+  }
+  if (reminder.recurrence === 'daily' || reminder.recurrence === 'weekly') {
+    const minutes = reminder.timeOfDayMinutes ?? 0;
+    return {
+      time: `${pad(Math.floor(minutes / MINUTES_PER_HOUR))}:${pad(minutes % MINUTES_PER_HOUR)}`,
+      timezone: 'UTC',
+      unit: reminder.recurrence,
+      ...(reminder.recurrence === 'weekly'
+        ? { weekday: reminder.weekday ?? 0 }
+        : {}),
+    };
+  }
+  const cron = reminder.cronExpression ?? '';
+  const tz = reminder.timezone ?? 'UTC';
+  const simple = SIMPLE_CRON.exec(cron);
+  if (simple) {
+    const [, minute, hour, day] = simple;
+    const time = `${pad(Number(hour))}:${pad(Number(minute))}`;
+    return day === '*'
+      ? { time, timezone: tz, unit: 'daily' }
+      : { time, timezone: tz, unit: 'weekly', weekday: Number(day) };
+  }
+  return { cron, timezone: tz, unit: 'cron' };
+}
+
+/**
+ * Create or edit a recurring reminder from App Home. `mayChangeRuns` is false
+ * for a named editor: what the reminder RUNS (kind, command, URL, an agent
+ * job's instructions) stays with its creator, so those show read-only.
+ */
+export function buildReminderModal({
+  existing,
+  isOwner,
+  mayChangeRuns,
+  timezone,
+}: {
+  existing?: Reminder;
+  isOwner: boolean;
+  mayChangeRuns: boolean;
+  timezone: string;
+}): SlackModalView {
+  const blocks: SlackBlock[] = [];
+  const kind = existing?.kind ?? 'message';
+
+  if (mayChangeRuns) {
+    blocks.push({
+      block_id: 'reminder_kind',
+      element: {
+        action_id: 'kind',
+        initial_option: option(kind, KIND_LABELS[kind]),
+        options: Object.entries(KIND_LABELS).map(([value, text]) =>
+          option(value, text)
+        ),
+        type: 'static_select',
+      },
+      label: plainText('What it does'),
+      type: 'input',
+    });
+  } else {
+    blocks.push({
+      text: mrkdwn(`*What it does:* ${KIND_LABELS[kind]}`),
+      type: 'section',
+    });
+  }
+
+  if (mayChangeRuns || kind !== 'agent') {
+    blocks.push({
+      block_id: 'reminder_text',
+      element: {
+        action_id: 'text',
+        ...(existing ? { initial_value: existing.text } : {}),
+        max_length: MAX_TEXT_CHARS,
+        multiline: true,
+        placeholder: plainText(
+          'e.g. Stand up and stretch — or, for an agent job: summarise yesterday’s messages in #general in three bullets.'
+        ),
+        type: 'plain_text_input',
+      },
+      hint: plainText(
+        'For an agent job these are the instructions it follows each run, and only its reply is posted. For a URL or a command, this goes above the output (optional there).'
+      ),
+      label: plainText('Message or instructions'),
+      optional: kind === 'script' || kind === 'bash',
+      type: 'input',
+    });
+  } else {
+    blocks.push({
+      text: mrkdwn(
+        '*Instructions:* only the reminder’s creator can change an agent job’s instructions — it runs with their permissions.'
+      ),
+      type: 'section',
+    });
+  }
+
+  if (mayChangeRuns) {
+    blocks.push(
+      {
+        block_id: 'reminder_url',
+        element: {
+          action_id: 'url',
+          ...(existing?.url ? { initial_value: existing.url } : {}),
+          type: 'url_text_input',
+        },
+        hint: plainText('Only for “Fetch a URL”.'),
+        label: plainText('URL'),
+        optional: true,
+        type: 'input',
+      },
+      {
+        block_id: 'reminder_command',
+        element: {
+          action_id: 'command',
+          ...(existing?.command ? { initial_value: existing.command } : {}),
+          multiline: true,
+          type: 'plain_text_input',
+        },
+        hint: plainText(
+          existing?.threadId
+            ? 'Only for “Shell command”. Runs in the sandbox of the thread this reminder was made in.'
+            : 'Only for “Shell command”. A reminder made here has no thread, so it runs in a fresh sandbox each time.'
+        ),
+        label: plainText('Command'),
+        optional: true,
+        type: 'input',
+      }
+    );
+  }
+
+  if (existing?.recurrence === 'event') {
+    blocks.push({
+      elements: [
+        mrkdwn(
+          'This reminder fires on an event, not a schedule. Ask kyto to change what triggers it.'
+        ),
+      ],
+      type: 'context',
+    });
+  } else {
+    const form = scheduleForm(existing, timezone);
+    blocks.push(
+      { type: 'divider' },
+      {
+        block_id: 'reminder_every',
+        element: {
+          action_id: 'every',
+          initial_option: option(form.unit, EVERY_UNITS[form.unit]),
+          options: Object.entries(EVERY_UNITS).map(([value, text]) =>
+            option(value, text)
+          ),
+          type: 'static_select',
+        },
+        hint: plainText(
+          'Agent jobs run at most once an hour, shell commands every 5 minutes, the rest every minute.'
+        ),
+        label: plainText('How often'),
+        type: 'input',
+      },
+      {
+        block_id: 'reminder_count',
+        element: {
+          action_id: 'count',
+          ...(form.count === undefined
+            ? {}
+            : { initial_value: String(form.count) }),
+          is_decimal_allowed: false,
+          min_value: '1',
+          type: 'number_input',
+        },
+        hint: plainText('For “Every N minutes / hours / days”.'),
+        label: plainText('N'),
+        optional: true,
+        type: 'input',
+      },
+      {
+        block_id: 'reminder_time',
+        element: {
+          action_id: 'time',
+          ...(form.time ? { initial_time: form.time } : {}),
+          type: 'timepicker',
+        },
+        hint: plainText(
+          'For “Every day” and “Every week”, in the timezone below.'
+        ),
+        label: plainText('At'),
+        optional: true,
+        type: 'input',
+      },
+      {
+        block_id: 'reminder_weekday',
+        element: {
+          action_id: 'weekday',
+          ...(form.weekday === undefined
+            ? {}
+            : {
+                initial_option: option(
+                  String(form.weekday),
+                  WEEKDAY_LABELS[form.weekday] ?? 'Sunday'
+                ),
+              }),
+          options: WEEKDAY_LABELS.map((label, index) =>
+            option(String(index), label)
+          ),
+          type: 'static_select',
+        },
+        hint: plainText('For “Every week”.'),
+        label: plainText('On'),
+        optional: true,
+        type: 'input',
+      },
+      {
+        block_id: 'reminder_cron',
+        element: {
+          action_id: 'cron',
+          ...(form.cron ? { initial_value: form.cron } : {}),
+          placeholder: plainText('0 9 * * 1-5  (9:00 on weekdays)'),
+          type: 'plain_text_input',
+        },
+        hint: plainText(
+          'For “Custom cron”: minute hour day-of-month month day-of-week.'
+        ),
+        label: plainText('Cron'),
+        optional: true,
+        type: 'input',
+      },
+      {
+        block_id: 'reminder_timezone',
+        element: {
+          action_id: 'timezone',
+          initial_value: form.timezone,
+          type: 'plain_text_input',
+        },
+        hint: plainText('An IANA name like Asia/Kolkata or America/New_York.'),
+        label: plainText('Timezone'),
+        type: 'input',
+      }
+    );
+  }
+
+  blocks.push({ type: 'divider' });
+  if (isOwner) {
+    blocks.push({
+      block_id: 'reminder_channel',
+      element: {
+        action_id: 'channel',
+        ...(existing?.channelId
+          ? { initial_conversation: existing.channelId }
+          : {}),
+        filter: { exclude_bot_users: true, include: ['public', 'private'] },
+        type: 'conversations_select',
+      },
+      hint: plainText('Leave empty to DM the reminder’s creator.'),
+      label: plainText('Post in'),
+      optional: true,
+      type: 'input',
+    });
+  } else {
+    blocks.push({
+      elements: [
+        mrkdwn(
+          existing?.channelId
+            ? `Posts in <#${existing.channelId}>.`
+            : 'Posts to you in a DM.'
+        ),
+      ],
+      type: 'context',
+    });
+  }
+  blocks.push({
+    block_id: 'reminder_max_runs',
+    element: {
+      action_id: 'max_runs',
+      ...(existing?.maxRuns ? { initial_value: String(existing.maxRuns) } : {}),
+      is_decimal_allowed: false,
+      min_value: '1',
+      type: 'number_input',
+    },
+    hint: plainText(
+      existing
+        ? `Stop after this many runs in total (it has run ${existing.runCount}). Empty = forever.`
+        : 'Stop after this many runs. Empty = forever.'
+    ),
+    label: plainText('Run cap'),
+    optional: true,
+    type: 'input',
+  });
+  if (mayChangeRuns) {
+    blocks.push({
+      block_id: 'reminder_editors',
+      element: {
+        action_id: 'editors',
+        ...(existing?.editorUserIds?.length
+          ? { initial_users: existing.editorUserIds }
+          : {}),
+        type: 'multi_users_select',
+      },
+      hint: plainText(
+        'They can change the wording and the schedule, never what it runs.'
+      ),
+      label: plainText('Also editable by'),
+      optional: true,
+      type: 'input',
+    });
+  }
+
+  return {
+    blocks,
+    callback_id: REMINDER_MODAL_CALLBACK,
+    close: plainText('Cancel'),
+    ...(existing
+      ? { private_metadata: JSON.stringify({ id: existing.id }) }
+      : {}),
+    submit: plainText('Save'),
+    title: plainText(existing ? 'Edit reminder' : 'New reminder'),
+    type: 'modal',
+  };
+}

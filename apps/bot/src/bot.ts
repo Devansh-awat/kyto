@@ -40,6 +40,7 @@ import '@/features/approvals';
 import '@/features/ask-question';
 import '@/features/assistant';
 import '@/features/channel-instructions';
+import '@/features/reminders';
 import { runCodeChannelCommand } from '@/features/code-channels';
 import '@/features/confirm-post';
 import '@/features/customizations';

@@ -796,6 +796,8 @@ interface ModalStateElement {
   selected_conversations?: string[] | null;
   selected_option?: { value?: string } | null;
   selected_options?: { value?: string }[] | null;
+  selected_time?: string | null;
+  selected_users?: string[] | null;
   value?: string | null;
 }
 
@@ -804,6 +806,7 @@ function modalStateValue(element?: ModalStateElement): string | undefined {
     element?.value ??
     element?.selected_option?.value ??
     element?.selected_conversation ??
+    element?.selected_time ??
     undefined
   );
 }
@@ -817,6 +820,9 @@ function modalStateValue(element?: ModalStateElement): string | undefined {
 function modalStateValues(element?: ModalStateElement): string[] {
   if (element?.selected_conversations) {
     return element.selected_conversations.filter(Boolean);
+  }
+  if (element?.selected_users) {
+    return element.selected_users.filter(Boolean);
   }
   if (element?.selected_options) {
     return element.selected_options
