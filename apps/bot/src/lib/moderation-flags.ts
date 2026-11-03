@@ -1,15 +1,11 @@
 import { z } from 'zod';
 
-// A web page or file kyto read is about anything — news about a war is
-// "violence" — so a tool result only counts for sexual content, the one
-// category that is a ban whatever brought it in.
-const TOOL_RESULT_CATEGORIES = /^sexual/;
-// Off everywhere (owner's call, 2026-10-03): in its first day every ping was
-// one of these on banter — "kick em" (from a channel) read as violence, "noob
-// bot" as harassment. Bare `illicit` too (owner's call, 2026-10-08). Only the
-// bare categories: `violence/graphic`, `harassment/threatening` and
-// `illicit/violent` still alert.
-const IGNORED_CATEGORIES = new Set(['violence', 'harassment', 'illicit']);
+// Only NSFW alerts the owner (owner's call, 2026-11-03). Every other category
+// pinged on banter or ordinary asks: "kick em" read as violence, "noob bot" as
+// harassment, a plain request as `illicit/violent` — so the owner was pulled
+// into threads for nothing. `sexual` and `sexual/minors` are the categories that
+// are a ban whatever brought them in, a tool result included.
+const ALERT_CATEGORIES = /^sexual/;
 
 export const responseSchema = z.object({
   results: z.array(
@@ -51,13 +47,7 @@ export function flaggedItems({
       continue;
     }
     const categories = Object.entries(result.categories)
-      .filter(
-        ([category, hit]) =>
-          hit &&
-          !IGNORED_CATEGORIES.has(category) &&
-          (item.source !== 'tool result' ||
-            TOOL_RESULT_CATEGORIES.test(category))
-      )
+      .filter(([category, hit]) => hit && ALERT_CATEGORIES.test(category))
       .map(([category]) => category);
     if (categories.length > 0) {
       flags.push({ categories, source: item.source });
