@@ -21,6 +21,7 @@ import { sandboxKey } from '@/lib/code-channels';
 import logger from '@/lib/logger';
 import { openSandboxProxies } from '@/lib/sandbox/proxies';
 import { threadSandboxStore, withThreadSandbox } from '@/lib/sandbox/store';
+import { errorMessage } from '@/lib/utils/error';
 
 // An agent reminder runs the SAME multi-step tool loop as a real turn, but
 // headless: nothing is streamed to Slack, and its final text becomes the
@@ -92,6 +93,7 @@ const CONVERSATION_ID = /[CDG][A-Z0-9]{6,}/;
 const USER_ID = /[UW][A-Z0-9]{6,}/;
 const ACTION_PREVIEW_CHARS = 300;
 const MAX_ACTIONS = 40;
+const ERROR_PREVIEW_CHARS = 200;
 
 const preview = (value: unknown): string => {
   const text = typeof value === 'string' ? value : JSON.stringify(value);
@@ -110,18 +112,42 @@ const preview = (value: unknown): string => {
 export async function runReminderAgent(
   reminder: Reminder
 ): Promise<string | null> {
-  // Haiku or luna at random, like every non-turn call (drawnAttempts).
-  const attempt = drawnAttempts()[0];
-  if (!attempt) {
+  // The whole roster, in a random order like every non-turn call
+  // (drawnAttempts). Only one model used to be tried: when it was rate-limited
+  // (a 429 from upstream) the job came back empty and the run was lost.
+  const roster = drawnAttempts();
+  if (roster.length === 0) {
     throw new Error(
       'No model is configured for agent reminders (the subagent roster is empty).'
     );
   }
-  const run = () => runAgent(reminder, attempt);
+  const run = async (): Promise<string | null> => {
+    const reasons: string[] = [];
+    for (const attempt of roster) {
+      try {
+        return await runAgent(reminder, attempt);
+      } catch (error) {
+        // Only a run that did NOTHING is retried on the next model: one that
+        // called tools may already have posted or changed something.
+        if (!(error instanceof EmptyRunError)) {
+          throw error;
+        }
+        reasons.push(`${attempt.model}: ${error.message}`);
+        logger.warn(
+          { err: error.message, model: attempt.model, reminderId: reminder.id },
+          '[reminders] agent job came back empty; trying the next model'
+        );
+      }
+    }
+    throw new Error(`Every model came back empty (${reasons.join('; ')}).`);
+  };
   return reminder.threadId
     ? await withThreadSandbox(reminder.threadId, run)
     : await run();
 }
+
+/** A run that wrote nothing and called no tool, so another model may retry it. */
+class EmptyRunError extends Error {}
 
 /**
  * Second chance at the message: same model, its real tools still registered,
@@ -273,9 +299,12 @@ async function runAgent(
     const actions: string[] = [];
     let postedToDestination = false;
     let skipped = false;
+    let streamError: string | undefined;
     for await (const part of result.fullStream) {
       if (part.type === 'text-delta') {
         text += part.text;
+      } else if (part.type === 'error') {
+        streamError = errorMessage(part.error);
       } else if (part.type === 'tool-call') {
         if (part.toolName === SKIP_TOOL_NAME) {
           skipped = true;
@@ -338,7 +367,9 @@ async function runAgent(
       );
       return '_(Ran the scheduled job — it completed its actions but did not write a report.)_';
     }
-    throw new Error('Agent reminder produced an empty response.');
+    throw new EmptyRunError(
+      streamError?.slice(0, ERROR_PREVIEW_CHARS) ?? 'empty response'
+    );
   } finally {
     proxies.revoke();
     await close?.().catch(() => undefined);

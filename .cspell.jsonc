@@ -3,6 +3,7 @@
   "import": ["@repo/cspell-config"],
   "words": [
     "regme",
+    "neighbourhood",
     "RDAP",
     "rdap",
     "whois",

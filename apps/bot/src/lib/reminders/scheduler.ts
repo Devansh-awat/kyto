@@ -48,6 +48,39 @@ async function buildReminderMessage(
   return reminder.text;
 }
 
+const FAILURE_PREVIEW_CHARS = 150;
+const FAILURE_ERROR_CHARS = 400;
+
+async function notifyFailure({
+  bot,
+  error,
+  reminder,
+}: {
+  bot: Chat;
+  error: unknown;
+  reminder: Reminder;
+}): Promise<void> {
+  const preview =
+    reminder.text.length > FAILURE_PREVIEW_CHARS
+      ? `${reminder.text.slice(0, FAILURE_PREVIEW_CHARS)}…`
+      : reminder.text;
+  const where = reminder.channelId ? ` for <#${reminder.channelId}>` : '';
+  try {
+    const dm = await bot.openDM(reminder.userId);
+    await dm.post({
+      markdown: `Your ${reminder.kind} reminder${where} couldn't run this time, so nothing was posted. It will try again on its next run; you can edit or pause it from my App Home.
+> ${preview.replace(/\n/g, ' ')}
+
+What went wrong: ${errorMessage(error).slice(0, FAILURE_ERROR_CHARS)}`,
+    });
+  } catch (dmError) {
+    logger.error(
+      { err: errorMessage(dmError), reminderId: reminder.id },
+      '[reminders] failure DM failed'
+    );
+  }
+}
+
 /** What set off an event reminder (lib/reminders/events). */
 export interface ReminderEvent {
   /** Untrusted: the message, reaction or webhook body, already clamped. */
@@ -83,8 +116,10 @@ export async function fireReminder({
     }
     markdown = built;
   } catch (error) {
-    // A failed run still posts, so a broken command/script/job is visible to
-    // its owner rather than silently doing nothing on every interval.
+    // A failed run is told to its CREATOR, privately, and never posted where
+    // the reminder lands. It used to post "@creator Reminder: <text>" plus the
+    // error into the channel: for an agent job the text is its whole prompt,
+    // so a rate-limited ad job dumped its instructions into a public channel.
     logger.warn(
       {
         err: errorMessage(error),
@@ -93,7 +128,8 @@ export async function fireReminder({
       },
       '[reminders] failed to build reminder content'
     );
-    markdown = `Reminder: ${reminder.text}\n\n_(Couldn't complete this run: ${errorMessage(error)})_`;
+    await notifyFailure({ bot, error, reminder: stored });
+    return;
   }
 
   const identity = await resolveIdentity('reminder').catch(
