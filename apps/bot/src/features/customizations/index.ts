@@ -36,6 +36,7 @@ import {
   setMcpServerOauth,
   setMcpServerShares,
   setModelMode,
+  setSlackGrantSkipConfirm,
   setUsageFooter,
   setUserCustomization,
   updateChatgptModel,
@@ -1340,6 +1341,26 @@ bot.onAction('home_disconnect_slack', async (event) => {
       logger.warn(
         { ...toLogError(error), userId: event.user.userId },
         'Failed to disconnect Slack account'
+      );
+    });
+});
+
+bot.onAction('home_toggle_slack_skip_confirm', async (event) => {
+  const target = event.value;
+  if (!(target === 'on' || target === 'off')) {
+    return;
+  }
+  // Keyed on the clicker: only a person can waive the click on their own
+  // account, never someone else's.
+  await setSlackGrantSkipConfirm({
+    skipConfirm: target === 'on',
+    userId: event.user.userId,
+  })
+    .then(() => publishHome({ userId: event.user.userId }))
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), userId: event.user.userId },
+        'Failed to toggle Slack confirmations'
       );
     });
 });

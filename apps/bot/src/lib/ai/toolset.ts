@@ -32,6 +32,7 @@ import { requestMcpPermission } from '@/lib/mcp-permissions/request';
 import { redactSecrets, redactSecretsDeep } from '@/lib/redact';
 import { listSkills } from '@/lib/skills';
 import { slackBrowserAvailable } from '@/lib/slack-browser';
+import { slackOauthConfigured } from '@/lib/slack-oauth';
 import { errorMessage } from '@/lib/utils/error';
 import {
   hydrateLoadedTools,
@@ -123,7 +124,11 @@ import { bashTool } from './tools/sandbox';
 import { scheduleReminderTool } from './tools/schedule-reminder';
 import { searchSlackTool } from './tools/search-slack';
 import { searchWebTool } from './tools/search-web';
-import { editAsUserTool, sendAsUserTool } from './tools/send-as-user';
+import {
+  deleteAsUserTool,
+  editAsUserTool,
+  sendAsUserTool,
+} from './tools/send-as-user';
 import { loadSkillTool, manageSkillsTool } from './tools/skills';
 import { skipTool } from './tools/skip';
 import { slackBrowserTool } from './tools/slack-browser';
@@ -248,6 +253,7 @@ const EFFECT_TOOLS = new Set([
   'closeNpsSurvey',
   'codeChannel',
   'createChannel',
+  'deleteAsUser',
   'deploySite',
   'editAsUser',
   'editReminder',
@@ -297,6 +303,7 @@ const PUBLIC_POSTING_TOOLS = [
   'closeNpsSurvey',
   'codeChannel',
   'createChannel',
+  'deleteAsUser',
   'editAsUser',
   'embed',
   'focusMode',
@@ -416,7 +423,11 @@ export async function buildTools({
   const authorUserId = message.author.userId;
   const isOwner =
     Boolean(env.OWNER_USER_ID) && authorUserId === env.OWNER_USER_ID;
-  const canActAsOwner = Boolean(env.SLACK_USER_TOKEN) && isOwner;
+  // Acting AS the asker, from their own Slack account: anyone who can connect
+  // one (the tool hands back a connect link until they do), plus the owner's env
+  // token from before grants existed.
+  const canActAsSelf =
+    slackOauthConfigured() || (Boolean(env.SLACK_USER_TOKEN) && isOwner);
   const agentMailKey = env.AGENTMAIL_API_KEY;
   const redactEmail = !(unredactedEmail && isOwner);
 
@@ -1063,22 +1074,36 @@ export async function buildTools({
           },
         }
       : {}),
-    ...(canActAsOwner
+    ...(canActAsSelf
       ? {
           sendAsUser: {
-            summary: 'send a Slack message AS the owner',
+            summary:
+              'send a Slack message or DM AS the person asking, from their own account',
             tool: sendAsUserTool({
               authorUserId,
               extendAttemptDeadline,
+              isOwner,
               thread,
+              unattended,
             }),
           },
           editAsUser: {
-            summary: 'edit one of the owner’s Slack messages',
+            summary: 'edit one of the asking person’s own Slack messages',
             tool: editAsUserTool({
               authorUserId,
               extendAttemptDeadline,
+              isOwner,
               thread,
+              unattended,
+            }),
+          },
+          deleteAsUser: {
+            summary: 'delete one of the asking person’s own Slack messages',
+            tool: deleteAsUserTool({
+              authorUserId,
+              extendAttemptDeadline,
+              thread,
+              unattended,
             }),
           },
         }

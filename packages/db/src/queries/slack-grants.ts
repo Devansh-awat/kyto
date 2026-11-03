@@ -11,6 +11,7 @@ export type { SlackGrant, SlackGrantSecret } from '../schema/slack-grants';
 const publicColumns = {
   createdAt: userSlackGrants.createdAt,
   scopes: userSlackGrants.scopes,
+  skipConfirm: userSlackGrants.skipConfirm,
   teamId: userSlackGrants.teamId,
   updatedAt: userSlackGrants.updatedAt,
   userId: userSlackGrants.userId,
@@ -61,4 +62,17 @@ export async function upsertSlackGrant(input: {
 
 export async function deleteSlackGrant(userId: string): Promise<void> {
   await db.delete(userSlackGrants).where(eq(userSlackGrants.userId, userId));
+}
+
+export async function setSlackGrantSkipConfirm({
+  skipConfirm,
+  userId,
+}: {
+  skipConfirm: boolean;
+  userId: string;
+}): Promise<void> {
+  await db
+    .update(userSlackGrants)
+    .set({ skipConfirm })
+    .where(eq(userSlackGrants.userId, userId));
 }

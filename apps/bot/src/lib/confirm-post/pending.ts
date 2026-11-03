@@ -14,7 +14,8 @@ import type { ResolvedIdentity } from '@/lib/identity';
 // WHICH human is fixed here, when the request is MADE, and re-checked at click
 // time (`approverUserId`) — never taken from whoever clicked. Normally the owner;
 // for a post wearing someone's name and picture it is THAT PERSON, since consent
-// to be impersonated is theirs to give (owner's call, 2026-07-30).
+// to be impersonated is theirs to give (owner's call, 2026-07-30); and for
+// anything done from someone's own account it is them (owner's call, 2026-11-03).
 
 export type PendingPost =
   | {
@@ -35,10 +36,12 @@ export type PendingPost =
     }
   | {
       kind: 'sendAsUser';
+      // Whose account it goes out from, and so whose click sends it: these
+      // kinds only ever act as the person who asked.
       requestedBy: string;
-      // Either a channel to post into, or a user to DM as the owner. When
-      // targetUser is set, the IM channel is opened at send time with the
-      // owner's token — the confirm preview names the person, not a raw D-id.
+      // Either a channel to post into, or a user to DM as them. When
+      // targetUser is set, the IM channel is opened at send time with their
+      // token — the confirm preview names the person, not a raw D-id.
       targetChannel?: string;
       targetUser?: string;
       text: string;
@@ -54,6 +57,13 @@ export type PendingPost =
       messageTs: string;
       text: string;
       blocks?: unknown[];
+      summary: string;
+    }
+  | {
+      kind: 'deleteAsUser';
+      requestedBy: string;
+      targetChannel: string;
+      messageTs: string;
       summary: string;
     };
 

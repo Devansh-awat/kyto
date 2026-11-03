@@ -30,7 +30,12 @@ function preview(text: string): string {
 }
 
 function confirmBlocks(id: string, post: PendingPost): unknown[] {
-  const bodyPreview = post.kind === 'postMessage' ? post.body : post.text;
+  let bodyPreview = '';
+  if (post.kind === 'postMessage') {
+    bodyPreview = post.body;
+  } else if (post.kind !== 'deleteAsUser') {
+    bodyPreview = post.text;
+  }
   // A person asked to lend their face gets a different headline: they are not
   // approving kyto's outbound post in general, they are deciding whether a
   // message may go out under their name and picture.
@@ -51,6 +56,19 @@ function confirmBlocks(id: string, post: PendingPost): unknown[] {
           },
         ]
       : []),
+    // Their own account: the waiver is theirs to make, so say where it is.
+    ...(post.kind === 'postMessage'
+      ? []
+      : [
+          {
+            elements: [
+              mrkdwn(
+                "_Don't want to be asked? Turn confirmations off in kyto's App Home, under Your Slack account._"
+              ),
+            ],
+            type: 'context',
+          },
+        ]),
     {
       type: 'actions',
       elements: [
@@ -85,10 +103,12 @@ function outcomeToResult(
   }
   // Named rather than "the owner": for an impersonated post the decision was
   // someone else's, and the model must not tell the thread the owner refused.
-  const who =
-    post.kind === 'postMessage' && post.approverUserId
-      ? `<@${post.approverUserId}>`
-      : 'the owner';
+  let who = 'the owner';
+  if (post.kind !== 'postMessage') {
+    who = `<@${post.requestedBy}>`;
+  } else if (post.approverUserId) {
+    who = `<@${post.approverUserId}>`;
+  }
   if (outcome?.decision === 'denied') {
     return {
       denied: true,

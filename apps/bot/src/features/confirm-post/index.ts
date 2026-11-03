@@ -2,6 +2,7 @@ import { env } from '@/env';
 import type { ActionEvent } from '@/harness/types';
 import { executePostMessage } from '@/lib/ai/tools/post-message';
 import {
+  executeDeleteAsUser,
   executeEditAsUser,
   executeSendAsUser,
 } from '@/lib/ai/tools/send-as-user';
@@ -20,12 +21,14 @@ import logger from '@/lib/logger';
 import { errorMessage, toLogError } from '@/lib/utils/error';
 
 // Who this row's buttons belong to: the person named on it when the request was
-// MADE (an impersonated post asks the person being impersonated), else the owner.
-// Taken from the row, never from the click.
+// MADE (an impersonated post asks the person being impersonated; a send, edit or
+// delete from someone's own account asks them), else the owner. Taken from the
+// row, never from the click.
 function approverOf(post: PendingPost): string | undefined {
-  const designated =
-    post.kind === 'postMessage' ? post.approverUserId : undefined;
-  return designated ?? env.OWNER_USER_ID;
+  if (post.kind !== 'postMessage') {
+    return post.requestedBy;
+  }
+  return post.approverUserId ?? env.OWNER_USER_ID;
 }
 
 // The ephemeral is only shown to that person, but a crafted interaction payload
@@ -82,8 +85,10 @@ bot.onAction(CONFIRM_SEND_ACTION, async (event) => {
       result = { success: true, summary: `Sent — ${post.summary}.` };
     } else if (post.kind === 'sendAsUser') {
       result = await executeSendAsUser(post);
-    } else {
+    } else if (post.kind === 'editAsUser') {
       result = await executeEditAsUser(post);
+    } else {
+      result = await executeDeleteAsUser(post);
     }
     const detail = result.success
       ? (result.summary ?? 'Sent.')

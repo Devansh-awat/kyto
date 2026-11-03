@@ -196,7 +196,7 @@ export function postMessageTool({
   );
   const permission = isOwner
     ? 'Post to another target. Type must be thread, channel, or user.'
-    : 'You may post into the current thread freely, and `type: "channel"` on the channel you were mentioned in is delivered as a reply in that thread, because starting a top-level post is the owner\'s alone. A DM to the person who asked you for it (type user, their own id) is sent straight away; a DM to anyone else is held until the owner clicks Confirm, which can take a while or never come. Posting into a DIFFERENT channel is queued for the owner\'s approval: it is posted in this thread with Approve/Deny buttons, never expires, and nothing is sent unless they approve. Say it is waiting; do not claim it was sent, and do not look for another way to send it.';
+    : "You may post into the current thread freely, and `type: \"channel\"` on the channel you were mentioned in is delivered as a reply in that thread, because starting a top-level post is the owner's alone. A DM to the person who asked you for it (type user, their own id) is sent straight away; a DM to anyone else is held until the owner clicks Confirm, which can take a while or never come. If what they want is a message FROM THEM (under their own name, from their own Slack account), use `sendAsUser` instead: it needs only their own click, never the owner's. Posting into a DIFFERENT channel is queued for the owner's approval: it is posted in this thread with Approve/Deny buttons, never expires, and nothing is sent unless they approve. Say it is waiting; do not claim it was sent, and do not look for another way to send it.";
   let userAccountNote = '';
   if (userAccountConfigured) {
     userAccountNote = asUserAccount

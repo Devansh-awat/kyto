@@ -507,7 +507,34 @@ function slackGrantBlocks(grant: SlackGrant | null): SlackBlock[] {
         type: 'button',
       },
       text: mrkdwn(
-        '*Your Slack account*\nConnected — kyto can act as you where you ask it to.'
+        '*Your Slack account*\nConnected — kyto can act as you where you ask it to: send messages and DMs from your account, and edit or delete your own messages.'
+      ),
+      type: 'section',
+    },
+    {
+      accessory: {
+        action_id: 'home_toggle_slack_skip_confirm',
+        ...(grant.skipConfirm
+          ? {}
+          : {
+              confirm: {
+                confirm: plainText('Stop asking'),
+                deny: plainText('Keep asking'),
+                text: mrkdwn(
+                  'kyto will send, edit and delete as you the moment you (or something it reads, like a pasted message or a web page) asks it to — with no preview first. Only turn this off if you trust that.'
+                ),
+                title: plainText('Skip confirmations?'),
+              },
+            }),
+        text: plainText(grant.skipConfirm ? 'Ask me first' : 'Stop asking'),
+        type: 'button',
+        // The target state, so a stale home view can't flip it the wrong way.
+        value: grant.skipConfirm ? 'off' : 'on',
+      },
+      text: mrkdwn(
+        grant.skipConfirm
+          ? '*Confirmations:* off — kyto acts as you without asking.'
+          : '*Confirmations:* on — kyto shows you a preview with a Confirm button before anything goes out as you.'
       ),
       type: 'section',
     },

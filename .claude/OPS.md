@@ -209,6 +209,7 @@ ones are derived from everyone and stay.
 ALTER TABLE code_channels ADD COLUMN IF NOT EXISTS native boolean NOT NULL DEFAULT false;
 ALTER TABLE code_channels ADD COLUMN IF NOT EXISTS origin_thread_id text;
 ALTER TABLE code_channels ADD COLUMN IF NOT EXISTS canvas_views jsonb NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE user_slack_grants ADD COLUMN IF NOT EXISTS skip_confirm boolean NOT NULL DEFAULT false; -- 2026-11-03, a person waived the confirm click for acting as them
 ```
 
 Applied 2026-10-10 (`sudo -u postgres psql gorkie`). The four rows from before

@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import { boolean, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
 
 /**
  * A user's own Slack authorization for kyto ("connect your Slack account"), one
@@ -24,6 +24,11 @@ export const userSlackGrants = pgTable('user_slack_grants', {
   // should say so rather than fail with a bare `missing_scope`.
   scopes: text('scopes').notNull(),
   teamId: text('team_id').notNull(),
+  // The person turned off the Confirm click for things kyto does AS them
+  // (sendAsUser/editAsUser/deleteAsUser) from App Home. Off by default: the
+  // click is what stops a prompt injection from speaking under their name, so
+  // only they may waive it, and disconnecting (row deleted) restores it.
+  skipConfirm: boolean('skip_confirm').notNull().default(false),
   createdAt: timestamp('created_at', { withTimezone: true })
     .notNull()
     .defaultNow(),
