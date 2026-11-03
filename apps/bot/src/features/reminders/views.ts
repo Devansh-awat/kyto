@@ -105,12 +105,21 @@ function scheduleForm(
  * a named editor: an agent job's instructions are what it runs, and it runs as
  * its creator, so they show read-only.
  */
+const AS_USER_APPROVALS = {
+  ask: 'Ask me each time (a DM to approve)',
+  next: 'Next run only, then ask',
+  always: 'Every run, without asking',
+} as const;
+
 export function buildReminderModal({
   existing,
+  isCreator,
   mayChangeRuns,
   timezone,
 }: {
   existing?: Reminder;
+  /** Only the creator may lend the job their own Slack account. */
+  isCreator: boolean;
   mayChangeRuns: boolean;
   timezone: string;
 }): SlackModalView {
@@ -304,6 +313,26 @@ export function buildReminderModal({
       ),
       label: plainText('Also editable by'),
       optional: true,
+      type: 'input',
+    });
+  }
+
+  if (isCreator) {
+    const current = existing?.asUserApproval ?? 'ask';
+    blocks.push({
+      block_id: 'reminder_as_user',
+      element: {
+        action_id: 'as_user',
+        initial_option: option(current, AS_USER_APPROVALS[current]),
+        options: Object.entries(AS_USER_APPROVALS).map(([value, text]) =>
+          option(value, text)
+        ),
+        type: 'static_select',
+      },
+      hint: plainText(
+        'When the job sends, edits or deletes a message from YOUR Slack account (connect it in App Home). Only you see this setting.'
+      ),
+      label: plainText('May act as you'),
       type: 'input',
     });
   }

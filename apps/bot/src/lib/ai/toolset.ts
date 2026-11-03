@@ -403,7 +403,12 @@ export async function buildTools({
    * posts (null = the creator's DM). postMessage needs it to tell a post to
    * the job's own channel from one that would wait on a click nobody makes.
    */
-  reminderJob?: { channelId: string | null };
+  reminderJob?: {
+    channelId: string | null;
+    /** The job's own row, so sendAsUser &co can save a request against it. */
+    id: string;
+    asUserApproval: 'always' | 'ask' | 'next';
+  };
   /** Answering as kyto's user account: a subagent's report wakes it, too. */
   asUserAccount?: boolean;
   /**
@@ -428,6 +433,11 @@ export async function buildTools({
   // token from before grants existed.
   const canActAsSelf =
     slackOauthConfigured() || (Boolean(env.SLACK_USER_TOKEN) && isOwner);
+  // One per run, shared by the three as-you tools: a 'next run only' approval
+  // covers every action of THIS run, though it is spent on the first.
+  const asUserRun = reminderJob
+    ? { approval: reminderJob.asUserApproval, reminderId: reminderJob.id }
+    : undefined;
   const agentMailKey = env.AGENTMAIL_API_KEY;
   const redactEmail = !(unredactedEmail && isOwner);
 
@@ -1080,6 +1090,7 @@ export async function buildTools({
             summary:
               'send a Slack message or DM AS the person asking, from their own account',
             tool: sendAsUserTool({
+              asUserRun,
               authorUserId,
               extendAttemptDeadline,
               isOwner,
@@ -1090,6 +1101,7 @@ export async function buildTools({
           editAsUser: {
             summary: 'edit one of the asking person’s own Slack messages',
             tool: editAsUserTool({
+              asUserRun,
               authorUserId,
               extendAttemptDeadline,
               isOwner,
@@ -1100,6 +1112,7 @@ export async function buildTools({
           deleteAsUser: {
             summary: 'delete one of the asking person’s own Slack messages',
             tool: deleteAsUserTool({
+              asUserRun,
               authorUserId,
               extendAttemptDeadline,
               thread,

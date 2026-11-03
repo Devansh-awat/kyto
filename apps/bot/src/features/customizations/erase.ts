@@ -14,6 +14,7 @@ import {
   deleteThinkingForChannel,
   deleteThreadLogsForChannel,
   deleteThreadWakesByUser,
+  deleteUserAsUserRequests,
   deleteUserModelCredential,
   getUserCustomization,
   listMcpServers,
@@ -377,6 +378,8 @@ async function eraseSettings(userId: string): Promise<{
   await deleteChatgptAccount(userId).catch(() => undefined);
   // Their own Slack token (search-as-them, !secret): "everything" includes it.
   await deleteSlackGrant(userId).catch(() => undefined);
+  // So are the as-you requests their scheduled jobs left waiting on them.
+  await deleteUserAsUserRequests(userId).catch(() => undefined);
   // What they wrote for a channel goes too; the channel's creator can set it again.
   const channelInstructions = await deleteChannelInstructionsSetBy(
     userId

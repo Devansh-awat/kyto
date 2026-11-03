@@ -492,7 +492,9 @@ Four kinds, each recomputing its message at fire time except 'message':
 - 'bash': runs \`command\` and posts its exact stdout/stderr, prefixed by \`text\`. It runs in THIS THREAD'S sandbox, which persists. So write a script to a file now, and the reminder can run it on every fire. Min interval 5 minutes.
 - 'agent': runs \`text\` as instructions for a headless kyto with the full toolset (it can search, read Slack history, run bash, and decide what to say), and posts whatever it replies. Use this when the message must be computed fresh each time. Min interval 1 hour, since each fire is a real model run.
 
-Only the person who asked for it can change it later, unless they name other people in \`editors\`.`,
+Only the person who asked for it can change it later, unless they name other people in \`editors\`.
+
+An 'agent' job that sends, edits or deletes a message AS its creator (sendAsUser &co) DMs them a card to approve each one by default. Only they can pre-approve it (next run only, or every run), from the job's Edit in kyto's App Home; you cannot set that for them.`,
     inputSchema: z.object({
       text: z
         .string()

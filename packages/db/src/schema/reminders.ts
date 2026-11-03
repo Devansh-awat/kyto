@@ -130,6 +130,14 @@ export const reminders = pgTable(
     webhookSecret: text('webhook_secret'),
     // The cooldown's clock: two events a second apart fire once.
     lastFiredAt: timestamp('last_fired_at', { withTimezone: true }),
+    // May an unattended run of this job act AS its creator (sendAsUser &co)
+    // without asking: 'ask' (a DM card per action), 'next' (the next run only,
+    // reset once used) or 'always'. Only the creator sets it — it is their
+    // account, not the owner's or an editor's to lend.
+    asUserApproval: text('as_user_approval')
+      .$type<'always' | 'ask' | 'next'>()
+      .notNull()
+      .default('ask'),
     active: boolean('active').notNull().default(true),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()

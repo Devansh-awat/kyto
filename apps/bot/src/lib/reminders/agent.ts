@@ -252,7 +252,11 @@ async function runAgent(
         bot,
         getSandboxContext: () => sandboxContext,
         message,
-        reminderJob: { channelId: reminder.channelId },
+        reminderJob: {
+          asUserApproval: reminder.asUserApproval,
+          channelId: reminder.channelId,
+          id: reminder.id,
+        },
         thread,
         // A reminder fires on a schedule with nobody watching, so an MCP tool
         // set to ask permission refuses here rather than posting a button and

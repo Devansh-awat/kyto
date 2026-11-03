@@ -1,4 +1,11 @@
-import { boolean, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import {
+  boolean,
+  index,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+} from 'drizzle-orm/pg-core';
 
 /**
  * A user's own Slack authorization for kyto ("connect your Slack account"), one
@@ -45,3 +52,33 @@ export type SlackGrant = Omit<Row, 'encryptedToken'>;
 
 /** The grant WITH its ciphertext, for the bot's resolver only. */
 export type SlackGrantSecret = SlackGrant & { encryptedToken: string };
+
+/**
+ * Something an unattended run (a reminder firing) wanted to do AS a person —
+ * send, edit or delete from their account — saved for their click instead of
+ * blocking the run on it. The card is a DM; it can be answered after a restart
+ * or hours later, and `status = 'pending'` in the claiming UPDATE stops a
+ * double click from sending twice. `payload` is re-validated when clicked.
+ */
+export const asUserRequests = pgTable(
+  'as_user_requests',
+  {
+    id: text('id').primaryKey(),
+    // The person acted as: the only one whose click counts.
+    userId: text('user_id').notNull(),
+    reminderId: text('reminder_id'),
+    payload: jsonb('payload').notNull(),
+    summary: text('summary').notNull(),
+    // pending → sending → sent | failed; or cancelled.
+    status: text('status').notNull().default('pending'),
+    cardChannel: text('card_channel'),
+    cardTs: text('card_ts'),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+  },
+  (table) => [index('as_user_requests_user_idx').on(table.userId)]
+);
+
+export type AsUserRequest = typeof asUserRequests.$inferSelect;

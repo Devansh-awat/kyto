@@ -210,6 +210,8 @@ ALTER TABLE code_channels ADD COLUMN IF NOT EXISTS native boolean NOT NULL DEFAU
 ALTER TABLE code_channels ADD COLUMN IF NOT EXISTS origin_thread_id text;
 ALTER TABLE code_channels ADD COLUMN IF NOT EXISTS canvas_views jsonb NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE user_slack_grants ADD COLUMN IF NOT EXISTS skip_confirm boolean NOT NULL DEFAULT false; -- 2026-11-03, a person waived the confirm click for acting as them
+ALTER TABLE reminders ADD COLUMN IF NOT EXISTS as_user_approval text NOT NULL DEFAULT 'ask'; -- 2026-11-03, may a job act as its creator
+CREATE TABLE IF NOT EXISTS as_user_requests (id text PRIMARY KEY, user_id text NOT NULL, reminder_id text, payload jsonb NOT NULL, summary text NOT NULL, status text NOT NULL DEFAULT 'pending', card_channel text, card_ts text, created_at timestamptz NOT NULL DEFAULT now(), decided_at timestamptz); CREATE INDEX IF NOT EXISTS as_user_requests_user_idx ON as_user_requests (user_id); -- 2026-11-03
 ```
 
 Applied 2026-10-10 (`sudo -u postgres psql gorkie`). The four rows from before

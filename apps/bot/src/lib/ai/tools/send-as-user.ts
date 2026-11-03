@@ -1,4 +1,10 @@
-import { getSlackGrant } from '@repo/db/queries';
+import { randomUUID } from 'node:crypto';
+import {
+  consumeNextRunAsUserApproval,
+  createAsUserRequest,
+  getSlackGrant,
+  setAsUserRequestCard,
+} from '@repo/db/queries';
 import { tool } from 'ai';
 import { z } from 'zod';
 import {
@@ -7,6 +13,8 @@ import {
   restoreAnnotatedMentions,
 } from '@/harness/markdown';
 import type { ThreadHandle as Thread } from '@/harness/thread';
+import { mrkdwn, plainText } from '@/harness/views';
+import { slack } from '@/lib/chat';
 import type { PendingPost } from '@/lib/confirm-post/pending';
 import { requestPostConfirmation } from '@/lib/confirm-post/request';
 import logger from '@/lib/logger';
@@ -93,6 +101,41 @@ async function openOwnDm(
   }
   return { channelId: result.channel.id };
 }
+
+/** A saved request's payload, re-validated when its card is clicked. */
+export const asUserPostSchema = z.discriminatedUnion('kind', [
+  z.object({
+    blocks: z.array(z.unknown()).optional(),
+    crossChannel: z.boolean(),
+    kind: z.literal('sendAsUser'),
+    requestedBy: z.string(),
+    summary: z.string(),
+    targetChannel: z.string().optional(),
+    targetUser: z.string().optional(),
+    text: z.string(),
+    threadTs: z.string().optional(),
+  }),
+  z.object({
+    blocks: z.array(z.unknown()).optional(),
+    kind: z.literal('editAsUser'),
+    messageTs: z.string(),
+    requestedBy: z.string(),
+    summary: z.string(),
+    targetChannel: z.string(),
+    text: z.string(),
+  }),
+  z.object({
+    kind: z.literal('deleteAsUser'),
+    messageTs: z.string(),
+    requestedBy: z.string(),
+    summary: z.string(),
+    targetChannel: z.string(),
+  }),
+]);
+
+export const AS_USER_SEND_ONCE_ACTION = 'as_user_send_once';
+export const AS_USER_ALWAYS_ACTION = 'as_user_always';
+export const AS_USER_CANCEL_ACTION = 'as_user_cancel';
 
 interface ActResult {
   error?: string;
@@ -232,7 +275,7 @@ export async function executeDeleteAsUser({
   return { success: true, summary: `Deleted <@${requestedBy}>'s message.` };
 }
 
-function executeAsUser(post: AsUserPost): Promise<ActResult> {
+export function executeAsUser(post: AsUserPost): Promise<ActResult> {
   if (post.kind === 'sendAsUser') {
     return executeSendAsUser(post);
   }
@@ -242,20 +285,108 @@ function executeAsUser(post: AsUserPost): Promise<ActResult> {
   return executeDeleteAsUser(post);
 }
 
+/** A reminder run's standing permission to act as its creator. */
+interface AsUserRun {
+  approval: 'always' | 'ask' | 'next';
+  reminderId: string;
+}
+
+/**
+ * A reminder run can't wait on a click, so the action is SAVED and its creator
+ * gets a DM card: send it once, send it and stop asking for this reminder, or
+ * cancel. Answerable for a day, across restarts (`as_user_requests`).
+ */
+async function saveForLater({
+  post,
+  reminderId,
+}: {
+  post: AsUserPost;
+  reminderId: string;
+}): Promise<ActResult & { queued?: boolean }> {
+  const id = randomUUID();
+  await createAsUserRequest({
+    id,
+    payload: post,
+    reminderId,
+    summary: post.summary,
+    userId: post.requestedBy,
+  });
+  const preview =
+    post.kind === 'deleteAsUser' ? '' : post.text.trim().slice(0, 500);
+  const card = await slack.webClient.chat.postMessage({
+    blocks: [
+      {
+        text: mrkdwn(
+          `:alarm_clock: *Your scheduled job wants to act as you*\n${post.summary}`
+        ),
+        type: 'section',
+      },
+      ...(preview
+        ? [{ text: mrkdwn(`>>> ${preview}`), type: 'section' as const }]
+        : []),
+      {
+        elements: [
+          {
+            action_id: AS_USER_SEND_ONCE_ACTION,
+            style: 'primary',
+            text: plainText('Send this once'),
+            type: 'button',
+            value: id,
+          },
+          {
+            action_id: AS_USER_ALWAYS_ACTION,
+            text: plainText('Always for this job'),
+            type: 'button',
+            value: id,
+          },
+          {
+            action_id: AS_USER_CANCEL_ACTION,
+            style: 'danger',
+            text: plainText('Cancel'),
+            type: 'button',
+            value: id,
+          },
+        ],
+        type: 'actions',
+      },
+      {
+        elements: [
+          mrkdwn(
+            '_Good for 24 hours. "Always" sends this and lets this job act as you from now on; change it in App Home._'
+          ),
+        ],
+        type: 'context',
+      },
+    ],
+    channel: post.requestedBy,
+    text: `Your scheduled job wants to ${post.summary}`,
+  });
+  if (card.channel && card.ts) {
+    await setAsUserRequestCard({ channel: card.channel, id, ts: card.ts });
+  }
+  return {
+    queued: true,
+    success: false,
+    summary: `Not done yet: saved for <@${post.requestedBy}> to approve from a DM (to ${post.summary}); it goes out when they click. Do NOT retry it or send it another way, and don't call it sent. Carry on with the rest of the job.`,
+  };
+}
+
 /**
  * Run an as-the-person action: straight away if THEY turned the click off in
- * App Home, otherwise behind their own Confirm button (a prompt injection can
- * ask, not press). An unattended run has nobody to press it, so it refuses
- * rather than block ten minutes on a button no one will see.
+ * App Home (or pre-approved this reminder), otherwise behind their own Confirm
+ * button — a prompt injection can ask, not press. A reminder run saves it for a
+ * later click instead; any other unattended run refuses.
  */
 async function confirmOrRun({
   abortSignal,
+  asUserRun,
   extendAttemptDeadline,
   post,
   thread,
   unattended,
 }: {
   abortSignal?: AbortSignal;
+  asUserRun?: AsUserRun;
   extendAttemptDeadline?: (extraMs: number) => () => void;
   post: AsUserPost;
   thread: Thread;
@@ -268,6 +399,23 @@ async function confirmOrRun({
       '[sendAsUser] ran without a confirm click (turned off in App Home)'
     );
     return await executeAsUser(post);
+  }
+  if (asUserRun && asUserRun.approval !== 'ask') {
+    if (asUserRun.approval === 'next') {
+      await consumeNextRunAsUserApproval(asUserRun.reminderId);
+    }
+    logger.info(
+      {
+        approval: asUserRun.approval,
+        kind: post.kind,
+        reminderId: asUserRun.reminderId,
+      },
+      "[sendAsUser] ran on the reminder creator's pre-approval"
+    );
+    return await executeAsUser(post);
+  }
+  if (asUserRun) {
+    return await saveForLater({ post, reminderId: asUserRun.reminderId });
   }
   if (unattended) {
     return {
@@ -285,6 +433,7 @@ async function confirmOrRun({
 }
 
 interface AsUserToolOptions {
+  asUserRun?: AsUserRun;
   authorUserId: string;
   extendAttemptDeadline?: (extraMs: number) => () => void;
   isOwner: boolean;
@@ -324,6 +473,7 @@ function resolveChannelArg(
  * stages the post and shows THEM a confirm button.
  */
 export function sendAsUserTool({
+  asUserRun,
   authorUserId,
   extendAttemptDeadline,
   isOwner,
@@ -424,6 +574,15 @@ export function sendAsUserTool({
         const targetChannel = resolvedUser
           ? undefined
           : (target.channel ?? currentChannelId);
+        // Their own DM with kyto: a message from them there is just a new
+        // message TO kyto, which would start another turn.
+        if (targetChannel?.startsWith('D')) {
+          return {
+            error:
+              'That is their DM with kyto, so a message from them there would only be talking to kyto. Pass userId to DM someone, or channelId to post in a channel.',
+            success: false,
+          };
+        }
         let summary = 'send as YOU in this thread';
         if (resolvedUser) {
           summary = `send as YOU in a DM to <@${resolvedUser}>`;
@@ -432,6 +591,7 @@ export function sendAsUserTool({
         }
         return await confirmOrRun({
           abortSignal,
+          asUserRun,
           extendAttemptDeadline,
           post: {
             blocks: safeBlocks,
@@ -460,6 +620,7 @@ export function sendAsUserTool({
  * sendAsUser — editing under someone's name is as outward-facing as posting.
  */
 export function editAsUserTool({
+  asUserRun,
   authorUserId,
   extendAttemptDeadline,
   isOwner,
@@ -524,6 +685,7 @@ export function editAsUserTool({
         const restored = restoreAnnotatedMentions(text);
         return await confirmOrRun({
           abortSignal,
+          asUserRun,
           extendAttemptDeadline,
           post: {
             blocks:
@@ -551,6 +713,7 @@ export function editAsUserTool({
  * undone, so it waits for their click like a send unless they waived it.
  */
 export function deleteAsUserTool({
+  asUserRun,
   authorUserId,
   extendAttemptDeadline,
   thread,
@@ -589,6 +752,7 @@ export function deleteAsUserTool({
         const targetChannel = target.channel ?? currentChannelId;
         return await confirmOrRun({
           abortSignal,
+          asUserRun,
           extendAttemptDeadline,
           post: {
             kind: 'deleteAsUser',

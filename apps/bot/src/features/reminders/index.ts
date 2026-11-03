@@ -37,6 +37,7 @@ import {
 // is re-checked when the modal opens AND when it is submitted.
 
 const metadataSchema = z.object({ id: z.string().min(1) });
+const asUserApprovalSchema = z.enum(['always', 'ask', 'next']);
 const unitSchema = z.enum(
   Object.keys(EVERY_UNITS) as [EveryUnit, ...EveryUnit[]]
 );
@@ -111,6 +112,7 @@ async function openModal({
   }
   const view = buildReminderModal({
     ...(found ? { existing: found.reminder } : {}),
+    isCreator: !found || found.reminder.userId === userId,
     mayChangeRuns: found?.mayChangeRuns ?? true,
     timezone: await userTimezone(userId),
   });
@@ -327,6 +329,11 @@ bot.onModalSubmit(
       };
     }
     const creatorId = existing?.userId ?? userId;
+    // Only the creator's own pick counts; the field isn't shown to anyone else.
+    const asUserApproval =
+      creatorId === userId
+        ? asUserApprovalSchema.safeParse(values.reminder_as_user).data
+        : undefined;
     const editors = (event.multiValues?.reminder_editors ?? []).filter(
       (editor) => editor !== creatorId
     );
@@ -343,9 +350,11 @@ bot.onModalSubmit(
           ...(mayChangeRuns
             ? { editorUserIds: editors.length > 0 ? editors : null }
             : {}),
+          ...(asUserApproval ? { asUserApproval } : {}),
         });
       } else if (nextSchedule) {
         saved = await createReminder({
+          ...(asUserApproval ? { asUserApproval } : {}),
           channelId: channel,
           editorUserIds: editors.length > 0 ? editors : null,
           kind,

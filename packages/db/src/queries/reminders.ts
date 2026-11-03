@@ -31,11 +31,13 @@ export async function createReminder(input: {
   threadId?: string | null;
   trigger?: ReminderTrigger | null;
   webhookSecret?: string | null;
+  asUserApproval?: 'always' | 'ask' | 'next';
 }): Promise<Reminder> {
   const nextRunAt = computeNextRun(input.schedule, new Date());
   const values: NewReminder = {
     userId: input.userId,
     editorUserIds: input.editorUserIds ?? null,
+    asUserApproval: input.asUserApproval ?? 'ask',
     text: input.text,
     channelId: input.channelId ?? null,
     maxRuns: input.maxRuns ?? null,
@@ -121,6 +123,7 @@ export async function updateReminder(input: {
   editorUserIds?: string[] | null;
   maxRuns?: number | null;
   schedule?: ReminderSchedule;
+  asUserApproval?: 'always' | 'ask' | 'next';
 }): Promise<Reminder | null> {
   const { id, schedule, ...rest } = input;
   const patch: Partial<NewReminder> = { ...rest };
