@@ -17,9 +17,16 @@ import { withGhPrefixes } from '@/lib/ai/tools/gh-prefix';
 
 const SHELL_TOOLS = new Set(['bash', 'gh', 'runBackgroundProcess']);
 
-// Outside quotes: anything that could chain, redirect, substitute, glob or
-// escape. `&&`, a `| tail` and `2>&1` are recognised before this is applied.
-const UNSAFE = /[;&|<>`$(){}*?~!#\\\n\r\0[\]]/;
+// Outside quotes: anything that could chain, redirect, substitute or escape.
+// `&&`, `||`, `;`, pipes, `$NAME`, `2>&1` and a redirect to /dev/null are
+// recognised before this is applied. Globs (`*.ts`, `~`) are only file names
+// to a command that reads, so they pass (#26: this is a cost gate).
+const UNSAFE = /[;&|<>`$(){}!#\\\n\r\0]/;
+// `$HOME`, `${f}`: a variable is a value, not a command. `$(…)` still isn't.
+const VARIABLE = /^\$(?:\{\w+\}|[A-Za-z_]\w*)/;
+// Output thrown away or merged changes nothing a command does.
+const NULL_REDIRECT =
+  /^(?:[012]?>>?|&>>?|<)\s*\/dev\/null(?=[\s;&|]|$)|^[12]?>&[12](?=[\s;&|]|$)/;
 // Read a double-quoted string the way bash does: `\` escapes the next
 // character (a PR body's markdown is full of \`code\`), and an unescaped `$` or
 // backtick still expands, so it is refused. Returns the text and where it ends.
@@ -34,7 +41,16 @@ function readDoubleQuoted(
     if (char === '"') {
       return { end: i + 1, text };
     }
-    if (char === '$' || char === '`') {
+    if (char === '$') {
+      const variable = VARIABLE.exec(command.slice(i));
+      if (!variable) {
+        return null;
+      }
+      text += variable[0];
+      i += variable[0].length;
+      continue;
+    }
+    if (char === '`') {
       return null;
     }
     if (char === '\\') {
@@ -49,9 +65,54 @@ function readDoubleQuoted(
 }
 
 const PLAIN = new Set([
+  '[',
+  'ag',
   'arch',
+  'b2sum',
+  'base64',
   'basename',
   'cat',
+  'cmp',
+  'column',
+  'comm',
+  'cut',
+  'diff',
+  'dig',
+  'fd',
+  'fdfind',
+  'fold',
+  'host',
+  'hexdump',
+  'jq',
+  'less',
+  'locale',
+  'lsof',
+  'lspci',
+  'lsusb',
+  'more',
+  'nl',
+  'nm',
+  'nslookup',
+  'objdump',
+  'od',
+  'printenv',
+  'printf',
+  'readelf',
+  'rev',
+  'rg',
+  'sleep',
+  'sort',
+  'ss',
+  'strings',
+  'tac',
+  'test',
+  'tr',
+  'type',
+  'uniq',
+  'xxd',
+  'yq',
+  'zcat',
+  'zipinfo',
   'cksum',
   'date',
   'df',
@@ -116,9 +177,85 @@ const FIND_ACTS =
 const DOWNLOAD_SENDS =
   /^(?:-d|--data(?:-\w+)?|-F|--form(?:-string)?|-T|--upload-file|-X|--request|-K|--config|--post-data|--post-file|--body-data|--body-file|--method|-e|--execute)(?:=|$)|^-[dFTXKe]./;
 // What a command's output may be piped into: these only filter what they read.
-const PIPE_FILTERS = new Set(['grep', 'head', 'tail', 'wc']);
+// `sed` and `awk` too, as long as they write no file and run nothing (#26).
+const PIPE_FILTERS = new Set([
+  'cat',
+  'column',
+  'cut',
+  'egrep',
+  'fgrep',
+  'grep',
+  'head',
+  'jq',
+  'less',
+  'nl',
+  'rev',
+  'rg',
+  'sort',
+  'tac',
+  'tail',
+  'tr',
+  'uniq',
+  'wc',
+  'xxd',
+  'yq',
+]);
+// `sed -i` edits files; awk can `system()` or print into a file or a pipe.
+const SED_WRITES = /^(?:-i|--in-place)/;
+const AWK_ACTS = /system|getline|[|>]/;
 
-const GIT_READ = new Set(['diff', 'log', 'rev-parse', 'show', 'status']);
+// Read-only git, flags and all (#26: `git remote -v`, `git diff --check` and
+// `git branch --show-current` were refused at 0.94-0.98 mid-turn on 2026-11-01).
+const GIT_READ = new Set([
+  'blame',
+  'cat-file',
+  'count-objects',
+  'describe',
+  'diff',
+  'for-each-ref',
+  'grep',
+  'log',
+  'ls-files',
+  'ls-remote',
+  'ls-tree',
+  'merge-base',
+  'name-rev',
+  'reflog',
+  'rev-list',
+  'rev-parse',
+  'shortlog',
+  'show',
+  'show-ref',
+  'status',
+  'whatchanged',
+]);
+// These read only in their listing forms.
+const GIT_LISTS: Record<string, (rest: string[]) => boolean> = {
+  config: (rest) =>
+    rest.some((arg) =>
+      ['--get', '--get-all', '--get-regexp', '--list', '-l'].includes(arg)
+    ),
+  remote: (rest) =>
+    rest.length === 0 ||
+    rest.every((arg) => arg === '-v' || arg === '--verbose') ||
+    ['get-url', 'show'].includes(rest[0] ?? ''),
+  stash: (rest) => rest[0] === 'list' || rest[0] === 'show',
+  tag: (rest) =>
+    rest.length === 0 || rest.some((arg) => arg === '-l' || arg === '--list'),
+  worktree: (rest) => rest[0] === 'list',
+};
+// Any program asked only for its version.
+const VERSION_FLAGS = new Set(['--version', '-V', '-v', 'version']);
+// Package managers asked what is installed.
+const PACKAGE_READS: Record<string, Set<string>> = {
+  bun: new Set(['pm']),
+  npm: new Set(['info', 'list', 'ls', 'outdated', 'view']),
+  pip: new Set(['freeze', 'list', 'show']),
+  pip3: new Set(['freeze', 'list', 'show']),
+};
+// `timeout 45 git clone …`, `time ls`, `sudo -n true`: the wrapper changes
+// nothing about what the command does.
+const TIMEOUT_FLAG = /^(?:-k|-s|--kill-after|--signal)$/;
 // `git branch NAME` creates one, so only its listing flags count as reading.
 const GIT_BRANCH_LISTS = new Set([
   '--all',
@@ -218,7 +355,8 @@ function tokenize(command: string): Token[] | null {
     if (char === ' ' || char === '\t') {
       endWord();
       i += 1;
-    } else if (command.startsWith('&&', i)) {
+    } else if (command.startsWith('&&', i) || command.startsWith('||', i)) {
+      // `a || b` may run either: each side passes on its own, like `&&`.
       endWord();
       tokens.push({ op: '&&' });
       i += 2;
@@ -232,9 +370,12 @@ function tokenize(command: string): Token[] | null {
       endWord();
       tokens.push({ op: '|' });
       i += 1;
-    } else if (word === undefined && command.startsWith('2>&1', i)) {
-      tokens.push({ op: '2>&1' });
-      i += 4;
+    } else if (word === undefined && NULL_REDIRECT.test(command.slice(i))) {
+      i += NULL_REDIRECT.exec(command.slice(i))?.[0].length ?? 1;
+    } else if (char === '$' && VARIABLE.test(command.slice(i))) {
+      const variable = VARIABLE.exec(command.slice(i))?.[0] ?? '$';
+      word = (word ?? '') + variable;
+      i += variable.length;
     } else if (char === "'") {
       const close = command.indexOf("'", i + 1);
       if (close === -1) {
@@ -260,44 +401,48 @@ function tokenize(command: string): Token[] | null {
   return tokens;
 }
 
-const TAIL_COUNT = /^-?\d+$/;
 const CD_PATH = /^[\w./-]+$/;
 
 // One `&&`-separated command's words, with a trailing `2>&1 | tail -N` peeled
 // off (it can't make the command code work). Null if any other operator is in it.
+function isFilter([name, ...args]: string[]): boolean {
+  if (!name) {
+    return false;
+  }
+  if (name === 'sed') {
+    return !args.some((arg) => SED_WRITES.test(arg));
+  }
+  if (name === 'awk') {
+    return !args.some((arg) => AWK_ACTS.test(arg));
+  }
+  if (name === 'tail') {
+    // `tail -f` never ends; everything else only reads.
+    return !args.some((arg) => /^-\w*f|^--follow/.test(arg));
+  }
+  return PIPE_FILTERS.has(name);
+}
+
+// One `&&`-separated command's words, with every `| filter` stage after it
+// checked and peeled off (they can't make the command code work). Null if a
+// stage isn't a filter or another operator is in it.
 function segmentArgv(tokens: Token[]): string[] | null {
-  let rest = tokens;
-  const pipe = rest.findIndex((token) => 'op' in token && token.op === '|');
-  if (pipe !== -1) {
-    const filter = rest
-      .slice(pipe + 1)
-      .map((token) => ('word' in token ? token.word : null));
-    const [name, ...args] = filter;
-    if (!(name && PIPE_FILTERS.has(name)) || args.some((arg) => arg === null)) {
-      return null;
+  const stages: string[][] = [[]];
+  for (const token of tokens) {
+    if ('op' in token) {
+      if (token.op === '|') {
+        stages.push([]);
+      } else if (token.op !== '2>&1') {
+        return null;
+      }
+    } else {
+      stages.at(-1)?.push(token.word);
     }
-    const count = args[0] === '-n' ? args.slice(1) : args;
-    if (
-      (name === 'head' || name === 'tail') &&
-      (count.length > 1 ||
-        (count[0] !== undefined && !TAIL_COUNT.test(count[0] ?? '')))
-    ) {
-      return null;
-    }
-    rest = rest.slice(0, pipe);
   }
-  const last = rest.at(-1);
-  if (last && 'op' in last && last.op === '2>&1') {
-    rest = rest.slice(0, -1);
+  const [first, ...filters] = stages;
+  if (!first || filters.some((stage) => !isFilter(stage))) {
+    return null;
   }
-  const argv: string[] = [];
-  for (const token of rest) {
-    if (!('word' in token)) {
-      return null;
-    }
-    argv.push(token.word);
-  }
-  return argv;
+  return first;
 }
 
 function isNotCodingGh(args: string[]): boolean {
@@ -338,6 +483,40 @@ function isNotCodingArgv([head, ...args]: string[]): boolean {
   if (!head || head.includes('=')) {
     return false;
   }
+  if (head === 'env') {
+    // Bare `env` lists; `env cmd` runs cmd.
+    return args.length === 0;
+  }
+  if (head === 'time' || head === 'nice') {
+    return isNotCodingArgv(args);
+  }
+  if (head === 'sudo') {
+    return isNotCodingArgv(args[0] === '-n' ? args.slice(1) : args);
+  }
+  if (head === 'timeout') {
+    let rest = args;
+    while (rest[0]?.startsWith('-')) {
+      rest = rest.slice(TIMEOUT_FLAG.test(rest[0] ?? '') ? 2 : 1);
+    }
+    return isNotCodingArgv(rest.slice(1));
+  }
+  if (args.length === 1 && VERSION_FLAGS.has(args[0] ?? '')) {
+    return true;
+  }
+  if (head in PACKAGE_READS) {
+    return PACKAGE_READS[head]?.has(args[0] ?? '') === true;
+  }
+  if (head === 'tar') {
+    // Listing an archive: `tar -tzf a.tgz`, `tar tf a.tar`.
+    const mode = (args[0] ?? '').replace(/^-/, '');
+    return mode.includes('t') && !/[xcru]/.test(mode);
+  }
+  if (head === 'unzip') {
+    return args.some((arg) => arg === '-l' || arg === '-v' || arg === '-Z');
+  }
+  if (head === 'sed' || head === 'awk') {
+    return isFilter([head, ...args]);
+  }
   if (head === 'cd') {
     return args.length === 1 && CD_PATH.test(args[0] ?? '');
   }
@@ -357,6 +536,10 @@ function isNotCodingArgv([head, ...args]: string[]): boolean {
     }
     if (sub === 'branch') {
       return rest.every((arg) => GIT_BRANCH_LISTS.has(arg));
+    }
+    const lists = sub === undefined ? undefined : GIT_LISTS[sub];
+    if (lists) {
+      return lists(rest);
     }
     if (sub !== undefined && GIT_FETCH.has(sub)) {
       const urls = rest.filter((arg) => /^[a-z][\w+.-]*:/i.test(arg));

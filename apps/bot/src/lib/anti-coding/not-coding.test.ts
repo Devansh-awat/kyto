@@ -73,7 +73,14 @@ describe('isNotCodingCall', () => {
       'echo alive\nnpm test',
       "echo 'unclosed",
       'A=1 ls',
-      'ls *.ts',
+      'env node x.js',
+      'ls | xargs rm',
+      'ls | tee f',
+      "cat a | sed -i 's/a/b/' f",
+      'awk \'{ system("id") }\' f',
+      'echo a >> f',
+      'timeout 5 npm test',
+      'sudo bash install.sh',
     ]) {
       expect(bash(command)).toBe(false);
     }
@@ -136,7 +143,7 @@ describe('isNotCodingCall', () => {
       'gh pr create --title x --body "`id`"',
       'gh pr create --title x --body "a \\\\`id`"',
       'cd $HOME && git status',
-      'git status ||  true',
+      'git status || npm test',
     ]) {
       expect(gh(command)).toBe(false);
     }
@@ -192,6 +199,38 @@ describe('isNotCodingCall', () => {
       'curl -fsSL -o /tmp/install.sh https://example.com/install.sh && head -n 20 /tmp/install.sh && sha256sum /tmp/install.sh',
       'wget -q -O /tmp/a.zip https://example.com/a.zip',
       'ls /etc | wc -l',
+    ]) {
+      expect(bash(command)).toBe(true);
+    }
+  });
+
+  test('read-only work always skips Jev, however it is written (#26)', () => {
+    for (const command of [
+      'git remote -v',
+      'git diff --check && git branch --show-current',
+      'git remote -v && git branch --show-current && git status --short && git diff --check && git diff --stat',
+      'git status --short && git diff --stat && git diff -- nephthys/macros/forward.py nephthys/events/message_creation.py',
+      'git log --oneline -20 2>/dev/null | head -5',
+      'git ls-files | grep -c py',
+      'git config --get remote.origin.url',
+      'git tag -l',
+      'ls *.ts',
+      'cat ~/notes.txt',
+      'ls "$HOME" && echo ${PWD}',
+      'grep -rn foo src 2>/dev/null | sort | uniq -c | sort -rn | head -20',
+      "sed -n '1,40p' src/a.ts",
+      "awk '{print $1}' access.log | sort | uniq -c",
+      'cat package.json | jq .dependencies',
+      'timeout 45 git clone --depth 1 https://github.com/o/r /tmp/r',
+      'time ls -la',
+      'sudo -n true || echo no sudo',
+      'node --version && python3 --version',
+      'pip list | grep requests',
+      'tar -tzf a.tgz | head',
+      'unzip -l a.zip',
+      'readelf -h a.out && objdump -d a.o | head -50',
+      'test -f a.txt && echo yes || echo no',
+      'rg -n TODO --type ts &>/dev/null',
     ]) {
       expect(bash(command)).toBe(true);
     }
