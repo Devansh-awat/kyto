@@ -52,6 +52,7 @@ import {
 } from './tools/canvas';
 import {
   createChannelTool,
+  inviteToChannelTool,
   joinChannelTool,
   setChannelTopicTool,
 } from './tools/channels';
@@ -263,11 +264,13 @@ const EFFECT_TOOLS = new Set([
   'deploySite',
   'editAsUser',
   'editReminder',
+  'inviteToChannel',
   'joinChannel',
   // Each posts into the thread: re-run after a restart, a user got the
   // same jar twice (#99).
   'embed',
   'generateImage',
+  'inviteToChannel',
   'mermaid',
   'pauseReminder',
   'npsSurvey',
@@ -289,6 +292,7 @@ const EFFECT_TOOLS = new Set([
   'unpinMessage',
   'uploadFile',
   'wake',
+  'withdrawApproval',
 ]);
 
 function isFailedResult(result: unknown): boolean {
@@ -913,6 +917,11 @@ export async function buildTools({
       summary:
         'join a public Slack channel when asked to (channel membership, not a thread)',
       tool: joinChannelTool({ authorUserId }),
+    },
+    inviteToChannel: {
+      summary:
+        'invite people into a public channel the asker is in (says who asked)',
+      tool: inviteToChannelTool({ authorUserId, isOwner }),
     },
     codeChannel: {
       summary:

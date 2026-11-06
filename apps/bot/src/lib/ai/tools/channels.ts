@@ -4,6 +4,7 @@ import type { ThreadHandle as Thread } from '@/harness/thread';
 import { slack } from '@/lib/chat';
 import logger from '@/lib/logger';
 import { creditChange } from '@/lib/slack/change-notice';
+import { isMember } from '@/lib/slack/channel-access';
 import { errorMessage } from '@/lib/utils/error';
 
 const createChannelSchema = z.looseObject({
@@ -336,6 +337,218 @@ export function joinChannelTool({ authorUserId }: { authorUserId: string }) {
       } catch (error) {
         logger.warn({ error: errorMessage(error) }, '[joinChannel] failed');
         return { error: errorMessage(error), joined: false };
+      }
+    },
+  });
+}
+
+// Why Slack refused an invite, in words a person can act on.
+const INVITE_ERRORS: Record<string, string> = {
+  already_in_channel: 'they are already in it',
+  cant_invite_self: "kyto can't invite itself (use joinChannel)",
+  is_archived: 'the channel is archived',
+  restricted_action:
+    "the workspace's settings don't let apps invite people there",
+  user_is_restricted:
+    "they're a guest, and a guest can only be added by an admin",
+  user_not_found: 'no such user',
+};
+const MAX_INVITES = 10;
+
+/**
+ * Invite people into a PUBLIC channel (owner's call 2026-11-06, #170): anyone
+ * may ask, as long as THEY are in that channel, so kyto only does what the
+ * asker could do with `/invite` themselves. Who asked is always said: in the
+ * channel where ordinary members post, else in a DM to each person added.
+ */
+export function inviteToChannelTool({
+  authorUserId,
+  isOwner,
+}: {
+  authorUserId: string;
+  isOwner: boolean;
+}) {
+  return tool({
+    description:
+      "Invite people into a PUBLIC Slack channel, when someone asks you to add or invite a person to a channel. The person asking must be in that channel themselves. kyto joins first if it isn't in it, then says who asked: in the channel when ordinary members can post there, otherwise in a DM to each person added. Private channels can't be done this way. Say someone was added only for the users it returns as invited.",
+    inputSchema: z.object({
+      channelId: z
+        .string()
+        .min(1)
+        .describe('The channel id (C…), or its <#C…|name> mention.'),
+      userIds: z
+        .array(z.string().min(1))
+        .min(1)
+        .max(MAX_INVITES)
+        .describe('The people to invite: user ids (U…/W…) or <@U…> mentions.'),
+    }),
+    execute: async ({ channelId: raw, userIds }) => {
+      const channel = /C[A-Z0-9]{6,}/.exec(raw)?.[0];
+      if (!channel) {
+        return {
+          error: `"${raw}" isn't a channel id (C…). Find the channel's id first.`,
+          success: false,
+        };
+      }
+      const users = [
+        ...new Set(
+          userIds
+            .map((user) => /[UW][A-Z0-9]{6,}/.exec(user)?.[0])
+            .filter((user): user is string => Boolean(user))
+        ),
+      ];
+      if (users.length === 0) {
+        return {
+          error:
+            'None of those are Slack user ids (U…). Look the people up first.',
+          success: false,
+        };
+      }
+      try {
+        const info = channelInfoSchema.parse(
+          await slack.webClient.apiCall('conversations.info', { channel })
+        );
+        const found = info.channel;
+        if (!(info.ok && found)) {
+          return {
+            error: `Couldn't look that channel up (${info.error ?? 'unknown error'}).`,
+            success: false,
+          };
+        }
+        if (found.is_private || found.is_im || found.is_mpim) {
+          return {
+            error:
+              'That channel is private: kyto only invites into public channels. Someone in it can `/invite` them.',
+            success: false,
+          };
+        }
+        if (found.is_archived) {
+          return { error: 'That channel is archived.', success: false };
+        }
+        // The rule that makes this safe: kyto adds people only where the asker
+        // could, being a member. Fails closed on a lookup error.
+        const askerIn =
+          isOwner ||
+          (await isMember({ channel, userId: authorUserId }).catch(
+            () => false
+          ));
+        if (!askerIn) {
+          return {
+            error: `<@${authorUserId}> isn't in <#${channel}>, so kyto won't add people there for them. Someone in the channel can ask, or they can join it first.`,
+            success: false,
+          };
+        }
+        if (!found.is_member) {
+          const joined = okSchema.parse(
+            await slack.webClient.apiCall('conversations.join', { channel })
+          );
+          if (!joined.ok) {
+            const code = joined.error ?? 'unknown_error';
+            return {
+              error: `kyto has to be in the channel to invite people, and Slack refused the join (${code}): ${JOIN_ERRORS[code] ?? 'see the error code'}.`,
+              success: false,
+            };
+          }
+        }
+        const result = z
+          .looseObject({
+            error: z.string().optional(),
+            errors: z
+              .array(
+                z.looseObject({
+                  error: z.string().optional(),
+                  user: z.string().optional(),
+                })
+              )
+              .optional(),
+            ok: z.boolean(),
+          })
+          .parse(
+            await slack.webClient
+              .apiCall('conversations.invite', {
+                channel,
+                // One bad user doesn't stop the rest.
+                force: true,
+                users: users.join(','),
+              })
+              .catch((error: unknown) => ({
+                error: errorMessage(error).replace(
+                  /^An API error occurred: /,
+                  ''
+                ),
+                ok: false,
+              }))
+          );
+        const failed = new Map<string, string>();
+        for (const entry of result.errors ?? []) {
+          if (entry.user) {
+            failed.set(entry.user, entry.error ?? 'unknown_error');
+          }
+        }
+        if (!result.ok && failed.size === 0) {
+          for (const user of users) {
+            failed.set(user, result.error ?? 'unknown_error');
+          }
+        }
+        const invited = users.filter((user) => !failed.has(user));
+        const refused = [...failed].map(
+          ([user, code]) => `<@${user}>: ${INVITE_ERRORS[code] ?? code}`
+        );
+        let told: string | undefined;
+        if (invited.length > 0) {
+          const people = invited.map((user) => `<@${user}>`).join(', ');
+          const posters = found.properties?.posting_restricted_to?.type;
+          const openChannel = !posters?.every((type) =>
+            STAFF_POSTERS.has(type)
+          );
+          const inChannel = openChannel
+            ? okSchema.parse(
+                await slack.webClient
+                  .apiCall('chat.postMessage', {
+                    channel,
+                    text: `_<@${authorUserId}> asked me to add ${people}_`,
+                  })
+                  .catch(() => ({ ok: false }))
+              ).ok
+            : false;
+          if (inChannel) {
+            told = 'said in the channel who asked';
+          } else {
+            for (const user of invited) {
+              await slack.webClient
+                .apiCall('chat.postMessage', {
+                  channel: user,
+                  text: `_<@${authorUserId}> asked me to add you to <#${channel}>_`,
+                })
+                .catch(() => undefined);
+            }
+            told = 'told each person added, in a DM, who asked';
+          }
+        }
+        logger.info(
+          {
+            channel,
+            invited,
+            refused: [...failed.keys()],
+            requestedBy: authorUserId,
+          },
+          '[inviteToChannel] invited'
+        );
+        return {
+          invited,
+          success: invited.length > 0,
+          summary: [
+            invited.length > 0
+              ? `Added ${invited.map((user) => `<@${user}>`).join(', ')} to <#${channel}> and ${told}.`
+              : `Nobody was added to <#${channel}>.`,
+            refused.length > 0 ? `Not added: ${refused.join('; ')}.` : '',
+          ]
+            .filter(Boolean)
+            .join(' '),
+        };
+      } catch (error) {
+        logger.warn({ error: errorMessage(error) }, '[inviteToChannel] failed');
+        return { error: errorMessage(error), success: false };
       }
     },
   });

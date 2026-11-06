@@ -42,10 +42,11 @@ const GROUPS = {
   },
   channelAdmin: {
     question:
-      'Will the assistant need to create or join a Slack channel, set a channel topic, add a bookmark, or pin or unpin a message?',
+      'Will the assistant need to create or join a Slack channel, invite someone into one, set a channel topic, add a bookmark, or pin or unpin a message?',
     tools: [
       'createChannel',
       'joinChannel',
+      'inviteToChannel',
       'setChannelTopic',
       'bookmarkLink',
       'pinMessage',
