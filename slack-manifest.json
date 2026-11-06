@@ -94,6 +94,7 @@
       ],
       "user": [
         "chat:write",
+        "files:write",
         "groups:history",
         "im:history",
         "im:write",

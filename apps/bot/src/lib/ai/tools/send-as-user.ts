@@ -18,7 +18,11 @@ import { slack } from '@/lib/chat';
 import type { PendingPost } from '@/lib/confirm-post/pending';
 import { requestPostConfirmation } from '@/lib/confirm-post/request';
 import logger from '@/lib/logger';
-import { normalizeSlackChannelArg, toRawSlackUserId } from '@/lib/slack/ids';
+import {
+  normalizeSlackChannelArg,
+  parseSlackPermalink,
+  toRawSlackUserId,
+} from '@/lib/slack/ids';
 import { askerSlackToken, slackAuthorizeUrl } from '@/lib/slack-oauth';
 import { errorMessage } from '@/lib/utils/error';
 import { parseBlocks } from './post-message';
@@ -28,6 +32,18 @@ const postMessageSchema = z.looseObject({
   ok: z.boolean(),
   ts: z.string().optional(),
 });
+
+const uploadUrlSchema = z.looseObject({
+  error: z.string().optional(),
+  file_id: z.string().optional(),
+  ok: z.boolean(),
+  upload_url: z.string().optional(),
+});
+
+// Slack refuses image blocks pointing at its own private file URLs, and a
+// model with no upload in hand invented one (`T00000000-F00000000`, #187).
+const SLACK_FILE_URL =
+  /https?:\/\/(?:files\.slack\.com|[a-z0-9-]+\.slack-files\.com)\//i;
 
 const openDmSchema = z.looseObject({
   channel: z.looseObject({ id: z.string() }).optional(),
@@ -63,19 +79,41 @@ async function callSlackAsUser({
   token,
 }: {
   body: Record<string, unknown>;
-  method: 'chat.delete' | 'chat.postMessage' | 'chat.update';
+  method:
+    | 'chat.delete'
+    | 'chat.postMessage'
+    | 'chat.update'
+    | 'files.completeUploadExternal'
+    | 'files.getUploadURLExternal';
   token: string;
 }): Promise<z.infer<typeof postMessageSchema>> {
+  // The files.* methods take form fields (arrays as JSON strings), not JSON.
+  const form = method.startsWith('files.');
   const response = await fetch(`https://slack.com/api/${method}`, {
     signal: AbortSignal.timeout(15_000),
-    body: JSON.stringify(body),
+    body: form
+      ? new URLSearchParams(
+          Object.entries(body).map(([key, value]): [string, string] => [
+            key,
+            typeof value === 'string' ? value : JSON.stringify(value),
+          ])
+        )
+      : JSON.stringify(body),
     headers: {
       Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Type': form
+        ? 'application/x-www-form-urlencoded'
+        : 'application/json; charset=utf-8',
     },
     method: 'POST',
   });
   return postMessageSchema.parse(await response.json());
+}
+
+/** A reconnect line for a grant from before `files:write` was asked for. */
+function reconnectForFiles(userId: string): string {
+  const connect = slackAuthorizeUrl(userId);
+  return `<@${userId}>'s Slack connection is older than file sending, so kyto can't attach files as them yet.${connect ? ` They can reconnect here (only they can use this link) and ask again: ${connect}` : ''} Until then, send the text with sendAsUser and upload the file to this thread with uploadFile.`;
 }
 
 /**
@@ -107,6 +145,8 @@ export const asUserPostSchema = z.discriminatedUnion('kind', [
   z.object({
     blocks: z.array(z.unknown()).optional(),
     crossChannel: z.boolean(),
+    files: z.array(z.object({ id: z.string(), title: z.string() })).optional(),
+    inThread: z.string().optional(),
     kind: z.literal('sendAsUser'),
     requestedBy: z.string(),
     summary: z.string(),
@@ -158,6 +198,8 @@ export async function executeSendAsUser({
   text,
   blocks,
   threadTs,
+  inThread,
+  files,
   crossChannel,
 }: Omit<
   Extract<PendingPost, { kind: 'sendAsUser' }>,
@@ -178,19 +220,37 @@ export async function executeSendAsUser({
   if (!channel) {
     return { error: 'No target channel or user to send to.', success: false };
   }
-  const result = await callSlackAsUser({
-    body: {
-      channel,
-      text,
-      ...(blocks ? { blocks } : {}),
-      ...(!crossChannel && threadTs && { thread_ts: threadTs }),
-    },
-    method: 'chat.postMessage',
-    token: gate.token,
-  });
+  const replyTo = inThread ?? (crossChannel ? undefined : threadTs);
+  // With files, completing their upload IS the post: the text rides along as
+  // its message, so the files and the words land together.
+  const result =
+    files && files.length > 0
+      ? await callSlackAsUser({
+          body: {
+            channel_id: channel,
+            files,
+            ...(blocks ? { blocks } : { initial_comment: text }),
+            ...(replyTo && { thread_ts: replyTo }),
+          },
+          method: 'files.completeUploadExternal',
+          token: gate.token,
+        })
+      : await callSlackAsUser({
+          body: {
+            channel,
+            text,
+            ...(blocks ? { blocks } : {}),
+            ...(replyTo && { thread_ts: replyTo }),
+          },
+          method: 'chat.postMessage',
+          token: gate.token,
+        });
   if (!result.ok) {
     return {
-      error: `Failed to send as <@${requestedBy}>: ${result.error}`,
+      error:
+        result.error === 'missing_scope' && files?.length
+          ? reconnectForFiles(requestedBy)
+          : `Failed to send as <@${requestedBy}>: ${result.error}`,
       success: false,
     };
   }
@@ -200,17 +260,24 @@ export async function executeSendAsUser({
       '[sendAsUser] posted as a person outside the current channel'
     );
   }
+  const attached = files?.length
+    ? ` with ${files.map((file) => file.title).join(', ')} attached`
+    : '';
   if (targetUser) {
     return {
       success: true,
-      summary: `Sent the DM as <@${requestedBy}> to <@${targetUser}>.`,
+      summary: `Sent the DM as <@${requestedBy}> to <@${targetUser}>${attached}.`,
     };
+  }
+  let where = '';
+  if (inThread) {
+    where = ` in the thread in <#${channel}>`;
+  } else if (crossChannel) {
+    where = ` to <#${channel}>`;
   }
   return {
     success: true,
-    summary: crossChannel
-      ? `Sent the message as <@${requestedBy}> to <#${channel}>.`
-      : `Sent the message as <@${requestedBy}>.`,
+    summary: `Sent the message as <@${requestedBy}>${where}${attached}.`,
   };
 }
 
@@ -441,6 +508,12 @@ interface AsUserToolOptions {
   unattended?: boolean;
 }
 
+type StageFile = (input: { path: string }) => Promise<{
+  filename: string;
+  send: (uploadUrl: string) => Promise<void>;
+  size: number;
+}>;
+
 const CONFIRM_NOTE =
   "It waits for THEIR Confirm click (not the owner's) unless they turned confirmations off in kyto's App Home; the result says which. If they haven't connected their Slack account, the result has a link only they can use.";
 
@@ -468,6 +541,65 @@ function resolveChannelArg(
 }
 
 /**
+ * Upload a sandbox file with the ASKER's token, without sharing it: the
+ * upload URL is one-shot for that file, so the sandbox sends the bytes and the
+ * token stays on the host. It is only shared once the post is confirmed; an
+ * unconfirmed upload is discarded by Slack.
+ */
+async function stageForSend({
+  filePath,
+  requestedBy,
+  savedForLater,
+  stageFile,
+}: {
+  filePath: string;
+  requestedBy: string;
+  savedForLater: boolean;
+  stageFile?: StageFile;
+}): Promise<{ file: { id: string; title: string } } | { error: string }> {
+  if (!stageFile) {
+    return {
+      error:
+        'Attaching a file needs the sandbox, which this run has no access to.',
+    };
+  }
+  // A reminder's saved request waits up to a day for its card, longer than an
+  // unfinished upload is kept.
+  if (savedForLater) {
+    return {
+      error:
+        "A reminder run can't hold a file for the creator's approval card. Send the text, and say the file couldn't go with it.",
+    };
+  }
+  const gate = await actorToken(requestedBy);
+  if (!gate.ok) {
+    return { error: gate.error };
+  }
+  const grant = await getSlackGrant(requestedBy).catch(() => null);
+  if (grant && !grant.scopes.split(/[\s,]+/).includes('files:write')) {
+    return { error: reconnectForFiles(requestedBy) };
+  }
+  const file = await stageFile({ path: filePath });
+  const target = uploadUrlSchema.parse(
+    await callSlackAsUser({
+      body: { filename: file.filename, length: String(file.size) },
+      method: 'files.getUploadURLExternal',
+      token: gate.token,
+    })
+  );
+  if (!(target.ok && target.upload_url && target.file_id)) {
+    return {
+      error:
+        target.error === 'missing_scope'
+          ? reconnectForFiles(requestedBy)
+          : `Slack wouldn't take ${file.filename} from <@${requestedBy}>'s account: ${target.error ?? 'no upload URL'}`,
+    };
+  }
+  await file.send(target.upload_url);
+  return { file: { id: target.file_id, title: file.filename } };
+}
+
+/**
  * Send a message AS the person who asked, from their own Slack account — the
  * owner included. Never inline unless they waived the click in App Home: it
  * stages the post and shows THEM a confirm button.
@@ -477,11 +609,12 @@ export function sendAsUserTool({
   authorUserId,
   extendAttemptDeadline,
   isOwner,
+  stageFile,
   thread,
   unattended,
-}: AsUserToolOptions) {
+}: AsUserToolOptions & { stageFile?: StageFile }) {
   return tool({
-    description: `Send a message AS the person who asked you (from their own Slack account, under their own name), not as kyto. Only ever as them: there is no way to send as anyone else. Defaults to the current thread. Pass channelId to post a top-level message in a channel they are in, or userId to DM someone from their account. Pass \`blocks\` to send Block Kit (the text becomes the notification fallback). ${CONFIRM_NOTE}`,
+    description: `Send a message AS the person who asked you (from their own Slack account, under their own name), not as kyto. Only ever as them: there is no way to send as anyone else. Defaults to the current thread. Pass channelId to post a top-level message in a channel they are in, threadLink to reply inside a thread anywhere they can post (a Slack message link), or userId to DM someone from their account. Pass filePath to attach a file from the sandbox (a picture, a PDF): it goes out with the message, from their account. Never put a Slack file URL in blocks: those never display, so attach with filePath instead. Pass \`blocks\` to send Block Kit (the text becomes the notification fallback). ${CONFIRM_NOTE}`,
     inputSchema: z.object({
       text: z
         .string()
@@ -504,6 +637,20 @@ export function sendAsUserTool({
         .describe(
           'Target Slack user id (e.g. U0123ABC) to DM from their account. Mutually exclusive with channelId.'
         ),
+      threadLink: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          'A Slack message link (https://….slack.com/archives/C…/p…): the message is posted as a reply in THAT thread, in that channel. Use it for "post it as me in that thread". Not with channelId or userId.'
+        ),
+      filePath: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          'A file in the sandbox workspace to attach, sent from their account with the text as its message.'
+        ),
       blocks: z
         .string()
         .optional()
@@ -512,13 +659,20 @@ export function sendAsUserTool({
         ),
     }),
     execute: async (
-      { text, channelId, userId, blocks: rawBlocks },
+      { text, channelId, userId, threadLink, filePath, blocks: rawBlocks },
       { abortSignal }
     ) => {
       try {
-        if (channelId && userId) {
+        if ([channelId, userId, threadLink].filter(Boolean).length > 1) {
           return {
-            error: 'Pass channelId OR userId, not both.',
+            error: 'Pass only one of channelId, userId or threadLink.',
+            success: false,
+          };
+        }
+        const link = threadLink ? parseSlackPermalink(threadLink) : undefined;
+        if (link === null) {
+          return {
+            error: `"${threadLink}" is not a Slack message link. Pass the link to a message in the thread (Copy link in Slack).`,
             success: false,
           };
         }
@@ -534,7 +688,9 @@ export function sendAsUserTool({
         // timestamp mis-supplied as `channelId` (or a display name as `userId`)
         // otherwise sails through the gate and only fails deep in the Web API as
         // `channel_not_found` — sometimes after the click.
-        const target = resolveChannelArg(channelId);
+        const target = link
+          ? { channel: link.channelId }
+          : resolveChannelArg(channelId);
         if ('error' in target) {
           return { error: target.error, success: false };
         }
@@ -556,7 +712,20 @@ export function sendAsUserTool({
             return { error: parsed.error, success: false };
           }
           blocks = parsed.blocks;
+          if (SLACK_FILE_URL.test(rawBlocks)) {
+            return {
+              error:
+                'blocks point at a Slack file URL, which never displays in a block (and one made up is a broken link). Attach the file with filePath instead, or leave the image out.',
+              success: false,
+            };
+          }
         }
+        // The same thread we're in, linked: just a reply here.
+        const inThread =
+          link &&
+          !(link.channelId === currentChannelId && link.threadTs === threadTs)
+            ? link.threadTs
+            : undefined;
         const crossChannel = Boolean(
           resolvedUser ||
             (target.channel && target.channel !== currentChannelId)
@@ -586,8 +755,24 @@ export function sendAsUserTool({
         let summary = 'send as YOU in this thread';
         if (resolvedUser) {
           summary = `send as YOU in a DM to <@${resolvedUser}>`;
+        } else if (inThread && targetChannel) {
+          summary = `send as YOU in a thread in <#${targetChannel}>`;
         } else if (crossChannel && targetChannel) {
           summary = `send as YOU to <#${targetChannel}>`;
+        }
+        let files: { id: string; title: string }[] | undefined;
+        if (filePath) {
+          const staged = await stageForSend({
+            filePath,
+            requestedBy: authorUserId,
+            savedForLater: asUserRun?.approval === 'ask',
+            stageFile,
+          });
+          if ('error' in staged) {
+            return { error: staged.error, success: false };
+          }
+          files = [staged.file];
+          summary = `${summary}, with ${staged.file.title} attached`;
         }
         return await confirmOrRun({
           abortSignal,
@@ -603,6 +788,8 @@ export function sendAsUserTool({
             targetUser: resolvedUser,
             text: body,
             threadTs,
+            ...(inThread && { inThread }),
+            ...(files && { files }),
           },
           thread,
           unattended,

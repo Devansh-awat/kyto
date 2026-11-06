@@ -332,6 +332,18 @@ the model is told the action is queued and carries on. Security rules are in
 CLAUDE.md — read them before adding a new `ApprovalKind`, and never add one for
 `sendAsUser`/`editAsUser`/`deleteAsUser`.
 
+## Acting as a person (`sendAsUser`)
+
+`threadLink` (a message link) replies inside that thread in any channel the
+asker can post in (#188; `inThread` on the pending row, separate from the
+current-thread `threadTs`). `filePath` attaches a sandbox file FROM THEIR
+ACCOUNT (#187): the asker's token gets the one-shot upload URL on the host, the
+sandbox sends the bytes, and the upload is completed (`files.completeUploadExternal`,
+the text as its message) only after their click; a cancelled one is discarded
+by Slack. Needs the `files:write` user scope (added 2026-11-06), so an older
+grant is told to reconnect. A reminder's saved 24h card can't carry a file.
+Blocks pointing at a Slack file URL are refused (one was made up, #187).
+
 ## Ownership & edit permission (reminders + sites)
 
 Things kyto creates on someone's behalf and can later change carry an access list, so a bystander in a public thread can't rewrite someone's reminder or take down their site. The rule, shared by both: **the creator, anyone the creator named as an editor, and the bot owner.** The core prompt tells the model the rule, and that a refusal is not to be worked around.

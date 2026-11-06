@@ -489,6 +489,80 @@ export async function buildTools({
   // (tools/report-abuse): every later tool but a few is refused.
   let abuseStop: string | undefined;
 
+  // A sandbox file, stat-checked, whose bytes go to a Slack upload URL from
+  // the SANDBOX (never through kyto's heap). Shared by uploadFile (as kyto)
+  // and sendAsUser (the asker's own token gets the URL, #187).
+  const stageSandboxFile = async ({
+    filename,
+    path,
+  }: {
+    filename?: string;
+    path: string;
+  }): Promise<{
+    filename: string;
+    send: (uploadUrl: string) => Promise<void>;
+    size: number;
+  }> => {
+    const sandboxContext = getSandboxContext();
+    const { session, sessionWorkDir } = sandboxContext;
+    const sandboxPath = nodePath.normalize(
+      path.startsWith('/') ? path : nodePath.join(sessionWorkDir, path)
+    );
+    if (
+      sandboxPath !== sessionWorkDir &&
+      !sandboxPath.startsWith(`${sessionWorkDir}/`)
+    ) {
+      throw new Error('Only files in the workspace can be sent to Slack.');
+    }
+    const resolvedFilename =
+      filename ?? nodePath.basename(sandboxPath) ?? 'artifact';
+    // Tool calls in one step run together, so an upload sent alongside
+    // the bash that builds its file read it before it existed (six
+    // misses in one user's threads). Give a sibling a moment to write it.
+    let size = await session.fileSize({ path: sandboxPath });
+    const deadline = Date.now() + UPLOAD_WAIT_MS;
+    while (size === null && Date.now() < deadline) {
+      await Bun.sleep(UPLOAD_POLL_MS);
+      size = await session.fileSize({ path: sandboxPath });
+    }
+    if (size === null) {
+      throw new Error(`Could not find file: ${path}`);
+    }
+    if (size > MAX_UPLOAD_BYTES) {
+      const mb = Math.round(size / (1024 * 1024));
+      const limitMb = Math.round(MAX_UPLOAD_BYTES / (1024 * 1024));
+      throw new Error(
+        `That file is ${mb} MB, over Slack's ${limitMb} MB upload limit, so I can't send it to Slack. Split it into smaller parts, or host it somewhere and share a link.`
+      );
+    }
+    return {
+      filename: resolvedFilename,
+      send: async (uploadUrl) => {
+        // -T streams the file (--data-binary reads it whole into a
+        // 1 GB sandbox); -X POST is the method Slack wants.
+        const { exitCode, stderr, stdout } = await session.run({
+          command: `curl -sS -T ${shellQuote(sandboxPath)} -X POST -H 'Content-Type: application/octet-stream' -w '\\n%{http_code}' ${shellQuote(uploadUrl)}`,
+        });
+        const [received = '', status = ''] = stdout.trim().split('\n');
+        if (exitCode !== 0 || status !== '200') {
+          throw new Error(
+            `Sending ${resolvedFilename} to Slack failed (curl exit ${exitCode}, HTTP ${status || 'none'}): ${(stderr || received).trim().slice(0, 300)}`
+          );
+        }
+        // Slack accepts a body shorter than promised, and an
+        // unfinished upload expires by itself; a published truncated
+        // file does not, so check before it is completed.
+        const bytes = UPLOAD_RECEIVED.exec(received.trim())?.[1];
+        if (bytes !== String(size)) {
+          throw new Error(
+            `${resolvedFilename} didn't arrive whole (Slack got ${bytes ?? 'an unknown number of'} of ${size} bytes; did it change while uploading?). Nothing was posted; try again.`
+          );
+        }
+      },
+      size,
+    };
+  };
+
   const core: ToolSet = {
     bash: bashTool({
       background,
@@ -614,72 +688,12 @@ export async function buildTools({
     loadSkill: loadSkillTool({ skills: await listSkills() }),
     uploadFile: uploadFileTool({
       upload: async ({ filename, path, title }) => {
-        const sandboxContext = getSandboxContext();
-        const { session, sessionWorkDir } = sandboxContext;
-        const sandboxPath = nodePath.normalize(
-          path.startsWith('/') ? path : nodePath.join(sessionWorkDir, path)
-        );
-        if (
-          sandboxPath !== sessionWorkDir &&
-          !sandboxPath.startsWith(`${sessionWorkDir}/`)
-        ) {
-          throw new Error(
-            'uploadFile can only upload files from the workspace.'
-          );
-        }
-        const resolvedFilename =
-          filename ?? nodePath.basename(sandboxPath) ?? 'artifact';
-        // Tool calls in one step run together, so an upload sent alongside
-        // the bash that builds its file read it before it existed (six
-        // misses in one user's threads). Give a sibling a moment to write it.
-        let size = await session.fileSize({ path: sandboxPath });
-        const deadline = Date.now() + UPLOAD_WAIT_MS;
-        while (size === null && Date.now() < deadline) {
-          await Bun.sleep(UPLOAD_POLL_MS);
-          size = await session.fileSize({ path: sandboxPath });
-        }
-        if (size === null) {
-          throw new Error(`Could not find file: ${path}`);
-        }
-        if (size > MAX_UPLOAD_BYTES) {
-          const mb = Math.round(size / (1024 * 1024));
-          const limitMb = Math.round(MAX_UPLOAD_BYTES / (1024 * 1024));
-          throw new Error(
-            `That file is ${mb} MB, over Slack's ${limitMb} MB upload limit, so I can't send it to Slack. Split it into smaller parts, or host it somewhere and share a link.`
-          );
-        }
+        const file = await stageSandboxFile({ filename, path });
         await thread.post({
-          files: [
-            {
-              filename: resolvedFilename,
-              send: async (uploadUrl) => {
-                // -T streams the file (--data-binary reads it whole into a
-                // 1 GB sandbox); -X POST is the method Slack wants.
-                const { exitCode, stderr, stdout } = await session.run({
-                  command: `curl -sS -T ${shellQuote(sandboxPath)} -X POST -H 'Content-Type: application/octet-stream' -w '\\n%{http_code}' ${shellQuote(uploadUrl)}`,
-                });
-                const [received = '', status = ''] = stdout.trim().split('\n');
-                if (exitCode !== 0 || status !== '200') {
-                  throw new Error(
-                    `Sending ${resolvedFilename} to Slack failed (curl exit ${exitCode}, HTTP ${status || 'none'}): ${(stderr || received).trim().slice(0, 300)}`
-                  );
-                }
-                // Slack accepts a body shorter than promised, and an
-                // unfinished upload expires by itself; a published truncated
-                // file does not, so check before it is completed.
-                const bytes = UPLOAD_RECEIVED.exec(received.trim())?.[1];
-                if (bytes !== String(size)) {
-                  throw new Error(
-                    `${resolvedFilename} didn't arrive whole (Slack got ${bytes ?? 'an unknown number of'} of ${size} bytes; did it change while uploading?). Nothing was posted; try again.`
-                  );
-                }
-              },
-              size,
-            },
-          ],
-          markdown: title ?? resolvedFilename,
+          files: [file],
+          markdown: title ?? file.filename,
         });
-        return { filename: resolvedFilename, uploaded: true };
+        return { filename: file.filename, uploaded: true };
       },
     }),
   };
@@ -1099,6 +1113,7 @@ export async function buildTools({
               authorUserId,
               extendAttemptDeadline,
               isOwner,
+              stageFile: stageSandboxFile,
               thread,
               unattended,
             }),

@@ -47,6 +47,13 @@ export type PendingPost =
       text: string;
       blocks?: unknown[];
       threadTs?: string;
+      // A thread named by the caller, in any channel they can post in (#188).
+      // Separate from threadTs (the CURRENT thread, used only when the post
+      // stays in this channel), so a saved row keeps its meaning.
+      inThread?: string;
+      // Sandbox files already uploaded with their token but not shared:
+      // completing the upload at send time is what posts them (#187).
+      files?: { id: string; title: string }[];
       crossChannel: boolean;
       summary: string;
     }

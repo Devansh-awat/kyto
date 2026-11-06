@@ -39,9 +39,12 @@ const STATE_TTL_MS = 15 * 60 * 1000;
 // your own message); the rest are the capabilities the owner asked to unlock
 // next — searching YOUR channels without kyto's short-lived assistant token,
 // sending as you (behind the same confirm click as every other outward post),
-// and reading a private conversation you point it at.
+// and reading a private conversation you point it at. `files:write` lets
+// sendAsUser attach a file from your account (#187); a grant from before it
+// is asked to reconnect when a file is attached.
 const USER_SCOPES = [
   'chat:write',
+  'files:write',
   'groups:history',
   'im:history',
   'im:write',
