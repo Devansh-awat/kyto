@@ -10,7 +10,7 @@ import type { SandboxContext } from '@repo/ai';
 // in a thread's persistent sandbox this cost is paid once. The Chromium PROCESS
 // does not survive a sandbox pause, so every browser command re-runs this script
 // — it exits immediately when the CDP endpoint is already answering.
-const CDP_PORT = 9222;
+export const CDP_PORT = 9222;
 
 const ENSURE_SCRIPT = `
 set -u
@@ -75,9 +75,13 @@ if ! wait_alive; then
 fi
 
 # Point agent-browser at the stealth Chromium instead of its own Chrome.
-agent-browser connect $CDP >/dev/null 2>&1 || true
+# Bounded: a daemon wedged on a stuck page never answered, and this line
+# held every later browser call "unfinished" until !stop (#55).
+timeout 15 agent-browser connect $CDP >/dev/null 2>&1 || true
 echo "cloakbrowser: ready"
 `;
+
+const ENSURE_DEADLINE_MS = 3 * 60 * 1000;
 
 export type EnsureResult = { ok: true } | { ok: false; error: string };
 
@@ -93,7 +97,12 @@ export async function ensureCloakBrowser({
   context: SandboxContext;
 }): Promise<EnsureResult> {
   const result = await context.session.run({
-    abortSignal,
+    // A first launch downloads Chromium, so this gets longer than a command,
+    // but never forever (#55).
+    abortSignal: AbortSignal.any([
+      ...(abortSignal ? [abortSignal] : []),
+      AbortSignal.timeout(ENSURE_DEADLINE_MS),
+    ]),
     command: ENSURE_SCRIPT,
     workingDirectory: context.sessionWorkDir,
   });
