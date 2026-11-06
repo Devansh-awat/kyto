@@ -249,6 +249,17 @@ export function editMemoryTool(actor: MemoryActor) {
             updated: false,
           };
         }
+        // The same 5 KB body re-sent four times in a turn rewrote the row
+        // four times (#182): say it is already saved, so the model stops.
+        if (
+          (body === undefined || body === row.body) &&
+          (summary === undefined || summary.trim() === row.summary)
+        ) {
+          return {
+            summary: `Memory "${trimmedTitle}" already says exactly that: nothing to change, no need to save it again.`,
+            updated: false,
+          };
+        }
         await updateMemory({
           body,
           id: row.id,

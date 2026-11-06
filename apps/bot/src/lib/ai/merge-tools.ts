@@ -13,8 +13,12 @@ import { z } from 'zod';
  *
  * The schema is FLAT (`action` plus every field, all optional), not a union:
  * OpenAI rejects a function whose parameters aren't a top-level object, and a
- * union's per-action requirements are checked here anyway. A field's
- * description names the actions that use it.
+ * union's per-action requirements are checked here anyway. A field can't be
+ * marked required for ONE action in a flat schema, so the requirement is said
+ * in words instead: each action's line in the description lists the fields it
+ * needs, a field's description says which actions need it, and a call missing
+ * one is told exactly what to add. Said nowhere, GLM sent `memory edit` with
+ * only a body ~15 times in one turn, 5 KB each (#184).
  *
  * Pass tools that are ALREADY wrapped (trackUse): usage, the anti-coding guard,
  * the Slack budget and redaction all key on the original names, which are only
@@ -35,6 +39,8 @@ export function mergeTools({
   const schemas = new Map<string, z.ZodObject>();
   const fieldActions = new Map<string, string[]>();
   const fieldSchemas = new Map<string, z.ZodType[]>();
+  const requiredBy = new Map<string, string[]>();
+  const required = new Map<string, string[]>();
   for (const name of names) {
     const schema = actions[name]?.inputSchema;
     if (!(schema instanceof z.ZodObject)) {
@@ -47,6 +53,10 @@ export function mergeTools({
         ...(fieldSchemas.get(field) ?? []),
         fieldSchema as z.ZodType,
       ]);
+      if (!(fieldSchema as z.ZodType).safeParse(undefined).success) {
+        requiredBy.set(field, [...(requiredBy.get(field) ?? []), name]);
+        required.set(name, [...(required.get(name) ?? []), field]);
+      }
     }
   }
   const shape: Record<string, z.ZodType> = {
@@ -63,11 +73,17 @@ export function mergeTools({
     const merged = others.length > 0 ? z.union([only, ...others]) : only;
     const base = merged.description ?? only.description ?? '';
     const scope = used.length === names.length ? '' : ` [${used.join(', ')}]`;
-    shape[field] = merged.optional().describe(`${base}${scope}`.trim());
+    const needed = requiredBy.get(field);
+    const must = needed ? ` REQUIRED for ${needed.join(', ')}.` : '';
+    shape[field] = merged.optional().describe(`${base}${scope}${must}`.trim());
   }
   return tool({
     description: `${description}\n\nSet \`action\` to one of these, and pass only the fields it uses:\n${names
-      .map((name) => `- ${name}: ${actions[name]?.description ?? ''}`)
+      .map((name) => {
+        const needs = required.get(name);
+        const line = needs ? ` (needs ${needs.join(', ')})` : '';
+        return `- ${name}${line}: ${actions[name]?.description ?? ''}`;
+      })
       .join('\n')}`,
     inputSchema: z.object(shape),
     execute: async (input: Record<string, unknown>, options) => {
@@ -83,8 +99,13 @@ export function mergeTools({
       }
       const parsed = schema.safeParse(fields);
       if (!parsed.success) {
+        const missing = (required.get(name) ?? []).filter(
+          (field) => fields[field] === undefined || fields[field] === null
+        );
         return {
-          error: `Invalid input for action '${name}': ${z.prettifyError(parsed.error)}`,
+          error: missing.length
+            ? `Action '${name}' needs ${missing.map((field) => `\`${field}\``).join(' and ')}, which this call left out. Call again WITH ${missing.length > 1 ? 'them' : 'it'}; the same call without ${missing.length > 1 ? 'them' : 'it'} fails the same way.`
+            : `Invalid input for action '${name}': ${z.prettifyError(parsed.error)}. Fix that field and call again; the same call fails the same way.`,
           success: false,
         };
       }

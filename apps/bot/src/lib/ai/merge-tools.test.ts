@@ -55,7 +55,20 @@ describe('mergeTools', () => {
         'title',
       ]);
     }
-    expect(merged.description).toContain('- save: Save a note.');
+    expect(merged.description).toContain(
+      '- save (needs body, title): Save a note.'
+    );
+  });
+
+  test('a call missing a required field is told which one to add (#184)', async () => {
+    const result = await run({ action: 'save', body: 'x' });
+    expect(JSON.stringify(result)).toContain('needs `title`');
+    const schema = merged.inputSchema;
+    if (schema instanceof z.ZodObject) {
+      expect(schema.shape.title?.description).toContain(
+        'REQUIRED for delete, save'
+      );
+    }
   });
 });
 
