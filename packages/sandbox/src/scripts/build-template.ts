@@ -99,6 +99,10 @@ async function main(): Promise<void> {
       )
       .runCmd([
         'if command -v fdfind >/dev/null 2>&1; then ln -sf "$(command -v fdfind)" /usr/local/bin/fd; fi',
+        // eMudhra's CA key was compromised (E2B advisory, 2026-10-21) and
+        // Debian 12's ca-certificates still ships its emSign roots: distrust
+        // them in the system store, which curl, git, apt and OpenSSL read.
+        "sed -i -E 's#^(mozilla/emSign.*)$#!\\1#' /etc/ca-certificates.conf && update-ca-certificates --fresh >/dev/null",
         'apt-get purge -y nodejs nodejs-doc || true',
         'apt-get autoremove -y || true',
         'curl -fsSL https://deb.nodesource.com/setup_24.x | bash -',
