@@ -8,6 +8,8 @@ This is what makes a 'bash' recurring reminder useful: write and test a script h
 
 A read-only \`slack <method> '<json>'\` command for the Slack Web API is on PATH in the sandbox (not curl, not the official CLI): load the \`sandbox-jobs\` skill before using it.
 
+Asked for a GIF, a clip or a video: load the \`media-clips\` skill first (you make it from the source with yt-dlp and ffmpeg rather than hunting GIF sites).
+
 Scripted browser work (and anything behind a captcha or anti-bot check) uses \`cloakbrowser\`, a stealth Chromium in the sandbox that must run HEADFUL: load the \`browser-scripting\` skill before writing one.
 
 CODE MODE: prefer ONE script over many tool calls when a task loops over N things or chains many fetch/browser steps. Load the \`sandbox-jobs\` skill for how.

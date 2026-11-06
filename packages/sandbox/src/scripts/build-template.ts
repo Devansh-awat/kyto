@@ -30,13 +30,18 @@ function args() {
         short: 't',
         type: 'string',
       },
+      // Rebuild every layer, e.g. after a CA compromise (E2B's eMudhra
+      // advisory, 2026-10-21): a cached layer keeps the old trust store.
+      'skip-cache': {
+        type: 'boolean',
+      },
     },
     strict: true,
   });
 
   if (values.help) {
     process.stdout.write(
-      'Usage: bun run build:template -- [--template <name>]\n'
+      'Usage: bun run build:template -- [--template <name>] [--skip-cache]\n'
     );
     process.exit(0);
   }
@@ -50,7 +55,8 @@ async function main(): Promise<void> {
     throw new Error('E2B_API_KEY is required to build the sandbox template.');
   }
 
-  const template = args().template?.trim() || sandboxConfig.template;
+  const options = args();
+  const template = options.template?.trim() || sandboxConfig.template;
   logger.info({ template }, '[sandbox] building e2b template');
 
   const build = await Template.build(
@@ -101,7 +107,7 @@ async function main(): Promise<void> {
         'node --version | grep -E "^v2[4-9]" || (echo "ERROR: Node 24+ required, got $(node --version)" && exit 1)',
         'npm config --global set prefix /usr/local',
         'python3 -m pip install --no-cache-dir --break-system-packages --no-user --upgrade pip',
-        'python3 -m pip install --no-cache-dir --break-system-packages --no-user pillow matplotlib numpy pandas requests',
+        'python3 -m pip install --no-cache-dir --break-system-packages --no-user pillow matplotlib numpy pandas requests yt-dlp',
         // codeMode runs its TypeScript with bun; it installs bun itself into a
         // sandbox from an older template (#63).
         'bash -lc "curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash"',
@@ -128,6 +134,7 @@ async function main(): Promise<void> {
     {
       apiKey,
       onBuildLogs: defaultBuildLogger(),
+      skipCache: options['skip-cache'] ?? false,
     }
   );
 
