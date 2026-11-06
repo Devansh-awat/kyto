@@ -212,8 +212,13 @@ const SLACK_TOOL_BUDGET = 120;
 const SLACK_READ_REUSE_MS = 5 * 60 * 1000;
 // Web search gets the same reuse (owner's call, 2026-10-26): the same query
 // again within the window is that result again, marked as a repeat. Not across
-// turns: a new message often means "look again, it changed".
-const REUSED_READ_TOOLS = new Set([...SLACK_READ_TOOLS, 'searchWeb']);
+// turns: a new message often means "look again, it changed". fetchUrl too
+// (#180: the same pages fetched twice in one turn).
+const REUSED_READ_TOOLS = new Set([
+  ...SLACK_READ_TOOLS,
+  'fetchUrl',
+  'searchWeb',
+]);
 
 const CODE_TOOLS = new Set([
   'bash',
