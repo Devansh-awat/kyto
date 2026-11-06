@@ -41,6 +41,9 @@ const MAX_RUN_MINUTES = RUN_TIMEOUT_SECONDS / 60;
 // prints only when it ends, so a timed-out run used to come back as
 // "(no output)" and was re-run blind for another 18 minutes (#124).
 const CHANGED_FILES_MAX = 30;
+// pi's session logs (`~/.pi/agent/sessions/--<cwd, / as ->--/*.jsonl`).
+const PI_SESSIONS = '/home/user/.pi/agent/sessions';
+const LAST_WORDS_CHARS = 3000;
 // How much longer than the run the turn's stall watchdog must wait.
 const WATCHDOG_GRACE_MS = 2 * 60 * 1000;
 // One run at a time per sandbox. Two parallel coding-agent calls (kyto building
@@ -258,7 +261,7 @@ export function codingAgentTool({
         };
       }
       const notes: Record<number, string> = {
-        124: `The coding agent was stopped after ${runSeconds / 60} minutes. Its work so far is in the directory (changedFiles); call again with continue: true to pick up. If the work is a long-running job (a benchmark, a solver loop), don't hand it the run again: have it finish and smoke-test the program, then run that yourself with runBackgroundProcess.`,
+        124: `The coding agent was stopped after ${runSeconds / 60} minutes. Its work so far is in the directory (changedFiles, gitChanges, and its last words in output). If that already covers the task, don't run it again: check the diff and test it yourself (reading and running a test is not code work), and only continue for what is actually missing, with a brief that names just that. Otherwise call again with continue: true to pick up. If the work is a long-running job (a benchmark, a solver loop), don't hand it the run again: have it finish and smoke-test the program, then run that yourself with runBackgroundProcess.`,
         [KILLED_EXIT]:
           'The coding agent was killed, most likely out of memory (the sandbox has 1 GB). Its work so far is in the directory. Free memory first (close the browser, stop dev servers and background jobs), then call again with continue: true.',
       };
@@ -287,6 +290,29 @@ export function codingAgentTool({
               )
               .catch(() => undefined)
           : undefined;
+      // A stopped run printed nothing (`pi -p` prints only at the end), so it
+      // came back "(no output)" and kyto re-ran it blind: two 10-minute passes
+      // over a diff that was already written (#176). pi appends its session
+      // to a JSONL file as it goes; its last words, and what git says
+      // changed, tell kyto how far it got.
+      const progress =
+        result.exitCode === 124 || result.exitCode === KILLED_EXIT
+          ? await Promise.resolve(
+              context.session.run({
+                command: [
+                  `f=$(ls -t '${PI_SESSIONS}/--${workDir.replace(/^\//, '').replace(/[/\\:]/g, '-')}--'/*.jsonl 2>/dev/null | head -1)`,
+                  `[ -n "$f" ] && jq -r 'select(.type == "message" and .message.role == "assistant") | .message.content | if type == "string" then . else (map(select(.type == "text") | .text) | join("\\n")) end | select(length > 0)' "$f" 2>/dev/null | tail -c ${LAST_WORDS_CHARS}`,
+                  'echo; echo "---git---"',
+                  `git -C '${workDir}' status --short 2>/dev/null | head -40; git -C '${workDir}' diff --stat 2>/dev/null | tail -20`,
+                ].join('\n'),
+              })
+            )
+              .then((read) => {
+                const [said = '', git = ''] = read.stdout.split('---git---');
+                return { git: git.trim(), said: said.trim() };
+              })
+              .catch(() => undefined)
+          : undefined;
       return {
         directory: workDir,
         exitCode: result.exitCode,
@@ -294,9 +320,13 @@ export function codingAgentTool({
         output:
           output.length > OUTPUT_MAX
             ? `…${output.slice(-OUTPUT_MAX)}`
-            : output || '(no output)',
+            : output ||
+              (progress?.said
+                ? `(stopped before its summary; its last words were:)\n${progress.said}`
+                : '(no output)'),
         success: result.exitCode === 0,
         ...(changed ? { changedFiles: changed } : {}),
+        ...(progress?.git ? { gitChanges: progress.git } : {}),
         ...(note ? { note } : {}),
       };
     },
