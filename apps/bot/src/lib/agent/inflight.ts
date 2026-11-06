@@ -257,22 +257,50 @@ const lastCheckpointAt = new Map<string, number>();
 // before they reach the column — a checkpoint is a best-effort snapshot, not the
 // reply, so a scrubbed byte here costs nothing.
 function scrubForJsonb(text: string): string {
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: NUL is exactly what jsonb rejects.
-  return text.replace(/\u0000/g, '').replace(/[\uD800-\uDFFF]/g, '\uFFFD');
+  // Only LONE surrogates: a whole pair is an emoji, and replacing every
+  // surrogate turned each one into two replacement characters.
+  return (
+    text
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: NUL is exactly what jsonb rejects.
+      .replace(/\u0000/g, '')
+      .replace(
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
+        '\uFFFD'
+      )
+  );
 }
 
-function boundedOutput(output: unknown): unknown {
+// Every string in it, however deep: a bash result is an OBJECT
+// (`{exitCode, stdout, stderr}`), and JSON.stringify writes a NUL in its stdout
+// as the escape `\u0000`, which the string scrub never matched, so `head` of
+// an ELF binary still failed the write four times in one turn (#144, reopened).
+function scrubDeep(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return scrubForJsonb(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map(scrubDeep);
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, inner]) => [
+        scrubForJsonb(key),
+        scrubDeep(inner),
+      ])
+    );
+  }
+  return value;
+}
+
+export function boundedOutput(output: unknown): unknown {
+  const scrubbed = scrubDeep(output);
   const raw =
-    typeof output === 'string' ? output : (JSON.stringify(output) ?? '');
-  const text =
-    raw.length > CHECKPOINT_OUTPUT_MAX
-      ? `${raw.slice(0, CHECKPOINT_OUTPUT_MAX)}… [cut at ${CHECKPOINT_OUTPUT_MAX} characters when kyto restarted]`
-      : raw;
-  const scrubbed = scrubForJsonb(text);
-  // If nothing needed scrubbing and it fit, keep the original shape (objects
-  // stay objects for the resumed turn); only fall back to the string when we
-  // actually changed something.
-  return scrubbed === raw ? output : scrubbed;
+    typeof scrubbed === 'string' ? scrubbed : (JSON.stringify(scrubbed) ?? '');
+  // Objects stay objects for the resumed turn while they fit.
+  if (raw.length <= CHECKPOINT_OUTPUT_MAX) {
+    return scrubbed;
+  }
+  return `${raw.slice(0, CHECKPOINT_OUTPUT_MAX)}… [cut at ${CHECKPOINT_OUTPUT_MAX} characters when kyto restarted]`;
 }
 
 /**
@@ -304,17 +332,23 @@ export async function checkpointTurn({
     checkpoint: {
       at: new Date(now).toISOString(),
       results: results.map((result) => ({
-        input: result.input,
+        input: scrubDeep(result.input),
         output: boundedOutput(result.output),
         toolName: result.toolName,
       })),
-      text,
+      text: scrubForJsonb(text),
     },
     instanceId: INSTANCE_ID,
     threadId,
   }).catch((error: unknown) => {
+    // The wrapper's message is only "Failed query: …" with the params; the
+    // reason Postgres gave is its cause.
     logger.warn(
-      { ...toLogError(error), threadId },
+      {
+        ...toLogError(error),
+        cause: error instanceof Error ? String(error.cause) : undefined,
+        threadId,
+      },
       '[inflight] checkpoint failed'
     );
   });
