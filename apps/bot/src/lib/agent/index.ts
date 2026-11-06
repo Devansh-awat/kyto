@@ -613,7 +613,7 @@ async function executeTurn(
         { spent, threadId, userId: message.author.userId },
         '[spend] user hit the daily shared-key cap'
       );
-      const notice = `You've reached today's limit on kyto's shared AI budget (about $${DAILY_SHARED_CAP_USD.toFixed(2)} of usage). It resets at midnight UTC.\n\nTo keep going now, connect your own model key in kyto's App Home → *Models* — then you're not limited by the shared budget at all.`;
+      const notice = `_you've hit today's limit on my shared ai budget (about $${DAILY_SHARED_CAP_USD.toFixed(2)} of usage). it resets at midnight utc. to keep going now, connect your own model key in my app home under models, and the shared limit stops applying to you_`;
       await thread.postEphemeral(message.author, notice).catch(async () => {
         await thread.post({ markdown: notice }).catch(() => undefined);
       });
@@ -1002,7 +1002,7 @@ async function executeTurn(
         await thread
           .postEphemeral(
             message.author,
-            'Something went wrong answering that privately. Try again in a bit.'
+            "_i couldn't answer that privately, every model i tried failed. try again in a bit_"
           )
           .catch(() => undefined);
         return;
@@ -1012,7 +1012,8 @@ async function executeTurn(
           asUserAccount
             ? {
                 fromUserAccount: true,
-                markdown: 'ugh, something broke on my end. try again in a bit?',
+                markdown:
+                  "_i couldn't answer this, every model i tried failed. try again in a bit?_",
               }
             : agentErrorMessage({ error, stage: errorStage })
         )

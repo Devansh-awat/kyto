@@ -67,8 +67,8 @@ bot.onAction(APPROVE_ACTION, async (event) => {
     '[approvals] owner approved'
   );
   const text = result.ok
-    ? `:white_check_mark: Approved — ${result.detail}`
-    : `:x: Approved, but it failed: ${result.detail}`;
+    ? `:white_check_mark: _approved:_ ${result.detail}`
+    : `:x: _approved, but it failed:_ ${result.detail}`;
   await replaceApprovalMessage(row, text);
   await announce(row, `<@${row.requestedBy}> ${text}`);
 });
@@ -96,7 +96,7 @@ bot.onAction(DENY_ACTION, async (event) => {
     { approvalId: row.id, kind: row.kind },
     '[approvals] owner denied'
   );
-  const text = `:heavy_multiplication_x: Denied — I will not ${row.summary}.`;
+  const text = `:heavy_multiplication_x: _denied, so i won't ${row.summary}_`;
   await replaceApprovalMessage(row, text);
   await announce(row, `<@${row.requestedBy}> ${text}`);
 });

@@ -419,7 +419,7 @@ async function saveForLater({
       {
         elements: [
           mrkdwn(
-            '_Good for 24 hours. "Always" sends this and lets this job act as you from now on; change it in App Home._'
+            '_good for 24 hours. "always" sends this and lets this job act as you from now on, and you can change that in my app home_'
           ),
         ],
         type: 'context',

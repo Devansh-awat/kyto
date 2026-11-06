@@ -116,7 +116,9 @@ async function main(): Promise<void> {
         // The browser tool drives agent-browser against CloakBrowser's stealth
         // Chromium over CDP. Cache the ~200MB binary under the sandbox user's
         // HOME at build time so the first browse of a thread isn't a download.
-        'npm install -g cloakbrowser',
+        // Pinned: 0.7.0 (2026-11-01) refuses to install without a license key,
+        // which failed the CA rebuild. 0.6.5 checks a license only for Pro.
+        'npm install -g cloakbrowser@0.6.5',
         'bash -lc "HOME=/home/user cloakbrowser install"',
         // pi, the coding agent kyto delegates to. Pre-installed so a fresh
         // thread's first delegation isn't a download; the tool's setup

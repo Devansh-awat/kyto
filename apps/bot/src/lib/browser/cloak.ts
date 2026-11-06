@@ -23,8 +23,8 @@ if alive; then
 fi
 
 if ! command -v cloakbrowser >/dev/null 2>&1; then
-  sudo npm install -g cloakbrowser >/tmp/cloak-install.log 2>&1 \
-    || npm install -g cloakbrowser >>/tmp/cloak-install.log 2>&1
+  sudo npm install -g cloakbrowser@0.6.5 >/tmp/cloak-install.log 2>&1 \
+    || npm install -g cloakbrowser@0.6.5 >>/tmp/cloak-install.log 2>&1
 fi
 # 'cloakbrowser install' downloads the binary if needed and prints its path.
 BIN="$(cloakbrowser install 2>/dev/null | tail -n1)"

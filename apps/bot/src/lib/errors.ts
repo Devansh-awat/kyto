@@ -115,33 +115,33 @@ export function agentErrorMessage({
   // provider's raw rejection into a possibly-public channel — the detail lives
   // in their App Home tab, where only they can see it.
   if (error instanceof ByokExhaustedError) {
-    return "_kyto couldn't run this on your own model key — every key you added failed. check the Model keys section of kyto's App Home tab for what the provider said, or turn on shared-model fallback there._";
+    return "_i couldn't run this on your own model key, every key you added failed. the model keys section of my app home says what the provider said, or you can turn on shared-model fallback there_";
   }
   if (error instanceof BudgetExhaustedError) {
     const amount = message.match(SPEND_AMOUNT_PATTERN)?.[0] ?? '$3';
     const { hours, minutes } = timeUntilUtcMidnight();
-    return `_kyto's daily model budget (${amount}/day) is used up — every model is out of credits for today. it resets at UTC midnight, in ${hours}h ${minutes}m._`;
+    return `_my daily model budget (${amount}/day) is used up, so every model is out of credits for today. it resets at utc midnight, in ${hours}h ${minutes}m_`;
   }
   // Kyto assembled a prompt the SDK refuses to send. No model ever saw it, so
   // "the provider failed" would be a lie and "try again" is useless advice —
   // the same thread state rebuilds the same broken prompt. Say what it is.
   if (isPromptConstructionError(error)) {
-    return '_kyto built a malformed prompt for this turn and could not send it — that is a bug in kyto, not a model outage. starting a new thread works around it._';
+    return "_i built a broken prompt for this one and couldn't send it. that's a bug in me, not a model outage, and a new thread works around it_";
   }
   if (stage === 'after_text') {
-    return '_kyto hit an error while sending its reply, so the reply may be cut short or missing above. send a follow-up and kyto can continue from the current thread state._';
+    return "_i hit an error while sending this, so the reply above may be cut short. send a follow-up and i'll pick up from here_";
   }
   if (stage === 'after_progress') {
-    return '_kyto hit an error after it had already shown progress. the task rows above show what completed; send a follow-up and kyto can continue from the current thread state._';
+    return "_i hit an error partway through. the steps above show what got done, send a follow-up and i'll pick up from there_";
   }
   if (CREDIT_ERROR_PATTERN.test(message)) {
-    return '_kyto is out of model credits for this request. try again later or ask for a shorter/smaller result._';
+    return "_i'm out of model credits for this one. try again later, or ask for something smaller_";
   }
   if (CONTEXT_ERROR_PATTERN.test(message)) {
-    return '_that request is too large for the current model budget. try a shorter prompt or start a new thread._';
+    return "_that's too big for the model budget i have right now. try a shorter ask or a new thread_";
   }
   if (PROVIDER_TIMEOUT_PATTERN.test(message)) {
-    return '_kyto hit a model provider timeout. try again in a bit, or send a shorter follow-up so kyto can continue from the current thread state._';
+    return "_every model i tried timed out. try again in a bit, or send a shorter follow-up and i'll continue from here_";
   }
-  return '_oops, something went wrong._';
+  return "_i couldn't answer this, every model i tried failed. send it again in a bit_";
 }

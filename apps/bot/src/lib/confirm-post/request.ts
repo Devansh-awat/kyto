@@ -67,7 +67,7 @@ function confirmBlocks(id: string, post: PendingPost): unknown[] {
           {
             elements: [
               mrkdwn(
-                "_Don't want to be asked? Turn confirmations off in kyto's App Home, under Your Slack account._"
+                "_don't want to be asked? turn confirmations off in my app home, under your slack account_"
               ),
             ],
             type: 'context',

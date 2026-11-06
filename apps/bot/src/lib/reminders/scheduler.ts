@@ -69,10 +69,10 @@ async function notifyFailure({
   try {
     const dm = await bot.openDM(reminder.userId);
     await dm.post({
-      markdown: `Your ${reminder.kind} reminder${where} couldn't run this time, so nothing was posted. It will try again on its next run; you can edit or pause it from my App Home.
+      markdown: `_your ${reminder.kind} reminder${where} couldn't run this time, so nothing was posted. it'll try again on its next run, and you can edit or pause it from my app home_
 > ${preview.replace(/\n/g, ' ')}
 
-What went wrong: ${errorMessage(error).slice(0, FAILURE_ERROR_CHARS)}`,
+_what went wrong:_ ${errorMessage(error).slice(0, FAILURE_ERROR_CHARS)}`,
     });
   } catch (dmError) {
     logger.error(
@@ -199,7 +199,7 @@ export async function fireReminder({
     try {
       const dm = await bot.openDM(reminder.userId);
       await dm.post({
-        markdown: `I couldn't post your reminder in <#${reminder.channelId}> (${errorMessage(lastError)}), so here it is:\n\n${markdown}`,
+        markdown: `_i couldn't post your reminder in <#${reminder.channelId}> (${errorMessage(lastError)}), so here it is:_\n\n${markdown}`,
       });
     } catch (error) {
       logger.error(

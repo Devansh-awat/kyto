@@ -258,7 +258,7 @@ const eraseHandler =
       // can't tell from a button that just says "Forget me".
       const thread = await bot.openDM(userId);
       await thread.post({
-        markdown: `*Done — here's exactly what was removed.*\n\n${summarize(result)}`,
+        markdown: `*done, here's exactly what was removed:*\n\n${summarize(result)}`,
       });
     } catch (error: unknown) {
       logger.error(

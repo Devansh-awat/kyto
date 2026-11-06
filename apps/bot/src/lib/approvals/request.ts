@@ -41,7 +41,7 @@ function approvalBlocks({
   return [
     {
       text: mrkdwn(
-        `${owner}:lock: *Approval needed* — <@${row.requestedBy}> asked me${where} to ${row.summary}.\nI can't do that on my own, so it's waiting on you. There's no time limit; it stays here until you decide.`
+        `${owner}:lock: *approval needed*: <@${row.requestedBy}> asked me${where} to ${row.summary}.\n_i can't do that on my own, so it's waiting on you. there's no time limit, it stays here until you decide_`
       ),
       type: 'section',
     },
@@ -227,7 +227,7 @@ export async function requestApproval({
       await bot
         .thread(threadId)
         .post({
-          markdown: `:lock: Sent to the owner for approval (request #${row.id}): ${row.summary}. Nothing happens until they decide; I'll say here when they do. <@${requestedBy}> can ask me to withdraw it.`,
+          markdown: `:lock: _sent to the owner for approval (request #${row.id}): ${row.summary}. nothing happens until they decide, and i'll say here when they do. <@${requestedBy}> can ask me to withdraw it_`,
         })
         .catch(() => undefined);
     }

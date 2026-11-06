@@ -369,7 +369,7 @@ async function runAgent(
         { reminderId: reminder.id },
         '[reminders] agent job did work but produced no report, even after a nudge'
       );
-      return '_(Ran the scheduled job — it completed its actions but did not write a report.)_';
+      return '_(ran the scheduled job: it did its actions but wrote no report)_';
     }
     throw new EmptyRunError(
       streamError?.slice(0, ERROR_PREVIEW_CHARS) ?? 'empty response'
