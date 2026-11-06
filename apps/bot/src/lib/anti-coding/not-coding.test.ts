@@ -216,6 +216,7 @@ describe('isNotCodingCall', () => {
       'git tag -l',
       'ls *.ts',
       'cat ~/notes.txt',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: a shell variable, on purpose.
       'ls "$HOME" && echo ${PWD}',
       'grep -rn foo src 2>/dev/null | sort | uniq -c | sort -rn | head -20',
       "sed -n '1,40p' src/a.ts",
