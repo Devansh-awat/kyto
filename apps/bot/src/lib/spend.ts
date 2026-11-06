@@ -242,6 +242,71 @@ export async function describeSpend({
   return lines.join('\n');
 }
 
+/**
+ * What one person may spend of kyto's shared Hack Club budget in a UTC day,
+ * at list price (owner's call 2026-10-27). Their own key lifts it.
+ */
+export const DAILY_SHARED_CAP_USD = 1;
+
+/**
+ * `!spend` from anyone but the owner (#190): THEIR OWN usage only, never the
+ * bill or anyone else's rows. "How many tokens have I used" used to send the
+ * model digging through kyto's source for 2 minutes.
+ */
+export async function describeOwnSpend({
+  args,
+  userId,
+}: {
+  args: string;
+  userId: string;
+}): Promise<string> {
+  const requested = Number.parseInt(args.trim(), 10);
+  const days =
+    Number.isFinite(requested) && requested > 0
+      ? Math.min(requested, MAX_SPEND_DAYS)
+      : 1;
+  const midnight = new Date();
+  midnight.setUTCHours(0, 0, 0, 0);
+  const since = new Date(midnight.getTime() - (days - 1) * DAY_MS);
+  const groups = await summarizeModelSpend({ since, userId });
+  const scope = `since ${since.toISOString().slice(0, 10)} UTC`;
+  if (groups.length === 0) {
+    return `nothing of yours recorded ${scope} (the ledger started 2026-10-11).`;
+  }
+  const shared = groups.filter((group) => payerOf(group.provider) === 'kyto');
+  const own = groups.filter((group) => payerOf(group.provider) === 'own');
+  const sum = (list: SpendGroup[]) =>
+    list.reduce((total, group) => total + group.costUsd, 0);
+  const tokens = (list: SpendGroup[]) =>
+    list
+      .reduce(
+        (total, group) => total + group.inputTokens + group.outputTokens,
+        0
+      )
+      .toLocaleString('en-US');
+  const { hours, minutes } = timeUntilUtcMidnight();
+  const cap =
+    days === 1
+      ? ` of your $${DAILY_SHARED_CAP_USD.toFixed(2)} a day on kyto's shared budget (resets at UTC midnight, in ${hours}h ${minutes}m; your own key in App Home → Models lifts it)`
+      : " on kyto's shared budget";
+  const lines = [
+    `*${usd(sum(shared))}*${cap}, ${scope}: ${tokens(shared)} tokens.`,
+    ...describeGroups(shared),
+  ];
+  if (own.length > 0) {
+    lines.push(
+      '',
+      `*${usd(sum(own))}* on your own key (${tokens(own)} tokens).`,
+      ...describeGroups(own)
+    );
+  }
+  lines.push(
+    '',
+    '_this is what kyto spent for you. your own hack club ai account has its usage at https://ai.hackclub.com_'
+  );
+  return lines.join('\n');
+}
+
 const DEFAULT_EFFORT_DAYS = 7;
 const EFFORT_MODELS = [PRIMARY_MODEL, LUNA_MODEL, MERCURY_MODEL];
 const EFFORTS = ['low', 'medium', 'high'];

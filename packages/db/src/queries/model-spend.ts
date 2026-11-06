@@ -59,9 +59,12 @@ export interface SpendGroup {
 export async function summarizeModelSpend({
   since,
   threadId,
+  userId,
 }: {
   since?: Date;
   threadId?: string;
+  /** Only this person's calls (their own `!spend`, #190). */
+  userId?: string;
 }): Promise<SpendGroup[]> {
   const rows = await db
     .select({
@@ -81,7 +84,8 @@ export async function summarizeModelSpend({
     .where(
       and(
         since ? gte(modelSpend.createdAt, since) : undefined,
-        threadId ? eq(modelSpend.threadId, threadId) : undefined
+        threadId ? eq(modelSpend.threadId, threadId) : undefined,
+        userId ? eq(modelSpend.userId, userId) : undefined
       )
     )
     .groupBy(

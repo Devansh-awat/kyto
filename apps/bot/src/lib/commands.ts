@@ -17,7 +17,11 @@ import { runBanCommand } from '@/lib/bans';
 import { createDebugSnapshot, debugSnapshotUrl } from '@/lib/debug-snapshot';
 import { type ParsedFlags, parseFlags } from '@/lib/flags';
 import logger from '@/lib/logger';
-import { describeEffortStats, describeSpend } from '@/lib/spend';
+import {
+  describeEffortStats,
+  describeOwnSpend,
+  describeSpend,
+} from '@/lib/spend';
 import { describeThreadTimings } from '@/lib/turn-timings';
 import { errorMessage, toLogError } from '@/lib/utils/error';
 import { rawText, withoutLeadingMentions } from '@/lib/utils/message';
@@ -151,14 +155,19 @@ export async function handleCommand({
     // root of its own new thread) asks about the whole bill.
     const rootTs = thread.id.split(':')[2];
     const threadId = rootTs && message.id !== rootTs ? thread.id : undefined;
-    // Owner only: it is his bill.
-    const text =
-      env.OWNER_USER_ID && message.author.userId === env.OWNER_USER_ID
-        ? await describeSpend({ args: command.args, threadId }).catch(
-            (error: unknown) =>
-              `couldn't read the spend: ${errorMessage(error)}`
-          )
-        : '`!spend` is for the bot owner.';
+    // The bill is the owner's; anyone else sees only their own usage (#190).
+    const isOwner =
+      env.OWNER_USER_ID !== undefined &&
+      message.author.userId === env.OWNER_USER_ID;
+    const text = await (isOwner
+      ? describeSpend({ args: command.args, threadId })
+      : describeOwnSpend({
+          args: command.args,
+          userId: message.author.userId,
+        })
+    ).catch(
+      (error: unknown) => `couldn't read the spend: ${errorMessage(error)}`
+    );
     await tell({ message, text, thread, what: 'spend' });
     return true;
   }
