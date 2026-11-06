@@ -332,6 +332,12 @@ the model is told the action is queued and carries on. Security rules are in
 CLAUDE.md — read them before adding a new `ApprovalKind`, and never add one for
 `sendAsUser`/`editAsUser`/`deleteAsUser`.
 
+**The asker can WITHDRAW their own pending request** (#189): the card's
+"Withdraw (asker)" button or the deferred `withdrawApproval` tool; status
+`withdrawn`, claimed only while `pending` AND `requested_by` matches, so it
+grants nothing. The card is updated in place; when it sits in the owner's DM,
+the originating thread is told too.
+
 ## Acting as a person (`sendAsUser`)
 
 `threadLink` (a message link) replies inside that thread in any channel the

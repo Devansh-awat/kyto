@@ -1,7 +1,9 @@
 import {
   type ApprovalRequest,
   createApprovalRequest,
+  getApprovalRequest,
   setApprovalMessage,
+  withdrawApprovalRequest,
 } from '@repo/db/queries';
 import { env } from '@/env';
 import { mrkdwn, plainText } from '@/harness/views';
@@ -14,6 +16,7 @@ import type { ApprovalKind } from './types';
 
 export const APPROVE_ACTION = 'approval_approve';
 export const DENY_ACTION = 'approval_deny';
+export const WITHDRAW_ACTION = 'approval_withdraw';
 
 // Enough of the body to decide on; the full text is in the payload.
 const DETAIL_MAX = 700;
@@ -61,10 +64,82 @@ function approvalBlocks({
           type: 'button',
           value: String(row.id),
         },
+        // For the person who asked: they can take it back (#189).
+        {
+          action_id: WITHDRAW_ACTION,
+          text: plainText('Withdraw (asker)'),
+          type: 'button',
+          value: String(row.id),
+        },
       ],
       type: 'actions',
     },
   ];
+}
+
+/** Replace the card's buttons with what happened. */
+export async function replaceApprovalMessage(
+  row: ApprovalRequest,
+  text: string
+): Promise<void> {
+  if (!(row.messageChannel && row.messageTs)) {
+    return;
+  }
+  await slack.webClient.chat
+    .update({
+      blocks: [{ text: mrkdwn(text), type: 'section' }],
+      channel: row.messageChannel,
+      text,
+      ts: row.messageTs,
+    })
+    .catch((error: unknown) => {
+      logger.warn(
+        { ...toLogError(error), approvalId: row.id },
+        '[approvals] failed to update the approval message'
+      );
+    });
+}
+
+/**
+ * The asker withdraws their own pending request: from the card's button or
+ * the withdrawApproval tool. Only the row's `requestedBy` can (the claim
+ * checks it); the card is updated in place and the thread is told.
+ */
+export async function withdrawApproval({
+  id,
+  userId,
+}: {
+  id: number;
+  userId: string;
+}): Promise<{ ok: boolean; detail: string }> {
+  const row = await withdrawApprovalRequest({ id, requestedBy: userId });
+  if (!row) {
+    const existing = await getApprovalRequest(id).catch(() => null);
+    if (!existing) {
+      return { detail: `There is no request #${id}.`, ok: false };
+    }
+    if (existing.requestedBy !== userId) {
+      return {
+        detail: `Request #${id} was made by <@${existing.requestedBy}>; only they can withdraw it.`,
+        ok: false,
+      };
+    }
+    return {
+      detail: `Request #${id} is already ${existing.status}, so there is nothing to withdraw.`,
+      ok: false,
+    };
+  }
+  logger.info({ approvalId: row.id }, '[approvals] withdrawn by the asker');
+  const text = `_<@${userId}> withdrew this request (#${row.id}), so i won't ${row.summary}_`;
+  await replaceApprovalMessage(row, text);
+  // The card may sit in the owner's DM; the thread it came from hears too.
+  if (row.messageChannel !== slack.decodeThreadId(row.threadId).channel) {
+    await bot
+      .thread(row.threadId)
+      .post({ markdown: text })
+      .catch(() => undefined);
+  }
+  return { detail: `Withdrew request #${row.id}: ${row.summary}.`, ok: true };
 }
 
 /**
@@ -152,7 +227,7 @@ export async function requestApproval({
       await bot
         .thread(threadId)
         .post({
-          markdown: `:lock: Sent to the owner for approval (request #${row.id}): ${row.summary}. Nothing happens until they decide; I'll say here when they do.`,
+          markdown: `:lock: Sent to the owner for approval (request #${row.id}): ${row.summary}. Nothing happens until they decide; I'll say here when they do. <@${requestedBy}> can ask me to withdraw it.`,
         })
         .catch(() => undefined);
     }
@@ -170,6 +245,6 @@ export async function requestApproval({
   );
   return {
     id: row.id,
-    message: `Queued for the owner's approval (request #${row.id}): ${summary}. The owner has been sent it with Approve/Deny buttons and it does NOT expire. Nothing has happened yet and you must not claim it has. Carry on with anything else that was asked; if there is nothing else, say plainly that this needs ${env.OWNER_USER_ID ? "the owner's" : 'an'} approval and stop — do not try another route around it.`,
+    message: `Queued for the owner's approval (request #${row.id}): ${summary}. The owner has been sent it with Approve/Deny buttons and it does NOT expire. Nothing has happened yet and you must not claim it has. If the person changes their mind, \`withdrawApproval\` with this id takes it back. Carry on with anything else that was asked; if there is nothing else, say plainly that this needs ${env.OWNER_USER_ID ? "the owner's" : 'an'} approval and stop — do not try another route around it.`,
   };
 }

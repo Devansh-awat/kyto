@@ -145,6 +145,7 @@ import { fetchUrlTool, getPermalinkTool } from './tools/url';
 import { viewImageTool } from './tools/view-image';
 import { waitTool } from './tools/wait';
 import { wakeTool } from './tools/wake';
+import { withdrawApprovalTool } from './tools/withdraw-approval';
 import {
   createFileReads,
   editFileTool,
@@ -332,6 +333,7 @@ const PUBLIC_POSTING_TOOLS = [
   'unpinMessage',
   'unreact',
   'uploadFile',
+  'withdrawApproval',
 ];
 
 /**
@@ -924,6 +926,10 @@ export async function buildTools({
     bookmarkLink: {
       summary: 'add a bookmark to a channel',
       tool: bookmarkLinkTool({ thread }),
+    },
+    withdrawApproval: {
+      summary: "withdraw the person's own pending approval request",
+      tool: withdrawApprovalTool({ authorUserId }),
     },
     pinMessage: {
       summary: 'pin a message',

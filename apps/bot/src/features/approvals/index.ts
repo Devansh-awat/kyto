@@ -5,12 +5,16 @@ import {
 } from '@repo/db/queries';
 import { env } from '@/env';
 import type { ActionEvent } from '@/harness/types';
-import { mrkdwn } from '@/harness/views';
 import { executeApproval } from '@/lib/approvals/execute';
-import { APPROVE_ACTION, DENY_ACTION } from '@/lib/approvals/request';
-import { bot, slack } from '@/lib/chat';
+import {
+  APPROVE_ACTION,
+  DENY_ACTION,
+  replaceApprovalMessage,
+  WITHDRAW_ACTION,
+  withdrawApproval,
+} from '@/lib/approvals/request';
+import { bot } from '@/lib/chat';
 import logger from '@/lib/logger';
-import { toLogError } from '@/lib/utils/error';
 
 /**
  * Only the owner decides. The approval message is PUBLIC — everyone in the
@@ -20,28 +24,6 @@ import { toLogError } from '@/lib/utils/error';
  */
 function isOwner(event: ActionEvent): boolean {
   return Boolean(env.OWNER_USER_ID) && event.user.userId === env.OWNER_USER_ID;
-}
-
-async function replaceApprovalMessage(
-  row: ApprovalRequest,
-  text: string
-): Promise<void> {
-  if (!(row.messageChannel && row.messageTs)) {
-    return;
-  }
-  await slack.webClient.chat
-    .update({
-      blocks: [{ text: mrkdwn(text), type: 'section' }],
-      channel: row.messageChannel,
-      text,
-      ts: row.messageTs,
-    })
-    .catch((error: unknown) => {
-      logger.warn(
-        { ...toLogError(error), approvalId: row.id },
-        '[approvals] failed to update the approval message'
-      );
-    });
 }
 
 /** Tell the thread what happened, so the asker learns the outcome in place. */
@@ -117,4 +99,19 @@ bot.onAction(DENY_ACTION, async (event) => {
   const text = `:heavy_multiplication_x: Denied — I will not ${row.summary}.`;
   await replaceApprovalMessage(row, text);
   await announce(row, `<@${row.requestedBy}> ${text}`);
+});
+
+// The asker's own button. Withdrawing grants nothing (the claim matches only
+// their own pending row), so it needs no owner check.
+bot.onAction(WITHDRAW_ACTION, async (event) => {
+  const id = Number(event.value);
+  if (!Number.isFinite(id)) {
+    return;
+  }
+  const result = await withdrawApproval({ id, userId: event.user.userId });
+  if (!result.ok) {
+    await event.thread
+      ?.postEphemeral(event.user, result.detail)
+      .catch(() => undefined);
+  }
 });

@@ -98,6 +98,32 @@ export async function decideApprovalRequest({
   return row ?? null;
 }
 
+/**
+ * The asker takes back their own pending request (#189). Same claim as a
+ * decision (`status = 'pending'`), and only the row's own `requestedBy` can
+ * match, so it gives nobody a way to approve anything.
+ */
+export async function withdrawApprovalRequest({
+  id,
+  requestedBy,
+}: {
+  id: number;
+  requestedBy: string;
+}): Promise<ApprovalRequest | null> {
+  const [row] = await db
+    .update(approvalRequests)
+    .set({ decidedAt: new Date(), decidedBy: requestedBy, status: 'withdrawn' })
+    .where(
+      and(
+        eq(approvalRequests.id, id),
+        eq(approvalRequests.status, 'pending'),
+        eq(approvalRequests.requestedBy, requestedBy)
+      )
+    )
+    .returning();
+  return row ?? null;
+}
+
 /** Record what happened when an approved action ran. */
 export async function setApprovalOutcome({
   id,
