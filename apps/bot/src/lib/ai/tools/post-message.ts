@@ -25,6 +25,7 @@ import {
   toRawSlackChannelId,
   toRawSlackUserId,
 } from '@/lib/slack/ids';
+import { resolveChannel } from '@/lib/slack/names';
 
 interface PostTarget {
   id: string;
@@ -544,11 +545,19 @@ export function postMessageTool({
           ? { id: currentThreadId, type: 'thread' }
           : { id, type },
       });
+      // Where it really went, by id AND name: two channels both named "kyto"
+      // and the model wrote the other one's id three times (#163).
+      const landedChannel = sent.threadId.split(':')[1] ?? '';
+      const landedName = landedChannel
+        ? (await resolveChannel(landedChannel)).name
+        : undefined;
+      const landedIn = `<#${landedChannel}>${landedName ? ` (#${landedName}, ${landedChannel})` : ''}`;
+      const nameIt = ` It landed in ${landedIn}: if you say where it went, write exactly <#${landedChannel}>, never a channel id from memory.`;
       if (redirectedToThread) {
         return {
           ...sent,
-          summary:
-            'Posted as a reply in this thread rather than as a new message in the channel. Only the bot owner can have me start a top-level post. Say so if it matters; do not try another route. Your reply goes into this same thread, so do not repeat what you posted.',
+          landedIn,
+          summary: `Posted as a reply in this thread rather than as a new message in the channel. Only the bot owner can have me start a top-level post. Say so if it matters; do not try another route. Your reply goes into this same thread, so do not repeat what you posted.${nameIt}`,
         };
       }
       // The model posted into the thread it is answering and then wrote the
@@ -556,10 +565,10 @@ export function postMessageTool({
       return sent.threadId === currentThreadId
         ? {
             ...sent,
-            summary:
-              'Posted in this same thread you are answering. Any text you write from here on is ALSO posted in this thread, so do not repeat it or confirm it (no "Posted."/"Done"). If the request asked for more than this post, carry on with the rest now; call skip only once everything asked is done and there is nothing to add.',
+            landedIn,
+            summary: `Posted in this same thread you are answering. Any text you write from here on is ALSO posted in this thread, so do not repeat it or confirm it (no "Posted."/"Done"). If the request asked for more than this post, carry on with the rest now; call skip only once everything asked is done and there is nothing to add.${nameIt}`,
           }
-        : sent;
+        : { ...sent, landedIn, summary: `Posted.${nameIt}` };
     },
   });
 }
