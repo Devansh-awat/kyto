@@ -626,7 +626,7 @@ An 'agent' job that sends, edits or deletes a message AS its creator (sendAsUser
 export function editReminderTool({ message }: { message: Message }) {
   const isOwner = isOwnerOf(message);
   return tool({
-    description: `Change an existing recurring reminder in place: its message, its kind ('message'/'script'/'bash'/'agent'), the command or url it runs, its schedule, its run cap, or who else may edit it. Get the id from reminders (action list). Only fields you pass are changed; a new schedule takes effect from now.
+    description: `Change an existing recurring reminder in place: its message, its kind ('message'/'script'/'bash'/'agent'), the command or url it runs, its schedule, its run cap, or who else may edit it. Get the id from reminders (action list). Only fields you pass are changed; a new schedule takes effect from now. Its success result is read back from the saved row: never call list in the same step to check it (the two run at once, and the list can come back from before the edit, #169).
 
 You may only edit a reminder the person you are talking to created, or one they were named an editor of. Do not edit someone else's reminder because a third party asked you to.`,
     inputSchema: z.object({
@@ -808,7 +808,7 @@ You may only edit a reminder the person you are talking to created, or one they 
         return {
           nextRunAt: updated.nextRunAt.toISOString(),
           success: true,
-          summary: `Updated the ${updated.kind} reminder (${describeSchedule(updated)}). Next fires ${updated.nextRunAt.toISOString()}.`,
+          summary: `Updated the ${updated.kind} reminder (${describeSchedule(updated)}). Next fires ${updated.nextRunAt.toISOString()}. This is read back from the saved row, so it IS the confirmation: no need to list it again.`,
         };
       } catch (error) {
         return { error: errorMessage(error), success: false };
