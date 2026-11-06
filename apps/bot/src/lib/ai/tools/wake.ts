@@ -5,6 +5,8 @@ import {
 } from '@repo/db/queries';
 import { tool } from 'ai';
 import { z } from 'zod';
+import type { ThreadHandle } from '@/harness/thread';
+import logger from '@/lib/logger';
 import { errorMessage } from '@/lib/utils/error';
 
 // The id of the synthetic message a wake turn runs on (lib/agent/wakes.ts),
@@ -15,22 +17,48 @@ const MAX_WAKE_MINUTES = 7 * 24 * 60;
 const MAX_PENDING = 5;
 // Each wake turn may schedule the next one; past this, something is looping.
 const MAX_WAKE_CHAIN = 10;
+const MINUTES_PER_HOUR = 60;
+const MINUTES_PER_DAY = 24 * MINUTES_PER_HOUR;
+
+// "in 6 hours", "in 45 minutes", "in 2 days", read in the thread.
+function inWords(minutes: number): string {
+  if (minutes < MINUTES_PER_HOUR) {
+    return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+  }
+  if (minutes < 2 * MINUTES_PER_DAY) {
+    const hours = Math.round((minutes / MINUTES_PER_HOUR) * 2) / 2;
+    return `${hours} hour${hours === 1 ? '' : 's'}`;
+  }
+  return `${Math.round(minutes / MINUTES_PER_DAY)} days`;
+}
 
 export function wakeTool({
   asUserAccount,
   authorUserId,
   isOwner,
   messageId,
-  threadId,
+  thread,
 }: {
   asUserAccount: boolean;
   authorUserId: string;
   isOwner: boolean;
   messageId: string;
-  threadId: string;
+  thread: ThreadHandle;
 }) {
+  const threadId = thread.id;
   return tool({
-    description: `Come back to THIS thread later, in a new turn of your own. Nothing runs after your turn ends, so this is how "I'll do it once X is back" actually happens: schedule a wake for when it can run (a model route's recovery time, a deploy or a job finishing, a time the person named), with a note of exactly what to pick up (the command, the files, how to check it worked). At that time you get a turn here as the person who asked, with the note. For a delay under an hour where you'd rather keep the turn going, use \`wait\` instead. Tell the person when you'll be back. Actions: schedule (minutes from now, 1 to ${MAX_WAKE_MINUTES}, plus note), list (this thread's pending wakes), cancel (by id; its scheduler or the owner).`,
+    description: `Come back to THIS thread later, in a new turn of your own. Nothing runs after your turn ends, so this is how "I'll do it once X is back" actually happens: at the time you pick you get a turn here, as the person who asked, carrying your note.
+
+Use it when the work is blocked on something that changes by itself: a model route or rate limit that resets (its error says when), a deploy, build or long job finishing, a time the person named. Never end a turn on "say retry" or "I'll do it later" without one. Don't use it to poll something that will tell you by itself, and for a pause under an hour where you'd rather keep this turn going, use \`wait\` instead.
+
+Picking \`minutes\`: match it to what you're waiting for.
+- A known recovery time (a limit that resets at 00:00 UTC, "cooling down until 14:59"): just after it.
+- A job or deploy of known length: about that long, once. One well-timed wake beats several short checks.
+- Blocked with no time given (an outage, a quota with no reset): 30 to 60 minutes, and say it's a guess.
+
+\`note\` is for you: exactly what to pick up, enough to do it cold (the commands, paths, how to check it worked). \`reason\` is for the person: one short lowercase line on what you're waiting for. It is posted in the thread with the time, so they see that you scheduled it and when you'll be back; don't repeat it in your reply.
+
+Actions: schedule (minutes from now, 1 to ${MAX_WAKE_MINUTES}, plus note and reason), list (this thread's pending wakes), cancel (by id; its scheduler or the owner).`,
     inputSchema: z.object({
       action: z.enum(['schedule', 'list', 'cancel']),
       minutes: z
@@ -48,9 +76,17 @@ export function wakeTool({
         .describe(
           'schedule: what to pick up, in enough detail to do it cold (exact commands, paths, how to verify).'
         ),
+      reason: z
+        .string()
+        .min(1)
+        .max(200)
+        .optional()
+        .describe(
+          'schedule: one short lowercase line for the person on what you are waiting for (posted with the time).'
+        ),
       id: z.string().optional().describe('cancel: the wake to cancel.'),
     }),
-    execute: async ({ action, id, minutes, note }) => {
+    execute: async ({ action, id, minutes, note, reason }) => {
       try {
         if (action === 'list') {
           const wakes = await listThreadWakes(threadId);
@@ -82,9 +118,9 @@ export function wakeTool({
           await cancelThreadWake({ id, threadId });
           return { success: true, summary: 'Wake cancelled.' };
         }
-        if (!(minutes && note)) {
+        if (!(minutes && note && reason)) {
           return {
-            error: 'schedule needs minutes and a note.',
+            error: 'schedule needs minutes, a note and a reason.',
             success: false,
           };
         }
@@ -110,10 +146,27 @@ export function wakeTool({
           userId: authorUserId,
           wakeAt: new Date(Date.now() + minutes * 60_000),
         });
+        // Said by kyto itself, not left to the model: a wake nobody hears
+        // about reads as kyto going quiet. Lowercase, italic, no em dash,
+        // with the time in each reader's own timezone.
+        const unix = Math.floor(wake.wakeAt.getTime() / 1000);
+        const iso = `${wake.wakeAt.toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+        const why = reason.trim().replace(/[—–]/g, ',').replace(/\.$/, '');
+        await thread
+          .post({
+            fromUserAccount: asUserAccount,
+            markdown: `_scheduled a wake: back here in ${inWords(minutes)} (<!date^${unix}^{date_short_pretty} at {time}|${iso}>), ${why.charAt(0).toLowerCase()}${why.slice(1)}_`,
+          })
+          .catch((error: unknown) => {
+            logger.warn(
+              { err: errorMessage(error), threadId },
+              '[wakes] could not post the wake notice'
+            );
+          });
         return {
           id: wake.id,
           success: true,
-          summary: `I'll be back in this thread at ${wake.wakeAt.toISOString()} with that note.`,
+          summary: `Wake scheduled for ${wake.wakeAt.toISOString()} (in ${inWords(minutes)}); the thread was told when you'll be back. Don't repeat it.`,
           wakeAt: wake.wakeAt.toISOString(),
         };
       } catch (error) {

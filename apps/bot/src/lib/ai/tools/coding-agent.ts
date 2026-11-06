@@ -274,7 +274,13 @@ export function codingAgentTool({
           success: false,
         };
       }
-      const note = notes[result.exitCode];
+      // "Say retry and I'll try again" ended three turns in a row with nothing
+      // queued (#164): a failure that clears by itself gets a wake instead.
+      const note =
+        notes[result.exitCode] ??
+        (result.exitCode === 0
+          ? undefined
+          : 'If this failed for a reason that clears by itself (a rate limit, a credentials or transport error on the model route), don\'t end on "say retry": schedule a `wake` (load it) with this brief for when it should work again, or answer what you can without it.');
       const changed =
         result.exitCode === 124
           ? await Promise.resolve(
