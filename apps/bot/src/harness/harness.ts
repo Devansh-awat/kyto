@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { isSlackFileHost } from './file-host';
 import { mrkdwnToMarkdown } from './markdown';
 import { filterOutbound, filterOutboundDeep } from './outbound';
+import { cannotPostCode, cannotPostNote } from './post-refusal';
 import { ThreadCache } from './thread-cache';
 import type { Author, Message, MessageAttachment, StreamChunk } from './types';
 import { hasUnderline, splitUnderlines } from './underline';
@@ -1107,6 +1108,10 @@ export class SlackHarness {
       // A new message of this stream got its first content: it is now the
       // thread's newest message (the todo list moves under it).
       onNewMessage?: () => void;
+      // Each message this posts, as it is posted: a stream that THROWS returns
+      // nothing, and a caller that takes its messages back (a silent turn's
+      // plan, #34) needs them anyway.
+      onPosted?: (ts: string) => void;
       // Per-message identity override (needs chat:write.customize). Used so a
       // subagent's own streamed message posts as "kyto subagent" + its icon.
       username?: string;
@@ -1115,7 +1120,13 @@ export class SlackHarness {
     }
   ): Promise<string[]> {
     // The ts of every message this posted, so a caller can take them back.
-    const posted: string[] = [];
+    const postedTs: string[] = [];
+    const posted = {
+      push: (ts: string) => {
+        postedTs.push(ts);
+        options.onPosted?.(ts);
+      },
+    };
     const { channel, threadTs } = this.decodeThreadId(threadId);
     const streamArgs = {
       channel,
@@ -1169,15 +1180,71 @@ export class SlackHarness {
       }
       // apiCall: the typed postMessage has no overload for a markdown block
       // with an optional thread.
-      const sent = await this.webClient.apiCall('chat.postMessage', {
-        blocks: [{ text, type: 'markdown' }],
-        channel,
-        text: text.slice(0, NOTIFICATION_TEXT_CHARS),
-        ...(threadTs ? { thread_ts: threadTs } : {}),
-        ...(options.username ? { username: options.username } : {}),
-        ...(options.iconEmoji ? { icon_emoji: options.iconEmoji } : {}),
-        ...(options.iconUrl ? { icon_url: options.iconUrl } : {}),
-      });
+      const postAs = (client: WebClient, markdown: string) =>
+        client.apiCall('chat.postMessage', {
+          blocks: [{ text: markdown, type: 'markdown' }],
+          channel,
+          text: markdown.slice(0, NOTIFICATION_TEXT_CHARS),
+          ...(threadTs ? { thread_ts: threadTs } : {}),
+          ...(client === this.webClient && options.username
+            ? { username: options.username }
+            : {}),
+          ...(client === this.webClient && options.iconEmoji
+            ? { icon_emoji: options.iconEmoji }
+            : {}),
+          ...(client === this.webClient && options.iconUrl
+            ? { icon_url: options.iconUrl }
+            : {}),
+        });
+      let sent: unknown;
+      try {
+        sent = await postAs(this.webClient, text);
+      } catch (error) {
+        // The app may not post here at all (a channel that only lets some
+        // people post, #172): the bot-token retry failed the same way and the
+        // reply vanished while the turn logged complete. Kyto's account is a
+        // member wherever it heard the ping; failing that, the asker gets it in
+        // a DM. Either way a note says why.
+        const code = cannotPostCode(error);
+        if (!code) {
+          throw error;
+        }
+        this.logger.warn(
+          { channel, code },
+          '[harness] the app may not post here; sending the reply another way'
+        );
+        const account = this.userAccountClient;
+        const viaAccount = account
+          ? await postAs(
+              account,
+              `${text}\n\n${cannotPostNote({ code, via: 'account' })}`
+            ).catch((accountError: unknown) => {
+              this.logger.warn(
+                { channel, err: accountError },
+                '[harness] the account could not post there either'
+              );
+              return;
+            })
+          : undefined;
+        if (!viaAccount) {
+          const dm = await this.webClient.conversations.open({
+            users: options.recipientUserId,
+          });
+          await this.webClient.apiCall('chat.postMessage', {
+            blocks: [
+              {
+                text: `${cannotPostNote({ channel, code, via: 'dm' })}\n\n${text}`,
+                type: 'markdown',
+              },
+            ],
+            channel: dm.channel?.id ?? options.recipientUserId,
+            text: text.slice(0, NOTIFICATION_TEXT_CHARS),
+          });
+          options.onNewMessage?.();
+          return;
+        }
+        sent = viaAccount;
+      }
       const ts = startedStreamSchema.safeParse(sent).data?.ts;
       if (ts) {
         posted.push(ts);
@@ -1205,9 +1272,45 @@ export class SlackHarness {
       }
     };
     let structuredSupported = true;
-    const appendChunk = async (chunk: StreamChunk): Promise<void> => {
+    // Cards left `in_progress` (or `error`) in a stopped message make Slack
+    // title the WHOLE plan "Something went wrong", even on a turn that then
+    // answered fine: five separate triggers so far (#28, #30, #123, #191).
+    // The harness now owns the rule rather than each trigger: no card is ever
+    // sent as `error` (its output already says what failed), and whatever is
+    // still open when a message stops is closed as done. The headline is left
+    // to a turn that really failed.
+    const openCards = new Map<string, string>();
+    const closingChunks = (settle: StreamChunk[]): StreamChunk[] => {
+      const settled = new Set(
+        settle.flatMap((chunk) =>
+          chunk.type === 'task_update' && chunk.status !== 'in_progress'
+            ? [chunk.id]
+            : []
+        )
+      );
+      return [...openCards]
+        .filter(([id]) => !settled.has(id))
+        .map(([id, title]) => ({
+          id,
+          status: 'complete',
+          title,
+          type: 'task_update',
+        }));
+    };
+    const appendChunk = async (incoming: StreamChunk): Promise<void> => {
       if (!structuredSupported) {
         return;
+      }
+      const chunk: StreamChunk =
+        incoming.type === 'task_update' && incoming.status === 'error'
+          ? { ...incoming, status: 'complete' }
+          : incoming;
+      if (chunk.type === 'task_update') {
+        if (chunk.status === 'in_progress') {
+          openCards.set(chunk.id, chunk.title);
+        } else {
+          openCards.delete(chunk.id);
+        }
       }
       const send = async (sent: StreamChunk = chunk) => {
         await streamer.append({
@@ -1301,13 +1404,27 @@ export class SlackHarness {
       }
     };
     const stopStreamer = async ({
+      failed = false,
       final,
-      settle = [],
+      settle: given = [],
     }: {
+      /** The turn itself failed: its cards keep the statuses it gave them. */
+      failed?: boolean;
       final: boolean;
       /** Chunks that finish the message's open cards. */
       settle?: StreamChunk[];
     }): Promise<void> => {
+      const settle = failed
+        ? given
+        : [
+            ...given.map((chunk) =>
+              chunk.type === 'task_update' && chunk.status !== 'complete'
+                ? { ...chunk, status: 'complete' as const }
+                : chunk
+            ),
+            ...closingChunks(given),
+          ];
+      openCards.clear();
       if (!currentHasContent) {
         return;
       }
@@ -1326,6 +1443,17 @@ export class SlackHarness {
         unflushedText = '';
       } catch (error) {
         this.logger.warn({ err: error }, '[harness] stream stop failed');
+        // The stream never started because the app may not post here at all
+        // (#172): its text only ever reached the buffer, so the stop is the
+        // first Slack call to say no. Send that text the refused way.
+        if (!streamer.ts && cannotPostCode(error)) {
+          refused = true;
+          structuredSupported = false;
+          refusedText += unflushedText;
+          unflushedText = '';
+          await postRefusedText();
+          return;
+        }
         // A full message refuses the stop too, its unsent text riding along.
         // Stopped again WITHOUT that text (it stays in unflushedText for the
         // next message) but still carrying the settle chunks: closed bare, its
@@ -1344,6 +1472,29 @@ export class SlackHarness {
                     ...(blocks ? { blocks } : {}),
                   })
                   .then(() => true)
+                  // A full message can refuse the settle chunks too (#191,
+                  // back-to-back msg_too_long). Closing a card needs only its
+                  // id and status, so try once more with nothing else.
+                  .catch(() =>
+                    this.webClient
+                      .apiCall('chat.stopStream', {
+                        channel,
+                        chunks: settle.flatMap((chunk) =>
+                          chunk.type === 'task_update'
+                            ? [
+                                {
+                                  id: chunk.id,
+                                  status: chunk.status,
+                                  title: chunk.title.slice(0, 60),
+                                  type: 'task_update',
+                                },
+                              ]
+                            : []
+                        ),
+                        ts,
+                      })
+                      .then(() => true)
+                  )
                   .catch((settleError: unknown) => {
                     this.logger.warn(
                       { err: settleError },
@@ -1537,11 +1688,12 @@ export class SlackHarness {
         await postRefusedText();
       } else {
         await stopStreamer({
+          failed: cutShort,
           final: true,
           settle: cutShort ? options.onRotate?.() : undefined,
         });
       }
     }
-    return posted;
+    return postedTs;
   }
 }

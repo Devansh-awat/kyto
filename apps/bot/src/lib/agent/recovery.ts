@@ -27,6 +27,7 @@ export async function* synthesizeFinalAnswer({
   attempt,
   history,
   knownTools,
+  onProgress,
   onSkip,
   onTally,
   onText,
@@ -46,6 +47,8 @@ export async function* synthesizeFinalAnswer({
   cutOff?: boolean;
   history: string[];
   knownTools: Set<string>;
+  /** A tool call or result: the attempt's stall watchdog re-arms on it. */
+  onProgress: () => void;
   /** A skip here is as deliberate as in the attempt it rescues. */
   onSkip: () => void;
   onTally: (tally: StreamTally) => void;
@@ -100,6 +103,8 @@ export async function* synthesizeFinalAnswer({
       onSkip,
       onTally,
       onTextDelta: onText,
+      onToolActivity: onProgress,
+      onToolResult: onProgress,
       stream: result.fullStream,
     });
   } catch (error) {
@@ -126,6 +131,7 @@ export async function* continueTruncatedReply({
   history,
   knownTools,
   onFinish,
+  onProgress,
   onTally,
   onText,
   results,
@@ -142,6 +148,8 @@ export async function* continueTruncatedReply({
   history: string[];
   knownTools: Set<string>;
   onFinish: (reason: string) => void;
+  /** A tool call or result: the attempt's stall watchdog re-arms on it. */
+  onProgress: () => void;
   onTally: (tally: StreamTally) => void;
   onText: (text: string) => void;
   results: GatheredResult[];
@@ -181,6 +189,8 @@ export async function* continueTruncatedReply({
       onFinish,
       onTally,
       onTextDelta: onText,
+      onToolActivity: onProgress,
+      onToolResult: onProgress,
       stream: result.fullStream,
     });
   } catch (error) {

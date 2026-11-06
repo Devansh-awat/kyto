@@ -6,6 +6,7 @@ import {
   neutralizeBroadcast,
   restoreAnnotatedMentions,
 } from '@/harness/markdown';
+import { cannotPostCode, cannotPostNote } from '@/harness/post-refusal';
 import type { ThreadHandle as Thread } from '@/harness/thread';
 import { stripLeakedToolName } from '@/lib/agent/leaked-tool-name';
 import { slack } from '@/lib/chat';
@@ -35,18 +36,9 @@ const IDLE_MS = 1500;
 const FENCE_REOPEN_PADDING = 3;
 const TABLE_SEPARATOR = /^\|?[\s:|-]*-{2,}[\s:|-]*$/;
 
-// A PRIVATE channel the app isn't in answers `channel_not_found`, not
-// `not_in_channel` — the reply to a ping of the user account there was lost
-// the same way (issue #13).
-const OUTSIDE_CHANNEL = new Set(['channel_not_found', 'not_in_channel']);
 const slackErrorSchema = z.looseObject({
   data: z.looseObject({ error: z.string().optional() }).optional(),
 });
-
-function isNotInChannel(error: unknown): boolean {
-  const code = slackErrorSchema.safeParse(error).data?.data?.error;
-  return code !== undefined && OUTSIDE_CHANNEL.has(code);
-}
 
 export function createReply({
   allowBroadcast = false,
@@ -64,6 +56,7 @@ export function createReply({
   let buffer = '';
   let lastReleaseAt = Date.now();
   let posted = false;
+  let notedFallback = false;
   const fences = createFenceNormalizer({ slack: false });
   // The streamed message being written: its text so far, and the fence a cut
   // closed, to reopen at the top of the next one.
@@ -137,11 +130,12 @@ export function createReply({
           logger.info({ threadId }, '[agent] channel archived; reply dropped');
           return;
         }
-        if (fromUserAccount || !isNotInChannel(error)) {
+        const code = cannotPostCode(error);
+        if (fromUserAccount || !code) {
           logger.warn({ err: error, threadId }, '[agent] reply post failed');
           continue;
         }
-        await postOutsideChannel({ chunk: markdown, identity, thread });
+        await postOutsideChannel({ chunk: markdown, code, identity, thread });
       }
     }
   }
@@ -152,32 +146,44 @@ export function createReply({
   // account, which is in the channel if it heard the message.
   async function postOutsideChannel({
     chunk,
+    code,
     identity,
     thread,
   }: {
     chunk: string;
+    /** Slack's reason, from `cannotPostCode`. */
+    code: string;
     identity:
       | Awaited<ReturnType<typeof resolveIdentity>>
       | { fromUserAccount: true };
     thread: Thread;
   }): Promise<void> {
     const channel = threadId.split(':')[1] ?? '';
-    try {
-      await slack.webClient.conversations.join({ channel });
-      await thread.post({ allowBroadcast, ...identity, markdown: chunk });
-      posted = true;
-      return;
-    } catch (error) {
-      logger.error(
-        { channel, err: error, threadId },
-        '[agent] reply refused (not in the channel) and joining did not help; trying the user account'
-      );
+    // Joining can't lift a posting restriction (#172), only a missing
+    // membership.
+    if (code !== 'restricted_action') {
+      try {
+        await slack.webClient.conversations.join({ channel });
+        await thread.post({ allowBroadcast, ...identity, markdown: chunk });
+        posted = true;
+        return;
+      } catch (error) {
+        logger.error(
+          { channel, err: error, threadId },
+          '[agent] reply refused (not in the channel) and joining did not help; trying the user account'
+        );
+      }
     }
     if (!slack.userAccountId) {
       return;
     }
     try {
-      await thread.post({ fromUserAccount: true, markdown: chunk });
+      // Said once, under the first part that had to go out this way.
+      const note = notedFallback
+        ? ''
+        : `\n\n${cannotPostNote({ code, via: 'account' })}`;
+      await thread.post({ fromUserAccount: true, markdown: `${chunk}${note}` });
+      notedFallback = true;
       posted = true;
     } catch (error) {
       logger.error(

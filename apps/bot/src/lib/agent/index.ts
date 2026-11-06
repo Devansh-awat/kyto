@@ -92,6 +92,7 @@ import {
   interruptTurn,
   queuedInput,
   steerTurn,
+  TurnAbort,
   takeSteering,
 } from '@/lib/agent/steering';
 import { compactThinking, rememberThinking } from '@/lib/agent/thinking';
@@ -853,22 +854,36 @@ async function executeTurn(
       await speakAsUserAccount({ message, thread });
       await reply?.flush({ thread });
     } else {
-      await streamSegmented({ message, thread });
-      await reply?.flush({ thread });
-      // A skip that said nothing left only a "Thinking completed" plan behind
-      // (#34). Once kyto has said something, the plan is the record of what it
-      // did around that, so it stays (owner's call, 2026-10-08).
-      if (turnSkipped && !reply?.hasPosted() && planMessages.length > 0) {
-        const { channel } = slack.decodeThreadId(thread.id);
-        for (const ts of planMessages) {
-          await slack.webClient.chat
-            .delete({ channel, ts })
-            .catch((error: unknown) => {
-              logger.warn(
-                { err: error, threadId: thread.id, ts },
-                '[agent] could not remove a skipped turn’s plan'
-              );
-            });
+      // A turn that ends having said nothing leaves only a "Thinking
+      // completed" plan behind (#34): a skip, and also a turn stopped before it
+      // spoke (the asker's own stop button, 6s in, before the model had even
+      // been called, twice on 2026-11-04). Once kyto has said something, the
+      // plan is the record of what it did around that, so it stays (owner's
+      // call, 2026-10-08).
+      let stopped = false;
+      try {
+        await streamSegmented({ message, thread });
+        await reply?.flush({ thread });
+      } catch (error) {
+        stopped = error instanceof TurnAbort && error.reason === 'stop';
+        throw error;
+      } finally {
+        if (
+          (turnSkipped || stopped) &&
+          !reply?.hasPosted() &&
+          planMessages.length > 0
+        ) {
+          const { channel } = slack.decodeThreadId(thread.id);
+          for (const ts of planMessages) {
+            await slack.webClient.chat
+              .delete({ channel, ts })
+              .catch((error: unknown) => {
+                logger.warn(
+                  { err: error, threadId: thread.id, ts },
+                  '[agent] could not remove a silent turn’s plan'
+                );
+              });
+          }
         }
       }
     }
@@ -2233,6 +2248,10 @@ async function executeTurn(
               skipped = true;
             },
             onTally: recordTiming,
+            // The nudge works under THIS attempt's stall watchdog: without
+            // re-arming it, a nudge busy with tools was killed 5 minutes after
+            // the attempt's own last step (#194).
+            onProgress: () => armWatchdog(ATTEMPT_TIMEOUT_MS),
             activeTools: attemptTools,
             attempt: currentAttempt,
             knownTools,
@@ -2243,6 +2262,7 @@ async function executeTurn(
               errorStage = 'after_text';
               streamedText = appendStreamedText(streamedText, text);
               moderationReply += text;
+              armWatchdog(ATTEMPT_TIMEOUT_MS);
             },
             results: gatheredResults,
             secret,
@@ -2258,7 +2278,10 @@ async function executeTurn(
           // made the attempt count as handled and the turn ended on "let me
           // build it…" — one user asked "conclusion?" / "output?" four
           // times in one day. The next model carries on from what was shown.
-          if (cutInWork && !(nudgeWrote || skipped)) {
+          if (
+            (cutInWork && !(nudgeWrote || skipped)) ||
+            attemptAbort.signal.reason instanceof AttemptTimeoutError
+          ) {
             throw new StreamInterruptedError(
               `Model ${currentAttempt.model} was cut off mid-work and its continuation wrote nothing`
             );
@@ -2282,8 +2305,10 @@ async function executeTurn(
         ) {
           for (let round = 0; round < MAX_CONTINUATIONS; round += 1) {
             let continuationFinish: string | undefined;
+            let continuationWrote = false;
             yield* continueTruncatedReply({
               onTally: recordTiming,
+              onProgress: () => armWatchdog(ATTEMPT_TIMEOUT_MS),
               activeTools: attemptTools,
               attempt: currentAttempt,
               knownTools,
@@ -2291,10 +2316,12 @@ async function executeTurn(
                 continuationFinish = reason;
               },
               onText: (text) => {
+                continuationWrote = true;
                 producedText = true;
                 errorStage = 'after_text';
                 streamedText = appendStreamedText(streamedText, text);
                 moderationReply += text;
+                armWatchdog(ATTEMPT_TIMEOUT_MS);
               },
               results: gatheredResults,
               secret,
@@ -2306,6 +2333,20 @@ async function executeTurn(
               toolOrder: built.toolOrder,
               tools: built.tools,
             });
+            // A continuation that died (the stall watchdog, a dropped stream:
+            // no finish reason at all) is NOT a finished reply. It used to fall
+            // through to "handled" on the cut-off text from before, and the turn
+            // ended on half a sentence and a to-do card while the person had to
+            // type "continue" (#194). Hand it to the next model instead, which
+            // carries on from what was shown with the results gathered so far.
+            if (
+              attemptAbort.signal.reason instanceof AttemptTimeoutError ||
+              (continuationFinish === undefined && !continuationWrote)
+            ) {
+              throw new StreamInterruptedError(
+                `Model ${currentAttempt.model} stopped mid-reply and its continuation died before finishing`
+              );
+            }
             // Whatever it just wrote fit, and arrived whole — the reply is
             // complete. `other` means this continuation was itself cut off, so
             // it gets another round exactly like a `length` one does.
@@ -3002,7 +3043,7 @@ async function executeTurn(
           yield close;
         }
       };
-      const posted = await slack.stream(threadId, segment(), {
+      await slack.stream(threadId, segment(), {
         // Only the turn's LAST message gets the footer, and only when that
         // message has content; otherwise it is posted on its own afterwards.
         finalBlocks: async () => {
@@ -3024,11 +3065,11 @@ async function executeTurn(
         // Each new message of the reply is the thread's newest: a live to-do
         // list moves under it.
         onNewMessage: () => moveTodosDown(threadId),
+        onPosted: (ts) => planMessages.push(ts),
         recipientTeamId: slack.teamId ?? '',
         recipientUserId: turnMessage.author.userId,
         taskDisplayMode: 'plan',
       });
-      planMessages.push(...posted);
       if (broadcast) {
         await turnThread
           .post({ allowBroadcast: isOwner, markdown: broadcast })
