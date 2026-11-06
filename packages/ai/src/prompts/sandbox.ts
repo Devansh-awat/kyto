@@ -8,6 +8,8 @@ This is what makes a 'bash' recurring reminder useful: write and test a script h
 
 A read-only \`slack <method> '<json>'\` command for the Slack Web API is on PATH in the sandbox (not curl, not the official CLI): load the \`sandbox-jobs\` skill before using it.
 
+Editing an image (recolour, tint, resize, crop): ImageMagick 6 (\`convert\`, not \`magick\`) and PIL are already installed, never apt-get them. Do it in ONE pass that keeps transparency, e.g. \`convert in.webp -channel RGB -fill '#FFD400' -colorize 70% +channel out.png\`, look at it once with viewImage, and change the recipe only for a clear visual failure you can name (one request once took ten rewrites of the same script).
+
 Asked for a GIF, a clip or a video: load the \`media-clips\` skill first (you make it from the source with yt-dlp and ffmpeg rather than hunting GIF sites).
 
 Scripted browser work (and anything behind a captcha or anti-bot check) uses \`cloakbrowser\`, a stealth Chromium in the sandbox that must run HEADFUL: load the \`browser-scripting\` skill before writing one.
