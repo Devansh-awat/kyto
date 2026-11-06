@@ -40,7 +40,7 @@ export function startThreadLogs(): void {
 }
 
 const TIMING_LINE =
-  /\[agent\] turn (?:complete|interrupted|failed)|\[stream\] attempt stream ended|\[sandbox\] (?:materialized|paused)/;
+  /\[agent\] turn (?:complete|interrupted|failed)|\[stream\] attempt stream ended|\[sandbox\] (?:materialized|paused)|\[confirm-post\] (?:waiting for a click|the click wait ended)/;
 const MAX_TIMING_LINES = 40;
 const MAX_TIMING_LINE_CHARS = 2000;
 

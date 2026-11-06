@@ -12,9 +12,13 @@ import {
 } from './pending';
 
 /** What the tool hands back once the approver has (or hasn't) acted. */
-export type ConfirmResult =
+export type ConfirmResult = (
   | { success: true; summary: string }
-  | { success: false; denied?: boolean; error?: string; summary?: string };
+  | { success: false; denied?: boolean; error?: string; summary?: string }
+) & {
+  /** How long the tool sat on a person's click: not a slow call (#186). */
+  waitedForClickSeconds?: number;
+};
 
 export const CONFIRM_SEND_ACTION = 'confirm_post_send';
 export const CONFIRM_CANCEL_ACTION = 'confirm_post_cancel';
@@ -153,6 +157,23 @@ export async function requestPostConfirmation({
   thread: ThreadHandle;
 }): Promise<ConfirmResult> {
   const { id, wait } = stashPendingPost(post);
+  const waitStarted = Date.now();
+  // Said in the logs and to the person who asked: a 7-minute postMessage was
+  // the owner taking 7 minutes to click, and it was reviewed and filed as a
+  // slow tool, with the asker watching a spinning card the whole time (#186).
+  logger.info(
+    { approverUserId, requestedBy: post.requestedBy, summary: post.summary },
+    '[confirm-post] waiting for a click (time from here is a person deciding, not a slow call)'
+  );
+  if (approverUserId !== post.requestedBy) {
+    await thread
+      .postEphemeral(
+        post.requestedBy,
+        `_waiting for <@${approverUserId}> to ok this before it goes out (up to ${Math.round(CONFIRM_WAIT_MS / 60_000)} minutes)_`,
+        { fallbackToDM: false }
+      )
+      .catch(() => undefined);
+  }
   const delivered = await thread.postEphemeral(
     approverUserId,
     `Confirm before I send: ${post.summary}`,
@@ -202,7 +223,18 @@ export async function requestPostConfirmation({
     });
   }).finally(() => releaseDeadline?.());
 
-  return outcomeToResult(outcome, post, Boolean(abortSignal?.aborted));
+  const waitedForClickSeconds = Math.round((Date.now() - waitStarted) / 1000);
+  logger.info(
+    {
+      decision: outcome?.decision ?? 'no answer',
+      waitedForClickSeconds,
+    },
+    '[confirm-post] the click wait ended'
+  );
+  return {
+    ...outcomeToResult(outcome, post, Boolean(abortSignal?.aborted)),
+    waitedForClickSeconds,
+  };
 }
 
 const interactionSchema = {
