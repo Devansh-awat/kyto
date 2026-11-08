@@ -216,4 +216,14 @@ describe('condemnsHackclub', () => {
       })
     ).toBe(false);
   });
+
+  // 2026-11-08: Hack Club dropped mercury; its 400 sent turns past haiku/luna.
+  test('one model the proxy no longer serves does not', () => {
+    expect(
+      condemnsHackclub({
+        status: 400,
+        text: 'Bad Request {"error":"inception/mercury-3 is not a valid model ID"} 400',
+      })
+    ).toBe(false);
+  });
 });

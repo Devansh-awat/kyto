@@ -77,7 +77,13 @@ export function buildFallbackQueue(
  * And no for one model's upstream pool being busy (`temporarily rate-limited
  * upstream`): on 2026-10-20 mercury's sent a `--model mercury` turn past
  * haiku, luna and GLM, all answering fine, straight to Gemini.
+ *
+ * And no for one model the proxy no longer serves (`… is not a valid model
+ * ID`, a 400): when Hack Club dropped mercury on 2026-11-08, every mercury
+ * thread skipped haiku and luna and landed on Gemini's free tier.
  */
+const INVALID_MODEL_TEXT = /is not a valid model id/i;
+
 export function condemnsHackclub({
   status,
   text,
@@ -89,7 +95,8 @@ export function condemnsHackclub({
   return (
     status !== undefined &&
     !isGatewayStatus(status) &&
-    !isUpstreamPoolLimitText(text)
+    !isUpstreamPoolLimitText(text) &&
+    !INVALID_MODEL_TEXT.test(text)
   );
 }
 

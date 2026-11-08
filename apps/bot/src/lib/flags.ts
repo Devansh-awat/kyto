@@ -38,7 +38,9 @@ export type ParsedFlags =
   | { flags: MessageFlags; ok: true };
 
 // kyto's own model names; `MODEL_CHOICES` is keyed by exactly these.
-export const SHARED_MODEL_NAMES = ['glm', 'haiku', 'luna', 'mercury'] as const;
+// Mercury left Hack Club AI on 2026-11-08 (every call: "not a valid model
+// ID"), so a stored `mercury` choice now falls back to the thread's arm.
+export const SHARED_MODEL_NAMES = ['glm', 'haiku', 'luna'] as const;
 // What `--model`/`--reasoning` may say when the flag ends a line rather than
 // opening the message: a value that reads like prose is prose.
 const TRAILING_MODEL = new RegExp(

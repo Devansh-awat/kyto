@@ -246,11 +246,8 @@ export const subagentAttempts: ModelAttempt[] = [
 export function drawnAttempts(): ModelAttempt[] {
   // A random sort key each: every order equally likely, so each model leads
   // a third of the runs.
-  const drawn = [
-    PRIMARY_ATTEMPT,
-    catalogAttempt(LUNA_MODEL),
-    catalogAttempt(MERCURY_MODEL),
-  ]
+  // Mercury left Hack Club AI on 2026-11-08, so it's haiku and luna halves.
+  const drawn = [PRIMARY_ATTEMPT, catalogAttempt(LUNA_MODEL)]
     .map((attempt) => ({ attempt, key: Math.random() }))
     .sort((a, b) => a.key - b.key)
     .map(({ attempt }) => attempt);
