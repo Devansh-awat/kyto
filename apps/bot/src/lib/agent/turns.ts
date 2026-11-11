@@ -1,4 +1,8 @@
 import { TurnAbort } from '@/lib/agent/steering';
+import {
+  hasThreadProcesses,
+  killThreadProcesses,
+} from '@/lib/ai/tools/background';
 import logger from '@/lib/logger';
 import type { ActiveTurn } from '@/types/agent';
 
@@ -70,6 +74,33 @@ export function stopTurn({
       turn.controller.abort(new TurnAbort('stop'));
       stopped = true;
     }
+  }
+  // A stop covers the detached sandbox jobs too, or "Stopped" is a lie: they
+  // run on, and their reports keep waking the thread. With no turn running
+  // that is still a stop (the jobs outlive their turn), and the caller must
+  // not answer "nothing to stop". A caller filtering turns (`mayStop`) only
+  // stops jobs along with a turn it let through.
+  const jobs = hasThreadProcesses(threadId);
+  if (stopped || (!mayStop && jobs)) {
+    stopped = true;
+    killThreadProcesses(threadId)
+      .then((killed) => {
+        if (killed > 0) {
+          logger.info(
+            { killed, source, threadId },
+            '[agent] killed background jobs on stop'
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        logger.warn(
+          {
+            err: error instanceof Error ? error.message : String(error),
+            threadId,
+          },
+          '[agent] failed to kill background jobs on stop'
+        );
+      });
   }
   return stopped;
 }

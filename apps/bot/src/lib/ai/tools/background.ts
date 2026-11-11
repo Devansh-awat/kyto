@@ -91,6 +91,8 @@ interface BackgroundProcess {
   command: string;
   errPath: string;
   exitPath: string;
+  /** Set while the command may have fetched a repo whose hooks aren't stripped yet. */
+  fetchCommand?: string;
   /** Its turn was interrupted while waiting on it; the next turn is told. */
   orphaned?: boolean;
   outPath: string;
@@ -103,10 +105,59 @@ interface BackgroundProcess {
 // next turn (a wake, or someone asking "is it done?") got "Unknown process id"
 // for a job that was still running. In memory: a restart loses them, as it
 // loses the sandbox's own process.
-const threadProcesses = new Map<
-  string,
-  { counter: number; processes: Map<string, BackgroundProcess> }
->();
+interface ThreadProcesses {
+  counter: number;
+  /** The sandbox of the turn that registered it, so a stop can reach the jobs. */
+  getSandboxContext: () => SandboxContext;
+  processes: Map<string, BackgroundProcess>;
+}
+// Turns that wake the thread share ONE registry (`threadProcesses`). A secret or
+// unattended turn gets its own, so its handles never show up in another turn's
+// process list; `stopRegistries` lists both so an explicit STOP reaches every
+// job anyway.
+const threadProcesses = new Map<string, ThreadProcesses>();
+const stopRegistries = new Map<string, Set<ThreadProcesses>>();
+
+/** Whether a STOP in this thread has background jobs to kill. */
+export function hasThreadProcesses(threadId: string): boolean {
+  for (const registry of stopRegistries.get(threadId) ?? []) {
+    if (registry.processes.size > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Kill every background job of a thread (an explicit STOP): their whole
+ * process groups, then forget the handles so no watcher wakes the thread about
+ * them later. Hooks are stripped from anything a killed job had fetched, as for
+ * a job that finished. Returns how many were killed.
+ */
+export async function killThreadProcesses(threadId: string): Promise<number> {
+  const registries = stopRegistries.get(threadId);
+  stopRegistries.delete(threadId);
+  let killed = 0;
+  for (const registry of registries ?? []) {
+    const procs = [...registry.processes.values()];
+    registry.processes.clear();
+    if (procs.length === 0) {
+      continue;
+    }
+    const context = registry.getSandboxContext();
+    const pids = procs.map((proc) => proc.pid).join(' ');
+    await context.session.run({
+      command: `for p in ${pids}; do kill -9 -$p 2>/dev/null || kill -9 $p 2>/dev/null; done; true`,
+    });
+    for (const proc of procs) {
+      if (proc.fetchCommand) {
+        await disarmFetchedRepos({ command: proc.fetchCommand, context });
+      }
+    }
+    killed += procs.length;
+  }
+  return killed;
+}
 
 /**
  * Commands an interrupted turn was still waiting on, once each. The command
@@ -175,23 +226,34 @@ export function backgroundProcessTools({
   github?: { isOwner: boolean; threadId: string; userId: string };
 }) {
   const registry = (() => {
-    const fresh = () => ({
+    const fresh = (): ThreadProcesses => ({
       counter: 0,
+      getSandboxContext,
       processes: new Map<string, BackgroundProcess>(),
     });
     const key = wake?.thread.id;
-    if (!key) {
-      return fresh();
+    const shared = key ? threadProcesses.get(key) : undefined;
+    const registry = shared ?? fresh();
+    registry.getSandboxContext = getSandboxContext;
+    const stopKey = key ?? github?.threadId;
+    if (key && !shared) {
+      threadProcesses.set(key, registry);
     }
-    const existing = threadProcesses.get(key) ?? fresh();
-    threadProcesses.set(key, existing);
-    return existing;
+    if (stopKey) {
+      // Drop other turns' registries with nothing left to kill, so a long
+      // thread doesn't keep every turn's sandbox handle alive.
+      const set = stopRegistries.get(stopKey) ?? new Set<ThreadProcesses>();
+      for (const other of set) {
+        if (other !== registry && other.processes.size === 0) {
+          set.delete(other);
+        }
+      }
+      set.add(registry);
+      stopRegistries.set(stopKey, set);
+    }
+    return registry;
   })();
   const processes = registry.processes;
-  // Commands still to be checked for a repo they may have fetched; a detached
-  // command finishes out of band, so the disarm happens when a poll first sees
-  // it done rather than at start time.
-  const pendingDisarm = new Map<string, string>();
 
   async function startManaged(
     command: string,
@@ -216,11 +278,19 @@ export function backgroundProcessTools({
     // file is written only AFTER the command completes, so its presence is how a
     // poll knows the job finished. Single-quoting keeps the outer shell from
     // expanding anything in the user command ($?, $! stay for the inner sh).
-    const wrapped = `{ ${command}\n} >"${proc.outPath}" 2>"${proc.errPath}"; echo $? >"${proc.exitPath}"`;
+    // The script goes in a FILE, not the argv: `pkill -f <pattern>` in the
+    // command used to match this wrapper's own command line, kill it before it
+    // wrote the exit file, and leave the call "unfinished" until its timeout.
+    const scriptPath = `${base}.sh`;
+    const wrapped = `{ ${command}\n} >"${proc.outPath}" 2>"${proc.errPath}" </dev/null; echo $? >"${proc.exitPath}"`;
+    await context.session.writeBinaryFile({
+      content: new TextEncoder().encode(wrapped),
+      path: scriptPath,
+    });
     // `setsid`: its own process group, whose id is this pid, so a kill takes
     // the command's children too. A plain `&` shares the shell's group, and
     // the group kill silently missed: only `sh` died, the command ran on.
-    const launch = `nohup setsid sh -c ${shSingleQuote(wrapped)} >/dev/null 2>&1 & echo $!`;
+    const launch = `nohup setsid sh ${shSingleQuote(scriptPath)} >/dev/null 2>&1 </dev/null & echo $!`;
     const result = await context.session.run({
       command: launch,
       workingDirectory: workingDirectory ?? context.sessionWorkDir,
@@ -234,7 +304,9 @@ export function backgroundProcessTools({
     proc.pid = pid;
     processes.set(id, proc);
     if (mayHaveFetchedRepo(command)) {
-      pendingDisarm.set(id, command);
+      // A detached command finishes out of band, so the disarm happens when a
+      // poll first sees it done (or it is killed) rather than at start time.
+      proc.fetchCommand = command;
     }
     return { id };
   }
@@ -244,11 +316,12 @@ export function backgroundProcessTools({
     id: string,
     result: ManagedResult
   ): Promise<string | undefined> {
-    const command = pendingDisarm.get(id);
-    if (!(command && result.finished)) {
+    const proc = processes.get(id);
+    const command = proc?.fetchCommand;
+    if (!(proc && command && result.finished)) {
       return;
     }
-    pendingDisarm.delete(id);
+    proc.fetchCommand = undefined;
     return await disarmFetchedRepos({ command, context: getSandboxContext() });
   }
 
@@ -427,12 +500,18 @@ export function backgroundProcessTools({
       command: `kill -9 -${proc.pid} 2>/dev/null || kill -9 ${proc.pid} 2>/dev/null || true`,
     });
     processes.delete(id);
+    if (proc.fetchCommand) {
+      await disarmFetchedRepos({
+        command: proc.fetchCommand,
+        context: getSandboxContext(),
+      });
+    }
     return true;
   }
 
   const runBackgroundProcess = tool({
     description:
-      "Start a shell command running in the background in the sandbox and return immediately with a handle id, instead of waiting for it to finish: for a dev server, a watcher, a long build or benchmark you work alongside. Not for something you'd only wait on straight away (that is plain bash). Use process (action output) to check on it and process (action kill) to stop it.",
+      "Start a shell command running in the background in the sandbox and return immediately with a handle id, instead of waiting for it to finish: for a dev server, a watcher, a long build or benchmark you work alongside. Not for something you'd only wait on straight away (that is plain bash). Use getProcessOutput to check on it and killProcess to stop it.",
     inputSchema: z.object({
       command: z.string().min(1),
     }),
@@ -454,7 +533,7 @@ export function backgroundProcessTools({
         return {
           id: started.id,
           success: true,
-          summary: `Started background process ${started.id}. Check it with process (action output, id ${started.id}); stop it with process (action kill, id ${started.id}). If your turn ends before it does, you'll be woken with its result when it finishes (or told after 30 minutes if it's still going), so don't poll it just to wait.`,
+          summary: `Started background process ${started.id}. Check it with getProcessOutput (id ${started.id}); stop it with killProcess (id ${started.id}). If your turn ends before it does, you'll be woken with its result when it finishes (or told after 30 minutes if it's still going), so don't poll it just to wait.`,
         };
       } catch (error) {
         return { error: errorMessage(error), success: false };
@@ -464,7 +543,7 @@ export function backgroundProcessTools({
 
   const getProcessOutput = tool({
     description:
-      'Read the output so far of a background process (started with process (action start), or a bash command that was auto-moved to the background after running over a minute), and whether it is still running. Reports the exit code once finished.',
+      'Read the output so far of a background process (started with runBackgroundProcess, or a bash command that was auto-moved to the background after running over a minute), and whether it is still running. Reports the exit code once finished.',
     inputSchema: z.object({
       id: z.string().min(1),
     }),
@@ -502,7 +581,7 @@ export function backgroundProcessTools({
 
   const killProcess = tool({
     description:
-      'Kill a background process (started with process (action start) or auto-moved from bash).',
+      'Kill a background process (started with runBackgroundProcess or auto-moved from bash).',
     inputSchema: z.object({
       id: z.string().min(1),
     }),

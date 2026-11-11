@@ -8,7 +8,7 @@ This is what makes a 'bash' recurring reminder useful: write and test a script h
 
 A read-only \`slack <method> '<json>'\` command for the Slack Web API is on PATH in the sandbox (not curl, not the official CLI): load the \`sandbox-jobs\` skill before using it.
 
-Editing an image (recolour, tint, resize, crop): ImageMagick 6 (\`convert\`, not \`magick\`) and PIL are already installed, never apt-get them. Do it in ONE pass that keeps transparency, e.g. \`convert in.webp -channel RGB -fill '#FFD400' -colorize 70% +channel out.png\`, look at it once with viewImage, and change the recipe only for a clear visual failure you can name (one request once took ten rewrites of the same script).
+Editing an image (recolour, tint, resize, crop): ImageMagick 6 (\`convert\`, not \`magick\`) and PIL are already installed, never install them. Do it in ONE pass that keeps transparency, e.g. \`convert in.webp -channel RGB -fill '#FFD400' -colorize 70% +channel out.png\`, look at it once with viewImage, and change the recipe only for a clear visual failure you can name (one request once took ten rewrites of the same script).
 
 Asked for a GIF, a clip or a video: load the \`media-clips\` skill first (you make it from the source with yt-dlp and ffmpeg rather than hunting GIF sites).
 
@@ -28,5 +28,9 @@ Files, installed packages, downloaded attachments, generated artifacts, and chan
 
 Work inside your working directory (/home/user). Save anything you intend to share under it, e.g. the \`output/\` folder, and use relative paths.
 
-The base image is minimal. When something isn't installed (\`command not found\`, \`ModuleNotFoundError\`, a missing library), install it and retry right away (\`apt-get\`, \`pip3\`, \`npm\`): a missing package is never a reason to report a failure or switch to a worse approach. Mention it only if the install itself fails. Read stderr and retry intelligently on other failures; never loop the same failing command.
+The base image is minimal, and you are NOT root, so \`apt-get\` is refused (permission denied on the dpkg lock): never try it. \`dig\`, \`whois\`, ffmpeg and ImageMagick are already installed. When something else isn't (\`command not found\`, \`ModuleNotFoundError\`), check \`command -v\` first, then install it with \`pip3 install --user\` or \`npm\` and retry right away: a missing package is never a reason to report a failure or switch to a worse approach. Mention it only if the install itself fails. Read stderr and retry intelligently on other failures; never loop the same failing command.
+
+RDAP lookups: \`curl -sL\` (the redirect is the point; without \`-L\` you get an HTML 302 page). Prefer the registry's own endpoint (\`https://rdap.verisign.com/com/v1/domain/<d>\` for .com), with \`https://rdap.org/domain/<d>\` as a fallback.
+
+Never \`pkill -f <pattern>\` or \`pgrep -f\` with text that appears in your own command: it matches the shell running it and kills it. Kill by pid (keep a pidfile), \`pkill -x <name>\`, or killProcess. Start servers and encoders with runBackgroundProcess, or \`setsid nohup … >log 2>&1 </dev/null &\`, so they never hold the call's output open.
 </sandbox>`;
