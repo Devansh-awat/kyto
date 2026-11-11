@@ -191,7 +191,7 @@ async function deleteKytoReplies({
 }): Promise<void> {
   const threadId = slack.encodeThreadId({ channel: channelId, threadTs });
   // A turn still running would keep posting into the thread being cleared.
-  stopTurn({ threadId });
+  stopTurn({ source: 'thread-cleanup', threadId, userId: ownerId });
   let deleted = 0;
   let failed = 0;
   try {

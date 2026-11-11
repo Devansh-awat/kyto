@@ -555,7 +555,11 @@ bot.onAction([OPT_IN_ACCEPT_ACTION, OPT_IN_NO_JOIN_ACTION], acceptOptIn);
 
 bot.onAction('stop_turn', async (event) => {
   const threadId = event.value ?? event.threadId;
-  const stopped = stopTurn({ threadId });
+  const stopped = stopTurn({
+    source: 'stop_turn button',
+    threadId,
+    userId: event.user.userId,
+  });
 
   if (!stopped) {
     await event.thread

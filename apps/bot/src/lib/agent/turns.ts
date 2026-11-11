@@ -1,4 +1,5 @@
 import { TurnAbort } from '@/lib/agent/steering';
+import logger from '@/lib/logger';
 import type { ActiveTurn } from '@/types/agent';
 
 const turns = new Map<string, ActiveTurn>();
@@ -42,15 +43,30 @@ export const USER_ACCOUNT_TURN_SUFFIX = '#user';
  */
 export function stopTurn({
   mayStop,
+  source,
   threadId,
+  userId,
 }: {
   mayStop?: (turn: ActiveTurn) => boolean;
+  /** Which caller is stopping: logged, so an `interrupted` turn can be traced. */
+  source: string;
   threadId: string;
+  userId?: string;
 }): boolean {
   let stopped = false;
   for (const slot of [threadId, `${threadId}${USER_ACCOUNT_TURN_SUFFIX}`]) {
     const turn = turns.get(slot);
     if (turn && (!mayStop || mayStop(turn))) {
+      logger.info(
+        {
+          source,
+          threadId,
+          turnAnswering: turn.message?.id,
+          turnSlot: slot,
+          userId,
+        },
+        '[agent] stopping turn'
+      );
       turn.controller.abort(new TurnAbort('stop'));
       stopped = true;
     }

@@ -269,7 +269,13 @@ async function runStop({
   message: Message;
   thread: Thread;
 }): Promise<void> {
-  if (stopTurn({ threadId: thread.id })) {
+  if (
+    stopTurn({
+      source: '!stop',
+      threadId: thread.id,
+      userId: message.author.userId,
+    })
+  ) {
     return;
   }
   await tell({

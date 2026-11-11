@@ -35,7 +35,12 @@ bot.onAgentSessionStopped(async ({ channelId, threadTs, userId }) => {
   const running = [threadId, `${threadId}${USER_ACCOUNT_TURN_SUFFIX}`].flatMap(
     (slot) => getTurn({ threadId: slot }) ?? []
   );
-  const stopped = stopTurn({ mayStop, threadId });
+  const stopped = stopTurn({
+    mayStop,
+    source: 'code-channel stop button',
+    threadId,
+    userId,
+  });
   logger.info(
     { stopped, threadId, userId },
     '[code-channel] stop button pressed'
