@@ -1,4 +1,3 @@
-import { originalToolName } from '@/lib/ai/merge-tools';
 import { clamp } from '@/lib/utils/text';
 import type {
   DefaultTaskRenderer,
@@ -88,9 +87,7 @@ export function renderTask({
   phase: RenderPhase;
   toolName: string;
 }) {
-  // A family call (`reminders` with action `once`) renders as the verb it
-  // stands for, so its card keeps the verb's own title and details.
-  const verb = originalToolName({ input, toolName });
+  const verb = toolName;
   const entry = renderers[verb];
   // An MCP tool reads whatever the server returns — a database password came
   // back from a "read" tool (#75) — and the plan is public. Its card says

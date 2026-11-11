@@ -607,7 +607,7 @@ export async function buildPrompt(
       : []),
     ...orphanedCommands.map(
       ({ command, id }) =>
-        `The turn before this one was interrupted while this command was running: \`${command.length > 300 ? `${command.slice(0, 300)}…` : command}\`. It wasn't stopped: it may still be running or have finished. Check it with process (action output, id "${id}") before running it again.`
+        `The turn before this one was interrupted while this command was running: \`${command.length > 300 ? `${command.slice(0, 300)}…` : command}\`. It wasn't stopped: it may still be running or have finished. Check it with getProcessOutput (id "${id}") before running it again.`
     ),
     ...(pulledInLater
       ? [
@@ -621,7 +621,7 @@ export async function buildPrompt(
       : []),
     ...(codeChannel === 'native' && thread && inChannelConversation
       ? [
-          "This is a Slack CODE CHANNEL and you are its agent: the whole channel is ONE conversation with you about one task (every message here is for you, no mention needed) and your replies go at the top level. The channel has one sandbox workspace; what you built earlier is still there. Show your work in the channel's tabs with the codeChannel tool (a `diff` tab after changing code, the pull request as a `pull_request` tab, a `canvas` tab for a plan people can comment on) and keep the context bar on the repo, branch and PR. Archive the channel only when someone asks.",
+          "This is a Slack CODE CHANNEL and you are its agent: the whole channel is ONE conversation with you about one task (every message here is for you, no mention needed) and your replies go at the top level. The channel has one sandbox workspace; what you built earlier is still there. Show your work in the channel's tabs with the code channel tab tools (setCodeChannelDiffTab after changing code, setCodeChannelPullRequestTab for the pull request, setCodeChannelCanvasTab for a plan people can comment on) and keep the context bar on the repo, branch and PR. Archive the channel only when someone asks.",
         ]
       : []),
     ...(codeChannel === 'native' && thread && !inChannelConversation

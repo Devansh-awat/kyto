@@ -7,7 +7,7 @@ import {
 import { errorMessage } from '@/lib/utils/error';
 
 // The rules every way of creating or editing a reminder enforces — the
-// `reminders` tool and the App Home editor — so neither can be the loophole.
+// reminder tools and the App Home editor — so neither can be the loophole.
 
 // How often each kind may fire, floored by what a fire actually costs.
 // 'message'/'script' are a post and maybe an HTTP GET. 'bash' resumes a real

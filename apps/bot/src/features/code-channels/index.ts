@@ -11,7 +11,7 @@ import type { ActiveTurn } from '@/types/agent';
 
 // What a Slack code channel kyto is the agent of sends kyto besides messages:
 // the stop button, its per-channel slash commands (registered with the
-// codeChannel tool) and the buttons and selects in its Block Kit tabs. A
+// code channel tools) and the buttons and selects in its Block Kit tabs. A
 // command or a click becomes that person's message to kyto in the channel:
 // kyto first says in the channel who did what — the channel is one shared
 // conversation, and a turn nobody can see the cause of reads as kyto talking

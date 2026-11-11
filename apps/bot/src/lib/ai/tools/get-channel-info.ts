@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { bot, slack } from '@/lib/chat';
 import { lookupFlaronChannel, searchFlaronChannels } from '@/lib/flaron';
 import { toChatSlackChannelId, toRawSlackChannelId } from '@/lib/slack/ids';
+import { errorMessage } from '@/lib/utils/error';
 import { assertReadableChannel } from './utils';
 
 const CHANNEL_ID = /^[CG][A-Z0-9]{6,}$/;
@@ -13,6 +14,10 @@ const MEMBER_PAGE = 1000;
 const MAX_MEMBERS = 5000;
 const MAX_DETAILED = 300;
 const LOOKUP_CONCURRENCY = 10;
+// A channel audit screens hundreds of candidates; conversations.info is rate
+// limited, so a batch is bounded and read a few at a time (#195).
+const MAX_BULK_CHANNELS = 50;
+const BULK_CONCURRENCY = 5;
 
 export function getChannelInfoTool({
   askerUserId,
@@ -23,14 +28,14 @@ export function getChannelInfoTool({
 }) {
   return tool({
     description:
-      'Fetch metadata for a channel: name, member count, DM status, visibility (public/private), etc. Works for private channels kyto is not in too (name and visibility only, from the Flaron directory). Never call a channel public unless this says so. With `members: true` it also lists who is in it (each member\'s id, name and whether they are a bot) in one call: use it for "who is in this channel" and "everyone except the bots", never a users.info loop.',
+      'Fetch metadata for a channel: name, member count, DM status, visibility (public/private), etc. Works for private channels kyto is not in too (name and visibility only, from the Flaron directory). Never call a channel public unless this says so. With `members: true` it also lists who is in it (each member\'s id, display name, real name and whether they are a bot) in one call: use it for "who is in this channel" and "everyone except the bots", never a users.info loop.',
     inputSchema: z.object({
       channelId: z.string(),
       members: z
         .boolean()
         .optional()
         .describe(
-          `Also list the members (id, name, isBot). Names and bot flags for up to ${MAX_DETAILED}; ids only beyond that.`
+          `Also list the members (id, name, realName, isBot). Names and bot flags for up to ${MAX_DETAILED}; ids only beyond that.`
         ),
     }),
     execute: async ({ channelId, members }) => {
@@ -46,6 +51,9 @@ export function getChannelInfoTool({
           isDM: info.isDM ?? false,
           memberCount: info.memberCount,
           channelVisibility: info.channelVisibility,
+          isArchived: info.isArchived,
+          purpose: info.purpose,
+          topic: info.topic,
         };
         if (!members) {
           return base;
@@ -62,8 +70,12 @@ export function getChannelInfoTool({
           cursor = page.response_metadata?.next_cursor || undefined;
         } while (cursor && ids.length < MAX_MEMBERS);
         const detailed = ids.slice(0, MAX_DETAILED);
-        const people: { id: string; isBot: boolean | null; name: string }[] =
-          [];
+        const people: {
+          id: string;
+          isBot: boolean | null;
+          name: string;
+          realName: string | null;
+        }[] = [];
         let next = 0;
         const worker = async () => {
           while (next < detailed.length) {
@@ -75,6 +87,9 @@ export function getChannelInfoTool({
               id,
               isBot: author.isBot ?? null,
               name: author.userName,
+              // Display names alone gave "not in the channel" for four people
+              // who were (#198): a roster is matched on either name.
+              realName: author.fullName ?? null,
             };
           }
         };
@@ -119,6 +134,69 @@ export function getChannelInfoTool({
           } readConversationHistory will fail on it unless the asker connected their own Slack. To look inside it, use searchSlack with \`in:<#${raw}>\` once: it searches with the asker's own access, so it finds messages there only if THEY are a member. Zero results means the asker can't see it or it isn't there: say so, don't retry with variants.`,
         };
       }
+    },
+  });
+}
+
+export function getChannelsInfoTool({
+  askerUserId,
+  currentThreadId,
+}: {
+  askerUserId: string;
+  currentThreadId: string;
+}) {
+  return tool({
+    description: `Metadata for MANY channels in one call (up to ${MAX_BULK_CHANNELS} ids): name, visibility, purpose, topic, archived, member count. For channel audits and classifying candidate matches, instead of a getChannelInfo or shell loop. A channel kyto can't see comes back with the name and visibility from the Flaron directory and kytoCanRead: false; one that fails has an \`error\` and doesn't stop the rest. Page through a longer list in batches.`,
+    inputSchema: z.object({
+      channelIds: z
+        .array(z.string())
+        .min(1)
+        .max(MAX_BULK_CHANNELS)
+        .describe('Channel ids (C…/G…) or <#C…|name> links.'),
+    }),
+    execute: async ({ channelIds }) => {
+      const results: Record<string, unknown>[] = [];
+      let next = 0;
+      const worker = async () => {
+        while (next < channelIds.length) {
+          const index = next++;
+          const given = channelIds[index] ?? '';
+          const chatChannelId = toChatSlackChannelId(given);
+          const raw = toRawSlackChannelId(chatChannelId);
+          try {
+            const info = await assertReadableChannel(chatChannelId, {
+              askerUserId,
+              currentThreadId,
+            });
+            results[index] = {
+              id: info.id,
+              name: info.name,
+              isDM: info.isDM ?? false,
+              memberCount: info.memberCount,
+              channelVisibility: info.channelVisibility,
+              isArchived: info.isArchived,
+              purpose: info.purpose,
+              topic: info.topic,
+            };
+          } catch (error) {
+            const flaron = CHANNEL_ID.test(raw)
+              ? await lookupFlaronChannel({ id: raw }).catch(() => undefined)
+              : undefined;
+            results[index] =
+              flaron && flaron.visibility !== 'unknown'
+                ? { ...flaron, kytoCanRead: false }
+                : { id: raw, error: errorMessage(error) };
+          }
+        }
+      };
+      await Promise.all(
+        Array.from({ length: BULK_CONCURRENCY }, () => worker())
+      );
+      const failed = results.filter((result) => 'error' in result).length;
+      return {
+        channels: results,
+        summary: `${results.length - failed} of ${results.length} channels looked up${failed > 0 ? `, ${failed} failed (see error)` : ''}.`,
+      };
     },
   });
 }

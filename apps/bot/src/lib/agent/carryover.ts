@@ -38,7 +38,8 @@ const CARRIED_RESULT_MAX = 8000;
 // Every call is kept, each result cut to OBSERVATION_OUTPUT_MAX, and the turn
 // to OBSERVATION_TURN_MAX, most recent first: three tool-heavy turns must not
 // push the next request past the long-context price step.
-const EMAIL_RESULT = /^(?:email|checkInbox|readEmail|mcp_agentmail)/;
+const EMAIL_RESULT =
+  /^(?:checkInbox|readEmail|replyEmail|sendEmail|mcp_agentmail)/;
 const OBSERVATION_OUTPUT_MAX = 6000;
 const OBSERVATION_INPUT_MAX = 1000;
 export const OBSERVATION_TURN_MAX = 30_000;
@@ -263,13 +264,19 @@ const PUBLIC_TOOLS = new Set([
 // Tools that read with someone's OWN access or hold their own data: private
 // whatever came back.
 const PRIVATE_TOOLS = new Set([
+  'attachMemoryFiles',
   'deleteMemory',
+  'detachMemoryFiles',
+  'checkInbox',
   'editMemory',
-  'email',
   'fetchMemory',
   'getFile',
-  'memory',
+  'readEmail',
+  'replyEmail',
+  'restoreMemory',
+  'restoreMemoryFiles',
   'saveMemory',
+  'sendEmail',
   'slackBrowser',
   'slackScript',
 ]);

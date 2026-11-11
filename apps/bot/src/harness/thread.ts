@@ -534,12 +534,15 @@ export class ThreadHandle {
     return {
       channelVisibility,
       id: channel,
+      isArchived: conversation?.is_archived,
       isDM,
       isMember: (conversation as { is_member?: boolean } | undefined)
         ?.is_member,
       memberCount: (conversation as { num_members?: number } | undefined)
         ?.num_members,
       name: conversation?.name,
+      purpose: conversation?.purpose?.value || undefined,
+      topic: conversation?.topic?.value || undefined,
     };
   }
 }

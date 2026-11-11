@@ -159,8 +159,8 @@ describe('isPrivateObservation', () => {
   });
 
   test('email, memory and MCP tools are private whatever they return', () => {
-    expect(isPrivateObservation(result('email', 'nothing'))).toBe(true);
-    expect(isPrivateObservation(result('memory', []))).toBe(true);
+    expect(isPrivateObservation(result('checkInbox', 'nothing'))).toBe(true);
+    expect(isPrivateObservation(result('saveMemory', []))).toBe(true);
     expect(isPrivateObservation(result('mcp_linear_list', 'ok'))).toBe(true);
   });
 
@@ -191,7 +191,7 @@ describe('renderObservations email redaction', () => {
     const link = 'https://example.com/reset-password?token=abcdefghijklmnop';
     for (const toolName of [
       'readEmail',
-      'email',
+      'replyEmail',
       'mcp_agentmail_get_message',
     ]) {
       const rendered = renderObservations([

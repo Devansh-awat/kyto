@@ -24,7 +24,6 @@ import { buildMcpTools } from '@/lib/ai/mcp';
 import { withBuiltinMcpServers } from '@/lib/ai/mcp-builtin';
 import { withMcpOauth } from '@/lib/ai/mcp-oauth';
 import { resolveTurnMcpServers } from '@/lib/ai/mcp-scope';
-import { FAMILY_OF, mergeTools, TOOL_FAMILIES } from '@/lib/ai/merge-tools';
 import { slack } from '@/lib/chat';
 import { emojiUploadConfigured } from '@/lib/emoji-upload';
 import logger from '@/lib/logger';
@@ -57,7 +56,7 @@ import {
   setChannelTopicTool,
 } from './tools/channels';
 import { nowTool } from './tools/clock';
-import { codeChannelTool } from './tools/code-channel';
+import { codeChannelTools } from './tools/code-channel';
 import { codeModeTool } from './tools/code-mode';
 import { codingAgentTool } from './tools/coding-agent';
 import {
@@ -82,10 +81,14 @@ import { deleteFileTool, fileStatTool } from './tools/files';
 import { findImagesTool } from './tools/find-images';
 import { focusModeTool } from './tools/focus';
 import { generateImageTool } from './tools/generate-image';
-import { findChannelsTool, getChannelInfoTool } from './tools/get-channel-info';
+import {
+  findChannelsTool,
+  getChannelInfoTool,
+  getChannelsInfoTool,
+} from './tools/get-channel-info';
 import { getFileTool } from './tools/get-file';
 import { getUserTool } from './tools/get-user';
-import { ghTool, githubAccessTool } from './tools/gh';
+import { ghTool, githubAccessTools } from './tools/gh';
 import { joinThreadTool } from './tools/join-thread';
 import { leaveThreadTool } from './tools/leave-thread';
 import { listThreadsTool } from './tools/list-threads';
@@ -130,7 +133,7 @@ import {
   editAsUserTool,
   sendAsUserTool,
 } from './tools/send-as-user';
-import { loadSkillTool, manageSkillsTool } from './tools/skills';
+import { loadSkillTool, manageSkillsTools } from './tools/skills';
 import { skipTool } from './tools/skip';
 import { slackBrowserTool } from './tools/slack-browser';
 import { slackDocsTool } from './tools/slack-docs';
@@ -145,7 +148,7 @@ import { uploadFileTool } from './tools/upload-file';
 import { fetchUrlTool, getPermalinkTool } from './tools/url';
 import { viewImageTool } from './tools/view-image';
 import { waitTool } from './tools/wait';
-import { wakeTool } from './tools/wake';
+import { cancelWakeTool, listWakesTool, wakeTool } from './tools/wake';
 import { withdrawApprovalTool } from './tools/withdraw-approval';
 import {
   createFileReads,
@@ -192,6 +195,96 @@ export interface BuiltTools {
 // would only block it. The five shells are all here:
 // `slackScript` is free-form bash despite its name. Scheduling is here because a
 // `bash`/`agent` reminder is code that runs on a timer.
+// What a merged family's name stood for, for threads that remembered it
+// (thread_loaded_tools) before the families were split (#184).
+const RETIRED_FAMILIES: Record<string, string[]> = {
+  canvas: ['canvasDelete', 'canvasList', 'canvasRead', 'canvasWrite'],
+  codeChannel: [
+    'archiveCodeChannel',
+    'createCodeChannel',
+    'disableCodeChannel',
+    'enableCodeChannel',
+    'listCodeChannelViews',
+    'listCodeChannels',
+    'readCodeChannelCanvas',
+    'removeCodeChannelView',
+    'renameCodeChannel',
+    'setCodeChannelBlockKitTab',
+    'setCodeChannelCanvasTab',
+    'setCodeChannelCommands',
+    'setCodeChannelContextBar',
+    'setCodeChannelDiffTab',
+    'setCodeChannelHtmlTab',
+    'setCodeChannelPullRequestTab',
+  ],
+  email: ['checkInbox', 'readEmail', 'replyEmail', 'sendEmail'],
+  embed: ['embed', 'removeEmbed'],
+  githubAccess: [
+    'listGithubRepoClaims',
+    'releaseGithubRepo',
+    'setGithubRepoEditors',
+  ],
+  manageSkills: [
+    'installSkill',
+    'listSkills',
+    'removeSkill',
+    'showSkill',
+    'writeSkill',
+  ],
+  memory: [
+    'attachMemoryFiles',
+    'deleteMemory',
+    'detachMemoryFiles',
+    'editMemory',
+    'fetchMemory',
+    'restoreMemory',
+    'restoreMemoryFiles',
+    'saveMemory',
+  ],
+  pins: ['pinMessage', 'unpinMessage'],
+  process: ['getProcessOutput', 'killProcess', 'runBackgroundProcess'],
+  reminders: [
+    'cancelReminder',
+    'editReminder',
+    'listReminders',
+    'pauseReminder',
+    'resumeReminder',
+    'scheduleEventReminder',
+    'scheduleRecurringReminder',
+    'scheduleReminder',
+  ],
+  sites: ['deploySite', 'listSites', 'removeSite', 'siteStats'],
+  subagent: ['checkSubagent', 'runSubagent'],
+  wake: ['cancelWake', 'listWakes', 'wake'],
+};
+const PROCESS_TOOLS = ['getProcessOutput', 'killProcess'];
+const SKILL_VERBS: Record<string, string> = {
+  installSkill: 'install a skill from a public GitHub link',
+  listSkills: 'list the skill catalog',
+  removeSkill: 'remove a skill',
+  showSkill: "a skill's full text",
+  writeSkill: 'write or edit a skill from its SKILL.md',
+};
+const CODE_CHANNEL_SUMMARIES: Record<string, string> = {
+  archiveCodeChannel: 'archive the code channel you are in, with a summary',
+  createCodeChannel: 'create a Slack code channel for a task (only when asked)',
+  disableCodeChannel: 'turn a code channel back into a normal one',
+  enableCodeChannel: 'turn a channel into a code channel you answer in',
+  listCodeChannelViews: "list the code channel's tabs",
+  listCodeChannels: 'list the code channels',
+  readCodeChannelCanvas: "read a canvas tab's text and comments",
+  removeCodeChannelView: 'remove a tab from the code channel',
+  renameCodeChannel: 'rename the code channel',
+  setCodeChannelBlockKitTab: 'add or update a Block Kit tab',
+  setCodeChannelCanvasTab: 'add or update a canvas tab people comment on',
+  setCodeChannelCommands: "set the code channel's slash commands",
+  setCodeChannelContextBar:
+    "set the code channel's context bar (repo, branch, PR, CI)",
+  setCodeChannelDiffTab: 'set the diff tab',
+  setCodeChannelHtmlTab: 'add or update an HTML tab',
+  setCodeChannelPullRequestTab: 'add or update a pull request tab',
+};
+
 // Tools that each make one or more Slack Web API calls. A turn looping over
 // them (every channel's history, one user at a time) spends the app's rate
 // limit, which every other turn and kyto's own replies share. The sandbox's
@@ -199,6 +292,7 @@ export interface BuiltTools {
 const SLACK_READ_TOOLS = new Set([
   'findImages',
   'getChannelInfo',
+  'getChannelsInfo',
   'getPermalink',
   'getUser',
   'listThreads',
@@ -258,7 +352,19 @@ const EFFECT_TOOLS = new Set([
   'canvasWrite',
   'cancelReminder',
   'closeNpsSurvey',
-  'codeChannel',
+  'archiveCodeChannel',
+  'createCodeChannel',
+  'disableCodeChannel',
+  'enableCodeChannel',
+  'removeCodeChannelView',
+  'renameCodeChannel',
+  'setCodeChannelBlockKitTab',
+  'setCodeChannelCanvasTab',
+  'setCodeChannelCommands',
+  'setCodeChannelContextBar',
+  'setCodeChannelDiffTab',
+  'setCodeChannelHtmlTab',
+  'setCodeChannelPullRequestTab',
   'createChannel',
   'deleteAsUser',
   'deploySite',
@@ -311,7 +417,19 @@ const PUBLIC_POSTING_TOOLS = [
   'canvasWrite',
   'checkSubagent',
   'closeNpsSurvey',
-  'codeChannel',
+  'archiveCodeChannel',
+  'createCodeChannel',
+  'disableCodeChannel',
+  'enableCodeChannel',
+  'removeCodeChannelView',
+  'renameCodeChannel',
+  'setCodeChannelBlockKitTab',
+  'setCodeChannelCanvasTab',
+  'setCodeChannelCommands',
+  'setCodeChannelContextBar',
+  'setCodeChannelDiffTab',
+  'setCodeChannelHtmlTab',
+  'setCodeChannelPullRequestTab',
   'createChannel',
   'deleteAsUser',
   'editAsUser',
@@ -465,7 +583,7 @@ export async function buildTools({
       return [] as string[];
     }),
     // The thread's `--NO-MEMORY` (lib/flags), read here so a subagent or a
-    // reminder in the thread drops the memory tool too.
+    // reminder in the thread drops the memory tools too.
     threadModelChoice(thread.id),
   ]);
   const memoriesOff = memoryMode === 'off';
@@ -569,20 +687,25 @@ export async function buildTools({
     };
   };
 
+  const githubAccess = githubAccessTools({ isOwner, userId: authorUserId });
+
   const core: ToolSet = {
     bash: bashTool({
       background,
       extendAttemptDeadline,
       getSandboxContext,
       github: { isOwner, threadId: thread.id, userId: authorUserId },
-      // Its result says "check it with `process`", which is deferred: the model
+      // Its result says "check it with getProcessOutput", which is deferred: the model
       // called it unloaded and the turn showed "Something went wrong" — the
       // same failure #58 fixed for wake turns.
       onBackgrounded: () => {
-        if (deferred.process && !active.has('process')) {
-          active.add('process');
-          rememberLoadedTools(thread.id, ['process']);
+        const follow = PROCESS_TOOLS.filter(
+          (name) => deferred[name] && !active.has(name)
+        );
+        for (const name of follow) {
+          active.add(name);
         }
+        rememberLoadedTools(thread.id, follow);
       },
     }),
     codeMode: codeModeTool({
@@ -751,14 +874,21 @@ export async function buildTools({
       : {
           wake: {
             summary:
-              'come back to this thread later in a new turn (schedule / list / cancel), so "I\'ll do it once X is back" really happens',
+              'come back to this thread later in a new turn (so "I\'ll do it once X is back" really happens); listWakes / cancelWake manage them',
             tool: wakeTool({
               asUserAccount,
               authorUserId,
-              isOwner,
               messageId: message.id,
               thread,
             }),
+          },
+          listWakes: {
+            summary: "list this thread's pending wakes",
+            tool: listWakesTool({ thread }),
+          },
+          cancelWake: {
+            summary: 'cancel a pending wake of this thread by id',
+            tool: cancelWakeTool({ authorUserId, isOwner, thread }),
           },
         }),
     summarizeThread: {
@@ -862,6 +992,14 @@ export async function buildTools({
       summary: 'find channels by name, private ones included (names only)',
       tool: findChannelsTool(),
     },
+    getChannelsInfo: {
+      summary:
+        'metadata (name, visibility, purpose, topic, archived) for up to 50 channels in one call, for channel audits',
+      tool: getChannelsInfoTool({
+        askerUserId: authorUserId,
+        currentThreadId: thread.id,
+      }),
+    },
     findImages: {
       summary:
         'list the images posted in a channel by author and date (to find a meme/screenshot)',
@@ -923,11 +1061,17 @@ export async function buildTools({
         'invite people into a public channel the asker is in (says who asked)',
       tool: inviteToChannelTool({ authorUserId, isOwner }),
     },
-    codeChannel: {
-      summary:
-        'Slack code channels: create one for a task, enable/disable/list; inside one, its tabs (diff, html, canvas, PR), context bar, slash commands, rename, archive',
-      tool: codeChannelTool({ isOwner, message, thread }),
-    },
+    ...Object.fromEntries(
+      Object.entries(codeChannelTools({ isOwner, message, thread })).map(
+        ([name, codeTool]) => [
+          name,
+          {
+            summary: CODE_CHANNEL_SUMMARIES[name] ?? 'Slack code channel tool',
+            tool: codeTool,
+          },
+        ]
+      )
+    ),
     setChannelTopic: {
       summary: 'set a channel topic',
       tool: setChannelTopicTool({ authorUserId, isOwner, thread }),
@@ -984,10 +1128,18 @@ export async function buildTools({
               userId: authorUserId,
             }),
           },
-          githubAccess: {
+          listGithubRepoClaims: {
+            summary: 'see which GitHub repos are claimed and by whom',
+            tool: githubAccess.listGithubRepoClaims,
+          },
+          releaseGithubRepo: {
+            summary: "drop a repo's claim so anyone can have you write to it",
+            tool: githubAccess.releaseGithubRepo,
+          },
+          setGithubRepoEditors: {
             summary:
-              'see who a GitHub repo belongs to, or change who may write to it',
-            tool: githubAccessTool({ isOwner, userId: authorUserId }),
+              'set who may change a claimed GitHub repo besides its owner',
+            tool: githubAccess.setGithubRepoEditors,
           },
         }
       : {}),
@@ -1089,10 +1241,17 @@ export async function buildTools({
     // loads.
     ...(isOwner
       ? {
-          manageSkills: {
-            summary: 'install, write, edit or remove skills (owner only)',
-            tool: manageSkillsTool({ userId: authorUserId }),
-          },
+          ...Object.fromEntries(
+            Object.entries(manageSkillsTools({ userId: authorUserId })).map(
+              ([name, skillTool]) => [
+                name,
+                {
+                  summary: `${SKILL_VERBS[name] ?? name} (owner only)`,
+                  tool: skillTool,
+                },
+              ]
+            )
+          ),
         }
       : {}),
     ...(slackBrowser
@@ -1361,53 +1520,26 @@ export async function buildTools({
     } as T;
   };
 
-  // Wrapped under their ORIGINAL names before the families are merged: usage,
-  // the anti-coding guard, the Slack budget and redaction all key on them.
+  // Wrapped under their names: usage, the anti-coding guard, the Slack budget
+  // and redaction all key on them.
   for (const [name, entry] of Object.entries(core)) {
     core[name] = trackUse(name, entry);
   }
   for (const [name, entry] of Object.entries(deferred)) {
     deferred[name] = { ...entry, tool: trackUse(name, entry.tool) };
   }
-  // The names the usage summary reports against, from BEFORE the merge.
   const coreNames = new Set(Object.keys(core));
   noteToolNames([...coreNames, ...Object.keys(deferred)]);
-  // One tool per family (lib/ai/merge-tools). A family is core if any of its
-  // verbs was; it carries only the verbs this turn actually registered (an
-  // owner-only or `!secret`-withheld one stays out).
-  for (const [family, entry] of Object.entries(TOOL_FAMILIES)) {
-    const actions: Record<string, Tool> = {};
-    let inCore = false;
-    for (const [action, original] of Object.entries(entry.actions)) {
-      const found = core[original] ?? deferred[original]?.tool;
-      if (!found) {
-        continue;
-      }
-      inCore ||= original in core;
-      actions[action] = found;
-      delete core[original];
-      delete deferred[original];
-    }
-    if (Object.keys(actions).length === 0) {
-      continue;
-    }
-    const merged = mergeTools({ actions, description: entry.description });
-    if (inCore) {
-      core[family] = merged;
-    } else {
-      deferred[family] = { summary: entry.summary, tool: merged };
-    }
-  }
-
   await hydrateLoadedTools(thread.id);
   // Filtered through THIS turn's `deferred`, which is built for the person
   // speaking now — so a tool only registered for the owner, or an MCP tool from
   // someone else's server, can never be seeded onto a different user's turn
   // just because it was loaded earlier in the thread.
-  // A name loaded before the families were merged maps to its family.
+  // A thread that loaded a merged family ("reminders") before the families were
+  // split gets that family's verbs back.
   const remembered = new Set(
     recallLoadedTools(thread.id)
-      .map((name) => FAMILY_OF.get(name) ?? name)
+      .flatMap((name) => RETIRED_FAMILIES[name] ?? [name])
       .filter((name) => deferred[name])
   );
 
@@ -1474,10 +1606,7 @@ export async function buildTools({
       Object.entries(deferred).map(([name, entry]) => [name, entry.tool])
     ),
   };
-  // Loaded names are families; usage is counted per original verb.
-  const used = (name: string) =>
-    usage.has(name) ||
-    [...usage.keys()].some((original) => FAMILY_OF.get(original) === name);
+  const used = (name: string) => usage.has(name);
 
   return {
     activeTools: () => [...active],
@@ -1525,9 +1654,9 @@ export async function buildTools({
     // An extra schema the thread keeps is a cached read; a reshuffle is a full
     // re-write of the thread.
     preload: (names) => {
-      const added = names
-        .map((name) => FAMILY_OF.get(name) ?? name)
-        .filter((name) => deferred[name] !== undefined && !active.has(name));
+      const added = names.filter(
+        (name) => deferred[name] !== undefined && !active.has(name)
+      );
       for (const name of added) {
         active.add(name);
         preloadedNames.add(name);

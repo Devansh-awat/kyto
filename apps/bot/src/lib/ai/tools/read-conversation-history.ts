@@ -49,6 +49,18 @@ export function readConversationHistoryTool({
         .describe(
           "A message ts: only messages posted after it. To poll for replies to your own post, pass that post's ts: one call per check."
         ),
+      since: z
+        .string()
+        .optional()
+        .describe(
+          'CHANNEL history only: a time window like "14d", "36h", "2w" or a date (2026-11-01, UTC). Pages the channel back to then in this one call (up to 1000 messages) and says whether it got all of it and the range it covered. Instead of cursor-paging by hand.'
+        ),
+      includeThreads: z
+        .boolean()
+        .optional()
+        .describe(
+          'With `since`: also read the replies of the threads in the window (up to 60 threads), each reply placed after its thread starter.'
+        ),
       cursor: z
         .string()
         .optional()
@@ -61,8 +73,10 @@ export function readConversationHistoryTool({
         after,
         channelId,
         cursor,
+        includeThreads,
         limit,
         permalink,
+        since,
         threadId,
         threadTs,
       }) => {
@@ -76,17 +90,22 @@ export function readConversationHistoryTool({
         const decodedThread = threadId?.startsWith('slack:')
           ? slack.decodeThreadId(threadId)
           : undefined;
+        // The model sent only {limit, after} twice in one turn, the thread it
+        // meant in context but never named (#56): nothing named means THIS
+        // thread (or, with just a threadTs, this channel).
+        const current = slack.decodeThreadId(currentThreadId);
+        const named = Boolean(link || channelId || decodedThread);
         const resolvedChannelId =
           link?.channelId ||
           channelId ||
-          (decodedThread ? `slack:${decodedThread.channel}` : undefined);
+          (decodedThread ? `slack:${decodedThread.channel}` : undefined) ||
+          `slack:${current.channel}`;
         const resolvedThreadTs =
-          link?.threadTs || threadTs || decodedThread?.threadTs || undefined;
-        if (!resolvedChannelId) {
-          throw new Error(
-            'readConversationHistory needs channelId or threadId.'
-          );
-        }
+          link?.threadTs ||
+          threadTs ||
+          decodedThread?.threadTs ||
+          (named || since ? undefined : current.threadTs) ||
+          undefined;
         // A message ts passed as the cursor came back `invalid_cursor` four times
         // in one turn, each a 3-4s round trip, and the model kept guessing (#65).
         if (cursor && MESSAGE_TS.test(cursor)) {
@@ -95,10 +114,16 @@ export function readConversationHistoryTool({
           );
         }
 
-        const oldest = after?.trim() || undefined;
-        if (oldest && !MESSAGE_TS.test(oldest)) {
+        const sinceTs = since?.trim() ? parseSince(since) : undefined;
+        if (sinceTs && resolvedThreadTs) {
           throw new Error(
-            `after must be a message ts like 1791695940.351679, not ${oldest}.`
+            '`since` windows a CHANNEL; for a thread pass `after` (a message ts) or just limit.'
+          );
+        }
+        const oldest = after?.trim() || sinceTs || undefined;
+        if (after?.trim() && !MESSAGE_TS.test(after.trim())) {
+          throw new Error(
+            `after must be a message ts like 1791695940.351679, not ${after.trim()}.`
           );
         }
 
@@ -143,6 +168,18 @@ export function readConversationHistoryTool({
           };
         }
 
+        if (sinceTs && oldest) {
+          return {
+            ...(await readWindow({
+              channelId: chatChannelId,
+              currentThreadId,
+              includeThreads: Boolean(includeThreads),
+              oldest,
+            })),
+            ...dmSource,
+          };
+        }
+
         const result = await (resolvedThreadTs
           ? slack.fetchMessages(`${chatChannelId}:${resolvedThreadTs}`, {
               cursor,
@@ -152,6 +189,7 @@ export function readConversationHistoryTool({
           : slack.fetchChannelMessages(chatChannelId, {
               cursor,
               limit,
+              oldest,
             })
         ).catch((error: unknown) => {
           // A bare thread_not_found read as "that thread is gone"; it is almost
@@ -267,6 +305,144 @@ const askerHistorySchema = z.looseObject({
 });
 
 const MS_PER_SECOND = 1000;
+const SECONDS_PER_UNIT = {
+  d: 86_400,
+  h: 3600,
+  m: 60,
+  w: 604_800,
+} as const;
+// A busy channel's last two weeks were 1000+ messages and 140+ threads, read
+// with 11 calls and a stated gap (#201). One call pages the window, bounded.
+const WINDOW_PAGE = 200;
+const WINDOW_MAX_MESSAGES = 1000;
+const WINDOW_MAX_THREADS = 60;
+const WINDOW_THREAD_REPLIES = 200;
+const WINDOW_THREAD_CONCURRENCY = 5;
+const WINDOW_TEXT_MAX = 1500;
+
+/** "14d" / "36h" / "2w" / "90m" or a UTC date, as a Slack ts to read from. */
+function parseSince(value: string): string {
+  const text = value.trim().toLowerCase();
+  const span = /^(\d+)\s*(d|h|m|w)$/.exec(text);
+  let seconds: number;
+  if (span) {
+    const unit = span[2] as keyof typeof SECONDS_PER_UNIT;
+    seconds =
+      Date.now() / MS_PER_SECOND - Number(span[1]) * SECONDS_PER_UNIT[unit];
+  } else if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    seconds = Date.parse(`${text}T00:00:00Z`) / MS_PER_SECOND;
+  } else {
+    seconds = Number.NaN;
+  }
+  if (!Number.isFinite(seconds)) {
+    throw new Error(
+      `since must be a span like 14d, 36h or 2w, or a date like 2026-11-01, not ${value}.`
+    );
+  }
+  return seconds.toFixed(6);
+}
+
+type WindowMessage = Awaited<
+  ReturnType<typeof slack.fetchChannelMessages>
+>['messages'][number];
+
+/** A channel back to `oldest`, and optionally the replies of its threads. */
+async function readWindow({
+  channelId,
+  currentThreadId,
+  includeThreads,
+  oldest,
+}: {
+  channelId: string;
+  currentThreadId: string;
+  includeThreads: boolean;
+  oldest: string;
+}) {
+  const roots: WindowMessage[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await slack.fetchChannelMessages(channelId, {
+      cursor,
+      limit: WINDOW_PAGE,
+      oldest,
+    });
+    roots.push(...page.messages);
+    cursor = page.nextCursor;
+  } while (cursor && roots.length < WINDOW_MAX_MESSAGES);
+  // Slack pages newest first; a cursor left over means older messages in the
+  // window were not read.
+  const historyComplete = !cursor;
+  roots.sort((a, b) => Number(a.id) - Number(b.id));
+
+  const withReplies = includeThreads
+    ? roots.filter((root) => Number(root.raw.reply_count) > 0)
+    : [];
+  // Newest threads first: if the budget runs out, the recent ones are kept.
+  const wanted = withReplies.slice(-WINDOW_MAX_THREADS);
+  const replies = new Map<string, WindowMessage[]>();
+  let next = 0;
+  const worker = async () => {
+    while (next < wanted.length) {
+      const root = wanted[next++];
+      if (!root) {
+        return;
+      }
+      const thread = await slack
+        .fetchMessages(`${channelId}:${root.id}`, {
+          limit: WINDOW_THREAD_REPLIES,
+        })
+        .catch(() => undefined);
+      if (thread) {
+        replies.set(
+          root.id,
+          thread.messages.filter((message) => message.id !== root.id)
+        );
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: WINDOW_THREAD_CONCURRENCY }, () => worker())
+  );
+
+  const shape = (message: WindowMessage) => ({
+    id: message.id,
+    threadId: message.threadId,
+    text: (message.threadId === currentThreadId
+      ? message.text
+      : markStoredSelfMention(message.text)
+    ).slice(0, WINDOW_TEXT_MAX),
+    author: {
+      userId: message.author.userId,
+      userName: message.author.userName,
+      fullName: message.author.fullName,
+      isBot: message.author.isBot,
+    },
+    dateSent: message.metadata.dateSent?.toISOString(),
+    attachments: (message.attachments ?? []).map((attachment) => ({
+      name: attachment.name,
+      url: attachment.url,
+    })),
+  });
+  const messages = roots.flatMap((root) => [
+    shape(root),
+    ...(replies.get(root.id) ?? []).map(shape),
+  ]);
+  const threadsRead = replies.size;
+  const covered = {
+    from: roots[0]?.metadata.dateSent?.toISOString(),
+    to: roots.at(-1)?.metadata.dateSent?.toISOString(),
+  };
+  return {
+    channelId,
+    messages,
+    complete:
+      historyComplete &&
+      (!includeThreads || threadsRead === withReplies.length),
+    covered,
+    note: `${roots.length} top-level messages since ${new Date(Number(oldest) * MS_PER_SECOND).toISOString()}, oldest first${historyComplete ? '' : `; STOPPED at the ${WINDOW_MAX_MESSAGES}-message cap, so only the newest part of the window was read (from ${covered.from}). Pass a later \`since\` to read the rest by pieces`}. ${includeThreads ? `Replies read for ${threadsRead} of ${withReplies.length} threads${threadsRead < withReplies.length ? ' (the newest ones)' : ''}; texts cut at ${WINDOW_TEXT_MAX} characters.` : 'Thread replies not included (includeThreads: true adds them).'}`,
+    threadTs: null,
+  };
+}
 // A Slack message ts (`1791695940.351679`); a real cursor is base64.
 const MESSAGE_TS = /^\d+\.\d+$/;
 const ASKER_THREAD_PAGE = 200;

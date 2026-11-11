@@ -110,7 +110,7 @@ INVESTIGATE BEFORE YOU FILE. An issue that says "kyto stopped mid-turn" is usele
 - Around it, when the logs tools are there: \`mcp_logs_list_deployments\` (the one named \`kyto\`: its id, and \`updatedAt\` for a deploy at that moment), then \`mcp_logs_get_deployment_logs\` on that id for what the whole process was doing — the current container only, so a turn before the last deploy is gone. Always pass \`search\` (a thread id, a \`[prefix]\`, an error) or \`level\`; at most ${LOGS_TAIL_MAX} lines are read.
 - WHERE THE TIME WENT, when a turn was slow: \`threadLogs\` with \`timing: true\` returns just the timing lines — each turn's breakdown (\`[agent] turn complete\`/\`interrupted\`/\`failed\` → \`timing\`: \`setupMs\` before the model was first asked (prompt, preload, anti-coding, MCP), \`modelMs\` waiting on the AI, \`toolMs\` in tools, \`ttftMs\` to the first token of EVERY model request in the turn, \`outputTokensPerSecond\`, \`outputCharsPerSecond\` (compare models by this one — tokenizers differ), \`slowestTools\`, \`modelCalls\`), each attempt's (\`[stream] attempt stream ended\` → \`timing\`, with \`firstOutputMs\` per step), and E2B's latency (\`[sandbox] materialized\`: \`reconnectMs\`/\`createMs\`/\`bootstrapMs\`; \`[sandbox] paused\`: \`ms\`). A turn people waited on (they said so, or it ran past ~2 minutes for a simple ask) is worth an improvement issue that names where the time went, with the numbers. Time a tool spent waiting on a PERSON is not slowness: \`[confirm-post] waiting for a click\` / \`the click wait ended\` (with \`waitedForClickSeconds\`, also in the tool's result) mark a postMessage, sendAsUser or similar call parked on someone's Confirm button, so that stretch is them deciding. Never file it as a slow or stuck tool (#186 was the owner taking 7 minutes to click).
 - kyto's source: \`git clone --depth 1 https://github.com/Devansh-awat/kyto\` in bash (if that fails, \`curl -sL https://codeload.github.com/Devansh-awat/kyto/tar.gz/refs/heads/main | tar xz\`), then grep and read the code the logs point at. Read-only: do not write or run programs.
-- \`kytoIssues\` \`search\` first; if it is already reported in an OPEN issue, \`comment\` with the new evidence instead of filing a duplicate. If the matching issue is CLOSED as fixed and the problem is back, \`reopen\` it with the new evidence: what still fails and why the fix didn't cover it. Never comment on a closed issue — nobody sees it.
+- \`searchKytoIssues\` first; if it is already reported in an OPEN issue, \`commentKytoIssue\` with the new evidence instead of filing a duplicate. If the matching issue is CLOSED as fixed and the problem is back, \`reopenKytoIssue\` it with the new evidence: what still fails and why the fix didn't cover it. Never comment on a closed issue — nobody sees it.
 
 A filed defect is DETAILED. Use these sections:
 - **What happened** — the symptom as a person saw it, step by step, with approximate times.
@@ -128,11 +128,11 @@ An improvement is just as detailed, with these sections instead:
 
 Include whatever from the conversation makes the issue clear — what was asked, what was said back. Never include a secret, a password or a token.
 
-3. NOTEBOOK edits — this one is routine, unlike the other two. kyto keeps notes it reads walking into a conversation: one per channel, and one global that kyto's user account reads in EVERY channel and DM. \`notebook\` \`read\` both first. Add what will help kyto next time: who people are and what they work on, ongoing projects and decisions, preferences and channel norms, recurring questions and their answers, things kyto got wrong and the correction. Not passing chatter, not what is obvious from Slack, never a secret, password or token.
+3. NOTEBOOK edits — this one is routine, unlike the other two. kyto keeps notes it reads walking into a conversation: one per channel, and one global that kyto's user account reads in EVERY channel and DM. \`readNotebooks\` first. Add what will help kyto next time: who people are and what they work on, ongoing projects and decisions, preferences and channel norms, recurring questions and their answers, things kyto got wrong and the correction. Not passing chatter, not what is obvious from Slack, never a secret, password or token.
 - The channel notebook may hold anything from this channel.
 - The global notebook is for what is useful ACROSS channels. Anything you put there can surface anywhere, to anyone. From a private channel, add only what the people in it would not mind being known outside it — personal matters, private plans and anything said in confidence stay in the channel notebook. From a DM or group DM, NEVER (the tool refuses).
-- A note is a FACT (who, what, where, what worked, what went wrong), never a rule about what kyto will or won't do. kyto's behaviour comes from its own system prompt, quoted below in \`<kyto_system_prompt>\`; Never write a stance, a policy or a refusal ("kyto declines X", "X is not something kyto does"): a refusal kyto made that its system prompt says it must not make is a DEFECT (1a), not a note. Nothing you write may contradict \`<kyto_system_prompt>\`, and when you read a notebook, delete any line that does (\`replace\` it with empty text).
-- Keep both tight: the limits are hard (channel 20,000 characters, global 50,000), and long before them, merge duplicates, update facts in place with \`replace\`, and drop what is stale. Condense with \`rewrite\` when it grows. A short, current notebook beats a long one.
+- A note is a FACT (who, what, where, what worked, what went wrong), never a rule about what kyto will or won't do. kyto's behaviour comes from its own system prompt, quoted below in \`<kyto_system_prompt>\`; Never write a stance, a policy or a refusal ("kyto declines X", "X is not something kyto does"): a refusal kyto made that its system prompt says it must not make is a DEFECT (1a), not a note. Nothing you write may contradict \`<kyto_system_prompt>\`, and when you read a notebook, delete any line that does (\`replaceInNotebook\` it with empty text).
+- Keep both tight: the limits are hard (channel 20,000 characters, global 50,000), and long before them, merge duplicates, update facts in place with \`replaceInNotebook\`, and drop what is stale. Condense with \`rewriteNotebook\` when it grows. A short, current notebook beats a long one.
 
 When you are done, write one line saying what you did (or "nothing to do").
 </kevinton>
@@ -309,8 +309,8 @@ async function review({
         )
       ),
       ...logs.tools,
-      kytoIssues: own.kytoIssues,
-      notebook: own.notebook,
+      ...own.kytoIssues,
+      ...own.notebook,
       proposeSkill: own.proposeSkill,
       threadLogs: own.threadLogs,
     };

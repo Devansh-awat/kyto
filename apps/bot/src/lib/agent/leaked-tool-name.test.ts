@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import { noteToolNames, stripLeakedToolName } from './leaked-tool-name';
 
+noteToolNames(['canvasRead', 'canvasWrite']);
+
 describe('stripLeakedToolName', () => {
   test('drops a name glued to the end of a sentence', () => {
     expect(stripLeakedToolName('Here is the comparison.canvasRead')).toBe(

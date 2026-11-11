@@ -207,6 +207,7 @@ export interface ChannelMetadata {
   channelVisibility: 'external' | 'private' | 'workspace';
   /** Raw channel id (C123…). */
   id: string;
+  isArchived?: boolean;
   isDM: boolean;
   /** Whether the bot is a member. Meaningful for external (Slack Connect)
    * channels, where membership — not workspace visibility — decides
@@ -216,4 +217,6 @@ export interface ChannelMetadata {
   isMember?: boolean;
   memberCount?: number;
   name?: string;
+  purpose?: string;
+  topic?: string;
 }

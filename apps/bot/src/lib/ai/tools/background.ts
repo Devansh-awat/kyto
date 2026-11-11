@@ -170,7 +170,7 @@ export function backgroundProcessTools({
    * The principal this turn acts for, so a backgrounded command is gated on
    * repo ownership like any other shell. Omitted only where there is no
    * principal to check (a reminder job): a command with no `github` is NOT
-   * exempt — see the guard call in `process` (action `start`).
+   * exempt — see the guard call in `runBackgroundProcess`.
    */
   github?: { isOwner: boolean; threadId: string; userId: string };
 }) {
@@ -432,7 +432,7 @@ export function backgroundProcessTools({
 
   const runBackgroundProcess = tool({
     description:
-      "Start a shell command running in the background in the sandbox and return immediately with a handle id, instead of waiting for it to finish: for a dev server, a watcher, a long build or benchmark you work alongside. Not for something you'd only wait on straight away (that is plain bash). Use process (action output) to check on it and process (action kill) to stop it.",
+      "Start a shell command running in the background in the sandbox and return immediately with a handle id, instead of waiting for it to finish: for a dev server, a watcher, a long build or benchmark you work alongside. Not for something you'd only wait on straight away (that is plain bash). Use getProcessOutput to check on it and killProcess to stop it.",
     inputSchema: z.object({
       command: z.string().min(1),
     }),
@@ -454,7 +454,7 @@ export function backgroundProcessTools({
         return {
           id: started.id,
           success: true,
-          summary: `Started background process ${started.id}. Check it with process (action output, id ${started.id}); stop it with process (action kill, id ${started.id}). If your turn ends before it does, you'll be woken with its result when it finishes (or told after 30 minutes if it's still going), so don't poll it just to wait.`,
+          summary: `Started background process ${started.id}. Check it with getProcessOutput (id ${started.id}); stop it with killProcess (id ${started.id}). If your turn ends before it does, you'll be woken with its result when it finishes (or told after 30 minutes if it's still going), so don't poll it just to wait.`,
         };
       } catch (error) {
         return { error: errorMessage(error), success: false };
@@ -464,7 +464,7 @@ export function backgroundProcessTools({
 
   const getProcessOutput = tool({
     description:
-      'Read the output so far of a background process (started with process (action start), or a bash command that was auto-moved to the background after running over a minute), and whether it is still running. Reports the exit code once finished.',
+      'Read the output so far of a background process (started with runBackgroundProcess, or a bash command that was auto-moved to the background after running over a minute), and whether it is still running. Reports the exit code once finished.',
     inputSchema: z.object({
       id: z.string().min(1),
     }),
@@ -502,7 +502,7 @@ export function backgroundProcessTools({
 
   const killProcess = tool({
     description:
-      'Kill a background process (started with process (action start) or auto-moved from bash).',
+      'Kill a background process (started with runBackgroundProcess or auto-moved from bash).',
     inputSchema: z.object({
       id: z.string().min(1),
     }),
@@ -566,7 +566,7 @@ function processReport({
   const silent = !(result.stdout.trim() || result.stderr.trim());
   const body = result.finished
     ? `the background command ${id} you started earlier in this thread (\`${command}\`) has FINISHED with exit code ${result.exitCode ?? 'unknown'}.\n\n${output}${silent ? '\n\nIt printed NOTHING. Exit 0 with no output is not proof it worked (a run that refused every write exited 0 like this): check the files it was meant to produce before you say it did.' : ''}\n\nCarry on with the task it was part of if there is more to do, or tell the thread what matters from it.`
-    : `the background command ${id} you started earlier in this thread (\`${command}\`) is STILL RUNNING 30 minutes after your turn ended: time's up for keeping the sandbox awake for it. Once the sandbox pauses it freezes, and it resumes the next time this thread uses the sandbox.\n\n${output}\n\nDecide: if it is worth waiting for, check it with the \`process\` tool (action \`output\`, id "${id}"), which keeps watching it for another 30 minutes; if it is stuck or no longer needed, kill it (action \`kill\`). Only post if the thread is waiting on its result or it failed in a way someone needs to know; killing a leftover job nobody asked about is housekeeping, so do it and call skip (an unasked "stopped the leftover job" message was noise, issue #71).`;
+    : `the background command ${id} you started earlier in this thread (\`${command}\`) is STILL RUNNING 30 minutes after your turn ended: time's up for keeping the sandbox awake for it. Once the sandbox pauses it freezes, and it resumes the next time this thread uses the sandbox.\n\n${output}\n\nDecide: if it is worth waiting for, check it with getProcessOutput (id "${id}"), which keeps watching it for another 30 minutes; if it is stuck or no longer needed, kill it (killProcess). Only post if the thread is waiting on its result or it failed in a way someone needs to know; killing a leftover job nobody asked about is housekeeping, so do it and call skip (an unasked "stopped the leftover job" message was noise, issue #71).`;
   return {
     attachments: [],
     author: wake.message.author,

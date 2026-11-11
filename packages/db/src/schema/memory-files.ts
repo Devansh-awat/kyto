@@ -12,7 +12,7 @@ const bytea = customType<{ data: Uint8Array; driverData: Uint8Array }>({
   dataType: () => 'bytea',
 });
 
-// A folder attached to a memory (the `memory` tool's `attach`): a gzipped tar,
+// A folder attached to a memory (`attachMemoryFiles`): a gzipped tar,
 // at most 5 MB (owner's call 2026-10-09), restored into a sandbox on request.
 // Goes with its memory (cascade) — erase, delete and curation never orphan one.
 export const memoryFiles = pgTable('memory_files', {

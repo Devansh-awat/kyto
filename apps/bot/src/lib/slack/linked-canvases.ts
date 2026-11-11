@@ -125,7 +125,7 @@ async function readOne({
     `<linked_canvas id="${canvasId}" title="${(file.title ?? '').replaceAll('"', "'")}" link="${file.permalink ?? ''}">`,
     cut ? text.slice(0, MAX_CANVAS_CHARS) : text,
     cut
-      ? `[cut at ${MAX_CANVAS_CHARS} of ${text.length} characters — read the rest with the canvas tool]`
+      ? `[cut at ${MAX_CANVAS_CHARS} of ${text.length} characters — read the rest with canvasRead]`
       : '',
     '</linked_canvas>',
   ]
