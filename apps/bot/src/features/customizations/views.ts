@@ -1239,7 +1239,7 @@ export function buildModelKeyModal(
           type: 'static_select',
         },
         hint: plainText(
-          'How hard the model thinks before answering. Higher is slower and uses more of your tokens; a --reasoning flag on a message still wins. Sent to Hack Club and OpenRouter keys only.'
+          'How hard the model thinks before answering. Higher is slower and uses more of your tokens; a --reasoning flag on a message still wins. Sent to Hack Club, OpenRouter and custom/mebbo keys, and to OpenAI, xAI, Groq and Google keys when the model is a reasoning model that takes it. Anthropic keys and older models get none; the level never goes past high.'
         ),
         label: plainText('Reasoning effort'),
         type: 'input',

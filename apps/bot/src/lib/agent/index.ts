@@ -1,4 +1,5 @@
 import {
+  byokEffortFormat,
   describeImages,
   GEMINI_PROVIDER,
   HACKCLUB_PROVIDER,
@@ -1673,6 +1674,21 @@ async function executeTurn(
           effort = { by: 'retry', effort: 'low' };
           // Already as low as the retry would go.
           lowEffortRetried = true;
+        } else if (
+          currentAttempt.byokProvider !== undefined &&
+          !currentAttempt.reasoningEffort
+        ) {
+          // A key whose owner picked no effort gets what Jev picks for the
+          // turn (owner's call 2026-11-11, #73) instead of a flat medium. A
+          // `--reasoning` flag wins; the request tuner only sends it to
+          // endpoints that take one.
+          const byokEffort = choice.effort ?? preload.effort?.haiku;
+          if (byokEffort) {
+            effort = {
+              by: choice.effort ? 'flag' : 'jev',
+              effort: byokEffort,
+            };
+          }
         } else if (currentAttempt.provider === HACKCLUB_PROVIDER) {
           // `high` once ran at medium on haiku: its thinking filled the 8000
           // output tokens. A `high` attempt now gets a bigger cap
@@ -1700,6 +1716,16 @@ async function executeTurn(
               effort: drawn.effort,
             };
           }
+        }
+        // The card and the logs name an effort only when this attempt's request
+        // actually carries one: an older OpenAI model, an Anthropic key or any
+        // key whose API takes none sends nothing (owner's call 2026-11-11).
+        if (
+          effort &&
+          currentAttempt.byokProvider !== undefined &&
+          !byokEffortFormat(currentAttempt)
+        ) {
+          effort = undefined;
         }
         // Saved on EVERY luna turn, raised or not: its time is what says the
         // thread's luna cache is still warm. A flag's effort is that turn's own.

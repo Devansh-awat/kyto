@@ -1031,9 +1031,7 @@ function tunedFetch({
     attempt.provider === HACKCLUB_PROVIDER &&
     attempt.model.startsWith('openai/');
   const byokDefaultEffort =
-    effort === undefined &&
-    (OPENROUTER_FORMAT_BYOK.has(attempt.provider) ||
-      FLAT_EFFORT_BYOK.has(attempt.provider));
+    effort === undefined && byokEffortFormat(attempt) !== undefined;
   // A `--reasoning` flag or the low-effort retry wins over the key's own pick.
   const reasoningEffort = byokDefaultEffort
     ? (attempt.reasoningEffort ?? BYOK_DEFAULT_EFFORT)
@@ -1090,6 +1088,32 @@ function tunedFetch({
       onRetry: onGatewayRetry,
       poolBudget,
     });
+    // A model the key's provider takes no effort for (an older one, or one the
+    // list above doesn't know) answers 400/422 naming the field. Ask once more
+    // without it and remember, so the next request doesn't fail first.
+    if (
+      (response.status === 400 || response.status === 422) &&
+      byokEffortFormat(attempt) !== undefined &&
+      typeof callInit?.body === 'string' &&
+      /reasoning/.test(callInit.body)
+    ) {
+      const detail = await response
+        .clone()
+        .text()
+        .catch(() => '');
+      if (/reasoning/i.test(detail)) {
+        effortRefused.add(`${attempt.baseURL}|${attempt.model}`);
+        await response.body?.cancel().catch(() => undefined);
+        const payload = JSON.parse(callInit.body) as Record<string, unknown>;
+        payload.reasoning = undefined;
+        payload.reasoning_effort = undefined;
+        response = await fetchWithGatewayRetry(
+          callInput,
+          { ...callInit, body: JSON.stringify(payload) },
+          { onRetry: onGatewayRetry, poolBudget }
+        );
+      }
+    }
     // Flex does not fall back to standard capacity on its own — OpenRouter
     // surfaces the refusal instead. A turn must not walk the fallback ladder
     // just because the cheap tier was full, so ask once more at the normal one.
@@ -1149,15 +1173,49 @@ const GLM_FLASH_ROUTING = {
   quantizations: ALLOWED_QUANTIZATIONS,
   sort: 'throughput',
 };
-// BYOK endpoints that speak OpenRouter's `reasoning: { effort }`; OpenAI's own
-// API calls it `reasoning_effort` and rejects the unknown field.
-const OPENROUTER_FORMAT_BYOK = new Set(['byok-hackclub', 'byok-openrouter']);
-// Self-hosted / OpenWebUI-style endpoints pass the flat `reasoning_effort`
-// field through to the model (the OpenAI chat spelling). Sent only when an
-// effort was chosen (the low-effort retry, a flag, the key's own pick): it was
-// never sent at all, so a `byok-custom` GLM spent all 32k tokens thinking on
-// the first try AND on the "low effort" retry (#73, 2026-11-05).
-const FLAT_EFFORT_BYOK = new Set(['byok-custom', 'byok-mebbo']);
+// Where a BYOK key takes a reasoning effort, in the format its API uses.
+// `nested` is OpenRouter's `reasoning: { effort }`; `flat` is the OpenAI chat
+// spelling `reasoning_effort`, which OpenAI, xAI, Groq, Gemini's OpenAI
+// endpoint and OpenWebUI-style servers accept. An older model on those APIs
+// rejects the field with a 400, so the key's MODEL must look like a reasoning
+// one; anything else (and Anthropic's compat layer, which ignores the field)
+// gets none. A model that slips through is caught by the retry in tunedFetch.
+const REASONING_MODEL: Record<string, RegExp> = {
+  'byok-groq': /^(?:openai\/gpt-oss|qwen\/qwen3\.[89])/,
+  'byok-openai': /^(?:o\d|gpt-5|gpt-6)/,
+  'byok-xai': /^grok-(?:3-mini|4\.|4-1|4-fast)/,
+  gemini: /^gemini-(?:2\.5|3)/,
+};
+// Endpoints that pass any model's effort through (the owner's own server).
+const PASSTHROUGH_FLAT = new Set(['byok-custom', 'byok-mebbo']);
+// Models an endpoint refused the field for (400/422 naming it), remembered so
+// the next request doesn't pay for the failed one: `baseURL|model`.
+const effortRefused = new Set<string>();
+
+/** The wire format a BYOK attempt takes an effort in; undefined = none. */
+export function byokEffortFormat(
+  attempt: ModelAttempt
+): 'flat' | 'nested' | undefined {
+  if (attempt.byokProvider === undefined) {
+    return;
+  }
+  if (effortRefused.has(`${attempt.baseURL}|${attempt.model}`)) {
+    return;
+  }
+  if (
+    attempt.provider === 'byok-hackclub' ||
+    attempt.provider === 'byok-openrouter'
+  ) {
+    return 'nested';
+  }
+  if (PASSTHROUGH_FLAT.has(attempt.provider)) {
+    return 'flat';
+  }
+  return REASONING_MODEL[attempt.provider]?.test(attempt.model)
+    ? 'flat'
+    : undefined;
+}
+
 // "Too big" for a carried conversation on a model with no price step.
 const CARRIED_COMPACT_STEP = 100_000;
 
@@ -1214,7 +1272,7 @@ export function tuneBody(
     explicitEffort = false,
     flex,
     historyMessages,
-    reasoningEffort,
+    reasoningEffort: requestedEffort,
   }: {
     explicitEffort?: boolean;
     flex: boolean;
@@ -1229,6 +1287,14 @@ export function tuneBody(
   if (raw === undefined) {
     return null;
   }
+  // The one place effort goes on the wire, and never past `high`: `xhigh`/`max`
+  // let GLM think until the whole output cap is spent (#73, owner's call
+  // 2026-11-11), so any word we don't know (a stray DB value) becomes `high`.
+  const reasoningEffort = (REASONING_EFFORTS as readonly string[]).includes(
+    requestedEffort
+  )
+    ? requestedEffort
+    : 'high';
   try {
     const payload = JSON.parse(raw) as Record<string, unknown>;
     if (!payload || typeof payload !== 'object') {
@@ -1293,19 +1359,17 @@ export function tuneBody(
       }
       changed = true;
     }
-    // A BYOK key on an OpenRouter-format endpoint gets the caller's effort, or
-    // BYOK_DEFAULT_EFFORT: unset, GLM thinks at its own default (`max`) until
-    // the output cap and returns no text at all (issues #73, #95).
-    const takesReasoning =
-      attempt.provider === HACKCLUB_PROVIDER ||
-      (explicitEffort && OPENROUTER_FORMAT_BYOK.has(attempt.provider));
-    if (takesReasoning && payload.reasoning === undefined) {
-      payload.reasoning = { effort: reasoningEffort };
-      changed = true;
-    }
-    if (
-      explicitEffort &&
-      FLAT_EFFORT_BYOK.has(attempt.provider) &&
+    // A BYOK key gets the caller's effort, or BYOK_DEFAULT_EFFORT, in the format
+    // its API takes: unset, GLM thinks at its own default (`max`) until the
+    // output cap and returns no text at all (issues #73, #95).
+    const byokFormat = explicitEffort ? byokEffortFormat(attempt) : undefined;
+    if (attempt.provider === HACKCLUB_PROVIDER || byokFormat === 'nested') {
+      if (payload.reasoning === undefined) {
+        payload.reasoning = { effort: reasoningEffort };
+        changed = true;
+      }
+    } else if (
+      byokFormat === 'flat' &&
       payload.reasoning_effort === undefined
     ) {
       payload.reasoning_effort = reasoningEffort;
