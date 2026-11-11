@@ -115,7 +115,7 @@ export function agentErrorMessage({
   // provider's raw rejection into a possibly-public channel — the detail lives
   // in their App Home tab, where only they can see it.
   if (error instanceof ByokExhaustedError) {
-    return "_i couldn't run this on your own model key, every key you added failed. the model keys section of my app home says what the provider said, or you can turn on shared-model fallback there_";
+    return "_your own model failed on this one, and i didn't use my shared models because you chose not to. if you'd rather i did, switch to shared models in my app home (the model keys section has a shared-model fallback toggle). the model keys section also shows what the provider said_";
   }
   if (error instanceof BudgetExhaustedError) {
     const amount = message.match(SPEND_AMOUNT_PATTERN)?.[0] ?? '$3';
