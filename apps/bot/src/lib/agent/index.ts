@@ -1015,6 +1015,19 @@ async function executeTurn(
           .catch(() => undefined);
         return;
       }
+      // You chose not to use shared models, so none were used. Only they can
+      // act on it, so it goes to them alone instead of the whole thread.
+      if (error instanceof ByokExhaustedError) {
+        await thread
+          .postEphemeral(message.author, agentErrorMessage({ error }))
+          .catch((postError: unknown) => {
+            logger.warn(
+              { err: postError, threadId },
+              '[agent] could not post the BYOK failure notice'
+            );
+          });
+        return;
+      }
       await thread
         .post(
           asUserAccount
