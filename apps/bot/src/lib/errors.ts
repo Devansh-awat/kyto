@@ -1,5 +1,5 @@
 import { isPromptConstructionError } from '@/lib/agent/routing';
-import { errorMessage } from '@/lib/utils/error';
+import { errorMessage, errorStatus } from '@/lib/utils/error';
 import type { AgentErrorStage } from '@/types/agent';
 
 // Thrown when a turn fails after HackClub returned the daily-spend-limit 429 AND
@@ -144,4 +144,16 @@ export function agentErrorMessage({
     return "_every model i tried timed out. try again in a bit, or send a shorter follow-up and i'll continue from here_";
   }
   return "_i couldn't answer this, every model i tried failed. send it again in a bit_";
+}
+
+/**
+ * Whether a stream ended on the model provider's failure, the only thing that
+ * may leave cards drawn as "Something went wrong" (owner's rule, #20). kyto's
+ * own daily cap is excluded even though its cause is a provider 429: a
+ * BudgetExhaustedError is answered by agentErrorMessage's budget line instead.
+ */
+export function isProviderFailure(error: unknown): boolean {
+  return (
+    !(error instanceof BudgetExhaustedError) && errorStatus(error) !== undefined
+  );
 }

@@ -78,3 +78,11 @@ describe('createToolMarkupFilter', () => {
     expect(filter.leaked).toBe(false);
   });
 });
+
+test('a reply quoting the thinking tag keeps the rest of its answer (#223)', () => {
+  const filter = createToolMarkupFilter();
+  expect(
+    filter.push('the <your_previous_thinking> tag is internal.').text
+  ).toBe('the <your_previous_thinking> tag is internal.');
+  expect(filter.leaked).toBe(false);
+});

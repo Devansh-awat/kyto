@@ -29,7 +29,7 @@
 // the reply. What is left of a leaked skip is the bare word, which the agent
 // loop already turns into a real skip (skip-text.ts).
 
-const MARKERS = ['<｜', '<invoke name=', '<function_calls>', '<antml:invoke'];
+const MARKERS = ['<｜', '<invoke name=', '<function_calls>', '<invoke'];
 
 // How much of the buffer's tail could still grow into a marker.
 function heldLength(buffer: string): number {
