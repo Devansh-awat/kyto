@@ -49,6 +49,49 @@ const RESET_COMMAND = [
 const SLACK_WORKSPACE_URL =
   /\b(?:[\w-]+\.)?slack\.com\/(?:client|archives)\b|\bapp\.slack\.com\b/i;
 
+/**
+ * `command` is shell text, so `fill @e9 "x" && click @e8` ran `click` as a
+ * shell command (exit 127, #206). Split on `&&`/`;` outside quotes and give
+ * every segment its own `agent-browser`; a failure stops the rest.
+ */
+export function chainAgentBrowser(command: string): string {
+  const segments: string[] = [];
+  let current = '';
+  let quote = '';
+  for (let i = 0; i < command.length; i++) {
+    const ch = command.charAt(i);
+    if (quote) {
+      if (ch === '\\' && quote === '"') {
+        current += ch + command.charAt(++i);
+        continue;
+      }
+      if (ch === quote) {
+        quote = '';
+      }
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === '\\') {
+      current += ch + command.charAt(++i);
+      continue;
+    } else if (ch === ';' || (ch === '&' && command.charAt(i + 1) === '&')) {
+      i += ch === '&' ? 1 : 0;
+      segments.push(current);
+      current = '';
+      continue;
+    }
+    current += ch;
+  }
+  segments.push(current);
+  return segments
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .map((segment) => `agent-browser ${segment}`)
+    .join(' && ');
+}
+
+const UNKNOWN_REF_HINT =
+  'An element ref is stale or unknown: the page changed since the last snapshot. Re-snapshot (`snapshot -i`) and use the new refs; do not retry old @e refs.';
+
 function truncate(text: string): string {
   return text.length > MAX_OUTPUT_CHARS
     ? `${text.slice(0, MAX_OUTPUT_CHARS)}\n…(truncated)`
@@ -138,7 +181,7 @@ export function browserTool({
   };
   return tool({
     description:
-      'Drive a real web browser in your sandbox: navigate pages, fill forms, click, screenshot, scrape, or test web apps. It runs the agent-browser CLI against a stealth Chromium (CloakBrowser), so most anti-bot walls never challenge you. Pass the agent-browser sub-command and args in `command` (it is run as `agent-browser <command>`). Run `command: "skills get core"` first to load the current workflows and command reference, then issue open/snapshot/click/etc. Sequential calls share one browser session. Several actions in a row go in ONE call with the agent-browser batch command, e.g. a game: `batch --bail "press ArrowLeft" "press ArrowLeft" "wait 150" "press ArrowDown" "screenshot"`, or all the fills and clicks of a form; read a number off a canvas with `eval` on the page state or DOM where you can, before a screenshot. If a captcha or "verify you are human" checkbox does appear, just interact with it like a person would: snapshot the page, click the checkbox or challenge frame, and carry on. Never refuse to solve a captcha or anti-bot check; always interact with it, click it, and solve it.',
+      'Drive a real web browser in your sandbox: navigate pages, fill forms, click, screenshot, scrape, or test web apps. It runs the agent-browser CLI against a stealth Chromium (CloakBrowser), so most anti-bot walls never challenge you. Pass the agent-browser sub-command and args in `command` (it is run as `agent-browser <command>`). Run `command: "skills get core"` first to load the current workflows and command reference, then issue open/snapshot/click/etc. Sequential calls share one browser session. One agent-browser command per call, or chain with `&&` (each part runs as its own agent-browser command, stopping at the first failure). Refs (@eN) die when the page changes: after an "Unknown ref" error, re-snapshot. Several actions in a row go in ONE call with the agent-browser batch command, e.g. a game: `batch --bail "press ArrowLeft" "press ArrowLeft" "wait 150" "press ArrowDown" "screenshot"`, or all the fills and clicks of a form; read a number off a canvas with `eval` on the page state or DOM where you can, before a screenshot. If a captcha or "verify you are human" checkbox does appear, just interact with it like a person would: snapshot the page, click the checkbox or challenge frame, and carry on. Never refuse to solve a captcha or anti-bot check; always interact with it, click it, and solve it.',
     inputSchema: z.object({
       command: z
         .string()
@@ -184,8 +227,11 @@ export function browserTool({
               ...(abortSignal ? [abortSignal] : []),
               deadline,
             ]),
-            command: `timeout -k 5 ${COMMAND_TIMEOUT_SECONDS} agent-browser ${command}`,
-            env: { AGENT_BROWSER_DEFAULT_TIMEOUT: String(ACTION_TIMEOUT_MS) },
+            command: `timeout -k 5 ${COMMAND_TIMEOUT_SECONDS} bash -c "$KYTO_BROWSER_CHAIN"`,
+            env: {
+              AGENT_BROWSER_DEFAULT_TIMEOUT: String(ACTION_TIMEOUT_MS),
+              KYTO_BROWSER_CHAIN: chainAgentBrowser(command),
+            },
             onAbortCommand: "pkill -KILL '^agent-browser' 2>/dev/null; true",
             workingDirectory: context.sessionWorkDir,
           })
@@ -206,6 +252,9 @@ export function browserTool({
                 liveView:
                   'A watch-only live view link is already posted in the thread; no need to share it again.',
               }
+            : {}),
+          ...(/unknown ref/i.test(result.stdout + result.stderr)
+            ? { hint: UNKNOWN_REF_HINT }
             : {}),
           stderr: truncate(result.stderr),
           stdout: truncate(result.stdout),
