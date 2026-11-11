@@ -57,6 +57,7 @@ const FENCE_LANGUAGES = new Set(
     ' '
   )
 );
+const PLAIN_TAGS = new Set(['text', 'txt', 'plaintext']);
 const FENCE_OPEN = /^(\s*)(```|~~~)(.*)$/;
 const FENCE_ONLY = /^\s*(?:```|~~~)\s*$/;
 
@@ -134,7 +135,16 @@ export function createFenceNormalizer({ slack }: { slack: boolean }): {
       const info = rest.trim();
       const oneLine = /^(.*\S)\s*(?:```|~~~)$/.exec(info);
       if (oneLine) {
-        return `${indent}${fence}\n${oneLine[1]}\n${fence}`;
+        // A model that flattened "```text\nline\nline```" onto one line leaves
+        // its plain-text tag as the first word; it is a tag, not output. Only
+        // those tags: `go`, `python`, `sh`... are commands people type, and
+        // "```go test ./...```" must keep its `go`.
+        const [word = '', ...words] = (oneLine[1] ?? '').split(/\s+/);
+        const tagged =
+          !slack && words.length > 0 && PLAIN_TAGS.has(word.toLowerCase());
+        return tagged
+          ? `${indent}${fence}${word}\n${words.join(' ')}\n${fence}`
+          : `${indent}${fence}\n${oneLine[1]}\n${fence}`;
       }
       open = true;
       if (!info || (!slack && FENCE_LANGUAGES.has(info.toLowerCase()))) {
