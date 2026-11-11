@@ -79,6 +79,10 @@ async function main(): Promise<void> {
           'zip',
           'unzip',
           'jq',
+          // DNS and registration lookups (dig, whois): the sandbox is not root,
+          // so the model cannot install them at runtime.
+          'dnsutils',
+          'whois',
           'sudo',
           // A real display for the stealth browser: some anti-bot checks flag
           // headless Chromium even with CloakBrowser's fingerprint patches. The
