@@ -94,7 +94,6 @@ import {
   interruptTurn,
   queuedInput,
   steerTurn,
-  TurnAbort,
   takeSteering,
 } from '@/lib/agent/steering';
 import { compactThinking, rememberThinking } from '@/lib/agent/thinking';
@@ -147,6 +146,7 @@ import {
   BudgetExhaustedError,
   ByokExhaustedError,
   DegenerateOutputError,
+  isProviderFailure,
   StreamInterruptedError,
 } from '@/lib/errors';
 import { parseFlags } from '@/lib/flags';
@@ -716,6 +716,11 @@ async function executeTurn(
   // a skip that never said anything takes its plan back (below).
   let turnSkipped = false;
   const planMessages: string[] = [];
+  // The model called a tool, whatever came of it: not a turn with no output.
+  let outputSeen = false;
+  // The person asked for the answer and nothing else (the `outputOnly` tool):
+  // no plan, cards, thinking, or footer around it.
+  let outputOnly = false;
   // Whether the footer went out on the turn's last streamed message.
   let footerAttached = false;
   // What the turn read and wrote, for the moderation check once it is over.
@@ -851,23 +856,24 @@ async function executeTurn(
       await speakAsUserAccount({ message, thread });
       await reply?.flush({ thread });
     } else {
-      // A turn that ends having said nothing leaves only a "Thinking
-      // completed" plan behind (#34): a skip, and also a turn stopped before it
-      // spoke (the asker's own stop button, 6s in, before the model had even
-      // been called, twice on 2026-11-04). Once kyto has said something, the
-      // plan is the record of what it did around that, so it stays (owner's
-      // call, 2026-10-08).
-      let stopped = false;
+      // A turn that ends with NO output at all leaves only a "Thinking
+      // completed" plan behind (#34): a skip, a turn stopped or interrupted
+      // before it spoke (twice on 2026-11-04, and again 2026-11-09 when a
+      // correction cut the turn off before the model was even called). Output
+      // is reply text or any tool result: once kyto has said or done anything,
+      // the plan is the record of it and stays (owner's call, 2026-10-08).
+      let ended = false;
       try {
         await streamSegmented({ message, thread });
         await reply?.flush({ thread });
       } catch (error) {
-        stopped = error instanceof TurnAbort && error.reason === 'stop';
+        ended = abortReasonOf(controller.signal) !== undefined;
         throw error;
       } finally {
         if (
-          (turnSkipped || stopped) &&
+          (turnSkipped || ended) &&
           !reply?.hasPosted() &&
+          !outputSeen &&
           planMessages.length > 0
         ) {
           const { channel } = slack.decodeThreadId(thread.id);
@@ -1170,6 +1176,9 @@ async function executeTurn(
       getSandboxContext: () => sandboxContext,
       guardCodeTool: codingMonitor.guardTool,
       message: turnMessage,
+      onOutputOnly: () => {
+        outputOnly = true;
+      },
       secret,
       takeReminder,
       takeSteering: () => takeSteering(activeTurn),
@@ -1988,6 +1997,7 @@ async function executeTurn(
               },
               onToolActivity: () => {
                 attemptToolActivity = true;
+                outputSeen = true;
                 lastOutputWasText = false;
                 armWatchdog(ATTEMPT_TIMEOUT_MS);
               },
@@ -2945,7 +2955,7 @@ async function executeTurn(
       return;
     }
     const blocks: unknown[] = [];
-    if (hints.customization?.prompt && !slack.isDM(threadId)) {
+    if (hints.customization?.prompt && !slack.isDM(threadId) && !outputOnly) {
       blocks.push({
         elements: [
           {
@@ -2969,7 +2979,10 @@ async function executeTurn(
         ...((chosenAttempt ?? experimentArm)
           ? { leadAttempt: chosenAttempt ?? experimentArm }
           : {}),
-        showFooter: hints.customization?.showUsageFooter !== false,
+        // Only a weaker model's note survives `outputOnly`: it is about the
+        // answer's quality, not decoration.
+        showFooter:
+          hints.customization?.showUsageFooter !== false && !outputOnly,
       });
       blocks.push(...(footer?.blocks ?? []));
     }
@@ -3003,13 +3016,21 @@ async function executeTurn(
     let pending = await nextRendered();
     while (!pending.done) {
       segmenter.newMessage();
+      // Whether this message carries reply text. Under `outputOnly` the ones
+      // that don't (the thinking and tool cards from before the tool was
+      // called) are taken back once the answer is out.
+      let segmentHasText = false;
       // What a broadcast ping in the owner's reply has to be posted as, since
       // only a posted `mrkdwn` section resolves one (see harness/thread.ts).
       let broadcast = '';
       const segment = async function* (): AsyncGenerator<string | StreamChunk> {
         while (!pending.done) {
           const value = pending.value;
-          const action = segmenter.next(value);
+          // Under `outputOnly` no card is shown, so none may count as one.
+          const action =
+            outputOnly && typeof value !== 'string'
+              ? 'drop'
+              : segmenter.next(value);
           if (action === 'split') {
             // Visible text after this message's cards: it opens the next
             // message. Settle up first, or a card mid-flight stays spinning in
@@ -3031,6 +3052,7 @@ async function executeTurn(
               return;
             }
             if (text) {
+              segmentHasText = true;
               yield text;
             }
             if (reply?.streamedFull()) {
@@ -3047,6 +3069,7 @@ async function executeTurn(
             return;
           }
           if (text) {
+            segmentHasText = true;
             yield text;
           }
           yield value;
@@ -3059,6 +3082,7 @@ async function executeTurn(
         if (hasBroadcastToken(rest)) {
           broadcast = rest;
         } else if (rest) {
+          segmentHasText = true;
           yield rest;
         }
         const close = reply?.endMessage();
@@ -3066,7 +3090,7 @@ async function executeTurn(
           yield close;
         }
       };
-      await slack.stream(threadId, segment(), {
+      const segmentMessages = await slack.stream(threadId, segment(), {
         // Only the turn's LAST message gets the footer, and only when that
         // message has content; otherwise it is posted on its own afterwards.
         finalBlocks: async () => {
@@ -3089,10 +3113,27 @@ async function executeTurn(
         // list moves under it.
         onNewMessage: () => moveTodosDown(threadId),
         onPosted: (ts) => planMessages.push(ts),
+        // Slack's "Something went wrong" headline is for a failure of the
+        // model provider alone (owner's call, #20): not our own stop, restart
+        // or bug.
+        showFailure: (error) =>
+          !controller.signal.aborted && isProviderFailure(error),
         recipientTeamId: slack.teamId ?? '',
         recipientUserId: turnMessage.author.userId,
         taskDisplayMode: 'plan',
       });
+      if (outputOnly && !segmentHasText && !broadcast) {
+        for (const ts of segmentMessages) {
+          await slack.webClient.chat
+            .delete({ channel: slack.decodeThreadId(threadId).channel, ts })
+            .catch((error: unknown) => {
+              logger.warn(
+                { err: error, threadId, ts },
+                '[agent] could not remove a card-only message'
+              );
+            });
+        }
+      }
       if (broadcast) {
         await turnThread
           .post({ allowBroadcast: isOwner, markdown: broadcast })

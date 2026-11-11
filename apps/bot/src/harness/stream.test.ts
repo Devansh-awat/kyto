@@ -110,4 +110,32 @@ describe('streamed reply text', () => {
     );
     expect(settling).toBeDefined();
   });
+
+  test('a message filling up with cards is closed before Slack calls it full (#20)', async () => {
+    const { harness, messages } = fakeSlack({ limit: 12_000 });
+    const stopped: unknown[] = [];
+    spyOn(harness.webClient.chat, 'stopStream').mockImplementation((args) => {
+      stopped.push(args);
+      return Promise.resolve({ ok: true });
+    });
+    const cards = Array.from({ length: 12 }, (_, index) => ({
+      id: `card-${index}`,
+      output: 'x'.repeat(1500),
+      status: 'in_progress' as const,
+      title: `Card ${index}`,
+      type: 'task_update' as const,
+    }));
+    async function* chunks() {
+      for await (const card of cards) {
+        yield card;
+      }
+    }
+    await harness.stream('slack:C1:1.000', chunks(), {
+      onRotate: () => [],
+      recipientTeamId: 'T1',
+      recipientUserId: 'U1',
+    });
+    expect(messages.size).toBeGreaterThan(1);
+    expect(stopped.length).toBeGreaterThan(1);
+  });
 });

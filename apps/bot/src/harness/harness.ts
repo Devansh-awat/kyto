@@ -3,7 +3,7 @@ import { WebClient } from '@slack/web-api';
 import { z } from 'zod';
 import { isSlackFileHost } from './file-host';
 import { mrkdwnToMarkdown } from './markdown';
-import { filterOutbound, filterOutboundDeep } from './outbound';
+import { createStreamFilter, filterOutboundDeep } from './outbound';
 import { cannotPostCode, cannotPostNote } from './post-refusal';
 import { ThreadCache } from './thread-cache';
 import type { Author, Message, MessageAttachment, StreamChunk } from './types';
@@ -1112,6 +1112,10 @@ export class SlackHarness {
       // nothing, and a caller that takes its messages back (a silent turn's
       // plan, #34) needs them anyway.
       onPosted?: (ts: string) => void;
+      // The stream ended on an error: whether it is one worth showing as
+      // Slack's "Something went wrong" (the model provider's, owner's call).
+      // Any other cut closes its open cards as done; absent = never shown.
+      showFailure?: (error: unknown) => boolean;
       // Per-message identity override (needs chat:write.customize). Used so a
       // subagent's own streamed message posts as "kyto subagent" + its icon.
       username?: string;
@@ -1161,6 +1165,11 @@ export class SlackHarness {
     };
     // Reply text in the current message, against MESSAGE_TEXT_CHARS.
     let currentTextChars = 0;
+    // Card chunks sent into the current message: they fill it too, and a
+    // message that filled up refuses the stop that would close its cards, so
+    // it was left drawn as "Something went wrong" (#30, #20).
+    let currentCardChars = 0;
+    let rotating = false;
     // Reply text the current streamer holds but Slack has not taken: a failed
     // flush stays in the buffer of a streamer that is about to be dropped, so
     // the next one is handed it, or up to a buffer's worth of reply vanishes.
@@ -1267,6 +1276,7 @@ export class SlackHarness {
       streamStartedAt = Date.now();
       currentHasContent = false;
       currentTextChars = 0;
+      currentCardChars = 0;
       if (carried) {
         await sendReplyText(carried);
       }
@@ -1305,6 +1315,17 @@ export class SlackHarness {
         incoming.type === 'task_update' && incoming.status === 'error'
           ? { ...incoming, status: 'complete' }
           : incoming;
+      // Rotate while the message still has room to be closed, rather than
+      // when Slack says it is full.
+      const size = JSON.stringify(chunk).length;
+      if (
+        !rotating &&
+        currentHasContent &&
+        currentTextChars + currentCardChars + size > MESSAGE_TEXT_CHARS
+      ) {
+        await rotate();
+      }
+      currentCardChars += size;
       if (chunk.type === 'task_update') {
         if (chunk.status === 'in_progress') {
           openCards.set(chunk.id, chunk.title);
@@ -1526,8 +1547,13 @@ export class SlackHarness {
       // Settle the outgoing message BEFORE stopping it: this is the caller's
       // only chance to finish cards it opened here, since the next append goes
       // to a message where those ids do not exist.
-      for (const chunk of options.onRotate?.() ?? []) {
-        await appendChunk(chunk);
+      rotating = true;
+      try {
+        for (const chunk of options.onRotate?.() ?? []) {
+          await appendChunk(chunk);
+        }
+      } finally {
+        rotating = false;
       }
       await stopStreamer({ final: false });
       await restartStreamer();
@@ -1595,7 +1621,10 @@ export class SlackHarness {
     const appendText = async (text: string): Promise<void> => {
       let rest = text;
       while (rest) {
-        const room = Math.max(0, MESSAGE_TEXT_CHARS - currentTextChars);
+        const room = Math.max(
+          0,
+          MESSAGE_TEXT_CHARS - currentTextChars - currentCardChars
+        );
         if (rest.length <= room) {
           await sendReplyText(rest);
           return;
@@ -1619,11 +1648,13 @@ export class SlackHarness {
         await rotate();
       }
     };
+    const filterReply = createStreamFilter();
     const iterator = chunks[Symbol.asyncIterator]();
     // Unset while a chunk is being handled, so the producer is never run ahead
     // of the appends (its card budget and onRotate must see them in order).
     let pending: Promise<IteratorResult<string | StreamChunk>> | undefined;
     let cutShort = false;
+    let providerFailed = false;
     try {
       while (true) {
         pending ??= iterator.next();
@@ -1661,14 +1692,14 @@ export class SlackHarness {
               if ('block' in part) {
                 await appendChunk({ blocks: [part.block], type: 'blocks' });
               } else if (part.markdown) {
-                await appendText(filterOutbound(`${part.markdown}\n`));
+                await appendText(filterReply.push(`${part.markdown}\n`));
               }
             }
             markContent();
             continue;
           }
           if (text) {
-            await appendText(filterOutbound(text));
+            await appendText(filterReply.push(text));
           }
           continue;
         }
@@ -1679,16 +1710,23 @@ export class SlackHarness {
       if (!pending) {
         await iterator.return?.().catch(() => undefined);
       }
-      // A turn cut mid-card (a restart, a failure) left the card
-      // `in_progress`, drawn as "Something went wrong": its stop closes it.
+      // A turn cut mid-card leaves the card `in_progress`, drawn as "Something
+      // went wrong": only the model provider's failure may keep that (#20); for
+      // a restart, a stop or anything of ours the stop closes the card as done.
       cutShort = true;
+      providerFailed = options.showFailure?.(error) ?? false;
       throw error;
     } finally {
+      // A block that never closed gives back the reply it held (#223).
+      const unclosed = cutShort ? '' : filterReply.flush();
+      if (unclosed.trim()) {
+        await appendText(unclosed).catch(() => undefined);
+      }
       if (refused) {
         await postRefusedText();
       } else {
         await stopStreamer({
-          failed: cutShort,
+          failed: providerFailed,
           final: true,
           settle: cutShort ? options.onRotate?.() : undefined,
         });

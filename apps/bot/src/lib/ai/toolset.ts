@@ -101,6 +101,7 @@ import {
 } from './tools/memory';
 import { mermaidTool } from './tools/mermaid';
 import { closeNpsSurveyTool, npsResultsTool, npsSurveyTool } from './tools/nps';
+import { outputOnlyTool } from './tools/output-only';
 import {
   bookmarkLinkTool,
   pinMessageTool,
@@ -355,6 +356,7 @@ export async function buildTools({
   getSandboxContext,
   guardCodeTool,
   message,
+  onOutputOnly,
   thread,
   maxToolCalls,
   secret = false,
@@ -390,6 +392,8 @@ export async function buildTools({
     toolName: string;
   }) => Promise<string | null>;
   message: Message;
+  /** The `outputOnly` tool was called: the turn shows the answer and nothing else. */
+  onOutputOnly?: () => void;
   thread: ThreadHandle;
   /** A `!secret` turn: nothing may be posted publicly on its behalf. */
   secret?: boolean;
@@ -644,6 +648,11 @@ export async function buildTools({
     // Keyed off the constant: the stop condition that makes a skip terminal
     // matches on this exact name (see streamAttempt).
     [SKIP_TOOL_NAME]: skipTool({ threadId: thread.id }),
+    // CORE: it has to be called before the answer, and a round trip to load it
+    // would put the thinking card on screen first. Not for a run nobody reads.
+    ...(onOutputOnly
+      ? { outputOnly: outputOnlyTool({ onOutputOnly, threadId: thread.id }) }
+      : {}),
     // CORE, not deferred: a model deciding "this is beyond me" cannot be asked
     // to first spend a round trip loading the tool that says so.
     ...(escalation

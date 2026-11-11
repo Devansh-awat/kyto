@@ -18,6 +18,7 @@ import { requestHints } from '@/lib/ai/hints';
 import { renderStream } from '@/lib/ai/stream';
 import { stripToolComplaints } from '@/lib/ai/stream/tool-complaints';
 import { slack } from '@/lib/chat';
+import { isProviderFailure } from '@/lib/errors';
 import logger from '@/lib/logger';
 import { errorMessage } from '@/lib/utils/error';
 
@@ -537,6 +538,8 @@ export function runSubagentTool({
               },
               recipientTeamId: slack.teamId ?? '',
               recipientUserId: message.author.userId,
+              showFailure: (error) =>
+                !abortSignal?.aborted && isProviderFailure(error),
               taskDisplayMode: 'plan',
               username: cardLabel,
             });
