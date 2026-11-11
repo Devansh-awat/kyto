@@ -35,6 +35,28 @@ describe('reasoning effort on BYOK attempts', () => {
     expect(reasoningSent('byok-hackclub', false)).toBeUndefined();
   });
 
+  test('a custom endpoint gets the flat reasoning_effort on a chosen effort', () => {
+    const body = (explicit: boolean) =>
+      JSON.parse(
+        tuneBody(
+          JSON.stringify({ messages: [], model: 'glm-5.3' }),
+          attempt('byok-custom'),
+          undefined,
+          undefined,
+          undefined,
+          {
+            explicitEffort: explicit,
+            flex: false,
+            historyMessages: 0,
+            reasoningEffort: 'low',
+          }
+        ) ?? '{}'
+      );
+    expect(body(true).reasoning_effort).toBe('low');
+    expect(body(true).reasoning).toBeUndefined();
+    expect(body(false).reasoning_effort).toBeUndefined();
+  });
+
   test('never sent to an endpoint that rejects the field', () => {
     expect(reasoningSent('byok-openai', true)).toBeUndefined();
   });

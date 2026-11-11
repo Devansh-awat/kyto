@@ -1031,7 +1031,9 @@ function tunedFetch({
     attempt.provider === HACKCLUB_PROVIDER &&
     attempt.model.startsWith('openai/');
   const byokDefaultEffort =
-    effort === undefined && OPENROUTER_FORMAT_BYOK.has(attempt.provider);
+    effort === undefined &&
+    (OPENROUTER_FORMAT_BYOK.has(attempt.provider) ||
+      FLAT_EFFORT_BYOK.has(attempt.provider));
   // A `--reasoning` flag or the low-effort retry wins over the key's own pick.
   const reasoningEffort = byokDefaultEffort
     ? (attempt.reasoningEffort ?? BYOK_DEFAULT_EFFORT)
@@ -1150,6 +1152,12 @@ const GLM_FLASH_ROUTING = {
 // BYOK endpoints that speak OpenRouter's `reasoning: { effort }`; OpenAI's own
 // API calls it `reasoning_effort` and rejects the unknown field.
 const OPENROUTER_FORMAT_BYOK = new Set(['byok-hackclub', 'byok-openrouter']);
+// Self-hosted / OpenWebUI-style endpoints pass the flat `reasoning_effort`
+// field through to the model (the OpenAI chat spelling). Sent only when an
+// effort was chosen (the low-effort retry, a flag, the key's own pick): it was
+// never sent at all, so a `byok-custom` GLM spent all 32k tokens thinking on
+// the first try AND on the "low effort" retry (#73, 2026-11-05).
+const FLAT_EFFORT_BYOK = new Set(['byok-custom', 'byok-mebbo']);
 // "Too big" for a carried conversation on a model with no price step.
 const CARRIED_COMPACT_STEP = 100_000;
 
@@ -1293,6 +1301,14 @@ export function tuneBody(
       (explicitEffort && OPENROUTER_FORMAT_BYOK.has(attempt.provider));
     if (takesReasoning && payload.reasoning === undefined) {
       payload.reasoning = { effort: reasoningEffort };
+      changed = true;
+    }
+    if (
+      explicitEffort &&
+      FLAT_EFFORT_BYOK.has(attempt.provider) &&
+      payload.reasoning_effort === undefined
+    ) {
+      payload.reasoning_effort = reasoningEffort;
       changed = true;
     }
     // One routing hint shared by EVERY thread (coolton's design, 2026-09-29):
