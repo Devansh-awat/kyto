@@ -3,6 +3,7 @@ import {
   LazySandbox,
   mayHaveFetchedRepo,
   runOnce,
+  sandboxNow,
   sanitizeGitRepos,
 } from '@repo/sandbox';
 import { env } from '@/env';
@@ -78,6 +79,7 @@ export async function runReminderBash(reminder: Reminder): Promise<string> {
       store: threadSandboxStore,
     });
     try {
+      const since = await sandboxNow(sandbox);
       const result = await sandbox.run({ command });
       // Same disarm the `bash` tool does. A scheduled command is model-authored
       // and runs unattended on a timer, so a repo it clones would sit armed in
@@ -87,6 +89,7 @@ export async function runReminderBash(reminder: Reminder): Promise<string> {
         await sanitizeGitRepos({
           dirs: [sandbox.workDir],
           runner: sandbox,
+          since,
         }).catch(() => undefined);
       }
       return format(result);

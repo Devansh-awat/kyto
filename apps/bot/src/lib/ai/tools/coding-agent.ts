@@ -3,6 +3,7 @@ import type { SandboxContext } from '@repo/ai';
 import {
   CODING_AGENT_RULES_PATH,
   CODING_AGENT_SETUP_COMMAND,
+  sandboxNow,
 } from '@repo/sandbox';
 import { tool } from 'ai';
 import { z } from 'zod';
@@ -190,6 +191,7 @@ export function codingAgentTool({
 
       const runSeconds = (minutes ?? MAX_RUN_MINUTES) * 60;
       const startedAt = Math.floor(Date.now() / 1000);
+      const since = await sandboxNow(context.session);
       const releaseDeadline = extendAttemptDeadline?.(
         runSeconds * 1000 + WATCHDOG_GRACE_MS
       );
@@ -244,6 +246,7 @@ export function codingAgentTool({
       const securityNotice = await disarmFetchedRepos({
         abortSignal,
         context,
+        since,
       });
 
       const output = (result.stdout + result.stderr).replace(ANSI, '').trim();

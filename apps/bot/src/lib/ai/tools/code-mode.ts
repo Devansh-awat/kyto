@@ -1,5 +1,6 @@
 import nodePath from 'node:path/posix';
 import type { SandboxContext } from '@repo/ai';
+import { sandboxNow } from '@repo/sandbox';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { guardGithubCommand } from '@/lib/github/guard';
@@ -105,6 +106,7 @@ export function codeModeTool({
     }),
     execute: async ({ code, install }, { abortSignal }) => {
       const context = getSandboxContext();
+      const since = await sandboxNow(context.session);
       const guard = github
         ? await guardGithubCommand({
             command: code,
@@ -177,6 +179,7 @@ export function codeModeTool({
       const securityNotice = await disarmFetchedRepos({
         abortSignal,
         context,
+        since,
       });
       return {
         exitCode: result.exitCode,
