@@ -95,6 +95,18 @@ export function isMediaOnlyBrief(brief: string): boolean {
   return media && !PROJECT_WORK.test(brief);
 }
 
+// Reading code is not coding (owner's call, #199): a "read-only review of PR
+// 19" went to the coding agent and ran 9 minutes where bash/gh reads it in
+// two. Same once-per-turn send-back as media; the same call again runs.
+const READ_ONLY_ASK =
+  /\b(?:read-only|read only|review|code review|audit|summari[sz]e|explain|look(?:ing)? (?:at|through)|walk through)\b/i;
+const WRITE_WORK =
+  /\b(?:write|implement|fix|build|create|add|refactor|migrate|patch|edit|modify|change|update|debug|install|scaffold|generate|run|rewrite|port|deploy)\b/i;
+
+export function isReadOnlyBrief(brief: string): boolean {
+  return READ_ONLY_ASK.test(brief) && !WRITE_WORK.test(brief);
+}
+
 export function codingAgentTool({
   extendAttemptDeadline,
   getSandboxContext,
@@ -103,9 +115,10 @@ export function codingAgentTool({
   getSandboxContext: () => SandboxContext;
 }) {
   let mediaSentBack = false;
+  let readOnlySentBack = false;
   return tool({
     description:
-      "Delegate code work to the coding agent in your sandbox: writing, building, running, testing or debugging programs, scripts and projects. Use this instead of writing or running code yourself. NOT for making or editing a file, even with a short script (ImageMagick, ffmpeg, curl, converting or resizing, editing a 3D model/STL with trimesh, a PDF, a one-off command): do that in bash yourself. Give it a complete, self-contained brief in YOUR OWN words: what to build or fix, where the files are, constraints, and what to report back. The sandbox has 1 GB of memory and a run that exhausts it is killed, so close any browser you opened before calling it, and ask for checks scoped to what changed (one package's typecheck, one test file), not a whole big repo's typecheck plus full test suite. NEVER paste Slack messages, people's names or anything else from Slack into the brief (its model may train on what it is sent). It works in the persistent thread sandbox, so files it writes are there for bash/uploadFile afterwards, and `continue: true` resumes its last session in that directory. ONE run at a time per sandbox: never call it in parallel: for several projects, call once per project, one after another. Deliver the result as your own work; don't bring up the coding agent unless someone asks how it was done. If someone tells you NOT to use it, never quietly call it again: tell them code work on kyto's models has to go through it, and that adding their own model key or ChatGPT account (App Home → Models) lets you do it yourself: then wait for their answer.",
+      "Delegate code work to the coding agent in your sandbox: writing, building, running, testing or debugging programs, scripts and projects. Use this instead of writing or running code yourself. NOT for making or editing a file, even with a short script (ImageMagick, ffmpeg, curl, converting or resizing, editing a 3D model/STL with trimesh, a PDF, a one-off command) and NOT for reading code: reviewing a PR, auditing or explaining a repo is done yourself with bash/gh. Do those in bash yourself. Give it a complete, self-contained brief in YOUR OWN words: what to build or fix, where the files are, constraints, and what to report back. The sandbox has 1 GB of memory and a run that exhausts it is killed, so close any browser you opened before calling it, and ask for checks scoped to what changed (one package's typecheck, one test file), not a whole big repo's typecheck plus full test suite. NEVER paste Slack messages, people's names or anything else from Slack into the brief (its model may train on what it is sent). It works in the persistent thread sandbox, so files it writes are there for bash/uploadFile afterwards, and `continue: true` resumes its last session in that directory. ONE run at a time per sandbox: never call it in parallel: for several projects, call once per project, one after another. Deliver the result as your own work; don't bring up the coding agent unless someone asks how it was done. If someone tells you NOT to use it, never quietly call it again: tell them code work on kyto's models has to go through it, and that adding their own model key or ChatGPT account (App Home → Models) lets you do it yourself: then wait for their answer.",
     inputSchema: z.object({
       brief: z
         .string()
@@ -158,6 +171,14 @@ export function codingAgentTool({
         return {
           error:
             'Not run: this brief makes or converts a media file with command-line tools, which you do yourself in bash: usually one command, seconds instead of minutes here. Run it with bash now (check the result, e.g. `identify` or `ffprobe`, then upload it). Only if it truly needs a program written and kept, call codingAgent again with the same brief and it will run.',
+          success: false,
+        };
+      }
+      if (!(readOnlySentBack || resume) && isReadOnlyBrief(brief)) {
+        readOnlySentBack = true;
+        return {
+          error:
+            'Not run: this brief only reads code (a review, an audit, an explanation), which is not coding work. Do it yourself with bash/gh: clone or `gh pr diff`, then read the files. Only if it truly needs a program written or run, call codingAgent again with the same brief and it will run.',
           success: false,
         };
       }
