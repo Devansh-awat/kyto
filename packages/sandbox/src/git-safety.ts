@@ -112,6 +112,7 @@ EXEC_SUBSECTION_KEYS = set(${JSON.stringify(EXEC_SUBSECTION_KEYS)})
 MAX_DIRS = 50000
 
 removed_hooks = 0
+removed_hook_names = []
 removed_keys = []
 repos = []
 
@@ -170,6 +171,9 @@ def clean_gitdir(gitdir):
                 if os.path.isfile(target) or os.path.islink(target):
                     os.remove(target)
                     removed_hooks += 1
+                    # git init ships .sample hooks; only a real one is a signal.
+                    if not name.endswith('.sample'):
+                        removed_hook_names.append(name)
             except OSError:
                 pass
     config = os.path.join(gitdir, 'config')
@@ -215,11 +219,14 @@ for root in sys.argv[1:]:
 print(json.dumps({
     'repos': len(repos),
     'hooks': removed_hooks,
+    'hookNames': sorted(set(removed_hook_names)),
     'keys': sorted(set(removed_keys)),
 }))
 `;
 
 export interface GitSanitizeResult {
+  /** Names of the removed hooks that were not git's inert \`.sample\` templates. */
+  hookNames: string[];
   /** Hook scripts deleted. */
   hooks: number;
   /** Config keys/sections stripped, like \`core.hooksPath\`. */

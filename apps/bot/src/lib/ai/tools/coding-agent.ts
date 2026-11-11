@@ -241,7 +241,10 @@ export function codingAgentTool({
           context.session.run({ command: `rm -f '${briefPath}'` })
         ).catch(() => undefined);
       }
-      await disarmFetchedRepos({ abortSignal, context });
+      const securityNotice = await disarmFetchedRepos({
+        abortSignal,
+        context,
+      });
 
       const output = (result.stdout + result.stderr).replace(ANSI, '').trim();
       if (result.exitCode === BUSY_EXIT) {
@@ -334,6 +337,7 @@ export function codingAgentTool({
         ...(changed ? { changedFiles: changed } : {}),
         ...(progress?.git ? { gitChanges: progress.git } : {}),
         ...(note ? { note } : {}),
+        ...(securityNotice ? { securityNotice } : {}),
       };
     },
   });

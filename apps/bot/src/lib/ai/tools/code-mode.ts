@@ -174,9 +174,13 @@ export function codeModeTool({
       // the outside. A repo cloned here and left armed runs its config's
       // command on the next ordinary git operation in the thread, and nothing
       // else in the stack catches that.
-      await disarmFetchedRepos({ abortSignal, context });
+      const securityNotice = await disarmFetchedRepos({
+        abortSignal,
+        context,
+      });
       return {
         exitCode: result.exitCode,
+        securityNotice,
         stderr: clamp(result.stderr, OUTPUT_MAX),
         stdout: clamp(result.stdout, OUTPUT_MAX),
       };

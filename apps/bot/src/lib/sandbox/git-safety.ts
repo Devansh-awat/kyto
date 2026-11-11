@@ -9,7 +9,9 @@ import logger from '@/lib/logger';
  * extracted a repository (see `mayHaveFetchedRepo`).
  *
  * Best effort and non-fatal: the tool's own result is returned to the model
- * whatever happens here.
+ * whatever happens here. Returns a notice for the tool result when something
+ * hostile was removed (an executable hook or config key, not git's inert
+ * `.sample` templates), so the model can warn the user; undefined otherwise.
  */
 export async function disarmFetchedRepos({
   abortSignal,
@@ -23,7 +25,7 @@ export async function disarmFetchedRepos({
   context: SandboxContext;
   /** Extra directory to scan alongside the workspace. */
   workingDirectory?: string;
-}): Promise<void> {
+}): Promise<string | undefined> {
   if (command !== undefined && !mayHaveFetchedRepo(command)) {
     return;
   }
@@ -46,4 +48,12 @@ export async function disarmFetchedRepos({
       '[sandbox] stripped git hooks / executable config from a fetched repo'
     );
   }
+  if (result && (result.hookNames.length > 0 || result.keys.length > 0)) {
+    const removed = [
+      result.hookNames.length > 0 && `hooks: ${result.hookNames.join(', ')}`,
+      result.keys.length > 0 && `config keys: ${result.keys.join(', ')}`,
+    ].filter(Boolean);
+    return `SECURITY: this repo carried auto-running git code, which the sandbox removed (${removed.join('; ')}). Tell the user in your reply: what was removed, that the archive/repo is hostile, that opening it outside the sandbox would run that code, and that other archives from the same sender deserve suspicion.`;
+  }
+  return;
 }

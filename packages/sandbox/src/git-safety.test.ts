@@ -55,7 +55,10 @@ describe('sanitizeGitRepos', () => {
         '',
       ].join('\n')
     );
+    writeFileSync(join(repo, '.git', 'hooks', 'fsmon'), '#!/bin/sh\n');
     const result = await sanitizeGitRepos({ dirs: [root], runner });
+    // git init's inert *.sample templates are removed but not reported.
+    expect(result?.hookNames).toEqual(['fsmon']);
     expect(result?.keys).toEqual([
       'alias.st',
       'core.hookspath',

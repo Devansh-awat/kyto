@@ -77,13 +77,14 @@ The same \`slack\` command is available to the plain \`bash\` tool and to recurr
         if (result.exitCode === 0) {
           await guard?.claim();
         }
-        await disarmFetchedRepos({
+        const securityNotice = await disarmFetchedRepos({
           abortSignal,
           command: script,
           context,
         });
         return {
           exitCode: result.exitCode,
+          securityNotice,
           stderr: truncate(result.stderr),
           stdout: truncate(result.stdout),
           success: result.exitCode === 0,

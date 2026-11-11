@@ -137,12 +137,13 @@ export function bashTool({
           if (backgrounded.exitCode === 0) {
             await guard?.claim();
           }
-          await disarmFetchedRepos({
+          const securityNotice = await disarmFetchedRepos({
             abortSignal,
             command,
             context,
             workingDirectory: resolvedDir,
           });
+          return { ...backgrounded, securityNotice };
         }
         return backgrounded;
       }
@@ -157,7 +158,7 @@ export function bashTool({
       if (result.exitCode === 0) {
         await guard?.claim();
       }
-      await disarmFetchedRepos({
+      const securityNotice = await disarmFetchedRepos({
         abortSignal,
         command,
         context,
@@ -172,6 +173,7 @@ export function bashTool({
           exitCode: result.exitCode,
           stderr: result.stderr,
         }),
+        securityNotice,
         stderr: await clipStream(result.stderr, context, 'stderr'),
         stdout: await clipStream(result.stdout, context, 'stdout'),
       };

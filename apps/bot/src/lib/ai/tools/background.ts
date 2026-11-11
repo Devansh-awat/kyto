@@ -243,13 +243,13 @@ export function backgroundProcessTools({
   async function disarmIfFinished(
     id: string,
     result: ManagedResult
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     const command = pendingDisarm.get(id);
     if (!(command && result.finished)) {
       return;
     }
     pendingDisarm.delete(id);
-    await disarmFetchedRepos({ command, context: getSandboxContext() });
+    return await disarmFetchedRepos({ command, context: getSandboxContext() });
   }
 
   async function readManaged(
@@ -474,7 +474,7 @@ export function backgroundProcessTools({
         if (!result) {
           return { error: `Unknown process id: ${id}`, success: false };
         }
-        await disarmIfFinished(id, result);
+        const securityNotice = await disarmIfFinished(id, result);
         const proc = processes.get(id);
         if (proc && result.finished) {
           proc.collected = true;
@@ -489,6 +489,7 @@ export function backgroundProcessTools({
           exitCode: result.exitCode,
           id,
           running: !result.finished,
+          securityNotice,
           stderr: await clipManaged(result.stderr, context, 'stderr'),
           stdout: await clipManaged(result.stdout, context, 'stdout'),
           success: true,

@@ -87,7 +87,7 @@ export function ghTool({
         }
         // A `gh repo clone` / `gh release download` can drop a repo (and its
         // hooks) into the workspace.
-        await disarmFetchedRepos({
+        const securityNotice = await disarmFetchedRepos({
           abortSignal,
           command,
           context,
@@ -103,6 +103,7 @@ export function ghTool({
             stderr: result.stderr,
           }),
           stderr: truncate(result.stderr),
+          securityNotice,
           stdout: truncate(result.stdout),
           success: result.exitCode === 0,
         };
