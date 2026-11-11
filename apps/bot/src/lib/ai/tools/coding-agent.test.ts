@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { isMediaOnlyBrief } from './coding-agent';
+import { isMediaOnlyBrief, isReadOnlyBrief } from './coding-agent';
 
 describe('isMediaOnlyBrief', () => {
   test('a one-off media file is bash work (#110)', () => {
@@ -22,5 +22,25 @@ describe('isMediaOnlyBrief', () => {
     ]) {
       expect(isMediaOnlyBrief(brief)).toBe(false);
     }
+  });
+});
+
+describe('isReadOnlyBrief', () => {
+  test('reading or reviewing code is not coding work (#199)', () => {
+    expect(
+      isReadOnlyBrief(
+        'Perform a read-only code review of the GitHub pull request in ./nephthys-plus and report bugs.'
+      )
+    ).toBe(true);
+    expect(
+      isReadOnlyBrief('Explain how the auth middleware in ./api works.')
+    ).toBe(true);
+  });
+
+  test('a review that also changes code still runs', () => {
+    expect(isReadOnlyBrief('Review the PR, then fix the bugs you find.')).toBe(
+      false
+    );
+    expect(isReadOnlyBrief('Build a CLI that parses logs.')).toBe(false);
   });
 });
