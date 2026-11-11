@@ -8,6 +8,7 @@ export {
   GIT_HARDEN_COMMAND,
   type GitSanitizeResult,
   mayHaveFetchedRepo,
+  sandboxNow,
   sanitizeGitRepos,
 } from './git-safety';
 export {

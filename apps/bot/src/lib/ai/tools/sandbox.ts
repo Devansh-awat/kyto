@@ -3,7 +3,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { githubAuthHint } from '@/lib/github/diagnose';
 import { guardGithubCommand } from '@/lib/github/guard';
-import { disarmFetchedRepos } from '@/lib/sandbox/git-safety';
+import { disarmFetchedRepos, fetchStart } from '@/lib/sandbox/git-safety';
 import { clipOutput, fullOutputPath } from '@/lib/sandbox/output-clip';
 import type { BackgroundProcessTools } from './background';
 import { resolvePath, shellQuote } from './workspace-files';
@@ -99,6 +99,7 @@ export function bashTool({
       { abortSignal }
     ) => {
       const context = getSandboxContext();
+      const since = await fetchStart({ command, context });
       const resolvedDir = workingDirectory
         ? resolvePath(context, workingDirectory)
         : undefined;
@@ -141,6 +142,7 @@ export function bashTool({
             abortSignal,
             command,
             context,
+            since,
             workingDirectory: resolvedDir,
           });
           return { ...backgrounded, securityNotice };
@@ -162,6 +164,7 @@ export function bashTool({
         abortSignal,
         command,
         context,
+        since,
         workingDirectory: resolvedDir,
       });
       return {

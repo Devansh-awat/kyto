@@ -10,7 +10,7 @@ import { z } from 'zod';
 import { env } from '@/env';
 import { githubAuthHint } from '@/lib/github/diagnose';
 import { GITHUB_LOGIN, guardGithubCommand } from '@/lib/github/guard';
-import { disarmFetchedRepos } from '@/lib/sandbox/git-safety';
+import { disarmFetchedRepos, fetchStart } from '@/lib/sandbox/git-safety';
 import { errorMessage } from '@/lib/utils/error';
 import { editorsSchema, parseEditors } from './editors';
 import { withGhPrefixes } from './gh-prefix';
@@ -66,6 +66,7 @@ export function ghTool({
       }
       try {
         const context = getSandboxContext();
+        const since = await fetchStart({ command, context });
         const guard = await guardGithubCommand({
           command,
           context,
@@ -91,6 +92,7 @@ export function ghTool({
           abortSignal,
           command,
           context,
+          since,
           workingDirectory: context.sessionWorkDir,
         });
         return {

@@ -7,7 +7,7 @@ import type { Message } from '@/harness/types';
 import { parseGithubCommand } from '@/lib/github/command';
 import { guardGithubCommand } from '@/lib/github/guard';
 import logger from '@/lib/logger';
-import { disarmFetchedRepos } from '@/lib/sandbox/git-safety';
+import { disarmFetchedRepos, fetchStart } from '@/lib/sandbox/git-safety';
 import { clipOutput, fullOutputPath } from '@/lib/sandbox/output-clip';
 import { errorMessage } from '@/lib/utils/error';
 
@@ -191,13 +191,14 @@ export function backgroundProcessTools({
   // Commands still to be checked for a repo they may have fetched; a detached
   // command finishes out of band, so the disarm happens when a poll first sees
   // it done rather than at start time.
-  const pendingDisarm = new Map<string, string>();
+  const pendingDisarm = new Map<string, { command: string; since: number }>();
 
   async function startManaged(
     command: string,
     workingDirectory?: string
   ): Promise<{ id: string } | { error: string }> {
     const context = getSandboxContext();
+    const since = await fetchStart({ command, context });
     registry.counter += 1;
     const id = `bg-${registry.counter}`;
     // The sandbox (and its workdir) is the thread's and outlives a restart's
@@ -234,7 +235,7 @@ export function backgroundProcessTools({
     proc.pid = pid;
     processes.set(id, proc);
     if (mayHaveFetchedRepo(command)) {
-      pendingDisarm.set(id, command);
+      pendingDisarm.set(id, { command, since });
     }
     return { id };
   }
@@ -244,12 +245,16 @@ export function backgroundProcessTools({
     id: string,
     result: ManagedResult
   ): Promise<string | undefined> {
-    const command = pendingDisarm.get(id);
-    if (!(command && result.finished)) {
+    const pending = pendingDisarm.get(id);
+    if (!(pending && result.finished)) {
       return;
     }
     pendingDisarm.delete(id);
-    return await disarmFetchedRepos({ command, context: getSandboxContext() });
+    return await disarmFetchedRepos({
+      command: pending.command,
+      context: getSandboxContext(),
+      since: pending.since,
+    });
   }
 
   async function readManaged(

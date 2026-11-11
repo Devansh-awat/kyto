@@ -2,7 +2,7 @@ import type { SandboxContext } from '@repo/ai';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { guardGithubCommand } from '@/lib/github/guard';
-import { disarmFetchedRepos } from '@/lib/sandbox/git-safety';
+import { disarmFetchedRepos, fetchStart } from '@/lib/sandbox/git-safety';
 import { readOnlySlackMethods } from '@/lib/slack-proxy';
 import { errorMessage } from '@/lib/utils/error';
 
@@ -57,6 +57,7 @@ The same \`slack\` command is available to the plain \`bash\` tool and to recurr
     execute: async ({ script }, { abortSignal }) => {
       try {
         const context = getSandboxContext();
+        const since = await fetchStart({ command: script, context });
         const guard = github
           ? await guardGithubCommand({
               command: script,
@@ -81,6 +82,7 @@ The same \`slack\` command is available to the plain \`bash\` tool and to recurr
           abortSignal,
           command: script,
           context,
+          since,
         });
         return {
           exitCode: result.exitCode,
