@@ -25,7 +25,7 @@ describe('addressedState', () => {
       selfId: 'U0KYTO',
     });
     expect(state).toBe(
-      'owner: <> @kyto you too\nlily: @U0OTHER build yours from scratch'
+      '[name: "owner"]: <> @kyto you too\n[name: "lily"]: @U0OTHER build yours from scratch'
     );
   });
 
@@ -37,7 +37,7 @@ describe('addressedState', () => {
       ],
       selfId: undefined,
     });
-    expect(state.endsWith('kevin (bot): hi')).toBe(true);
+    expect(state.endsWith('[name: "kevin"] (bot): hi')).toBe(true);
     expect(state.length).toBe(6000);
   });
 });
