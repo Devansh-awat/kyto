@@ -67,6 +67,7 @@ import {
   describePriorEffects,
   trackTurn,
 } from '@/lib/agent/inflight';
+import { nameField } from '@/lib/agent/mentions';
 import {
   experimentAttempt,
   isSharedModel,
@@ -1227,7 +1228,7 @@ async function executeTurn(
     if (unanswered.length > 0) {
       const lines = unanswered.map(
         ({ author, text }) =>
-          `- ${author.fullName ?? author.userName}: ${clamp(text, UNANSWERED_PREVIEW_LENGTH)}`
+          `- ${nameField({ name: author.fullName ?? author.userName })}: ${clamp(text, UNANSWERED_PREVIEW_LENGTH)}`
       );
       messageText = `${messageText}\n\n<unanswered_earlier>These earlier messages in the thread were addressed to you, and a newer message interrupted you before you replied to them:\n${lines.join('\n')}\nAnswer them in this reply too, unless the thread has already settled them.</unanswered_earlier>`;
     }

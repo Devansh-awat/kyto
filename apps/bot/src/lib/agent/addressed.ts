@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { env } from '@/env';
 import type { Message } from '@/harness/types';
+import { nameField } from '@/lib/agent/mentions';
 import logger from '@/lib/logger';
 import { recordJevSpend } from '@/lib/spend';
 import { toLogError } from '@/lib/utils/error';
@@ -47,7 +48,7 @@ export function addressedState({
       );
       const name = author.isMe
         ? 'kyto'
-        : `${author.fullName ?? author.userName}${author.isBot ? ' (bot)' : ''}`;
+        : `${nameField({ name: author.fullName ?? author.userName })}${author.isBot ? ' (bot)' : ''}`;
       return `${name}: ${body.trim()}`;
     })
     .join('\n')

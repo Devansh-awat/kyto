@@ -1,5 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
+import { nameField } from '@/lib/agent/mentions';
 import { lookupFlaronUser } from '@/lib/flaron';
 import { resolveUserProfile } from '@/lib/slack/names';
 
@@ -108,7 +109,7 @@ export function getUserTool() {
         pronouns: profile.pronouns,
         status: profile.status,
         ...directory,
-        summary: `${profile.displayName ?? userId}${profile.pronouns ? ` (${profile.pronouns})` : ''}${profile.title ? `, ${profile.title}` : ''}.${verification ? ` Hack Club verification: ${verification}.` : ''}${hackatime ? ` Hackatime: ${hackatime.username}.` : ''}`,
+        summary: `${profile.displayName ? nameField({ name: profile.displayName, ...(profile.pronouns ? { pronouns: profile.pronouns } : {}) }) : userId}${profile.title ? `, ${profile.title}` : ''}.${verification ? ` Hack Club verification: ${verification}.` : ''}${hackatime ? ` Hackatime: ${hackatime.username}.` : ''}`,
         title: profile.title,
         userId,
         userName: profile.displayName,
