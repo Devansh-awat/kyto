@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Prepares an Amp orb for kyto: the pinned Bun and the workspace dependencies.
+# Tests need no database or real keys (test-env.ts supplies placeholders).
+# Never start the bot here: a second Socket Mode connection steals live events.
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+step() { printf '[setup] %s (%ss)\n' "$1" "$SECONDS"; }
+
+# The orb image ships a newer Bun that rejects bun.lock under --frozen-lockfile,
+# so install the version package.json pins. ~/.local/bin precedes /usr/local/bin
+# on the orb's PATH, so this copy wins without any profile change.
+bun_version="$(sed -n 's/.*"packageManager": *"bun@\([^"]*\)".*/\1/p' package.json)"
+bun_bin="$HOME/.local/bin/bun"
+if [[ "$("$bun_bin" --version 2>/dev/null || true)" != "$bun_version" ]]; then
+	step "installing bun $bun_version"
+	case "$(uname -m)" in
+	aarch64 | arm64) bun_arch=aarch64 ;;
+	*) bun_arch=x64 ;;
+	esac
+	tmp="$(mktemp -d)"
+	# GitHub's release zip takes about a second; bun.sh/install took minutes.
+	curl -fsSL -o "$tmp/bun.zip" \
+		"https://github.com/oven-sh/bun/releases/download/bun-v$bun_version/bun-linux-$bun_arch.zip"
+	unzip -q -o "$tmp/bun.zip" -d "$tmp"
+	mkdir -p "$HOME/.local/bin"
+	install -m 755 "$tmp/bun-linux-$bun_arch/bun" "$bun_bin"
+	ln -sf bun "$HOME/.local/bin/bunx"
+	rm -rf "$tmp"
+fi
+export PATH="$HOME/.local/bin:$PATH"
+step "bun $(bun --version)"
+
+step "bun install"
+bun install --frozen-lockfile
+step "done"
