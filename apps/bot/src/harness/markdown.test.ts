@@ -153,6 +153,45 @@ describe('createFenceNormalizer', () => {
     expect(normalize('```hi```')).toBe('```\nhi\n```');
   });
 
+  // #78 recurrence: `ls /tmp` came back as "```text a b```" and the posted
+  // block read "text a b", the language tag printed as output.
+  test('a flattened one-line block keeps its language tag out of the code', () => {
+    expect(normalize('```text systemd-a systemd-b```')).toBe(
+      '```text\nsystemd-a systemd-b\n```'
+    );
+    expect(normalize('```hi there```')).toBe('```\nhi there\n```');
+    expect(normalize('```text```')).toBe('```\ntext\n```');
+  });
+
+  // The review of the fix above: a command that starts with a language word
+  // lost that word to the fence.
+  // "```python print(1)```" (code) and "```python script.py```" (a command)
+  // are the same text, so neither loses a word: both stay plain blocks.
+  test('a one-line block never loses its first word to a guessed language', () => {
+    expect(normalize('```python print(1)```')).toBe(
+      '```\npython print(1)\n```'
+    );
+    expect(normalize('```python script.py```')).toBe(
+      '```\npython script.py\n```'
+    );
+  });
+
+  test('a one-line command starting with a language word keeps it', () => {
+    for (const command of [
+      'go test ./...',
+      'python script.py',
+      'sh run.sh',
+      'php artisan serve',
+      'swift build',
+      'ruby app.rb',
+      'node index.js',
+    ]) {
+      expect(normalize(`\`\`\`${command}\`\`\``)).toBe(
+        `\`\`\`\n${command}\n\`\`\``
+      );
+    }
+  });
+
   test('prose and well-formed blocks pass through untouched', () => {
     const text = 'hello\n\n```\nsudo apt install\n```\n\n*bold*';
     expect(normalize(text)).toBe(text);
