@@ -121,28 +121,37 @@ export function ghTool({
  * in, or drop a claim entirely. Without this a claim would be a one-way door —
  * the creator could never share a repo or hand it back.
  */
-export function githubAccessTool({
+export function githubAccessTools({
   isOwner,
   userId,
 }: {
   isOwner: boolean;
   userId: string;
 }) {
-  return tool({
-    description:
-      "Manage who can have you WRITE to a GitHub repo you set up for someone. `list` shows the claimed repos and who they belong to; `editors` sets the people allowed to change a repo alongside its owner; `release` drops the claim so anyone can have you write to it again. Only a repo's owner and the bot owner can change or release it.",
-    inputSchema: z.object({
-      action: z
-        .enum(['list', 'editors', 'release'])
-        .describe('What to do with the claim.'),
-      editors: editorsSchema,
-      repo: z
-        .string()
-        .optional()
-        .describe('The repo as owner/name. Required for editors and release.'),
-    }),
-    execute: async ({ action, editors, repo }) => {
-      if (action === 'list') {
+  /** The claim for `repo`, if this person may change it; else why not. */
+  async function ownClaim(repo: string) {
+    const claim = await getGithubRepo(repo);
+    if (!claim) {
+      return {
+        error: `"${repo}" isn't claimed by anyone, so there's nothing to change: writes to it aren't gated.`,
+      };
+    }
+    // Not canEdit: an editor may WRITE to the repo, but releasing the claim
+    // (lifting the gate for everyone) or rewriting the editor list is the owner's.
+    if (!(isOwner || claim.ownerUserId === userId)) {
+      return {
+        error: `"${claim.repo}" belongs to <@${claim.ownerUserId}>. Only they and the bot owner can change who may write to it.`,
+      };
+    }
+    return { claim };
+  }
+  const repo = z.string().min(1).describe('The repo as owner/name.');
+  return {
+    listGithubRepoClaims: tool({
+      description:
+        'List the GitHub repos claimed by someone you set them up for, and who they belong to.',
+      inputSchema: z.object({}),
+      execute: async () => {
         const rows = await listGithubRepos();
         return {
           repos: rows.map((row) => ({
@@ -155,48 +164,51 @@ export function githubAccessTool({
               ? 'No GitHub repos are claimed yet.'
               : `${rows.length} claimed repo(s).`,
         };
-      }
-      if (!repo) {
-        return { error: 'Provide the repo as owner/name.', success: false };
-      }
-      const claim = await getGithubRepo(repo);
-      if (!claim) {
+      },
+    }),
+    releaseGithubRepo: tool({
+      description:
+        "Drop a repo's claim so anyone can have you write to it again. Only a repo's owner and the bot owner.",
+      inputSchema: z.object({ repo }),
+      execute: async (input) => {
+        const found = await ownClaim(input.repo);
+        if ('error' in found) {
+          return { error: found.error, success: false };
+        }
+        await deleteGithubRepoClaim(found.claim.repo);
         return {
-          error: `"${repo}" isn't claimed by anyone, so there's nothing to change: writes to it aren't gated.`,
-          success: false,
-        };
-      }
-      // Not canEdit: an editor may WRITE to the repo, but releasing the claim
-      // (lifting the gate for everyone) or rewriting the editor list is the owner's.
-      if (!(isOwner || claim.ownerUserId === userId)) {
-        return {
-          error: `"${claim.repo}" belongs to <@${claim.ownerUserId}>. Only they and the bot owner can change who may write to it.`,
-          success: false,
-        };
-      }
-      if (action === 'release') {
-        await deleteGithubRepoClaim(claim.repo);
-        return {
-          released: claim.repo,
+          released: found.claim.repo,
           success: true,
-          summary: `Released "${claim.repo}": writes to it are no longer restricted.`,
+          summary: `Released "${found.claim.repo}": writes to it are no longer restricted.`,
         };
-      }
-      const parsed = parseEditors(editors);
-      if (!parsed.ok) {
-        return { error: parsed.error, success: false };
-      }
-      await setGithubRepoEditors({
-        editorUserIds: parsed.editors,
-        repo: claim.repo,
-      });
-      return {
-        editors: parsed.editors ?? [],
-        success: true,
-        summary: parsed.editors
-          ? `Editors for "${claim.repo}": ${parsed.editors.map((id) => `<@${id}>`).join(', ')}.`
-          : `Cleared the editor list for "${claim.repo}". Only <@${claim.ownerUserId}> and the bot owner can write to it now.`,
-      };
-    },
-  });
+      },
+    }),
+    setGithubRepoEditors: tool({
+      description:
+        "Set the people allowed to change a claimed repo alongside its owner. Only a repo's owner and the bot owner.",
+      inputSchema: z.object({ editors: editorsSchema, repo }),
+      execute: async (input) => {
+        const found = await ownClaim(input.repo);
+        if ('error' in found) {
+          return { error: found.error, success: false };
+        }
+        const { claim } = found;
+        const parsed = parseEditors(input.editors);
+        if (!parsed.ok) {
+          return { error: parsed.error, success: false };
+        }
+        await setGithubRepoEditors({
+          editorUserIds: parsed.editors,
+          repo: claim.repo,
+        });
+        return {
+          editors: parsed.editors ?? [],
+          success: true,
+          summary: parsed.editors
+            ? `Editors for "${claim.repo}": ${parsed.editors.map((id) => `<@${id}>`).join(', ')}.`
+            : `Cleared the editor list for "${claim.repo}". Only <@${claim.ownerUserId}> and the bot owner can write to it now.`,
+        };
+      },
+    }),
+  };
 }

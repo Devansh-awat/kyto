@@ -56,7 +56,24 @@ const GROUPS = {
   codeChannels: {
     question:
       'Does this ask to create, turn on, turn off, list, rename or archive a code channel, or to change its tabs, context bar or commands?',
-    tools: ['codeChannel'],
+    tools: [
+      'createCodeChannel',
+      'enableCodeChannel',
+      'disableCodeChannel',
+      'listCodeChannels',
+      'setCodeChannelHtmlTab',
+      'setCodeChannelDiffTab',
+      'setCodeChannelCanvasTab',
+      'setCodeChannelBlockKitTab',
+      'setCodeChannelPullRequestTab',
+      'setCodeChannelContextBar',
+      'setCodeChannelCommands',
+      'listCodeChannelViews',
+      'removeCodeChannelView',
+      'readCodeChannelCanvas',
+      'renameCodeChannel',
+      'archiveCodeChannel',
+    ],
   },
   diagrams: {
     question:
@@ -81,7 +98,12 @@ const GROUPS = {
   github: {
     question:
       'Will the assistant need to use GitHub — look at repositories, issues or pull requests, or change who may write to a repo?',
-    tools: ['gh', 'githubAccess'],
+    tools: [
+      'gh',
+      'listGithubRepoClaims',
+      'releaseGithubRepo',
+      'setGithubRepoEditors',
+    ],
   },
   images: {
     question: 'Does this ask to generate or create an AI image or picture?',

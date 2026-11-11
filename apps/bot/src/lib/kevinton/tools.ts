@@ -93,165 +93,191 @@ export function kevintonTools({
   const filed: string[] = [];
   const proposed: string[] = [];
 
-  const kytoIssues = tool({
-    description: `Kyto's public GitHub issues (${REPO}). \`search\` first, always — a problem that already has an OPEN issue gets a \`comment\` with the new evidence, never a duplicate. A CLOSED one is never commented on (nobody sees it): if it was closed as fixed and the problem is back, \`reopen\` it with the new evidence as the body — what still fails and why the fix didn't cover it. One closed as not planned was the owner's decision: leave it. \`file\` opens a new one. Never include a secret, password or token. At most ${MAX_ISSUES_PER_REVIEW} new issues or comments per review.`,
-    inputSchema: z.object({
-      action: z.enum(['search', 'file', 'comment', 'reopen']),
-      body: z
-        .string()
-        .max(8000)
-        .optional()
-        .describe(
-          'file/comment/reopen: what kyto did, what went wrong, the evidence (errors, tool names, code paths), and a suggested fix.'
-        ),
-      number: z
-        .number()
-        .int()
-        .optional()
-        .describe('comment/reopen: the issue number.'),
-      query: z.string().max(200).optional().describe('search: keywords.'),
-      title: z.string().max(120).optional().describe('file: a short title.'),
-    }),
-    execute: async ({ action, body, number, query, title }) => {
-      try {
-        if (action === 'search') {
-          const q = encodeURIComponent(
-            `repo:${REPO} is:issue ${(query ?? '').replace(/[^\w\s.-]/g, ' ')}`
-          );
-          const result = searchSchema.parse(
-            await github(`/search/issues?q=${q}&per_page=10`)
-          );
-          return {
-            issues: result.items.map((item) => ({
-              number: item.number,
-              state: item.state,
-              title: item.title,
-            })),
-            success: true,
-            total: result.total_count,
-          };
-        }
-        if (issuesThisReview >= MAX_ISSUES_PER_REVIEW) {
-          return {
-            error: `Already ${MAX_ISSUES_PER_REVIEW} this review — that is the limit. Stop here.`,
-            success: false,
-          };
-        }
-        if (!body) {
-          return { error: `${action} needs a body.`, success: false };
-        }
-        const footer =
-          "\n\n---\n_Filed by kevinton, kyto's after-the-fact reviewer, from a conversation it reviewed. Conversation details are deliberately left out._";
-        if (action === 'comment' || action === 'reopen') {
-          if (!number) {
-            return {
-              error: `${action} needs the issue number.`,
-              success: false,
-            };
-          }
-          const target = issueSchema.parse(
-            await github(`/repos/${REPO}/issues/${number}`)
-          );
-          if (action === 'comment' && target.state === 'closed') {
-            // A comment on a closed issue is never seen.
-            return {
-              error: `#${number} is closed — a comment there goes unseen. If it was fixed and is back, use \`reopen\` with this evidence.`,
-              success: false,
-            };
-          }
-          if (action === 'reopen') {
-            if (target.state !== 'closed') {
-              return {
-                error: `#${number} is already open — \`comment\` instead.`,
-                success: false,
-              };
-            }
-            if (target.state_reason === 'not_planned') {
-              return {
-                error: `#${number} was closed as not planned — the owner's decision. Leave it.`,
-                success: false,
-              };
-            }
-            // kyto-agent only has read access; without the owner's token a
-            // recurrence becomes a new issue pointing at the old one.
-            if (!env.KEVINTON_REOPEN_TOKEN) {
-              return {
-                error: `Reopening isn't set up. File a NEW issue instead: body starts "Recurrence of #${number} (closed as fixed)", then what still fails and why the fix didn't cover it.`,
-                success: false,
-              };
-            }
-            await github(`/repos/${REPO}/issues/${number}`, {
-              body: { state: 'open' },
-              method: 'PATCH',
-              token: env.KEVINTON_REOPEN_TOKEN,
-            });
-            logger.info(
-              { issue: number, threadId },
-              '[kevinton] reopened an issue'
-            );
-          }
-          await github(`/repos/${REPO}/issues/${number}/comments`, {
-            body: { body: publicText(body) + footer },
-            method: 'POST',
-          });
-          issuesThisReview += 1;
-          filed.push(
-            action === 'reopen'
-              ? `reopened #${number}`
-              : `comment on #${number}`
-          );
-          return {
-            success: true,
-            summary:
-              action === 'reopen'
-                ? `Reopened #${number} with the new evidence.`
-                : `Commented on #${number}.`,
-          };
-        }
-        if (!title) {
-          return { error: 'file needs a title.', success: false };
-        }
-        const today = new Date().toISOString().slice(0, 10);
-        const todays = searchSchema.parse(
-          await github(
-            `/search/issues?q=${encodeURIComponent(`repo:${REPO} is:issue author:${env.GH_LOGIN} in:title "[kevinton]" created:>=${today}`)}&per_page=1`
-          )
+  const runIssues = async ({
+    action,
+    body,
+    number,
+    query,
+    title,
+  }: {
+    action: 'comment' | 'file' | 'reopen' | 'search';
+    body?: string;
+    number?: number;
+    query?: string;
+    title?: string;
+  }) => {
+    try {
+      if (action === 'search') {
+        const q = encodeURIComponent(
+          `repo:${REPO} is:issue ${(query ?? '').replace(/[^\w\s.-]/g, ' ')}`
         );
-        if (todays.total_count >= MAX_ISSUES_PER_DAY) {
-          return {
-            error: `${MAX_ISSUES_PER_DAY} kevinton issues already today — the daily limit. Stop here.`,
-            success: false,
-          };
-        }
-        const created = issueSchema.parse(
-          await github(`/repos/${REPO}/issues`, {
-            body: {
-              body: publicText(body) + footer,
-              // The prompt shows titles with the prefix, so the model often
-              // writes it itself; without this they read "[kevinton] [kevinton]".
-              title:
-                TITLE_PREFIX +
-                publicText(title).replace(/^(\s*\[kevinton\]\s*)+/i, ''),
-            },
-            method: 'POST',
-          })
-        );
-        issuesThisReview += 1;
-        filed.push(`#${created.number}`);
-        logger.info(
-          { issue: created.number, threadId },
-          '[kevinton] filed an issue'
+        const result = searchSchema.parse(
+          await github(`/search/issues?q=${q}&per_page=10`)
         );
         return {
-          number: created.number,
+          issues: result.items.map((item) => ({
+            number: item.number,
+            state: item.state,
+            title: item.title,
+          })),
           success: true,
-          summary: `Filed #${created.number}.`,
+          total: result.total_count,
         };
-      } catch (error) {
-        return { error: errorMessage(error), success: false };
       }
-    },
-  });
+      if (issuesThisReview >= MAX_ISSUES_PER_REVIEW) {
+        return {
+          error: `Already ${MAX_ISSUES_PER_REVIEW} this review — that is the limit. Stop here.`,
+          success: false,
+        };
+      }
+      if (!body) {
+        return { error: `${action} needs a body.`, success: false };
+      }
+      const footer =
+        "\n\n---\n_Filed by kevinton, kyto's after-the-fact reviewer, from a conversation it reviewed. Conversation details are deliberately left out._";
+      if (action === 'comment' || action === 'reopen') {
+        if (!number) {
+          return {
+            error: `${action} needs the issue number.`,
+            success: false,
+          };
+        }
+        const target = issueSchema.parse(
+          await github(`/repos/${REPO}/issues/${number}`)
+        );
+        if (action === 'comment' && target.state === 'closed') {
+          // A comment on a closed issue is never seen.
+          return {
+            error: `#${number} is closed — a comment there goes unseen. If it was fixed and is back, use \`reopen\` with this evidence.`,
+            success: false,
+          };
+        }
+        if (action === 'reopen') {
+          if (target.state !== 'closed') {
+            return {
+              error: `#${number} is already open — \`comment\` instead.`,
+              success: false,
+            };
+          }
+          if (target.state_reason === 'not_planned') {
+            return {
+              error: `#${number} was closed as not planned — the owner's decision. Leave it.`,
+              success: false,
+            };
+          }
+          // kyto-agent only has read access; without the owner's token a
+          // recurrence becomes a new issue pointing at the old one.
+          if (!env.KEVINTON_REOPEN_TOKEN) {
+            return {
+              error: `Reopening isn't set up. File a NEW issue instead: body starts "Recurrence of #${number} (closed as fixed)", then what still fails and why the fix didn't cover it.`,
+              success: false,
+            };
+          }
+          await github(`/repos/${REPO}/issues/${number}`, {
+            body: { state: 'open' },
+            method: 'PATCH',
+            token: env.KEVINTON_REOPEN_TOKEN,
+          });
+          logger.info(
+            { issue: number, threadId },
+            '[kevinton] reopened an issue'
+          );
+        }
+        await github(`/repos/${REPO}/issues/${number}/comments`, {
+          body: { body: publicText(body) + footer },
+          method: 'POST',
+        });
+        issuesThisReview += 1;
+        filed.push(
+          action === 'reopen' ? `reopened #${number}` : `comment on #${number}`
+        );
+        return {
+          success: true,
+          summary:
+            action === 'reopen'
+              ? `Reopened #${number} with the new evidence.`
+              : `Commented on #${number}.`,
+        };
+      }
+      if (!title) {
+        return { error: 'file needs a title.', success: false };
+      }
+      const today = new Date().toISOString().slice(0, 10);
+      const todays = searchSchema.parse(
+        await github(
+          `/search/issues?q=${encodeURIComponent(`repo:${REPO} is:issue author:${env.GH_LOGIN} in:title "[kevinton]" created:>=${today}`)}&per_page=1`
+        )
+      );
+      if (todays.total_count >= MAX_ISSUES_PER_DAY) {
+        return {
+          error: `${MAX_ISSUES_PER_DAY} kevinton issues already today — the daily limit. Stop here.`,
+          success: false,
+        };
+      }
+      const created = issueSchema.parse(
+        await github(`/repos/${REPO}/issues`, {
+          body: {
+            body: publicText(body) + footer,
+            // The prompt shows titles with the prefix, so the model often
+            // writes it itself; without this they read "[kevinton] [kevinton]".
+            title:
+              TITLE_PREFIX +
+              publicText(title).replace(/^(\s*\[kevinton\]\s*)+/i, ''),
+          },
+          method: 'POST',
+        })
+      );
+      issuesThisReview += 1;
+      filed.push(`#${created.number}`);
+      logger.info(
+        { issue: created.number, threadId },
+        '[kevinton] filed an issue'
+      );
+      return {
+        number: created.number,
+        success: true,
+        summary: `Filed #${created.number}.`,
+      };
+    } catch (error) {
+      return { error: errorMessage(error), success: false };
+    }
+  };
+
+  const issueBody = z
+    .string()
+    .min(1)
+    .max(8000)
+    .describe(
+      'What kyto did, what went wrong, the evidence (errors, tool names, code paths), and a suggested fix.'
+    );
+  const issueNumber = z.number().int().describe('The issue number.');
+  const kytoIssues = {
+    commentKytoIssue: tool({
+      description: `Comment on an OPEN issue of kyto's public GitHub repo (${REPO}) with new evidence, never a duplicate. A CLOSED one is never commented on (nobody sees it): \`reopenKytoIssue\` it instead. Never include a secret, password or token. At most ${MAX_ISSUES_PER_REVIEW} new issues or comments per review.`,
+      inputSchema: z.object({ body: issueBody, number: issueNumber }),
+      execute: (fields) => runIssues({ action: 'comment', ...fields }),
+    }),
+    fileKytoIssue: tool({
+      description: `Open a NEW issue on kyto's public GitHub repo (${REPO}). \`searchKytoIssues\` first, always. Never include a secret, password or token. At most ${MAX_ISSUES_PER_REVIEW} new issues or comments per review.`,
+      inputSchema: z.object({
+        body: issueBody,
+        title: z.string().min(1).max(120).describe('A short title.'),
+      }),
+      execute: (fields) => runIssues({ action: 'file', ...fields }),
+    }),
+    reopenKytoIssue: tool({
+      description: `Reopen an issue of kyto's repo (${REPO}) that was closed as fixed and whose problem is back, with the new evidence as the body: what still fails and why the fix didn't cover it. One closed as not planned was the owner's decision: leave it. Counts toward the ${MAX_ISSUES_PER_REVIEW} per review.`,
+      inputSchema: z.object({ body: issueBody, number: issueNumber }),
+      execute: (fields) => runIssues({ action: 'reopen', ...fields }),
+    }),
+    searchKytoIssues: tool({
+      description: `Search kyto's public GitHub issues (${REPO}), open and closed. Always first: a problem that already has an OPEN issue gets a comment with the new evidence, never a duplicate.`,
+      inputSchema: z.object({
+        query: z.string().min(1).max(200).describe('Keywords.'),
+      }),
+      execute: (fields) => runIssues({ action: 'search', ...fields }),
+    }),
+  };
 
   const proposeSkill = tool({
     description: `Propose a new skill, or an edit to one, for the owner to approve. Nothing goes live until they do. Give the COMPLETE SKILL.md: frontmatter (name: lowercase-hyphenated, description: when to use it), then clear, general instructions. Only for a genuinely reusable method that would save real work next time — the default is to propose nothing. At most ${MAX_SKILLS_PER_REVIEW} per review. Never put anything from the conversation into it.`,
@@ -335,71 +361,104 @@ export function kevintonTools({
 
   const channelId = slack.decodeThreadId(threadId).channel;
   const notebookEdits: string[] = [];
-  const notebook = tool({
-    description: `kyto's notebooks. \`channel\` is THIS channel's (max ${MAX_CHANNEL_NOTEBOOK_CHARS} chars) — both kytos read it here. \`global\` is workspace-wide (max ${MAX_GLOBAL_NOTEBOOK_CHARS} chars) — kyto's user account reads it in EVERY channel and DM.${globalNotebookAllowed ? '' : ' This thread is a DM, so the global notebook is read-only here.'} \`read\` returns both. \`append\` adds lines; \`replace\` swaps one exact, unique \`find\` for \`text\` (empty text deletes it); \`rewrite\` replaces the whole notebook — use it to condense.`,
-    inputSchema: z.object({
-      action: z.enum(['read', 'append', 'replace', 'rewrite']),
-      find: z.string().optional(),
-      notebook: z.enum(['channel', 'global']).optional(),
-      text: z.string().optional(),
-    }),
-    execute: async ({ action, find, notebook: which, text }) => {
-      try {
-        const found = await getNotebooks([GLOBAL_NOTEBOOK, channelId]);
-        if (action === 'read') {
-          return {
-            channel: found.get(channelId) ?? '',
-            global: found.get(GLOBAL_NOTEBOOK) ?? '',
-          };
-        }
-        if (!which) {
-          return { error: `${action} needs \`notebook\`.`, success: false };
-        }
-        if (which === 'global' && !globalNotebookAllowed) {
-          return {
-            error:
-              'Nothing from a DM may go into the global notebook — it would be read in every channel.',
-            success: false,
-          };
-        }
-        if (
-          text === undefined ||
-          (action === 'replace' && find === undefined)
-        ) {
-          return { error: `${action} needs its fields.`, success: false };
-        }
-        const scope = which === 'global' ? GLOBAL_NOTEBOOK : channelId;
-        const max =
-          which === 'global'
-            ? MAX_GLOBAL_NOTEBOOK_CHARS
-            : MAX_CHANNEL_NOTEBOOK_CHARS;
-        const clean = redactSecrets(text, 'kevinton notebook');
-        const edited = applyNotebookEdit({
-          content: found.get(scope) ?? '',
-          edit:
-            action === 'replace'
-              ? { action, find: find ?? '', text: clean }
-              : { action, text: clean },
-          max,
-        });
-        if ('error' in edited) {
-          return { error: edited.error, success: false };
-        }
-        await saveNotebook({ content: edited.content, scope });
-        notebookEdits.push(`${which} ${action}`);
-        logger.info(
-          { action, chars: edited.content.length, scope, threadId },
-          '[kevinton] edited a notebook'
-        );
+  const runNotebook = async ({
+    action,
+    find,
+    notebook: which,
+    text,
+  }: {
+    action: 'append' | 'read' | 'replace' | 'rewrite';
+    find?: string;
+    notebook?: 'channel' | 'global';
+    text?: string;
+  }) => {
+    try {
+      const found = await getNotebooks([GLOBAL_NOTEBOOK, channelId]);
+      if (action === 'read') {
         return {
-          success: true,
-          summary: `The ${which} notebook is now ${edited.content.length} of ${max} characters.`,
+          channel: found.get(channelId) ?? '',
+          global: found.get(GLOBAL_NOTEBOOK) ?? '',
         };
-      } catch (error) {
-        return { error: errorMessage(error), success: false };
       }
-    },
-  });
+      if (!which) {
+        return { error: `${action} needs \`notebook\`.`, success: false };
+      }
+      if (which === 'global' && !globalNotebookAllowed) {
+        return {
+          error:
+            'Nothing from a DM may go into the global notebook — it would be read in every channel.',
+          success: false,
+        };
+      }
+      if (text === undefined || (action === 'replace' && find === undefined)) {
+        return { error: `${action} needs its fields.`, success: false };
+      }
+      const scope = which === 'global' ? GLOBAL_NOTEBOOK : channelId;
+      const max =
+        which === 'global'
+          ? MAX_GLOBAL_NOTEBOOK_CHARS
+          : MAX_CHANNEL_NOTEBOOK_CHARS;
+      const clean = redactSecrets(text, 'kevinton notebook');
+      const edited = applyNotebookEdit({
+        content: found.get(scope) ?? '',
+        edit:
+          action === 'replace'
+            ? { action, find: find ?? '', text: clean }
+            : { action, text: clean },
+        max,
+      });
+      if ('error' in edited) {
+        return { error: edited.error, success: false };
+      }
+      await saveNotebook({ content: edited.content, scope });
+      notebookEdits.push(`${which} ${action}`);
+      logger.info(
+        { action, chars: edited.content.length, scope, threadId },
+        '[kevinton] edited a notebook'
+      );
+      return {
+        success: true,
+        summary: `The ${which} notebook is now ${edited.content.length} of ${max} characters.`,
+      };
+    } catch (error) {
+      return { error: errorMessage(error), success: false };
+    }
+  };
+
+  const which = z
+    .enum(['channel', 'global'])
+    .describe(
+      `\`channel\` is THIS channel's notebook (max ${MAX_CHANNEL_NOTEBOOK_CHARS} chars; both kytos read it here). \`global\` is workspace-wide (max ${MAX_GLOBAL_NOTEBOOK_CHARS} chars; kyto's user account reads it in EVERY channel and DM).${globalNotebookAllowed ? '' : ' This thread is a DM, so the global notebook is read-only here.'}`
+    );
+  const notebook = {
+    appendNotebook: tool({
+      description: "Add lines to the end of one of kyto's notebooks.",
+      inputSchema: z.object({ notebook: which, text: z.string().min(1) }),
+      execute: (fields) => runNotebook({ action: 'append', ...fields }),
+    }),
+    readNotebooks: tool({
+      description:
+        "Read both of kyto's notebooks (this channel's and the global one).",
+      inputSchema: z.object({}),
+      execute: () => runNotebook({ action: 'read' }),
+    }),
+    replaceInNotebook: tool({
+      description:
+        "Swap one exact, unique `find` for `text` in one of kyto's notebooks (empty text deletes it).",
+      inputSchema: z.object({
+        find: z.string().min(1).describe('The exact, unique text to replace.'),
+        notebook: which,
+        text: z.string().describe('The replacement; empty deletes `find`.'),
+      }),
+      execute: (fields) => runNotebook({ action: 'replace', ...fields }),
+    }),
+    rewriteNotebook: tool({
+      description:
+        "Replace the whole of one of kyto's notebooks. Use it to condense.",
+      inputSchema: z.object({ notebook: which, text: z.string() }),
+      execute: (fields) => runNotebook({ action: 'rewrite', ...fields }),
+    }),
+  };
 
   return {
     filed,

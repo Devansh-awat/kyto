@@ -1446,13 +1446,26 @@ async function executeTurn(
     // Always at hand in a native code channel: its tabs and context bar are
     // much of the point of working there, so not left to Jev noticing.
     if (isNativeCodeChannel(slack.decodeThreadId(threadId).channel)) {
-      built.preload(['codeChannel']);
+      built.preload([
+        'listCodeChannelViews',
+        'readCodeChannelCanvas',
+        'removeCodeChannelView',
+        'renameCodeChannel',
+        'archiveCodeChannel',
+        'setCodeChannelHtmlTab',
+        'setCodeChannelDiffTab',
+        'setCodeChannelCanvasTab',
+        'setCodeChannelBlockKitTab',
+        'setCodeChannelPullRequestTab',
+        'setCodeChannelContextBar',
+        'setCodeChannelCommands',
+      ]);
     }
     // A background-process wake tells the model to check or kill the process
-    // with the `process` tool, which is deferred: without this the wake turn
+    // with getProcessOutput / killProcess, which are deferred: without this the wake turn
     // called it unloaded and died on AI_NoSuchToolError (#58).
     if (WAKE_ID.test(message.id)) {
-      built.preload(['process']);
+      built.preload(['getProcessOutput', 'killProcess']);
     }
     const knownTools = new Set(Object.keys(built.tools));
 

@@ -59,91 +59,108 @@ export function loadSkillTool({ skills }: { skills: Skill[] }) {
 }
 
 /**
- * The owner's skill catalog. Registered for the owner only: a skill is prompt
- * text every user's turn may load.
+ * The owner's skill catalog, one tool per verb so each verb's own fields are
+ * required in the schema the model sees (#184). Registered for the owner only:
+ * a skill is prompt text every user's turn may load.
  */
-export function manageSkillsTool({ userId }: { userId: string }) {
-  return tool({
-    description:
-      "Manage the skill catalog (owner only): `list`; `show` a skill's full text; `install` from a public GitHub skill folder or SKILL.md link; `write` a new or edited skill from its complete SKILL.md text (frontmatter with name + description, then the instructions); `remove` one (a built-in of the same name comes back). Skills are loaded by every user's turns, so read a third-party skill before installing it.",
-    inputSchema: z.object({
-      action: z.enum(['list', 'show', 'install', 'write', 'remove']),
-      markdown: z
-        .string()
-        .max(60_000)
-        .optional()
-        .describe('write: the whole SKILL.md.'),
-      name: z.string().optional().describe('show/remove: the skill name.'),
-      url: z.string().url().optional().describe('install: the GitHub link.'),
-    }),
-    execute: async ({ action, markdown, name, url }) => {
+export function manageSkillsTools({ userId }: { userId: string }) {
+  const guarded =
+    <Input>(run: (input: Input) => Promise<Record<string, unknown>>) =>
+    async (input: Input) => {
       try {
-        if (action === 'list') {
-          return {
-            skills: (await listSkills()).map((skill) => ({
-              builtin: skill.builtin,
-              description: skill.description,
-              name: skill.name,
-              ...(skill.source ? { source: skill.source } : {}),
-            })),
-            success: true,
-          };
+        return await run(input);
+      } catch (error) {
+        return { error: errorMessage(error), success: false };
+      }
+    };
+  return {
+    installSkill: tool({
+      description:
+        "Install a skill from a public GitHub skill folder or SKILL.md link (owner only). Skills are loaded by every user's turns, so read a third-party skill (showSkill, or fetch it) before installing it.",
+      inputSchema: z.object({
+        url: z.string().url().describe('The GitHub link.'),
+      }),
+      execute: guarded(async ({ url }) => {
+        const fetched = await fetchGithubSkill(url);
+        if (!fetched.ok) {
+          return { error: fetched.error, success: false };
         }
-        if (action === 'show') {
-          const skill = name ? await getSkill(name) : undefined;
-          return skill
-            ? { skill, success: true }
-            : { error: `No skill "${name ?? ''}".`, success: false };
-        }
-        if (action === 'install') {
-          if (!url) {
-            return { error: 'install needs a url.', success: false };
-          }
-          const fetched = await fetchGithubSkill(url);
-          if (!fetched.ok) {
-            return { error: fetched.error, success: false };
-          }
-          await writeSkill({
-            files: fetched.files,
-            skill: fetched.skill,
-            source: fetched.source,
-            userId,
-          });
-          return {
-            installed: fetched.skill.name,
-            referenceFiles: Object.keys(fetched.files),
-            success: true,
-            summary: `Installed the ${fetched.skill.name} skill.`,
-          };
-        }
-        if (action === 'write') {
-          const parsed = parseSkill(markdown ?? '');
-          if (!parsed.ok) {
-            return { error: parsed.error, success: false };
-          }
-          const existing = await getSkill(parsed.skill.name);
-          await writeSkill({
-            files: existing?.builtin ? {} : (existing?.files ?? {}),
-            skill: parsed.skill,
-            userId,
-          });
-          return {
-            success: true,
-            summary: `Saved the ${parsed.skill.name} skill.`,
-          };
-        }
-        if (!name) {
-          return { error: 'remove needs a name.', success: false };
-        }
-        return (await removeSkill(name))
+        await writeSkill({
+          files: fetched.files,
+          skill: fetched.skill,
+          source: fetched.source,
+          userId,
+        });
+        return {
+          installed: fetched.skill.name,
+          referenceFiles: Object.keys(fetched.files),
+          success: true,
+          summary: `Installed the ${fetched.skill.name} skill.`,
+        };
+      }),
+    }),
+    listSkills: tool({
+      description: 'List the skill catalog (owner only).',
+      inputSchema: z.object({}),
+      execute: guarded(async () => ({
+        skills: (await listSkills()).map((skill) => ({
+          builtin: skill.builtin,
+          description: skill.description,
+          name: skill.name,
+          ...(skill.source ? { source: skill.source } : {}),
+        })),
+        success: true,
+      })),
+    }),
+    removeSkill: tool({
+      description:
+        'Remove an installed or written skill (owner only); a built-in of the same name comes back.',
+      inputSchema: z.object({
+        name: z.string().min(1).describe('The skill name.'),
+      }),
+      execute: guarded(async ({ name }) =>
+        (await removeSkill(name))
           ? { success: true, summary: `Removed the ${name} skill.` }
           : {
               error: `"${name}" is not an installed or written skill (built-ins can only be overridden).`,
               success: false,
-            };
-      } catch (error) {
-        return { error: errorMessage(error), success: false };
-      }
-    },
-  });
+            }
+      ),
+    }),
+    showSkill: tool({
+      description: "A skill's full text (owner only).",
+      inputSchema: z.object({
+        name: z.string().min(1).describe('The skill name.'),
+      }),
+      execute: guarded(async ({ name }) => {
+        const skill = await getSkill(name);
+        return skill
+          ? { skill, success: true }
+          : { error: `No skill "${name}".`, success: false };
+      }),
+    }),
+    writeSkill: tool({
+      description:
+        'Write a new or edited skill from its complete SKILL.md text: frontmatter with name + description, then the instructions (owner only).',
+      inputSchema: z.object({
+        markdown: z.string().min(1).max(60_000).describe('The whole SKILL.md.'),
+      }),
+      execute: guarded(async ({ markdown }) => {
+        const parsed = parseSkill(markdown);
+        if (!parsed.ok) {
+          return { error: parsed.error, success: false };
+        }
+        const existing = await getSkill(parsed.skill.name);
+        await writeSkill({
+          files: existing?.builtin ? {} : (existing?.files ?? {}),
+          skill: parsed.skill,
+          userId,
+        });
+        return {
+          success: true,
+          summary: `Saved the ${parsed.skill.name} skill.`,
+        };
+      }),
+    }),
+  };
 }

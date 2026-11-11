@@ -926,7 +926,17 @@ export class SlackHarness {
   /** Top-level channel history, newest first (Slack's native order). */
   async fetchChannelMessages(
     channelId: string,
-    { cursor, limit = 100 }: { cursor?: string; limit?: number } = {}
+    {
+      cursor,
+      latest,
+      limit = 100,
+      oldest,
+    }: {
+      cursor?: string;
+      latest?: string;
+      limit?: number;
+      oldest?: string;
+    } = {}
   ): Promise<{ messages: Message[]; nextCursor?: string }> {
     const channel = channelId.startsWith('slack:')
       ? (channelId.split(':')[1] ?? channelId)
@@ -937,6 +947,8 @@ export class SlackHarness {
         reader.conversations.history({
           channel,
           ...(cursor ? { cursor } : {}),
+          ...(latest ? { latest } : {}),
+          ...(oldest ? { oldest } : {}),
           limit,
         }),
     });

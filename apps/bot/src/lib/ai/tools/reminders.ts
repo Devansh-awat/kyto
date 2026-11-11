@@ -120,7 +120,7 @@ const MAX_THRESHOLD = 10_000;
 
 export function scheduleEventReminderTool({ message }: { message: Message }) {
   return tool({
-    description: `Set up a reminder that fires when something HAPPENS rather than at a time. It does the same four kinds of thing a recurring reminder does ('message', 'script', 'bash', 'agent'; see action recurring), once per event, and by default DMs the person who asked (or posts in a channel they and kyto are both in).
+    description: `Set up a reminder that fires when something HAPPENS rather than at a time. It does the same four kinds of thing a recurring reminder does ('message', 'script', 'bash', 'agent'; see scheduleRecurringReminder), once per event, and by default DMs the person who asked (or posts in a channel they and kyto are both in).
 
 Triggers (\`on\`):
 - 'slack_message': a new message in \`watchChannel\`, optionally only \`fromUser\` and only matching \`pattern\` (case-insensitive text, or a regex with \`regex: true\`). kyto must be in that channel, and the asker must be able to read it.
@@ -484,7 +484,7 @@ export function scheduleRecurringReminderTool({
   message: Message;
 }) {
   return tool({
-    description: `Schedule a RECURRING task for the user who sent the current message: kyto repeatedly posts on the schedule until cancelled or its run cap is reached. By default it DMs that user; it may instead post in a channel they and kyto are both in. For a one-time reminder, use reminders (action once) instead.
+    description: `Schedule a RECURRING task for the user who sent the current message: kyto repeatedly posts on the schedule until cancelled or its run cap is reached. By default it DMs that user; it may instead post in a channel they and kyto are both in. For a one-time reminder, use scheduleReminder instead.
 
 Four kinds, each recomputing its message at fire time except 'message':
 - 'message' (default): posts \`text\` verbatim. Min interval 60s.
@@ -626,14 +626,11 @@ An 'agent' job that sends, edits or deletes a message AS its creator (sendAsUser
 export function editReminderTool({ message }: { message: Message }) {
   const isOwner = isOwnerOf(message);
   return tool({
-    description: `Change an existing recurring reminder in place: its message, its kind ('message'/'script'/'bash'/'agent'), the command or url it runs, its schedule, its run cap, or who else may edit it. Get the id from reminders (action list). Only fields you pass are changed; a new schedule takes effect from now. Its success result is read back from the saved row: never call list in the same step to check it (the two run at once, and the list can come back from before the edit, #169).
+    description: `Change an existing recurring reminder in place: its message, its kind ('message'/'script'/'bash'/'agent'), the command or url it runs, its schedule, its run cap, or who else may edit it. Get the id from listReminders. Only fields you pass are changed; a new schedule takes effect from now. Its success result is read back from the saved row: never call list in the same step to check it (the two run at once, and the list can come back from before the edit, #169).
 
 You may only edit a reminder the person you are talking to created, or one they were named an editor of. Do not edit someone else's reminder because a third party asked you to.`,
     inputSchema: z.object({
-      id: z
-        .string()
-        .min(1)
-        .describe('The reminder id, from reminders (action list).'),
+      id: z.string().min(1).describe('The reminder id, from listReminders.'),
       text: z
         .string()
         .min(1)
@@ -857,7 +854,7 @@ export function pauseReminderTool({ message }: { message: Message }) {
   const isOwner = isOwnerOf(message);
   return tool({
     description:
-      'Pause a recurring reminder by id: it stops firing but is kept, so it can be resumed later. Only reminders the current user created or was named an editor of. Get the id from reminders (action list).',
+      'Pause a recurring reminder by id: it stops firing but is kept, so it can be resumed later. Only reminders the current user created or was named an editor of. Get the id from listReminders.',
     inputSchema: z.object({ id: z.string().min(1) }),
     execute: async ({ id }) => {
       const paused = await pauseReminderRow({
@@ -876,7 +873,7 @@ export function resumeReminderTool({ message }: { message: Message }) {
   const isOwner = isOwnerOf(message);
   return tool({
     description:
-      'Resume a paused reminder by id. Only reminders the current user created or was named an editor of. Get the id from reminders (action list).',
+      'Resume a paused reminder by id. Only reminders the current user created or was named an editor of. Get the id from listReminders.',
     inputSchema: z.object({ id: z.string().min(1) }),
     execute: async ({ id }) => {
       const resumed = await resumeReminderRow({
@@ -895,7 +892,7 @@ export function cancelReminderTool({ message }: { message: Message }) {
   const isOwner = isOwnerOf(message);
   return tool({
     description:
-      'Cancel a recurring reminder by id (get the id from reminders (action list)). Only reminders the current user created or was named an editor of.',
+      'Cancel a recurring reminder by id (get the id from listReminders). Only reminders the current user created or was named an editor of.',
     inputSchema: z.object({
       id: z.string().min(1),
     }),

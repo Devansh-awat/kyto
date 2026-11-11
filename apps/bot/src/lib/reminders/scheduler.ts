@@ -15,7 +15,7 @@ import { errorMessage } from '@/lib/utils/error';
 // Recurring reminders are Kyto's own durable side effect — same precedent as
 // static site hosting and the opt-in allowlist. A single setInterval loop on
 // the always-on systemd process is sufficient; Slack's own chat.scheduleMessage
-// API (used by the one-time `reminders` (action `once`) tool) only supports a single
+// API (used by the one-time `scheduleReminder` tool) only supports a single
 // future timestamp, not recurrence, so recurring reminders are driven here.
 const POLL_INTERVAL_MS = 30_000;
 

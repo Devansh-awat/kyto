@@ -201,7 +201,7 @@ export async function guardGithubTargets({
     return {
       allowed: false,
       reason:
-        'Refused: kevinton never writes to GitHub from a shell, and nothing was queued or posted. If this was meant to be a read the guard misjudged, it is a defect worth filing with kytoIssues; otherwise file what you found with kytoIssues.',
+        'Refused: kevinton never writes to GitHub from a shell, and nothing was queued or posted. If this was meant to be a read the guard misjudged, it is a defect worth filing with fileKytoIssue; otherwise file what you found with fileKytoIssue.',
     };
   }
   const command = commandText;

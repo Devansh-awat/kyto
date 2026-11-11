@@ -31,7 +31,7 @@ import {
 
 // Recurring AGENT reminders, created and edited from App Home; other kinds are
 // changed by asking kyto (owner's call 2026-11-03). The same rules as the
-// `reminders` tool (lib/reminders/rules + channel): the hourly floor, a channel
+// reminder tools (lib/reminders/rules + channel): the hourly floor, a channel
 // only the creator and kyto are both in, and a named editor may re-time a job
 // but never change its instructions, since it runs as its creator. Every id rides through the client, so access
 // is re-checked when the modal opens AND when it is submitted.

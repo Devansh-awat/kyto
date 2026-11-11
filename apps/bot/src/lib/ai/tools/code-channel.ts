@@ -54,6 +54,52 @@ const CONTEXT_BAR_ICONS = [
 const MAX_CONTEXT_BAR_ITEMS = 5;
 const MAX_COMMANDS = 10;
 const MAX_TITLE_CHARS = 200;
+const CHANNEL_ID = z.string().regex(/^[CG][A-Z0-9]+$/);
+
+/** What each split tool hands the one implementation below. */
+interface CodeChannelInput {
+  action:
+    | 'archive'
+    | 'create'
+    | 'disable'
+    | 'enable'
+    | 'list'
+    | 'listViews'
+    | 'readCanvas'
+    | 'removeView'
+    | 'rename'
+    | 'setCommands'
+    | 'setContextBar'
+    | 'setView';
+  baseBranch?: string;
+  blocks?: string;
+  channel?: string;
+  commands?: {
+    argumentHint?: string;
+    description: string;
+    name: string;
+  }[];
+  content?: string;
+  contextBar?: {
+    icon?: (typeof CONTEXT_BAR_ICONS)[number];
+    key: string;
+    label: string;
+    url?: string;
+  }[];
+  headBranch?: string;
+  includeResolved?: boolean;
+  isPrivate?: boolean;
+  name?: string;
+  prUrl?: string;
+  resourceDomains?: string[];
+  summary?: string;
+  task?: string;
+  title?: string;
+  viewId?: string;
+  viewKey?: string;
+  viewName?: string;
+  viewType?: string;
+}
 // Origins Slack won't link; the channel is created without one.
 const UNLINKABLE_ORIGIN = new Set([
   'invalid_origin_link',
@@ -192,7 +238,7 @@ async function handOff({
   });
 }
 
-export function codeChannelTool({
+export function codeChannelTools({
   isOwner,
   message,
   thread,
@@ -596,340 +642,429 @@ export function codeChannelTool({
     };
   }
 
-  return tool({
-    description:
-      "Slack CODE CHANNELS. `create` makes a real Slack code channel for a task (only when someone asks for one) and picks the work up there; `enable`/`disable` turn an existing channel (default: this one) into one where you answer every top-level message. Only its creator or the bot owner may enable; `list` shows them. Inside a code channel you are the agent of: `setView` adds or updates a tab (html page, `diff`, `block_kit`, a `canvas` people comment on, a `pull_request`), `listViews`/`removeView`, `readCanvas` (a canvas tab's text and comments. Read them before revising), `setContextBar` (≤5 items: repo, branch, PR, CI…; replaces the whole bar), `setCommands` (≤10 per-channel slash commands; using one sends you a message), `rename`, and `archive` with a summary. Only when someone asks.",
-    inputSchema: z.object({
-      action: z.enum([
-        'create',
-        'enable',
-        'disable',
-        'list',
-        'setView',
-        'listViews',
-        'removeView',
-        'readCanvas',
-        'setContextBar',
-        'setCommands',
-        'rename',
-        'archive',
-      ]),
-      baseBranch: z.string().optional().describe('setView diff: base branch.'),
-      blocks: z
-        .string()
-        .optional()
-        .describe('setView block_kit: a JSON array of Block Kit blocks.'),
-      channel: z
-        .string()
-        .regex(/^[CG][A-Z0-9]+$/)
-        .optional()
-        .describe('enable/disable: channel id. Defaults to this channel.'),
-      commands: z
-        .array(
-          z.object({
-            argumentHint: z.string().optional(),
-            description: z.string().min(1),
-            name: z
-              .string()
-              .regex(/^[a-z0-9][a-z0-9_-]{0,30}$/)
-              .describe('Without the slash.'),
-          })
-        )
-        .max(MAX_COMMANDS)
-        .optional()
-        .describe('setCommands: the whole set (an empty array clears them).'),
-      content: z
-        .string()
-        .optional()
-        .describe(
-          'setView: html → a full HTML document; diff → unified diff text; canvas → markdown.'
-        ),
-      contextBar: z
-        .array(
-          z.object({
-            icon: z.enum(CONTEXT_BAR_ICONS).optional(),
-            key: z.string().min(1).max(64),
-            label: z.string().min(1).max(128),
-            url: z.string().url().max(2048).optional(),
-          })
-        )
-        .max(MAX_CONTEXT_BAR_ITEMS)
-        .optional()
-        .describe('setContextBar: every item to show.'),
-      headBranch: z.string().optional().describe('setView diff: head branch.'),
-      includeResolved: z
-        .boolean()
-        .optional()
-        .describe('readCanvas: include resolved comments.'),
-      isPrivate: z.boolean().optional().describe('create: a private channel.'),
-      name: z
-        .string()
-        .min(1)
-        .max(80)
-        .optional()
-        .describe(
-          'create: the channel name, as the person wrote it (spaces fine).'
-        ),
-      prUrl: z.string().url().optional().describe('setView pull_request.'),
-      resourceDomains: z
-        .array(z.string())
-        .optional()
-        .describe(
-          'setView html: https origins the page may load scripts/styles/images from.'
-        ),
-      summary: z
-        .string()
-        .optional()
-        .describe(
-          'archive: a summary posted in the channel and on the request.'
-        ),
-      task: z
-        .string()
-        .optional()
-        .describe(
-          'create: what to do in the new channel, self-contained: you continue from it there.'
-        ),
-      title: z
-        .string()
-        .min(1)
-        .max(MAX_TITLE_CHARS)
-        .optional()
-        .describe('rename: the new title (renames the channel).'),
-      viewId: z.string().optional().describe('removeView: a tab by its id.'),
-      viewKey: z
-        .string()
-        .optional()
-        .describe(
-          'setView/removeView/readCanvas: your stable id for a tab; the same key updates the same tab.'
-        ),
-      viewName: z.string().optional().describe('setView: the tab label.'),
-      viewType: z
-        .enum(['html', 'diff', 'block_kit', 'canvas', 'pull_request'])
-        .optional()
-        .describe('setView: the kind of tab (default html).'),
-    }),
-    execute: async (input) => {
-      try {
-        switch (input.action) {
-          case 'list': {
-            const rows = await allCodeChannels();
-            return {
-              channels: rows.map((row) => ({
-                channel: `<#${row.channelId}>`,
-                enabledBy: `<@${row.enabledBy}>`,
-                kind: row.native ? 'slack code channel' : 'ordinary channel',
-              })),
-              success: true,
-            };
-          }
-          case 'create':
-            if (!input.name) {
-              return { error: 'create needs a name.', success: false };
-            }
-            return await create({
-              name: input.name,
-              ...(input.isPrivate === undefined
-                ? {}
-                : { isPrivate: input.isPrivate }),
-              ...(input.task ? { task: input.task } : {}),
-            });
-          case 'enable': {
-            const target = input.channel ?? currentChannel;
-            if (!/^[CG]/.test(target)) {
-              return {
-                error: 'Code channels are channels, not DMs.',
-                success: false,
-              };
-            }
-            return await enable(target);
-          }
-          case 'disable': {
-            const target = input.channel ?? currentChannel;
-            const allowed = await mayTurnOff(target);
-            if ('error' in allowed) {
-              return { error: allowed.error, success: false };
-            }
-            await disableCodeChannel(target);
-            return {
-              success: true,
-              summary: allowed.row.native
-                ? `I no longer answer every message in <#${target}>. It is still a Slack code channel; archive it to close it.`
-                : `<#${target}> is a normal channel again.`,
-            };
-          }
-          case 'archive':
-            return await archive(input.summary);
-          case 'setView':
-            return await setView(input);
-          case 'listViews': {
-            const here = await hereNative();
-            if ('error' in here) {
-              return { error: here.error, success: false };
-            }
-            const response = await callAgents({
-              method: 'agents.conversations.listViews',
-              params: { channel_id: here.channel },
-            });
-            if (!response.ok) {
-              return { error: refusalText(response), success: false };
-            }
-            const canvases = await canvasViews(here.channel);
-            return {
-              success: true,
-              views: [
-                ...(viewsSchema.parse(response).views ?? []).map((view) => ({
-                  label: view.label,
-                  version: view.content_version,
-                  viewId: view.view_id,
-                  viewKey: view.view_key ?? '(the diff)',
-                })),
-                ...Object.entries(canvases).map(([key, view]) => ({
-                  label: `${view.name} (canvas)`,
-                  viewId: view.viewId,
-                  viewKey: key,
-                })),
-              ],
-            };
-          }
-          case 'removeView': {
-            const here = await hereNative();
-            if ('error' in here) {
-              return { error: here.error, success: false };
-            }
-            if (Boolean(input.viewKey) === Boolean(input.viewId)) {
-              return {
-                error: 'Give exactly one of viewKey or viewId.',
-                success: false,
-              };
-            }
-            if (
-              input.viewKey &&
-              (await canvasViews(here.channel))[input.viewKey]
-            ) {
-              return {
-                error:
-                  "Slack can't remove a canvas tab through its API. Someone can remove it from the channel's tabs, or keep it and update it instead.",
-                success: false,
-              };
-            }
-            const response = await callAgents({
-              method: 'agents.conversations.removeView',
-              params: {
-                channel_id: here.channel,
-                ...(input.viewKey
-                  ? { view_key: input.viewKey }
-                  : { view_id: input.viewId }),
-              },
-            });
-            return response.ok
-              ? { success: true, summary: 'Tab removed.' }
-              : { error: refusalText(response), success: false };
-          }
-          case 'readCanvas': {
-            const here = await hereNative();
-            if ('error' in here) {
-              return { error: here.error, success: false };
-            }
-            const canvases = await canvasViews(here.channel);
-            const known = canvases[input.viewKey ?? ''];
-            if (!known) {
-              return {
-                error: `No canvas tab with that viewKey here (canvas tabs: ${Object.keys(canvases).join(', ') || 'none'}).`,
-                success: false,
-              };
-            }
-            const response = await callAgents({
-              method: 'agents.conversations.getCanvas',
-              params: {
-                canvas_id: known.canvasId,
-                channel: here.channel,
-                include_resolved: input.includeResolved ?? false,
-              },
-            });
-            if (!response.ok) {
-              return { error: refusalText(response), success: false };
-            }
-            const canvas = canvasSchema.parse(response);
-            return {
-              comments: (canvas.comments ?? []).map((comment) => ({
-                by: `<@${comment.user_id ?? 'unknown'}>`,
-                on: comment.quoted_text,
-                replies: (comment.replies ?? []).map(
-                  (reply) => `<@${reply.user_id ?? 'unknown'}>: ${reply.text}`
-                ),
-                resolved: comment.is_resolved === true,
-                text: comment.text,
-              })),
-              content: canvas.content,
-              success: true,
-              title: canvas.title,
-            };
-          }
-          case 'setContextBar': {
-            const here = await hereNative();
-            if ('error' in here) {
-              return { error: here.error, success: false };
-            }
-            const response = await callAgents({
-              method: 'agents.conversations.setProperties',
-              params: {
-                channel_id: here.channel,
-                code_channel: { context_bar_items: input.contextBar ?? [] },
-              },
-            });
-            return response.ok
-              ? { success: true, summary: 'Context bar updated.' }
-              : { error: refusalText(response), success: false };
-          }
-          case 'setCommands': {
-            const here = await hereNative();
-            if ('error' in here) {
-              return { error: here.error, success: false };
-            }
-            const commands = (input.commands ?? []).map((command) => ({
-              description: command.description,
-              name: command.name,
-              ...(command.argumentHint
-                ? { argument_hint: command.argumentHint }
-                : {}),
-            }));
-            const response = await callAgents({
-              method: 'agents.conversations.setCommands',
-              params: { channel_id: here.channel, commands },
-            });
-            return response.ok
-              ? {
-                  success: true,
-                  summary: `Registered ${commands.length} slash commands in this channel.`,
-                }
-              : { error: refusalText(response), success: false };
-          }
-          case 'rename': {
-            const here = await hereNative();
-            if ('error' in here) {
-              return { error: here.error, success: false };
-            }
-            if (!input.title) {
-              return { error: 'rename needs a title.', success: false };
-            }
-            const response = await callAgents({
-              method: 'agents.sessions.rename',
-              params: { channel_id: here.channel, title: input.title },
-            });
-            return response.ok
-              ? { success: true, summary: 'Renamed.' }
-              : { error: refusalText(response), success: false };
-          }
-          default:
-            return { error: 'Unknown action.', success: false };
+  async function run(input: CodeChannelInput) {
+    try {
+      switch (input.action) {
+        case 'list': {
+          const rows = await allCodeChannels();
+          return {
+            channels: rows.map((row) => ({
+              channel: `<#${row.channelId}>`,
+              enabledBy: `<@${row.enabledBy}>`,
+              kind: row.native ? 'slack code channel' : 'ordinary channel',
+            })),
+            success: true,
+          };
         }
-      } catch (error) {
-        logger.warn(
-          { error: errorMessage(error), threadTs: currentThreadTs },
-          '[codeChannel] failed'
-        );
-        return { error: errorMessage(error), success: false };
+        case 'create':
+          if (!input.name) {
+            return { error: 'create needs a name.', success: false };
+          }
+          return await create({
+            name: input.name,
+            ...(input.isPrivate === undefined
+              ? {}
+              : { isPrivate: input.isPrivate }),
+            ...(input.task ? { task: input.task } : {}),
+          });
+        case 'enable': {
+          const target = input.channel ?? currentChannel;
+          if (!/^[CG]/.test(target)) {
+            return {
+              error: 'Code channels are channels, not DMs.',
+              success: false,
+            };
+          }
+          return await enable(target);
+        }
+        case 'disable': {
+          const target = input.channel ?? currentChannel;
+          const allowed = await mayTurnOff(target);
+          if ('error' in allowed) {
+            return { error: allowed.error, success: false };
+          }
+          await disableCodeChannel(target);
+          return {
+            success: true,
+            summary: allowed.row.native
+              ? `I no longer answer every message in <#${target}>. It is still a Slack code channel; archive it to close it.`
+              : `<#${target}> is a normal channel again.`,
+          };
+        }
+        case 'archive':
+          return await archive(input.summary);
+        case 'setView':
+          return await setView(input);
+        case 'listViews': {
+          const here = await hereNative();
+          if ('error' in here) {
+            return { error: here.error, success: false };
+          }
+          const response = await callAgents({
+            method: 'agents.conversations.listViews',
+            params: { channel_id: here.channel },
+          });
+          if (!response.ok) {
+            return { error: refusalText(response), success: false };
+          }
+          const canvases = await canvasViews(here.channel);
+          return {
+            success: true,
+            views: [
+              ...(viewsSchema.parse(response).views ?? []).map((view) => ({
+                label: view.label,
+                version: view.content_version,
+                viewId: view.view_id,
+                viewKey: view.view_key ?? '(the diff)',
+              })),
+              ...Object.entries(canvases).map(([key, view]) => ({
+                label: `${view.name} (canvas)`,
+                viewId: view.viewId,
+                viewKey: key,
+              })),
+            ],
+          };
+        }
+        case 'removeView': {
+          const here = await hereNative();
+          if ('error' in here) {
+            return { error: here.error, success: false };
+          }
+          if (Boolean(input.viewKey) === Boolean(input.viewId)) {
+            return {
+              error: 'Give exactly one of viewKey or viewId.',
+              success: false,
+            };
+          }
+          if (
+            input.viewKey &&
+            (await canvasViews(here.channel))[input.viewKey]
+          ) {
+            return {
+              error:
+                "Slack can't remove a canvas tab through its API. Someone can remove it from the channel's tabs, or keep it and update it instead.",
+              success: false,
+            };
+          }
+          const response = await callAgents({
+            method: 'agents.conversations.removeView',
+            params: {
+              channel_id: here.channel,
+              ...(input.viewKey
+                ? { view_key: input.viewKey }
+                : { view_id: input.viewId }),
+            },
+          });
+          return response.ok
+            ? { success: true, summary: 'Tab removed.' }
+            : { error: refusalText(response), success: false };
+        }
+        case 'readCanvas': {
+          const here = await hereNative();
+          if ('error' in here) {
+            return { error: here.error, success: false };
+          }
+          const canvases = await canvasViews(here.channel);
+          const known = canvases[input.viewKey ?? ''];
+          if (!known) {
+            return {
+              error: `No canvas tab with that viewKey here (canvas tabs: ${Object.keys(canvases).join(', ') || 'none'}).`,
+              success: false,
+            };
+          }
+          const response = await callAgents({
+            method: 'agents.conversations.getCanvas',
+            params: {
+              canvas_id: known.canvasId,
+              channel: here.channel,
+              include_resolved: input.includeResolved ?? false,
+            },
+          });
+          if (!response.ok) {
+            return { error: refusalText(response), success: false };
+          }
+          const canvas = canvasSchema.parse(response);
+          return {
+            comments: (canvas.comments ?? []).map((comment) => ({
+              by: `<@${comment.user_id ?? 'unknown'}>`,
+              on: comment.quoted_text,
+              replies: (comment.replies ?? []).map(
+                (reply) => `<@${reply.user_id ?? 'unknown'}>: ${reply.text}`
+              ),
+              resolved: comment.is_resolved === true,
+              text: comment.text,
+            })),
+            content: canvas.content,
+            success: true,
+            title: canvas.title,
+          };
+        }
+        case 'setContextBar': {
+          const here = await hereNative();
+          if ('error' in here) {
+            return { error: here.error, success: false };
+          }
+          const response = await callAgents({
+            method: 'agents.conversations.setProperties',
+            params: {
+              channel_id: here.channel,
+              code_channel: { context_bar_items: input.contextBar ?? [] },
+            },
+          });
+          return response.ok
+            ? { success: true, summary: 'Context bar updated.' }
+            : { error: refusalText(response), success: false };
+        }
+        case 'setCommands': {
+          const here = await hereNative();
+          if ('error' in here) {
+            return { error: here.error, success: false };
+          }
+          const commands = (input.commands ?? []).map((command) => ({
+            description: command.description,
+            name: command.name,
+            ...(command.argumentHint
+              ? { argument_hint: command.argumentHint }
+              : {}),
+          }));
+          const response = await callAgents({
+            method: 'agents.conversations.setCommands',
+            params: { channel_id: here.channel, commands },
+          });
+          return response.ok
+            ? {
+                success: true,
+                summary: `Registered ${commands.length} slash commands in this channel.`,
+              }
+            : { error: refusalText(response), success: false };
+        }
+        case 'rename': {
+          const here = await hereNative();
+          if ('error' in here) {
+            return { error: here.error, success: false };
+          }
+          if (!input.title) {
+            return { error: 'rename needs a title.', success: false };
+          }
+          const response = await callAgents({
+            method: 'agents.sessions.rename',
+            params: { channel_id: here.channel, title: input.title },
+          });
+          return response.ok
+            ? { success: true, summary: 'Renamed.' }
+            : { error: refusalText(response), success: false };
+        }
+        default:
+          return { error: 'Unknown action.', success: false };
       }
-    },
-  });
+    } catch (error) {
+      logger.warn(
+        { error: errorMessage(error), threadTs: currentThreadTs },
+        '[codeChannel] failed'
+      );
+      return { error: errorMessage(error), success: false };
+    }
+  }
+
+  const viewKey = z
+    .string()
+    .min(1)
+    .describe(
+      'Your stable id for this tab; the same key updates the same tab.'
+    );
+  const viewName = z.string().optional().describe('The tab label.');
+  return {
+    archiveCodeChannel: tool({
+      description:
+        'Archive THIS code channel (you are its agent), posting a summary in the channel and on the request. Only when someone asks. Nothing can be posted in it afterwards, so end the turn with skip.',
+      inputSchema: z.object({
+        summary: z
+          .string()
+          .min(1)
+          .describe('A summary posted in the channel and on the request.'),
+      }),
+      execute: (fields) => run({ action: 'archive', ...fields }),
+    }),
+    createCodeChannel: tool({
+      description:
+        'Create a real Slack code channel for a task, and pick the work up there. Only when someone asks for one.',
+      inputSchema: z.object({
+        isPrivate: z.boolean().optional().describe('A private channel.'),
+        name: z
+          .string()
+          .min(1)
+          .max(80)
+          .describe('The channel name, as the person wrote it (spaces fine).'),
+        task: z
+          .string()
+          .optional()
+          .describe(
+            'What to do in the new channel, self-contained: you continue from it there.'
+          ),
+      }),
+      execute: (fields) => run({ action: 'create', ...fields }),
+    }),
+    disableCodeChannel: tool({
+      description:
+        'Turn a code channel back into a normal one (default: this channel). Only its creator or the bot owner may.',
+      inputSchema: z.object({
+        channel: CHANNEL_ID.optional().describe(
+          'Channel id. Defaults to this channel.'
+        ),
+      }),
+      execute: (fields) => run({ action: 'disable', ...fields }),
+    }),
+    enableCodeChannel: tool({
+      description:
+        'Turn an existing channel (default: this one) into a code channel where you answer every top-level message. Only its creator or the bot owner may enable.',
+      inputSchema: z.object({
+        channel: CHANNEL_ID.optional().describe(
+          'Channel id. Defaults to this channel.'
+        ),
+      }),
+      execute: (fields) => run({ action: 'enable', ...fields }),
+    }),
+    listCodeChannelViews: tool({
+      description: 'List the tabs of the code channel you are in.',
+      inputSchema: z.object({}),
+      execute: () => run({ action: 'listViews' }),
+    }),
+    listCodeChannels: tool({
+      description: 'List the code channels.',
+      inputSchema: z.object({}),
+      execute: () => run({ action: 'list' }),
+    }),
+    readCodeChannelCanvas: tool({
+      description:
+        "A canvas tab's text and comments. Read them before revising the canvas.",
+      inputSchema: z.object({
+        includeResolved: z
+          .boolean()
+          .optional()
+          .describe('Include resolved comments.'),
+        viewKey,
+      }),
+      execute: (fields) => run({ action: 'readCanvas', ...fields }),
+    }),
+    removeCodeChannelView: tool({
+      description:
+        'Remove a tab from the code channel you are in, by viewKey or viewId (exactly one).',
+      inputSchema: z.object({
+        viewId: z.string().optional().describe('A tab by its id.'),
+        viewKey: z.string().optional().describe('A tab by its key.'),
+      }),
+      execute: (fields) => run({ action: 'removeView', ...fields }),
+    }),
+    renameCodeChannel: tool({
+      description: 'Rename the code channel you are in.',
+      inputSchema: z.object({
+        title: z
+          .string()
+          .min(1)
+          .max(MAX_TITLE_CHARS)
+          .describe('The new title (renames the channel).'),
+      }),
+      execute: (fields) => run({ action: 'rename', ...fields }),
+    }),
+    setCodeChannelBlockKitTab: tool({
+      description:
+        'Add or update a Block Kit tab in the code channel you are in.',
+      inputSchema: z.object({
+        blocks: z.string().min(1).describe('A JSON array of Block Kit blocks.'),
+        viewKey,
+        viewName,
+      }),
+      execute: (fields) =>
+        run({ action: 'setView', viewType: 'block_kit', ...fields }),
+    }),
+    setCodeChannelCanvasTab: tool({
+      description:
+        'Add or update a canvas tab (people comment on it) in the code channel you are in.',
+      inputSchema: z.object({
+        content: z.string().min(1).describe('The canvas, as markdown.'),
+        viewKey,
+        viewName,
+      }),
+      execute: (fields) =>
+        run({ action: 'setView', viewType: 'canvas', ...fields }),
+    }),
+    setCodeChannelCommands: tool({
+      description:
+        'Set the per-channel slash commands of the code channel you are in (using one sends you a message). The whole set: an empty array clears them.',
+      inputSchema: z.object({
+        commands: z
+          .array(
+            z.object({
+              argumentHint: z.string().optional(),
+              description: z.string().min(1),
+              name: z
+                .string()
+                .regex(/^[a-z0-9][a-z0-9_-]{0,30}$/)
+                .describe('Without the slash.'),
+            })
+          )
+          .max(MAX_COMMANDS)
+          .describe('The whole set.'),
+      }),
+      execute: (fields) => run({ action: 'setCommands', ...fields }),
+    }),
+    setCodeChannelContextBar: tool({
+      description:
+        'Set the context bar of the code channel you are in (repo, branch, PR, CI…): replaces the whole bar.',
+      inputSchema: z.object({
+        contextBar: z
+          .array(
+            z.object({
+              icon: z.enum(CONTEXT_BAR_ICONS).optional(),
+              key: z.string().min(1).max(64),
+              label: z.string().min(1).max(128),
+              url: z.string().url().max(2048).optional(),
+            })
+          )
+          .max(MAX_CONTEXT_BAR_ITEMS)
+          .describe('Every item to show.'),
+      }),
+      execute: (fields) => run({ action: 'setContextBar', ...fields }),
+    }),
+    setCodeChannelDiffTab: tool({
+      description: 'Set the diff tab of the code channel you are in.',
+      inputSchema: z.object({
+        baseBranch: z.string().optional().describe('Base branch.'),
+        content: z
+          .string()
+          .min(1)
+          .describe('Unified diff text (git diff output).'),
+        headBranch: z.string().optional().describe('Head branch.'),
+        viewName,
+      }),
+      execute: (fields) =>
+        run({ action: 'setView', viewType: 'diff', ...fields }),
+    }),
+    setCodeChannelHtmlTab: tool({
+      description: 'Add or update an HTML tab in the code channel you are in.',
+      inputSchema: z.object({
+        content: z.string().min(1).describe('A full HTML document.'),
+        resourceDomains: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'https origins the page may load scripts/styles/images from.'
+          ),
+        viewKey,
+        viewName,
+      }),
+      execute: (fields) =>
+        run({ action: 'setView', viewType: 'html', ...fields }),
+    }),
+    setCodeChannelPullRequestTab: tool({
+      description:
+        'Add or update a pull request tab in the code channel you are in.',
+      inputSchema: z.object({
+        prUrl: z.string().url().describe('The pull request URL.'),
+        viewName,
+      }),
+      execute: (fields) =>
+        run({ action: 'setView', viewType: 'pull_request', ...fields }),
+    }),
+  };
 }

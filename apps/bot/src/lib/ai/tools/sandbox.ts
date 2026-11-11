@@ -65,7 +65,7 @@ export function bashTool({
   // auto-backgrounding (then a long command blocks as before).
   background?: BackgroundProcessTools;
   getSandboxContext: () => SandboxContext;
-  /** A command outlived the wait and now needs the `process` tool to follow. */
+  /** A command outlived the wait and now needs getProcessOutput / killProcess to follow. */
   onBackgrounded?: () => void;
   /**
    * Who this turn runs for, so a `gh`/`git push` typed into bash goes through
@@ -77,7 +77,7 @@ export function bashTool({
 }) {
   return tool({
     description:
-      'Run a bash command in your isolated Linux sandbox (network access, common CLIs, bun/node/python preinstalled). The workspace PERSISTS across turns in this thread (files you write and packages you install are still there next time). Without `timeout`, a command still running after ~1 minute is moved to the background and you get a handle to poll with process (action output). Set `timeout` BEFORE a command you know is slow (an install, a build, a test suite) and you wait for it up to that long instead; past it the command is killed. For something you want to keep running (a server, a watcher), use process (action start). Prefer grep and glob over `grep`/`find` here, and readFile over `cat`.',
+      'Run a bash command in your isolated Linux sandbox (network access, common CLIs, bun/node/python preinstalled). The workspace PERSISTS across turns in this thread (files you write and packages you install are still there next time). Without `timeout`, a command still running after ~1 minute is moved to the background and you get a handle to poll with getProcessOutput. Set `timeout` BEFORE a command you know is slow (an install, a build, a test suite) and you wait for it up to that long instead; past it the command is killed. For something you want to keep running (a server, a watcher), use runBackgroundProcess. Prefer grep and glob over `grep`/`find` here, and readFile over `cat`.',
     inputSchema: z.object({
       command: z.string().describe('The bash command to run.'),
       timeout: z
@@ -220,7 +220,7 @@ async function runWithAutoBackground({
     await background.killManaged(started.id);
     return {
       exitCode: 124,
-      note: `Killed after the ${Math.round(timeoutMs / MS_PER_SECOND)}s timeout you set; the output below is what it printed until then. If it was making progress, run it again with a longer timeout, or with process (action start) to keep it running.`,
+      note: `Killed after the ${Math.round(timeoutMs / MS_PER_SECOND)}s timeout you set; the output below is what it printed until then. If it was making progress, run it again with a longer timeout, or with runBackgroundProcess to keep it running.`,
       stderr: await clipStream(result.stderr, context, 'stderr'),
       stdout: await clipStream(result.stdout, context, 'stdout'),
       timedOut: true,
@@ -237,7 +237,7 @@ async function runWithAutoBackground({
   return {
     backgrounded: true,
     id: started.id,
-    note: `This command was still running after 60s, so it was moved to the background (handle "${started.id}") to keep the turn responsive: it is STILL RUNNING. Check it with the \`process\` tool (action \`output\`, id "${started.id}") and stop it with action \`kill\`. Don't just re-run it. If you need its result before replying, keep working on other things and check back, or use the wait tool. If your turn ends first, you'll be woken with its result when it finishes (or told after 30 minutes if it's still going).`,
+    note: `This command was still running after 60s, so it was moved to the background (handle "${started.id}") to keep the turn responsive: it is STILL RUNNING. Check it with getProcessOutput (id "${started.id}") and stop it with killProcess. Don't just re-run it. If you need its result before replying, keep working on other things and check back, or use the wait tool. If your turn ends first, you'll be woken with its result when it finishes (or told after 30 minutes if it's still going).`,
     running: true,
     stderr: await clipStream(result.stderr, context, 'stderr'),
     stdout: await clipStream(result.stdout, context, 'stdout'),

@@ -78,7 +78,7 @@ type SubagentResult =
   | { report: string; success: true }
   | { error: string; success: false };
 
-// A subagent run, tracked so `subagent` (action `check`) can collect a
+// A subagent run, tracked so `checkSubagent` can collect a
 // background one later, and `resume` can ask any finished one a follow-up.
 interface SubagentJob {
   // Set once checkSubagent has handed this job's finished report back to the
@@ -204,7 +204,7 @@ export function runSubagentTool({
 
   const runSubagent = tool({
     description:
-      'Delegate a task to a subagent: a headless copy of kyto (shares your sandbox, same tools) that runs on a cheaper pinned model and returns a written report to you. Its run shows up inside your own plan/thinking block as it works; it does NOT post a message of its own, so YOU are the only voice in the thread and its findings only reach the user if you say them. Use it for open-ended investigation or self-contained work that would otherwise clutter your own context, and for PARALLEL work: a task with several independent parts gets one subagent per part, all called in the same step (they run at the same time) or each with background:true. It has NO access to this conversation beyond what you put in the task. By default it runs FOREGROUND (you wait for its report, then use it). Set background:true to fire it off and keep working immediately) you get a job id back instead of the report, and later call subagent (action check) with that id to collect it. Every run has an `id`: to follow up on what it found (dig deeper, fix what it found, a related question), pass that id as `resume` with the follow-up as `task`. It continues with its whole earlier run in context, which is cheaper and better informed than a fresh subagent.',
+      'Delegate a task to a subagent: a headless copy of kyto (shares your sandbox, same tools) that runs on a cheaper pinned model and returns a written report to you. Its run shows up inside your own plan/thinking block as it works; it does NOT post a message of its own, so YOU are the only voice in the thread and its findings only reach the user if you say them. Use it for open-ended investigation or self-contained work that would otherwise clutter your own context, and for PARALLEL work: a task with several independent parts gets one subagent per part, all called in the same step (they run at the same time) or each with background:true. It has NO access to this conversation beyond what you put in the task. By default it runs FOREGROUND (you wait for its report, then use it). Set background:true to fire it off and keep working immediately) you get a job id back instead of the report, and later call checkSubagent with that id to collect it. Every run has an `id`: to follow up on what it found (dig deeper, fix what it found, a related question), pass that id as `resume` with the follow-up as `task`. It continues with its whole earlier run in context, which is cheaper and better informed than a fresh subagent.',
     inputSchema: z.object({
       task: z
         .string()
@@ -222,7 +222,7 @@ export function runSubagentTool({
         .boolean()
         .optional()
         .describe(
-          'If true, spawn the subagent and return IMMEDIATELY without waiting: it runs independently and you get no report back on this call. Use it to run a side-task in parallel while you continue your own work; collect it later with subagent (action check), or let its report come back as a follow-up turn. Default false (wait for and receive the report).'
+          'If true, spawn the subagent and return IMMEDIATELY without waiting: it runs independently and you get no report back on this call. Use it to run a side-task in parallel while you continue your own work; collect it later with checkSubagent, or let its report come back as a follow-up turn. Default false (wait for and receive the report).'
         ),
       resume: z
         .string()
@@ -253,7 +253,7 @@ export function runSubagentTool({
         if (!found?.conversation) {
           return {
             error: found
-              ? `Subagent ${resume} has nothing to resume: it is still running (collect it with subagent action check) or it failed before writing a report.`
+              ? `Subagent ${resume} has nothing to resume: it is still running (collect it with checkSubagent) or it failed before writing a report.`
               : `Unknown subagent id: ${resume}. Ids last an hour after a run finishes, in this thread, until kyto restarts. Start a new subagent instead.`,
             success: false,
           };
@@ -601,7 +601,7 @@ export function runSubagentTool({
           threadId: thread.id,
         });
       };
-      const resumable = `To ask it a follow-up with its context intact, call subagent (action run) with resume: "${id}" and the follow-up as the task.`;
+      const resumable = `To ask it a follow-up with its context intact, call runSubagent with resume: "${id}" and the follow-up as the task.`;
       if (!background) {
         const result = await job.catch(
           (error: unknown): SubagentResult => ({
@@ -643,7 +643,7 @@ export function runSubagentTool({
       return {
         background: true,
         id,
-        note: `Subagent ${jobLabel} started in the background as ${id}. Keep working; when you need its findings call subagent (action check) with id "${id}". If your turn ends before it finishes, that's fine: its report comes back to you as a new turn in this thread, so you don't have to wait for it. It does NOT post anything itself, so nothing reaches the user until you say it.`,
+        note: `Subagent ${jobLabel} started in the background as ${id}. Keep working; when you need its findings call checkSubagent with id "${id}". If your turn ends before it finishes, that's fine: its report comes back to you as a new turn in this thread, so you don't have to wait for it. It does NOT post anything itself, so nothing reaches the user until you say it.`,
         success: true,
       };
     },

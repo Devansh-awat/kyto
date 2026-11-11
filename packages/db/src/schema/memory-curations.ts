@@ -25,8 +25,8 @@ export interface CurationChange {
 }
 
 // The periodic memory curation's audit trail (lib/memory-curation). Every merge
-// and removal keeps the full text of what it replaced, so the `memory` tool's
-// `restore` can bring a memory back by title, and the last pass per author is
+// and removal keeps the full text of what it replaced, so `restoreMemory`
+// can bring a memory back by title, and the last pass per author is
 // what decides when the next one is due.
 export const memoryCurations = pgTable(
   'memory_curations',

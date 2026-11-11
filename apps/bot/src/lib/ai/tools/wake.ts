@@ -35,13 +35,11 @@ function inWords(minutes: number): string {
 export function wakeTool({
   asUserAccount,
   authorUserId,
-  isOwner,
   messageId,
   thread,
 }: {
   asUserAccount: boolean;
   authorUserId: string;
-  isOwner: boolean;
   messageId: string;
   thread: ThreadHandle;
 }) {
@@ -58,72 +56,31 @@ Picking \`minutes\`: match it to what you're waiting for.
 
 \`note\` is for you: exactly what to pick up, enough to do it cold (the commands, paths, how to check it worked). \`reason\` is for the person: one short lowercase line on what you're waiting for. It is posted in the thread with the time, so they see that you scheduled it and when you'll be back; don't repeat it in your reply.
 
-Actions: schedule (minutes from now, 1 to ${MAX_WAKE_MINUTES}, plus note and reason), list (this thread's pending wakes), cancel (by id; its scheduler or the owner).`,
+To see this thread's pending wakes use listWakes; to cancel one, cancelWake.`,
     inputSchema: z.object({
-      action: z.enum(['schedule', 'list', 'cancel']),
       minutes: z
         .number()
         .int()
         .min(1)
         .max(MAX_WAKE_MINUTES)
-        .optional()
-        .describe('schedule: how many minutes from now to wake up.'),
+        .describe('How many minutes from now to wake up.'),
       note: z
         .string()
         .min(1)
         .max(4000)
-        .optional()
         .describe(
-          'schedule: what to pick up, in enough detail to do it cold (exact commands, paths, how to verify).'
+          'What to pick up, in enough detail to do it cold (exact commands, paths, how to verify).'
         ),
       reason: z
         .string()
         .min(1)
         .max(200)
-        .optional()
         .describe(
-          'schedule: one short lowercase line for the person on what you are waiting for (posted with the time).'
+          'One short lowercase line for the person on what you are waiting for (posted with the time).'
         ),
-      id: z.string().optional().describe('cancel: the wake to cancel.'),
     }),
-    execute: async ({ action, id, minutes, note, reason }) => {
+    execute: async ({ minutes, note, reason }) => {
       try {
-        if (action === 'list') {
-          const wakes = await listThreadWakes(threadId);
-          return {
-            success: true,
-            wakes: wakes.map((wake) => ({
-              id: wake.id,
-              note: wake.note,
-              scheduledBy: wake.userId,
-              wakeAt: wake.wakeAt.toISOString(),
-            })),
-          };
-        }
-        if (action === 'cancel') {
-          if (!id) {
-            return { error: 'cancel needs the wake id.', success: false };
-          }
-          const pending = await listThreadWakes(threadId);
-          const target = pending.find((wake) => wake.id === id);
-          if (!target) {
-            return { error: `No pending wake ${id} here.`, success: false };
-          }
-          if (!isOwner && target.userId !== authorUserId) {
-            return {
-              error: `Only <@${target.userId}>, whose turn scheduled it, or the owner can cancel that wake.`,
-              success: false,
-            };
-          }
-          await cancelThreadWake({ id, threadId });
-          return { success: true, summary: 'Wake cancelled.' };
-        }
-        if (!(minutes && note && reason)) {
-          return {
-            error: 'schedule needs minutes, a note and a reason.',
-            success: false,
-          };
-        }
         const chain = Number(messageId.match(THREAD_WAKE_ID)?.[1] ?? 0);
         if (chain >= MAX_WAKE_CHAIN) {
           return {
@@ -169,6 +126,70 @@ Actions: schedule (minutes from now, 1 to ${MAX_WAKE_MINUTES}, plus note and rea
           summary: `Wake scheduled for ${wake.wakeAt.toISOString()} (in ${inWords(minutes)}); the thread was told when you'll be back. Don't repeat it.`,
           wakeAt: wake.wakeAt.toISOString(),
         };
+      } catch (error) {
+        return { error: errorMessage(error), success: false };
+      }
+    },
+  });
+}
+
+/** This thread's pending wakes. */
+export function listWakesTool({ thread }: { thread: ThreadHandle }) {
+  return tool({
+    description:
+      "List this thread's pending wakes (id, note, who scheduled it, when). Use it before cancelWake.",
+    inputSchema: z.object({}),
+    execute: async () => {
+      try {
+        const wakes = await listThreadWakes(thread.id);
+        return {
+          success: true,
+          wakes: wakes.map((wake) => ({
+            id: wake.id,
+            note: wake.note,
+            scheduledBy: wake.userId,
+            wakeAt: wake.wakeAt.toISOString(),
+          })),
+        };
+      } catch (error) {
+        return { error: errorMessage(error), success: false };
+      }
+    },
+  });
+}
+
+/** Cancel a pending wake: its scheduler or the owner. */
+export function cancelWakeTool({
+  authorUserId,
+  isOwner,
+  thread,
+}: {
+  authorUserId: string;
+  isOwner: boolean;
+  thread: ThreadHandle;
+}) {
+  const threadId = thread.id;
+  return tool({
+    description:
+      'Cancel a pending wake of this thread by id (from listWakes). Only the person whose turn scheduled it, or the owner.',
+    inputSchema: z.object({
+      id: z.string().min(1).describe('The wake to cancel.'),
+    }),
+    execute: async ({ id }) => {
+      try {
+        const pending = await listThreadWakes(threadId);
+        const target = pending.find((wake) => wake.id === id);
+        if (!target) {
+          return { error: `No pending wake ${id} here.`, success: false };
+        }
+        if (!isOwner && target.userId !== authorUserId) {
+          return {
+            error: `Only <@${target.userId}>, whose turn scheduled it, or the owner can cancel that wake.`,
+            success: false,
+          };
+        }
+        await cancelThreadWake({ id, threadId });
+        return { success: true, summary: 'Wake cancelled.' };
       } catch (error) {
         return { error: errorMessage(error), success: false };
       }
