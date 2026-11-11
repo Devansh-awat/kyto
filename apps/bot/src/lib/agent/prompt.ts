@@ -611,7 +611,7 @@ export async function buildPrompt(
     ),
     ...(pulledInLater
       ? [
-          "This message doesn't mention you, and this thread didn't start with you: someone brought you in partway, so you're seeing every reply here, most of them people talking to each other. Decide whether this one needs you: reply only if it's addressed to you, follows up on something you said, or asks something you should clearly answer. Otherwise call skip: nothing is posted.",
+          'This message doesn\'t mention you, and this thread didn\'t start with you: someone brought you in partway, so some replies here are people talking to each other. A message IS for you, and you must answer it, if any of these hold: it uses your name; it asks a question and your reply or upload is the latest thing in the thread before it; it asks for, or about, something you just made, posted or uploaded (a picture, preview, link, file, result); or it is a short follow-up to what you said last. Only call skip when it is plainly between other people, or a bare "ok"/"lol"/"thanks": nothing is posted. When unsure, answer: a short reply that wasn\'t needed costs less than ignoring someone who asked you something.',
         ]
       : []),
     ...(codeChannel === 'ordinary'
