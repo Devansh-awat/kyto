@@ -28,4 +28,17 @@ export function startMemoryLog(threadCache: ThreadCache): void {
   };
   setInterval(tick, INTERVAL_MS).unref();
   tick();
+
+  // The type counts show WHAT grows (closures, Sets) but not who holds them.
+  // `kill -USR2 1` in the pod writes a full snapshot; two of them hours apart,
+  // diffed in Chrome DevTools (Comparison view), name the retainer.
+  process.on('SIGUSR2', () => {
+    const path = `/tmp/kyto-${Date.now()}.heapsnapshot`;
+    Bun.gc(true);
+    Bun.write(path, Bun.generateHeapSnapshot('v8'))
+      .then(() => logger.info({ path }, '[mem] heap snapshot written'))
+      .catch((error: unknown) =>
+        logger.warn({ err: error }, '[mem] heap snapshot failed')
+      );
+  });
 }
