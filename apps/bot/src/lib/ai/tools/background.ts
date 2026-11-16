@@ -108,9 +108,15 @@ interface BackgroundProcess {
 // for a job that was still running. In memory: a restart loses them, as it
 // loses the sandbox's own process.
 interface ThreadProcesses {
-  counter: number;
-  /** The sandbox of the turn that registered it, so a stop can reach the jobs. */
-  getSandboxContext: () => SandboxContext;
+  /**
+   * The sandbox of the turn that registered it, so a stop can reach the jobs.
+   * The VALUE, never the turn's `getSandboxContext` closure: a closure keeps
+   * its whole defining scope alive in Bun, and these maps outlive the turn, so
+   * every thread ever woken kept its last turn's toolset (~20-30k Functions)
+   * until a restart. Found hunting the 2026-11-16 growth (RSS 166 MB -> 1.5 GB
+   * in 30 h).
+   */
+  context: SandboxContext;
   processes: Map<string, BackgroundProcess>;
 }
 // Turns that wake the thread share ONE registry (`threadProcesses`). A secret or
@@ -119,6 +125,40 @@ interface ThreadProcesses {
 // job anyway.
 const threadProcesses = new Map<string, ThreadProcesses>();
 const stopRegistries = new Map<string, Set<ThreadProcesses>>();
+// One counter for the process, not per registry: a thread's registry is
+// dropped once empty, and a fresh one counting from 1 again would hand a new
+// job an id (`bg-1`) the model saw for an earlier, killed one.
+let jobCounter = 0;
+
+/**
+ * Drop a registry from both maps once it holds no handle: nothing left for a
+ * STOP to kill or for the next turn to read. Called whenever a handle goes; a
+ * turn still running keeps its own reference and re-lists it on its next job.
+ */
+function forgetIfEmpty(registry: ThreadProcesses, stopKey?: string): void {
+  if (registry.processes.size > 0 || !stopKey) {
+    return;
+  }
+  if (threadProcesses.get(stopKey) === registry) {
+    threadProcesses.delete(stopKey);
+  }
+  const set = stopRegistries.get(stopKey);
+  set?.delete(registry);
+  if (set?.size === 0) {
+    stopRegistries.delete(stopKey);
+  }
+}
+
+/** Registry sizes, for tests. */
+export function backgroundRegistrySizes(): {
+  stopRegistries: number;
+  threadProcesses: number;
+} {
+  return {
+    stopRegistries: stopRegistries.size,
+    threadProcesses: threadProcesses.size,
+  };
+}
 
 /** Whether a STOP in this thread has background jobs to kill. */
 export function hasThreadProcesses(threadId: string): boolean {
@@ -143,10 +183,15 @@ export async function killThreadProcesses(threadId: string): Promise<number> {
   for (const registry of registries ?? []) {
     const procs = [...registry.processes.values()];
     registry.processes.clear();
+    // Its stop entry is gone above. The thread entry goes too: a turn still
+    // running keeps its own reference and re-lists it on its next job.
+    if (threadProcesses.get(threadId) === registry) {
+      threadProcesses.delete(threadId);
+    }
     if (procs.length === 0) {
       continue;
     }
-    const context = registry.getSandboxContext();
+    const context = registry.context;
     const pids = procs.map((proc) => proc.pid).join(' ');
     await context.session.run({
       command: `for p in ${pids}; do kill -9 -$p 2>/dev/null || kill -9 $p 2>/dev/null; done; true`,
@@ -231,35 +276,49 @@ export function backgroundProcessTools({
    */
   github?: { isOwner: boolean; threadId: string; userId: string };
 }) {
-  const registry = (() => {
-    const fresh = (): ThreadProcesses => ({
-      counter: 0,
-      getSandboxContext,
-      processes: new Map<string, BackgroundProcess>(),
-    });
-    const key = wake?.thread.id;
-    const shared = key ? threadProcesses.get(key) : undefined;
-    const registry = shared ?? fresh();
-    registry.getSandboxContext = getSandboxContext;
-    const stopKey = key ?? github?.threadId;
-    if (key && !shared) {
+  const key = wake?.thread.id;
+  const stopKey = key ?? github?.threadId;
+  // A registry is listed in the maps only while it holds a job, so a turn that
+  // starts none — nearly all of them — leaves nothing behind, and neither does
+  // a build that throws before it is closed. The thread's LISTED one is looked
+  // up on every use, not once here: the app and the account kyto can run in
+  // one thread at once (separate turn slots) and must see each other's jobs.
+  let own: ThreadProcesses | undefined;
+  const sandboxContext = getSandboxContext();
+  function current(): ThreadProcesses {
+    const listed = key ? threadProcesses.get(key) : undefined;
+    if (listed) {
+      listed.context = sandboxContext;
+      return listed;
+    }
+    own ??= { context: sandboxContext, processes: new Map() };
+    return own;
+  }
+
+  /** List the registry so a STOP, a wake and the next turn can find its jobs. */
+  function list(registry: ThreadProcesses): void {
+    if (!stopKey) {
+      return;
+    }
+    if (key && !threadProcesses.has(key)) {
       threadProcesses.set(key, registry);
     }
-    if (stopKey) {
-      // Drop other turns' registries with nothing left to kill, so a long
-      // thread doesn't keep every turn's sandbox handle alive.
-      const set = stopRegistries.get(stopKey) ?? new Set<ThreadProcesses>();
-      for (const other of set) {
-        if (other !== registry && other.processes.size === 0) {
-          set.delete(other);
-        }
-      }
-      set.add(registry);
-      stopRegistries.set(stopKey, set);
-    }
-    return registry;
-  })();
-  const processes = registry.processes;
+    const set = stopRegistries.get(stopKey) ?? new Set<ThreadProcesses>();
+    set.add(registry);
+    stopRegistries.set(stopKey, set);
+  }
+
+  /** A job's handle, wherever this thread's jobs are listed now. */
+  function find(id: string): BackgroundProcess | undefined {
+    return current().processes.get(id);
+  }
+
+  /** Forget a handle, and the registry with it once nothing is left. */
+  function remove(id: string): void {
+    const registry = current();
+    registry.processes.delete(id);
+    forgetIfEmpty(registry, stopKey);
+  }
 
   async function startManaged(
     command: string,
@@ -267,8 +326,8 @@ export function backgroundProcessTools({
   ): Promise<{ id: string } | { error: string }> {
     const context = getSandboxContext();
     const since = await fetchStart({ command, context });
-    registry.counter += 1;
-    const id = `bg-${registry.counter}`;
+    jobCounter += 1;
+    const id = `bg-${jobCounter}`;
     // The sandbox (and its workdir) is the thread's and outlives a restart's
     // in-memory counter, so `bg-1` after a restart found the old `bg-1`'s exit
     // file and reported "finished" with its result. The files get a nonce.
@@ -309,7 +368,9 @@ export function backgroundProcessTools({
       };
     }
     proc.pid = pid;
-    processes.set(id, proc);
+    const registry = current();
+    registry.processes.set(id, proc);
+    list(registry);
     if (mayHaveFetchedRepo(command)) {
       // A detached command finishes out of band, so the disarm happens when a
       // poll first sees it done (or it is killed) rather than at start time.
@@ -324,7 +385,7 @@ export function backgroundProcessTools({
     id: string,
     result: ManagedResult
   ): Promise<string | undefined> {
-    const proc = processes.get(id);
+    const proc = find(id);
     const command = proc?.fetchCommand;
     if (!(proc && command && result.finished)) {
       return;
@@ -339,9 +400,17 @@ export function backgroundProcessTools({
 
   async function readManaged(
     id: string,
-    context: SandboxContext = getSandboxContext()
+    context: SandboxContext = getSandboxContext(),
+    /**
+     * A poll that only needs to know whether the job finished. Polling used
+     * to copy the WHOLE output files every time (base64 through the heap), so
+     * a job with a growing log re-allocated several times its size on every
+     * poll: every 250-2000 ms in waitManaged, every 20 s while watched. The
+     * full text is read once, when a result is actually needed.
+     */
+    { statusOnly = false }: { statusOnly?: boolean } = {}
   ): Promise<ManagedResult | null> {
-    const proc = processes.get(id);
+    const proc = find(id);
     if (!proc) {
       return null;
     }
@@ -353,12 +422,14 @@ export function backgroundProcessTools({
     // command finishing between the reads came back "finished" with the
     // output it had before it printed (an `echo` read as empty).
     const snapshot = await context.session.run({
-      command: `for path in "${proc.exitPath}" "${proc.outPath}" "${proc.errPath}"; do base64 -w0 "$path" 2>/dev/null || true; printf '\n'; done`,
+      command: statusOnly
+        ? `base64 -w0 "${proc.exitPath}" 2>/dev/null || true; printf '\n'`
+        : `for path in "${proc.exitPath}" "${proc.outPath}" "${proc.errPath}"; do base64 -w0 "$path" 2>/dev/null || true; printf '\n'; done`,
     });
     const [exit64 = '', stdout64 = '', stderr64 = ''] =
       snapshot.stdout.split('\n');
-    const stdout = Buffer.from(stdout64, 'base64').toString();
-    const stderr = Buffer.from(stderr64, 'base64').toString();
+    const stdout = statusOnly ? '' : Buffer.from(stdout64, 'base64').toString();
+    const stderr = statusOnly ? '' : Buffer.from(stderr64, 'base64').toString();
     const exitText = Buffer.from(exit64, 'base64').toString().trim();
     const finished = exitText !== '';
     const exitCode = finished ? Number.parseInt(exitText, 10) : undefined;
@@ -378,7 +449,7 @@ export function backgroundProcessTools({
    * again a couple of minutes after the polling stops).
    */
   function watchManaged(id: string): void {
-    const proc = processes.get(id);
+    const proc = find(id);
     if (!(wake && proc) || proc.watching || proc.collected) {
       return;
     }
@@ -425,18 +496,18 @@ export function backgroundProcessTools({
     let deadline: number | undefined;
     while (true) {
       await Bun.sleep(WATCH_POLL_MS);
-      if (processes.get(id) !== proc || proc.collected) {
+      if (find(id) !== proc || proc.collected) {
         return;
       }
       if (launchingTurn && getTurn({ threadId: slot }) === launchingTurn) {
         continue;
       }
       deadline ??= Date.now() + WATCH_AFTER_TURN_MS;
-      const result = await readManaged(id, context);
-      if (!result) {
+      const status = await readManaged(id, context, { statusOnly: true });
+      if (!status) {
         return;
       }
-      if (!result.finished && Date.now() < deadline) {
+      if (!status.finished && Date.now() < deadline) {
         continue;
       }
       // A turn running now (someone asked, or another wake) goes first; it may
@@ -446,6 +517,11 @@ export function backgroundProcessTools({
         await Bun.sleep(WATCH_POLL_MS);
       }
       if (proc.collected || getTurn({ threadId: slot })) {
+        return;
+      }
+      // The output only now, for the report: up to 15 min may have passed.
+      const result = await readManaged(id, context);
+      if (!result) {
         return;
       }
       if (result.finished) {
@@ -479,39 +555,47 @@ export function backgroundProcessTools({
   ): Promise<ManagedResult> {
     const deadline = Date.now() + timeoutMs;
     let step = 0;
-    let last: ManagedResult = { finished: false, stderr: '', stdout: '' };
     while (Date.now() < deadline) {
       abortSignal?.throwIfAborted();
-      const result = await readManaged(id);
-      if (!result) {
-        return last;
+      const status = await readManaged(id, undefined, { statusOnly: true });
+      if (!status) {
+        return { finished: false, stderr: '', stdout: '' };
       }
-      last = result;
-      if (result.finished) {
-        const proc = processes.get(id);
-        if (proc) {
-          proc.collected = true;
-        }
-        return result;
+      if (status.finished) {
+        break;
       }
       const wait = POLL_STEPS_MS[Math.min(step, POLL_STEPS_MS.length - 1)];
       step += 1;
       await new Promise((resolve) => setTimeout(resolve, wait));
     }
-    return last;
+    // Finished, or still running at the deadline: ONE read of the output (the
+    // exit marker is written after both streams, so a finished job's is
+    // complete). The caller shows it, kills the job, or hands out a handle.
+    const result = await readManaged(id);
+    if (!result) {
+      return { finished: false, stderr: '', stdout: '' };
+    }
+    if (result.finished) {
+      // The id was never shown to the model (only a backgrounded command's
+      // is), so nothing can name it again: drop the handle, or the thread's
+      // registry — which outlives the turn — keeps it (and a STOP later
+      // "kills" its long-dead pid) forever.
+      remove(id);
+    }
+    return result;
   }
 
   // Kill the whole process group the launcher started, so children of the
   // command die too, then forget the handle.
   async function killManaged(id: string): Promise<boolean> {
-    const proc = processes.get(id);
+    const proc = find(id);
     if (!proc) {
       return false;
     }
     await getSandboxContext().session.run({
       command: `kill -9 -${proc.pid} 2>/dev/null || kill -9 ${proc.pid} 2>/dev/null || true`,
     });
-    processes.delete(id);
+    remove(id);
     if (proc.fetchCommand) {
       await disarmFetchedRepos({
         command: proc.fetchCommand,
@@ -567,7 +651,7 @@ export function backgroundProcessTools({
           return { error: `Unknown process id: ${id}`, success: false };
         }
         const securityNotice = await disarmIfFinished(id, result);
-        const proc = processes.get(id);
+        const proc = find(id);
         if (proc && result.finished) {
           proc.collected = true;
         }
@@ -611,7 +695,7 @@ export function backgroundProcessTools({
   });
 
   function orphanManaged(id: string): void {
-    const proc = processes.get(id);
+    const proc = find(id);
     if (proc) {
       proc.orphaned = true;
     }
