@@ -402,13 +402,13 @@ export function backgroundProcessTools({
     id: string,
     context: SandboxContext = getSandboxContext(),
     /**
-     * A poll that only needs to know whether the job finished. Polling used
-     * to copy the WHOLE output files every time (base64 through the heap), so
-     * a job with a growing log re-allocated several times its size on every
-     * poll: every 250-2000 ms in waitManaged, every 20 s while watched. The
-     * full text is read once, when a result is actually needed.
+     * A poll: the output comes back only once the job has finished. Polling
+     * used to copy the WHOLE output files every time (base64 through the
+     * heap), so a job with a growing log re-allocated several times its size
+     * on every poll: every 250-2000 ms in waitManaged, every 20 s while
+     * watched. Still one command, so a finished job costs no extra round trip.
      */
-    { statusOnly = false }: { statusOnly?: boolean } = {}
+    { whileRunning = 'output' }: { whileRunning?: 'output' | 'status' } = {}
   ): Promise<ManagedResult | null> {
     const proc = find(id);
     if (!proc) {
@@ -421,15 +421,18 @@ export function backgroundProcessTools({
     // marker is written after both streams, so it is read FIRST: read last, a
     // command finishing between the reads came back "finished" with the
     // output it had before it printed (an `echo` read as empty).
+    const streams = `for path in "${proc.outPath}" "${proc.errPath}"; do base64 -w0 "$path" 2>/dev/null || true; printf '\n'; done`;
+    const exit = `exit64=$(base64 -w0 "${proc.exitPath}" 2>/dev/null || true); printf '%s\n' "$exit64"`;
     const snapshot = await context.session.run({
-      command: statusOnly
-        ? `base64 -w0 "${proc.exitPath}" 2>/dev/null || true; printf '\n'`
-        : `for path in "${proc.exitPath}" "${proc.outPath}" "${proc.errPath}"; do base64 -w0 "$path" 2>/dev/null || true; printf '\n'; done`,
+      command:
+        whileRunning === 'status'
+          ? `${exit}; if [ -n "$exit64" ]; then ${streams}; fi`
+          : `${exit}; ${streams}`,
     });
     const [exit64 = '', stdout64 = '', stderr64 = ''] =
       snapshot.stdout.split('\n');
-    const stdout = statusOnly ? '' : Buffer.from(stdout64, 'base64').toString();
-    const stderr = statusOnly ? '' : Buffer.from(stderr64, 'base64').toString();
+    const stdout = Buffer.from(stdout64, 'base64').toString();
+    const stderr = Buffer.from(stderr64, 'base64').toString();
     const exitText = Buffer.from(exit64, 'base64').toString().trim();
     const finished = exitText !== '';
     const exitCode = finished ? Number.parseInt(exitText, 10) : undefined;
@@ -503,7 +506,7 @@ export function backgroundProcessTools({
         continue;
       }
       deadline ??= Date.now() + WATCH_AFTER_TURN_MS;
-      const status = await readManaged(id, context, { statusOnly: true });
+      const status = await readManaged(id, context, { whileRunning: 'status' });
       if (!status) {
         return;
       }
@@ -519,7 +522,9 @@ export function backgroundProcessTools({
       if (proc.collected || getTurn({ threadId: slot })) {
         return;
       }
-      // The output only now, for the report: up to 15 min may have passed.
+      // Read again for the report. Up to 15 min may have passed (a finished
+      // job's output is final, but a running one's has grown), and a job
+      // still running at the deadline came back without output.
       const result = await readManaged(id, context);
       if (!result) {
         return;
@@ -555,23 +560,24 @@ export function backgroundProcessTools({
   ): Promise<ManagedResult> {
     const deadline = Date.now() + timeoutMs;
     let step = 0;
+    let result: ManagedResult | null = null;
     while (Date.now() < deadline) {
       abortSignal?.throwIfAborted();
-      const status = await readManaged(id, undefined, { statusOnly: true });
-      if (!status) {
-        return { finished: false, stderr: '', stdout: '' };
-      }
-      if (status.finished) {
+      // A finished job's poll carries its full output (the exit marker is
+      // written after both streams, so it is complete).
+      result = await readManaged(id, undefined, { whileRunning: 'status' });
+      if (!result || result.finished) {
         break;
       }
       const wait = POLL_STEPS_MS[Math.min(step, POLL_STEPS_MS.length - 1)];
       step += 1;
       await new Promise((resolve) => setTimeout(resolve, wait));
     }
-    // Finished, or still running at the deadline: ONE read of the output (the
-    // exit marker is written after both streams, so a finished job's is
-    // complete). The caller shows it, kills the job, or hands out a handle.
-    const result = await readManaged(id);
+    // Still running at the deadline: one read of what it printed so far, for
+    // the caller to show, kill it, or hand out a handle.
+    if (!result?.finished) {
+      result = await readManaged(id);
+    }
     if (!result) {
       return { finished: false, stderr: '', stdout: '' };
     }

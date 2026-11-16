@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import nodePath from 'node:path';
 import type { SandboxContext } from '@repo/ai';
 import type { Tool } from 'ai';
 import type { Message } from '@/harness/types';
@@ -208,5 +211,100 @@ describe('background registry lifetime', () => {
     }
     // Before the fix each thread pinned its turn's 5000 closures: +50k here.
     expect(functions() - start).toBeLessThan(5000);
+  });
+});
+
+// A sandbox that is a temp directory on this machine, so the real launcher and
+// poll scripts run in a real shell. Counts the round trips.
+function shellSandbox() {
+  const dir = mkdtempSync(nodePath.join(tmpdir(), 'kyto-bg-'));
+  const runs: string[] = [];
+  const context = {
+    session: {
+      destroy: () => Promise.resolve(),
+      fileSize: () => Promise.resolve(null),
+      getHost: () => Promise.resolve('localhost'),
+      readBinaryFile: () => Promise.resolve(null),
+      run: ({
+        command,
+        workingDirectory,
+      }: {
+        command: string;
+        workingDirectory?: string;
+      }) => {
+        runs.push(command);
+        const done = Bun.spawnSync(['bash', '-c', command], {
+          cwd: workingDirectory ?? dir,
+        });
+        return Promise.resolve({
+          exitCode: done.exitCode ?? 1,
+          stderr: done.stderr.toString(),
+          stdout: done.stdout.toString(),
+        });
+      },
+      writeBinaryFile: ({
+        content,
+        path,
+      }: {
+        content: Uint8Array;
+        path: string;
+      }) => {
+        writeFileSync(path, content);
+        return Promise.resolve();
+      },
+    },
+    sessionWorkDir: dir,
+  } as unknown as SandboxContext;
+  return { context, runs };
+}
+
+describe('background polling', () => {
+  test('a finished command costs one launch and one poll, with all its output', async () => {
+    const { context, runs } = shellSandbox();
+    const background = backgroundProcessTools({
+      getSandboxContext: () => context,
+    });
+    // `(exit 3)`, not `exit 3`: a bare exit ends the wrapper shell before it
+    // writes the exit marker, and the job then never reads as finished.
+    const started = await background.startManaged(
+      'printf "out-1\\nout-2"; printf "err-1" >&2; (exit 3)'
+    );
+    if ('error' in started) {
+      throw new Error(started.error);
+    }
+    // Long enough that the job is done before the first poll.
+    await Bun.sleep(200);
+    const before = runs.length;
+    const result = await background.waitManaged(started.id, 5000);
+    expect(result).toMatchObject({
+      exitCode: 3,
+      finished: true,
+      stderr: 'err-1',
+      stdout: 'out-1\nout-2',
+    });
+    expect(runs.length - before).toBe(1);
+  });
+
+  test('a running job is polled without its output, then read once at the deadline', async () => {
+    const { context, runs } = shellSandbox();
+    const background = backgroundProcessTools({
+      getSandboxContext: () => context,
+    });
+    const started = await background.startManaged(
+      'printf "partial"; sleep 5; printf " rest"'
+    );
+    if ('error' in started) {
+      throw new Error(started.error);
+    }
+    const before = runs.length;
+    const result = await background.waitManaged(started.id, 600);
+    expect(result).toMatchObject({ finished: false, stdout: 'partial' });
+    const polls = runs.slice(before);
+    // Every poll but the last read only the exit marker's file.
+    for (const poll of polls.slice(0, -1)) {
+      expect(poll).toContain('if [ -n "$exit64" ]');
+    }
+    expect(polls.at(-1)).not.toContain('if [ -n "$exit64" ]');
+    await background.killManaged(started.id);
   });
 });
