@@ -9,7 +9,12 @@ interface Row {
 const rows = new Map<string, Row>();
 const calls = { reads: 0, writes: 0 };
 
+// bun shares one module registry across test files, so this mock outlives
+// the file: keep every real export and override only what is under test.
+const real = await import('@repo/db/queries');
+
 mock.module('@repo/db/queries', () => ({
+  ...real,
   deleteThreadSubscription: (threadId: string) => {
     rows.delete(threadId);
     return Promise.resolve();
