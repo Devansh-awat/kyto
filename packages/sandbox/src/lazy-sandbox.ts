@@ -33,6 +33,11 @@ const GIT_NON_INTERACTIVE: Record<string, string> = {
 
 // Bounds how long a turn's end (and the sandbox's pause) waits on one.
 const ABORT_COMMAND_TIMEOUT_MS = 15_000;
+// A read lands whole in the bot's memory, at two to three times the file's
+// size before a caller sees it, and every thread shares that one process: one
+// model-chosen dataset or video could take kyto down for everyone. Bigger
+// than any caller accepts (getFile writes, the largest, cap at 200 MB).
+const MAX_READ_BYTES = 256 * 1024 * 1024;
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -490,14 +495,38 @@ export class LazySandbox {
 
   async readBinaryFile({ path }: { path: string }): Promise<Uint8Array | null> {
     const sandbox = await this.ensure();
-    return await sandbox.files
-      .read(path, { format: 'bytes' })
+    const stream = await sandbox.files
+      .read(path, { format: 'stream' })
       .catch((error: unknown) => {
         if (isMissingSandboxError(error)) {
           return null;
         }
         throw error;
       });
+    if (!stream) {
+      return null;
+    }
+    // Counted as it arrives, so a file past the cap is refused without ever
+    // being held whole; a stat first would cost every read a round trip.
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    for await (const chunk of stream) {
+      size += chunk.byteLength;
+      if (size > MAX_READ_BYTES) {
+        // Leaving the loop cancels the stream.
+        throw new Error(
+          `${path} is over ${MAX_READ_BYTES / 1024 / 1024} MB, too large to read whole. Work on it inside the sandbox instead: head, tail, grep, split, or a script.`
+        );
+      }
+      chunks.push(chunk);
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return bytes;
   }
 
   async readTextFile({ path }: { path: string }): Promise<string | null> {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { sniffImageType } from '@/lib/ai/attachments';
+import { seedAttachments, sniffImageType } from '@/lib/ai/attachments';
 
 const bytesOf = (...parts: (number[] | string)[]) =>
   new Uint8Array(
@@ -23,5 +23,51 @@ describe('sniffImageType', () => {
   test('a text file renamed .png is not an image', () => {
     expect(sniffImageType(bytesOf('hello, this is not a png'))).toBeUndefined();
     expect(sniffImageType(new Uint8Array())).toBeUndefined();
+  });
+});
+
+describe('seedAttachments', () => {
+  const MB = 1024 * 1024;
+  function seed(sizes: (number | undefined)[]) {
+    const fetched: string[] = [];
+    const message = {
+      attachments: sizes.map((size, index) => ({
+        fetchData: () => {
+          fetched.push(`f${index}`);
+          return Promise.resolve(new Uint8Array([1]));
+        },
+        id: `F${index}`,
+        name: `f${index}.bin`,
+        size,
+        type: 'file',
+      })),
+      id: '1.0',
+    } as unknown as Parameters<typeof seedAttachments>[0]['message'];
+    const sandboxContext = {
+      session: { writeBinaryFile: () => Promise.resolve() },
+      sessionWorkDir: '/w',
+    } as unknown as Parameters<typeof seedAttachments>[0]['sandboxContext'];
+    return seedAttachments({ message, sandboxContext }).then((seeded) => ({
+      fetched,
+      names: seeded.map((entry) => entry.name),
+    }));
+  }
+
+  test('seeds ordinary files', async () => {
+    expect((await seed([2 * MB, undefined])).names).toEqual([
+      'f0.bin',
+      'f1.bin',
+    ]);
+  });
+
+  test('never downloads a file past the budget', async () => {
+    const { fetched, names } = await seed([150 * MB]);
+    expect(fetched).toEqual([]);
+    expect(names).toEqual([]);
+  });
+
+  test("a message's files share one budget", async () => {
+    const { fetched } = await seed([60 * MB, 60 * MB, 10 * MB]);
+    expect(fetched).toEqual(['f0', 'f2']);
   });
 });

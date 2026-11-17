@@ -34,6 +34,7 @@ interface RawSlackFile {
   id?: string;
   mimetype?: string;
   name?: string;
+  size?: number;
   url_private?: string;
 }
 
@@ -535,6 +536,7 @@ export class SlackHarness {
           id: file.id,
           mimeType: file.mimetype,
           name: file.name,
+          size: file.size,
           type: file.mimetype?.startsWith('image/') ? 'image' : 'file',
           url,
         },

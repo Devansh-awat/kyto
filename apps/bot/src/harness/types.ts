@@ -23,6 +23,8 @@ export interface MessageAttachment {
   id?: string;
   mimeType?: string;
   name?: string;
+  /** Bytes, as Slack reports it; absent when it didn't. */
+  size?: number;
   /** Coarse kind: 'image' | 'file'. */
   type: string;
   url?: string;

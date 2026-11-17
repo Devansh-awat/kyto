@@ -11,10 +11,20 @@ export async function seedAttachments({
   message: Message;
   sandboxContext: SandboxContext;
 }): Promise<SeededAttachment[]> {
+  // Each file is downloaded whole into the bot's memory before it's written
+  // out, all at once, so huge uploads could take the process down. A
+  // message's files share one budget, by the sizes Slack reports; the rest
+  // are still in the prompt with their ids, for getFile.
+  let budget = MAX_SEED_BYTES;
   const seeded = await Promise.all(
-    message.attachments.map((attachment, index) =>
-      seedAttachment({ attachment, index, message, sandboxContext })
-    )
+    message.attachments.map((attachment, index) => {
+      const size = attachment.size ?? 0;
+      if (size > budget) {
+        return null;
+      }
+      budget -= size;
+      return seedAttachment({ attachment, index, message, sandboxContext });
+    })
   );
   return seeded.filter((entry): entry is SeededAttachment => entry !== null);
 }
@@ -71,6 +81,7 @@ async function seedAttachment({
 // up the request; the file is still on disk for the model to process in code.
 const MAX_VISION_BYTES = 8 * 1024 * 1024;
 const VISION_MIME = /^image\/(png|jpe?g|webp|gif)$/i;
+const MAX_SEED_BYTES = 100 * 1024 * 1024;
 
 /**
  * The image type the BYTES say, not the name: Slack's mimetype follows the
