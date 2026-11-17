@@ -4,6 +4,8 @@ process.env.BYOK_ENCRYPTION_KEY ??= 'test-key-test-key-test-key-test-key-123';
 
 let tokenPosts = 0;
 let refuse = true;
+// What a refusal answers with: 400 (invalid_grant) by default.
+let refusalStatus = 400;
 // bun shares one module registry across test files: keep the real exports.
 const realPublicUrl = await import('@/lib/public-url');
 mock.module('@/lib/public-url', () => ({
@@ -12,7 +14,7 @@ mock.module('@/lib/public-url', () => ({
     tokenPosts++;
     return Promise.resolve(
       refuse
-        ? new Response('{"error":"invalid_grant"}', { status: 400 })
+        ? new Response('{"error":"invalid_grant"}', { status: refusalStatus })
         : Response.json({ access_token: 'new-access', expires_in: 3600 })
     );
   },
@@ -64,5 +66,19 @@ describe('a refused refresh grant', () => {
     };
     expect(tokenPosts).toBe(1);
     expect(out.authorization).toBe('Bearer new-access');
+  });
+
+  test('an outage (5xx) is not held back: the next turn tries again', async () => {
+    refuse = true;
+    refusalStatus = 503;
+    tokenPosts = 0;
+    try {
+      const server = serverWith('blip-refresh', 'srv-2');
+      await withMcpOauth(server);
+      await withMcpOauth(server);
+      expect(tokenPosts).toBe(2);
+    } finally {
+      refusalStatus = 400;
+    }
   });
 });

@@ -31,6 +31,7 @@ import { escapeHtml } from '@/lib/dashboard/render';
 import logger from '@/lib/logger';
 import { publicFetch } from '@/lib/public-url';
 import { registerSecret } from '@/lib/redact';
+import { errorMessage } from '@/lib/utils/error';
 
 const CALLBACK_PATH = '/_mcpauth/callback';
 const STATE_TTL_MS = 15 * 60 * 1000;
@@ -491,15 +492,21 @@ async function freshAccessToken(
   } catch (error) {
     // The old token is tried anyway; if it is dead, the listing fails with a
     // 401 and App Home shows it, which is the person's cue to sign in again.
-    for (const [key, at] of failedRefreshes) {
-      if (Date.now() - at >= REFRESH_BACKOFF_MS) {
-        failedRefreshes.delete(key);
+    // Only a refusal (RFC 6749 answers invalid_grant with a 400, a bad client
+    // with a 401) is held back. A timeout or a 5xx is retried next turn: the
+    // access token is often dead by then, so waiting out a blip broke the
+    // server for the whole backoff.
+    if (/answered 40[01]$/.test(errorMessage(error))) {
+      for (const [key, at] of failedRefreshes) {
+        if (Date.now() - at >= REFRESH_BACKOFF_MS) {
+          failedRefreshes.delete(key);
+        }
       }
+      failedRefreshes.set(refreshToken, Date.now());
     }
-    failedRefreshes.set(refreshToken, Date.now());
     logger.warn(
       {
-        err: error instanceof Error ? error.message : String(error),
+        err: errorMessage(error),
         serverId: server.id,
       },
       '[mcp-oauth] refresh failed'

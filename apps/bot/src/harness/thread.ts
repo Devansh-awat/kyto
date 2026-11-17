@@ -131,17 +131,13 @@ function cacheSubscription(threadId: string, state: ThreadState | null): void {
 // Bumped by every subscription write. A read that began before a write must
 // not cache what it saw: setState trusts a cached row to skip its upsert, so
 // a stale entry would swallow the other kyto's takeover for the whole TTL.
-const subscriptionWrites = new Map<string, number>();
+// One counter for every thread (both kytos share this process): writes are
+// rare, so a read that overlaps one, and goes uncached, is too.
+let subscriptionWrites = 0;
 
 function invalidateSubscription(threadId: string): void {
-  subscriptionWrites.set(threadId, (subscriptionWrites.get(threadId) ?? 0) + 1);
+  subscriptionWrites++;
   subscriptionCache.delete(threadId);
-  // One entry per thread written; drop the lot rather than grow forever.
-  // The only cost is that a read in flight right now goes uncached.
-  if (subscriptionWrites.size > SUBSCRIPTION_CACHE_MAX) {
-    subscriptionWrites.clear();
-    subscriptionWrites.set(threadId, 1);
-  }
 }
 
 /**
@@ -449,7 +445,7 @@ export class ThreadHandle {
     if (cached && Date.now() - cached.at < SUBSCRIPTION_CACHE_TTL_MS) {
       return cached.state;
     }
-    const writesBefore = subscriptionWrites.get(this.id);
+    const writesBefore = subscriptionWrites;
     let row: Awaited<ReturnType<typeof getThreadSubscription>>;
     try {
       row = await getThreadSubscription(this.id);
@@ -469,7 +465,7 @@ export class ThreadHandle {
           respondOnThreadMessages: row.respondOnThreadMessages,
         }
       : null;
-    if (subscriptionWrites.get(this.id) === writesBefore) {
+    if (subscriptionWrites === writesBefore) {
       cacheSubscription(this.id, state);
     }
     return state;
