@@ -8,6 +8,9 @@ interface Row {
 
 const rows = new Map<string, Row>();
 const calls = { reads: 0, writes: 0 };
+// When set, a read snapshots the row at once and answers only once released:
+// a query that was in flight while something else wrote.
+let readGate: Promise<void> | undefined;
 
 // bun shares one module registry across test files, so this mock outlives
 // the file: keep every real export and override only what is under test.
@@ -19,9 +22,13 @@ mock.module('@repo/db/queries', () => ({
     rows.delete(threadId);
     return Promise.resolve();
   },
-  getThreadSubscription: (threadId: string) => {
+  getThreadSubscription: async (threadId: string) => {
     calls.reads++;
-    return Promise.resolve(rows.get(threadId) ?? null);
+    const seen = rows.get(threadId) ?? null;
+    if (readGate) {
+      await readGate;
+    }
+    return seen;
   },
   setThreadFocus: () => Promise.resolve(),
   setThreadSubscription: ({
@@ -132,5 +139,49 @@ describe('setState', () => {
     }
     expect(calls.writes).toBe(2);
     expect(rows.get(thread.id)?.respondAs).toBe('app');
+  });
+});
+
+describe('a read racing a write', () => {
+  test("a read in flight during the other kyto's takeover doesn't cache the old row", async () => {
+    const thread = handle();
+    await thread.setState({ respondAs: 'app', respondOnThreadMessages: true });
+    const realNow = Date.now;
+    // Past the TTL, so the next read goes to the row.
+    Date.now = () => realNow() + 60_000;
+    try {
+      let release: () => void = () => undefined;
+      readGate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      // The app's read sees the row as 'app'...
+      const appRead = thread.state;
+      readGate = undefined;
+      // ...then the account takes the thread over before that read answers.
+      const account = new ThreadHandle({
+        harness: {} as never,
+        id: thread.id,
+        logger: { warn: () => undefined } as never,
+      });
+      await account.setState({
+        respondAs: 'user',
+        respondOnThreadMessages: true,
+      });
+      release();
+      expect((await appRead)?.respondAs).toBe('app');
+      // Had the stale read been cached, this would say 'app' for 30 s, and a
+      // ping of the app would skip its write and leave the account following.
+      expect((await thread.state)?.respondAs).toBe('user');
+      const writes = calls.writes;
+      await thread.setState({
+        respondAs: 'app',
+        respondOnThreadMessages: true,
+      });
+      expect(calls.writes).toBe(writes + 1);
+      expect(rows.get(thread.id)?.respondAs).toBe('app');
+    } finally {
+      Date.now = realNow;
+      readGate = undefined;
+    }
   });
 });

@@ -128,6 +128,22 @@ function cacheSubscription(threadId: string, state: ThreadState | null): void {
   subscriptionCache.set(threadId, { at: Date.now(), state });
 }
 
+// Bumped by every subscription write. A read that began before a write must
+// not cache what it saw: setState trusts a cached row to skip its upsert, so
+// a stale entry would swallow the other kyto's takeover for the whole TTL.
+const subscriptionWrites = new Map<string, number>();
+
+function invalidateSubscription(threadId: string): void {
+  subscriptionWrites.set(threadId, (subscriptionWrites.get(threadId) ?? 0) + 1);
+  subscriptionCache.delete(threadId);
+  // One entry per thread written; drop the lot rather than grow forever.
+  // The only cost is that a read in flight right now goes uncached.
+  if (subscriptionWrites.size > SUBSCRIPTION_CACHE_MAX) {
+    subscriptionWrites.clear();
+    subscriptionWrites.set(threadId, 1);
+  }
+}
+
 /**
  * A channel/thread handle: `slack:CHANNEL:THREAD_TS` (in-thread posts) or
  * `slack:CHANNEL` (top-level posts). Mirrors the old chat-sdk Thread surface.
@@ -433,6 +449,7 @@ export class ThreadHandle {
     if (cached && Date.now() - cached.at < SUBSCRIPTION_CACHE_TTL_MS) {
       return cached.state;
     }
+    const writesBefore = subscriptionWrites.get(this.id);
     let row: Awaited<ReturnType<typeof getThreadSubscription>>;
     try {
       row = await getThreadSubscription(this.id);
@@ -452,14 +469,16 @@ export class ThreadHandle {
           respondOnThreadMessages: row.respondOnThreadMessages,
         }
       : null;
-    cacheSubscription(this.id, state);
+    if (subscriptionWrites.get(this.id) === writesBefore) {
+      cacheSubscription(this.id, state);
+    }
     return state;
   }
 
   /** Set (or clear, with null) which users kyto responds to in this thread. */
   async setFocus(focusUserIds: string[] | null): Promise<void> {
     await setThreadFocus(this.id, focusUserIds);
-    subscriptionCache.delete(this.id);
+    invalidateSubscription(this.id);
   }
 
   async setState(state: ThreadState): Promise<void> {
@@ -483,7 +502,7 @@ export class ThreadHandle {
     // Not cached: an omitted respondAs keeps the stored one, which this
     // caller doesn't know, and both kytos may be taking the thread at once.
     // The next read goes to the row.
-    subscriptionCache.delete(this.id);
+    invalidateSubscription(this.id);
   }
 
   async subscribe(): Promise<void> {
@@ -501,6 +520,9 @@ export class ThreadHandle {
         '[harness] unsubscribe failed'
       );
     });
+    // Bumped, so a read already in flight can't cache the row it saw, then
+    // cached as gone: nothing to follow until the next mention writes again.
+    invalidateSubscription(this.id);
     cacheSubscription(this.id, null);
   }
 
