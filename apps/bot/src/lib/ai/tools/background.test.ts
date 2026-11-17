@@ -264,10 +264,8 @@ describe('background polling', () => {
     const background = backgroundProcessTools({
       getSandboxContext: () => context,
     });
-    // `(exit 3)`, not `exit 3`: a bare exit ends the wrapper shell before it
-    // writes the exit marker, and the job then never reads as finished.
     const started = await background.startManaged(
-      'printf "out-1\\nout-2"; printf "err-1" >&2; (exit 3)'
+      'printf "out-1\\nout-2"; printf "err-1" >&2; exit 3'
     );
     if ('error' in started) {
       throw new Error(started.error);
@@ -283,6 +281,28 @@ describe('background polling', () => {
       stdout: 'out-1\nout-2',
     });
     expect(runs.length - before).toBe(1);
+  });
+
+  test('a command that exits early, or fails under set -e, still reads as finished', async () => {
+    const { context } = shellSandbox();
+    const background = backgroundProcessTools({
+      getSandboxContext: () => context,
+    });
+    // These used to end the wrapper's shell before it wrote the exit file, so
+    // the job read as running until the turn gave up on it.
+    for (const [command, exitCode] of [
+      ['echo early; exit 7; echo never', 7],
+      ['set -e; false; echo never', 1],
+      ['cd /tmp && exit 0', 0],
+    ] as const) {
+      const started = await background.startManaged(command);
+      if ('error' in started) {
+        throw new Error(started.error);
+      }
+      const result = await background.waitManaged(started.id, 5000);
+      expect(result).toMatchObject({ exitCode, finished: true });
+      expect(JSON.stringify(result)).not.toContain('never');
+    }
   });
 
   test('a running job is polled without its output, then read once at the deadline', async () => {

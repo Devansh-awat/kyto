@@ -347,8 +347,11 @@ export function backgroundProcessTools({
     // The script goes in a FILE, not the argv: `pkill -f <pattern>` in the
     // command used to match this wrapper's own command line, kill it before it
     // wrote the exit file, and leave the call "unfinished" until its timeout.
+    // A subshell `( )`, not a group `{ }`: an `exit N` (or a `set -e`
+    // failure) in the command left a group's shell without ever writing the
+    // exit file, so the job read as still running until its timeout.
     const scriptPath = `${base}.sh`;
-    const wrapped = `{ ${command}\n} >"${proc.outPath}" 2>"${proc.errPath}" </dev/null; echo $? >"${proc.exitPath}"`;
+    const wrapped = `(\n${command}\n) >"${proc.outPath}" 2>"${proc.errPath}" </dev/null; echo $? >"${proc.exitPath}"`;
     await context.session.writeBinaryFile({
       content: new TextEncoder().encode(wrapped),
       path: scriptPath,
