@@ -6,12 +6,17 @@ let tokenPosts = 0;
 let refuse = true;
 // What a refusal answers with: 400 (invalid_grant) by default.
 let refusalStatus = 400;
+// When set, the token endpoint can't be reached at all, with this error.
+let unreachable: Error | undefined;
 // bun shares one module registry across test files: keep the real exports.
 const realPublicUrl = await import('@/lib/public-url');
 mock.module('@/lib/public-url', () => ({
   ...realPublicUrl,
   publicFetch: () => {
     tokenPosts++;
+    if (unreachable) {
+      return Promise.reject(unreachable);
+    }
     return Promise.resolve(
       refuse
         ? new Response('{"error":"invalid_grant"}', { status: refusalStatus })
@@ -79,6 +84,38 @@ describe('a refused refresh grant', () => {
       expect(tokenPosts).toBe(2);
     } finally {
       refusalStatus = 400;
+    }
+  });
+
+  test("a certificate that doesn't match the host is held back like a refusal", async () => {
+    // What prod hit: the endpoint's TLS certificate named another host. That
+    // stays broken until someone fixes it, so it is not re-tried every turn.
+    tokenPosts = 0;
+    unreachable = new Error(
+      'ERR_TLS_CERT_ALTNAME_INVALID fetching "https://auth.example/token".'
+    );
+    try {
+      const server = serverWith('tls-refresh', 'srv-3');
+      await withMcpOauth(server);
+      await withMcpOauth(server);
+      expect(tokenPosts).toBe(1);
+    } finally {
+      unreachable = undefined;
+    }
+  });
+
+  test('a timeout is not held back', async () => {
+    tokenPosts = 0;
+    unreachable = Object.assign(new Error('The operation timed out.'), {
+      name: 'TimeoutError',
+    });
+    try {
+      const server = serverWith('slow-refresh', 'srv-4');
+      await withMcpOauth(server);
+      await withMcpOauth(server);
+      expect(tokenPosts).toBe(2);
+    } finally {
+      unreachable = undefined;
     }
   });
 });

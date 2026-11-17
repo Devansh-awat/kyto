@@ -492,11 +492,14 @@ async function freshAccessToken(
   } catch (error) {
     // The old token is tried anyway; if it is dead, the listing fails with a
     // 401 and App Home shows it, which is the person's cue to sign in again.
-    // Only a refusal (RFC 6749 answers invalid_grant with a 400, a bad client
-    // with a 401) is held back. A timeout or a 5xx is retried next turn: the
-    // access token is often dead by then, so waiting out a blip broke the
-    // server for the whole backoff.
-    if (/answered 40[01]$/.test(errorMessage(error))) {
+    // A timeout or a 5xx is a blip, retried next turn: the access token is
+    // often dead by then, so waiting it out broke the server for the whole
+    // backoff. Anything else stays broken until someone acts (a refused
+    // grant, a 4xx, a TLS certificate that doesn't match the host, which is
+    // what prod hit) and is held back.
+    if (
+      !/answered 5\d\d$|timed? ?out|TimeoutError/i.test(errorMessage(error))
+    ) {
       for (const [key, at] of failedRefreshes) {
         if (Date.now() - at >= REFRESH_BACKOFF_MS) {
           failedRefreshes.delete(key);
