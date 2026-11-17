@@ -279,8 +279,8 @@ export class LazySandbox {
         ? [['bootstrap command', this.bootstrapCommand] as [string, string]]
         : []),
     ];
-    // One script, not one RPC per step: each was its own envd round trip on
-    // every materialize. In order, each in its own subshell, so a step that
+    // One script, not one RPC per step: each was its own round trip into the
+    // sandbox on every materialize. In order, each in its own subshell, so a step that
     // fails (or calls exit) still skips none after it, and says which it was.
     const script = steps
       .map(
