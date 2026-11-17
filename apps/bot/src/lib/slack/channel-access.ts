@@ -57,10 +57,15 @@ export async function mayReadChannel({
   askerUserId,
   channelId,
   currentChannelId,
+  isPublic,
 }: {
   askerUserId: string | undefined;
   channelId: string;
   currentChannelId: string | undefined;
+  /** From a `conversations.info` the caller made for this channel in the same
+   * call (`ChannelMetadata.isPublic`), so it isn't asked twice. Never a
+   * remembered value: a channel can go private. */
+  isPublic?: boolean;
 }): Promise<boolean> {
   const channel = toRawSlackChannelId(channelId);
   if (currentChannelId && channel === toRawSlackChannelId(currentChannelId)) {
@@ -74,7 +79,7 @@ export async function mayReadChannel({
   let allowed: boolean;
   try {
     allowed =
-      (await isPublicChannel(channel)) ||
+      (isPublic ?? (await isPublicChannel(channel))) ||
       (Boolean(askerUserId) &&
         (await isMember({ channel, userId: askerUserId ?? '' })));
   } catch {

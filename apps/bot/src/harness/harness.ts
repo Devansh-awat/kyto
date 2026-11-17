@@ -40,6 +40,9 @@ interface RawSlackFile {
 const USER_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const USER_CACHE_MAX = 20_000;
 const FAILED_USER_RETRY_MS = 60 * 1000;
+// Per attempt. A 1000-message history page answers in a second or two; a call
+// still waiting after this is hung, and the client's retries take over.
+const SLACK_CALL_TIMEOUT_MS = 30_000;
 
 // Slack's own ceiling on `limit` for the conversations.* read methods. Asking
 // for more is not an error, it just silently returns fewer — so paging a long
@@ -366,12 +369,20 @@ export class SlackHarness {
     /** An `xoxc-` token and its `d` cookie (bare value or `d=…` header). */
     userAccount?: { cookie: string; token: string };
   }) {
-    this.webClient = new WebClient(botToken);
+    // The library's default is no timeout at all: one Slack call that hangs
+    // holds its turn with no ceiling. Each retry gets its own 30 s. Uploads
+    // don't go through these (thread.ts posts the bytes with fetch).
+    this.webClient = new WebClient(botToken, {
+      timeout: SLACK_CALL_TIMEOUT_MS,
+    });
     const cookie = userAccount?.cookie.includes('=')
       ? userAccount.cookie
       : `d=${userAccount?.cookie}`;
     this.userAccountClient = userAccount
-      ? new WebClient(userAccount.token, { headers: { Cookie: cookie } })
+      ? new WebClient(userAccount.token, {
+          headers: { Cookie: cookie },
+          timeout: SLACK_CALL_TIMEOUT_MS,
+        })
       : undefined;
     this.userAccountGateway = userAccount
       ? new UserAccountGateway({ cookie, logger, token: userAccount.token })

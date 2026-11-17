@@ -464,7 +464,9 @@ async function readAsAsker({
   threadTs?: string;
   token: string;
 }) {
-  const client = new WebClient(token);
+  // A timeout, as the shared clients have (harness/harness.ts): the default
+  // is none.
+  const client = new WebClient(token, { timeout: 30_000 });
   // Slack pages a thread OLDEST first, so without a cursor the asker path walks
   // to its end and keeps the newest `limit`, as the bot path does — a poll for
   // fresh replies used to see only the thread's first page (#84). Channel

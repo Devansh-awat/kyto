@@ -215,6 +215,10 @@ export interface ChannelMetadata {
    * public/private channels of the bot's own workspace, so it is left
    * undefined elsewhere. */
   isMember?: boolean;
+  /** Not private, not a DM or group DM: the test `mayReadChannel` applies.
+   * `channelVisibility` can't stand in for it — a private Slack Connect
+   * channel reads as `external`. */
+  isPublic?: boolean;
   memberCount?: number;
   name?: string;
   purpose?: string;

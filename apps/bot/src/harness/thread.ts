@@ -551,6 +551,12 @@ export class ThreadHandle {
       isDM,
       isMember: (conversation as { is_member?: boolean } | undefined)
         ?.is_member,
+      isPublic: Boolean(
+        conversation &&
+          !conversation.is_private &&
+          !conversation.is_im &&
+          !conversation.is_mpim
+      ),
       memberCount: (conversation as { num_members?: number } | undefined)
         ?.num_members,
       name: conversation?.name,

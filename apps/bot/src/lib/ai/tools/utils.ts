@@ -58,6 +58,7 @@ export async function assertReadableChannel(
       askerUserId: options.askerUserId,
       channelId: chatChannelId,
       currentChannelId,
+      isPublic: metadata.isPublic,
     }))
   ) {
     throw new Error(PRIVATE_CHANNEL_REFUSAL);

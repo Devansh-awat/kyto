@@ -4,7 +4,7 @@ import { nameField } from '@/lib/agent/mentions';
 import { lookupFlaronUser } from '@/lib/flaron';
 import { resolveUserProfile } from '@/lib/slack/names';
 
-// Hack Club Auth's public, keyless verification check: asked only when Flaron
+// Hack Club Auth's public, keyless verification check: used only when Flaron
 // (which carries the same status) has none.
 const HCA_CHECK_URL = 'https://auth.hackclub.com/api/external/check';
 const HCA_TIMEOUT_MS = 5000;
@@ -73,21 +73,20 @@ export function getUserTool() {
       userId: z.string().min(1),
     }),
     execute: async ({ userId }) => {
-      const [profile, flaron, hackatime] = await Promise.all([
+      // HCA alongside the rest, not after: asked only once Flaron came back
+      // empty, it added up to its whole 5 s timeout to every such lookup.
+      const [profile, flaron, hackatime, hca] = await Promise.all([
         resolveUserProfile(userId),
         lookupFlaronUser(userId).catch(() => undefined),
         lookupHackatime(userId).catch(() => undefined),
+        fetch(`${HCA_CHECK_URL}?slack_id=${encodeURIComponent(userId)}`, {
+          signal: AbortSignal.timeout(HCA_TIMEOUT_MS),
+        })
+          .then((response) => response.json())
+          .catch(() => null),
       ]);
       const verification =
-        flaron?.idvStatus ??
-        hcaSchema.safeParse(
-          await fetch(
-            `${HCA_CHECK_URL}?slack_id=${encodeURIComponent(userId)}`,
-            { signal: AbortSignal.timeout(HCA_TIMEOUT_MS) }
-          )
-            .then((response) => response.json())
-            .catch(() => null)
-        ).data?.result;
+        flaron?.idvStatus ?? hcaSchema.safeParse(hca).data?.result;
       const directory = {
         ...(flaron ? { flaron: { ...flaron, idvStatus: undefined } } : {}),
         ...(verification ? { hackClubVerification: verification } : {}),
