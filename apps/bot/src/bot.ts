@@ -86,6 +86,15 @@ function pingsAccount(message: Message): boolean {
 }
 
 /**
+ * A top-level message roots a thread of its own, which nobody can have had
+ * kyto follow yet: its stored state is always empty. Not reading it spares a
+ * query (two, one per kyto) for every message in every channel kyto is in.
+ */
+function rootsNewThread(message: Message): boolean {
+  return slack.decodeThreadId(message.threadId).threadTs === message.id;
+}
+
+/**
  * A channel message, handed to the ACCOUNT. Slack only delivers the account's
  * DMs to its events app (channel messages never arrive there), so the APP's
  * connection — which sees every message in the channels it is in — passes on
@@ -111,6 +120,9 @@ async function answerAsAccount({
     return;
   }
   // Only a thread the account follows is worth claiming the message for.
+  if (rootsNewThread(message)) {
+    return;
+  }
   const state = await thread.state;
   if (
     state?.respondOnThreadMessages === true &&
@@ -450,6 +462,9 @@ async function answerThreadMessage({
     otherId &&
     (rawSlackText(message) ?? '').includes(`<@${otherId}>`)
   ) {
+    return;
+  }
+  if (rootsNewThread(message)) {
     return;
   }
   const state = await thread.state;

@@ -463,13 +463,26 @@ export class ThreadHandle {
   }
 
   async setState(state: ThreadState): Promise<void> {
+    const respondOnThreadMessages = state.respondOnThreadMessages === true;
+    // Every mention and DM sets the state the thread almost always already
+    // has: skip the upsert when the row says the same. respondAs is part of
+    // the compare, so a ping of the other kyto still takes the thread over.
+    const current = await this.readState();
+    if (
+      current &&
+      current.respondOnThreadMessages === respondOnThreadMessages &&
+      (state.respondAs === undefined || current.respondAs === state.respondAs)
+    ) {
+      return;
+    }
     await setThreadSubscription({
-      respondOnThreadMessages: state.respondOnThreadMessages === true,
+      respondOnThreadMessages,
       threadId: this.id,
       ...(state.respondAs ? { respondAs: state.respondAs } : {}),
     });
     // Not cached: an omitted respondAs keeps the stored one, which this
-    // caller doesn't know. The next read goes to the row.
+    // caller doesn't know, and both kytos may be taking the thread at once.
+    // The next read goes to the row.
     subscriptionCache.delete(this.id);
   }
 
