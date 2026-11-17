@@ -371,8 +371,9 @@ export class SlackHarness {
     userAccount?: { cookie: string; token: string };
   }) {
     // The library's default is no timeout at all: one Slack call that hangs
-    // holds its turn with no ceiling. Each retry gets its own 30 s. Uploads
-    // don't go through these (thread.ts posts the bytes with fetch).
+    // holds its turn with no ceiling. Each retry gets its own 30 s. A big
+    // upload doesn't go through these (thread.ts posts the bytes with fetch);
+    // submitEmoji's filesUploadV2 does, but an emoji is at most 128 KB.
     this.webClient = new WebClient(botToken, {
       timeout: SLACK_CALL_TIMEOUT_MS,
     });
