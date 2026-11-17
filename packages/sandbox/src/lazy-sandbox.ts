@@ -37,9 +37,9 @@ const ABORT_COMMAND_TIMEOUT_MS = 15_000;
 const BOOTSTRAP_FAILED = 'kyto-bootstrap failed:';
 // A read lands whole in the bot's memory, at two to three times the file's
 // size before a caller sees it, and every thread shares that one process: one
-// model-chosen dataset or video could take kyto down for everyone. Bigger
-// than any caller accepts (getFile writes, the largest, cap at 200 MB).
-const MAX_READ_BYTES = 256 * 1024 * 1024;
+// model-chosen dataset or video could take kyto down for everyone. Above the
+// largest whole read a caller makes (a site deploy's 50 MB per file).
+const MAX_READ_BYTES = 64 * 1024 * 1024;
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);

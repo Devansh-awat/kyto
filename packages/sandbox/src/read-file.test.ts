@@ -58,15 +58,15 @@ describe('readBinaryFile', () => {
   });
 
   test('a file past the cap is refused as it streams, not read whole', async () => {
-    // 300 chunks of 1 MB: the read must stop just past 256 MB.
+    // 100 chunks of 1 MB: the read must stop just past 64 MB.
     const chunk = new Uint8Array(MB);
     const { lazy, stats } = sandboxStreaming(
-      Array.from({ length: 300 }, () => chunk)
+      Array.from({ length: 100 }, () => chunk)
     );
     await expect(lazy.readBinaryFile({ path: '/big.bin' })).rejects.toThrow(
       /too large to read whole/
     );
-    expect(stats().pulled).toBeLessThan(260);
+    expect(stats().pulled).toBeLessThan(70);
     expect(stats().cancelled).toBe(true);
   });
 
