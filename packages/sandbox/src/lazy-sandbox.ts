@@ -33,6 +33,8 @@ const GIT_NON_INTERACTIVE: Record<string, string> = {
 
 // Bounds how long a turn's end (and the sandbox's pause) waits on one.
 const ABORT_COMMAND_TIMEOUT_MS = 15_000;
+// What a failed bootstrap step writes to stderr, so its log can name it.
+const BOOTSTRAP_FAILED = 'kyto-bootstrap failed:';
 // A read lands whole in the bot's memory, at two to three times the file's
 // size before a caller sees it, and every thread shares that one process: one
 // model-chosen dataset or video could take kyto down for everyone. Bigger
@@ -204,10 +206,12 @@ export class LazySandbox {
       return null;
     }
     try {
-      // Auto-resumes the sandbox when it is paused.
-      const sandbox = await Sandbox.connect(sandboxId, { apiKey: this.apiKey });
-      await sandbox.setTimeout(commandTimeoutMs());
-      return sandbox;
+      // Auto-resumes the sandbox when it is paused. The timeout rides along
+      // instead of a setTimeout after it, one control-plane round trip fewer.
+      return await Sandbox.connect(sandboxId, {
+        apiKey: this.apiKey,
+        timeoutMs: commandTimeoutMs(),
+      });
     } catch (error) {
       // Only a sandbox E2B says is GONE is forgotten. A network blip or a 5xx
       // used to be read the same way: the thread got a fresh, empty sandbox
@@ -261,40 +265,45 @@ export class LazySandbox {
    * helper it installs is simply absent, which the caller's command will report.
    */
   private async bootstrap(sandbox: Sandbox): Promise<void> {
-    // Git hardening first, and unconditionally: a repo that arrives as a
-    // tarball/zip brings its own hooks, and this makes sure none of them can
-    // run before any tool touches the workspace. Idempotent, so re-running it
-    // on a resumed sandbox is free.
-    await sandbox.commands
-      .run(GIT_HARDEN_COMMAND, { cwd: this.workDir, timeoutMs: 15_000 })
-      .catch((error: unknown) => {
-        this.logger.warn(
-          { err: errorText(error), sandboxId: sandbox.sandboxId },
-          '[sandbox] git hardening failed'
-        );
-      });
-    // Install the shared-display helper. Writing a file, not starting a server:
-    // a chat-only turn pays nothing, and the first thing that needs a headful
-    // browser gets one display that every later caller reuses (see display.ts).
-    await sandbox.commands
-      .run(DISPLAY_INSTALL_COMMAND, { cwd: this.workDir, timeoutMs: 15_000 })
-      .catch((error: unknown) => {
-        this.logger.warn(
-          { err: errorText(error), sandboxId: sandbox.sandboxId },
-          '[sandbox] display helper install failed'
-        );
-      });
-    if (!this.bootstrapCommand) {
-      return;
-    }
+    const steps: [label: string, command: string][] = [
+      // Git hardening first, and unconditionally: a repo that arrives as a
+      // tarball/zip brings its own hooks, and this makes sure none of them can
+      // run before any tool touches the workspace. Idempotent, so re-running
+      // it on a resumed sandbox is free.
+      ['git hardening', GIT_HARDEN_COMMAND],
+      // The shared-display helper. Writing a file, not starting a server: a
+      // chat-only turn pays nothing, and the first thing that needs a headful
+      // browser gets one display that every later caller reuses (display.ts).
+      ['display helper install', DISPLAY_INSTALL_COMMAND],
+      ...(this.bootstrapCommand
+        ? [['bootstrap command', this.bootstrapCommand] as [string, string]]
+        : []),
+    ];
+    // One script, not one RPC per step: each was its own envd round trip on
+    // every materialize. In order, each in its own subshell, so a step that
+    // fails (or calls exit) still skips none after it, and says which it was.
+    const script = steps
+      .map(
+        ([label, command]) =>
+          `(\n${command}\n) || echo "${BOOTSTRAP_FAILED} ${label} ($?)" >&2`
+      )
+      .join('\n');
     // Uses commands.run directly, NOT this.run — the latter calls ensure() and
     // would recurse back into materialization.
     await sandbox.commands
-      .run(this.bootstrapCommand, { cwd: this.workDir, timeoutMs: 30_000 })
+      .run(script, { cwd: this.workDir, timeoutMs: 60_000 })
+      .then((result) => {
+        if (result.stderr.includes(BOOTSTRAP_FAILED)) {
+          this.logger.warn(
+            { sandboxId: sandbox.sandboxId, stderr: result.stderr.slice(-500) },
+            '[sandbox] bootstrap step failed'
+          );
+        }
+      })
       .catch((error: unknown) => {
         this.logger.warn(
           { err: errorText(error), sandboxId: sandbox.sandboxId },
-          '[sandbox] bootstrap command failed'
+          '[sandbox] bootstrap failed'
         );
       });
   }
