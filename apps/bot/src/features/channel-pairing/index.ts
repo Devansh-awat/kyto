@@ -175,7 +175,13 @@ async function noteJoin({
 async function sweep(identity: Identity): Promise<void> {
   const known = await listKytoChannelIds(identity);
   const current = await listChannelIds(identity);
-  const fresh = await addKytoChannels({ channelIds: current, identity });
+  // Insert only what `known` lacks: re-inserting every channel each sweep made
+  // this poller the entire traffic on the table (~2.5M index probes/month).
+  const knownSet = new Set(known);
+  const fresh = await addKytoChannels({
+    channelIds: current.filter((channelId) => !knownSet.has(channelId)),
+    identity,
+  });
   if (known.length === 0) {
     logger.info(
       { count: fresh.length, identity },
