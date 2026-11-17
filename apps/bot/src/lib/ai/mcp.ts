@@ -641,6 +641,13 @@ class McpConnection {
       inputSchema: entry.inputSchema as Record<string, unknown> | undefined,
       name: entry.name,
     }));
+    // The key carries the credential, and an OAuth one rotates on every
+    // refresh: without a sweep each old token's entry stayed forever.
+    for (const [key, entry] of listCache) {
+      if (Date.now() - entry.at >= LIST_CACHE_TTL_MS) {
+        listCache.delete(key);
+      }
+    }
     listCache.set(cacheKey, { at: Date.now(), tools });
     return tools;
   }

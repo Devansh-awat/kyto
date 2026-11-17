@@ -443,6 +443,12 @@ export function hasMcpOauth(server: UserMcpServer): boolean {
 // the second caller (and often the whole grant) refused.
 const refreshing = new Map<string, Promise<string | undefined>>();
 
+// A refused grant stays refused, and each turn re-POSTing it waited up to
+// REQUEST_TIMEOUT_MS before the tools were built. Keyed by the refresh token,
+// so signing in again (a new token) is tried at once.
+const REFRESH_BACKOFF_MS = 15 * 60 * 1000;
+const failedRefreshes = new Map<string, number>();
+
 async function freshAccessToken(
   server: UserMcpServer
 ): Promise<string | undefined> {
@@ -457,6 +463,10 @@ async function freshAccessToken(
     return stored.accessToken;
   }
   const refreshToken = stored.refreshToken;
+  const failedAt = failedRefreshes.get(refreshToken);
+  if (failedAt !== undefined && Date.now() - failedAt < REFRESH_BACKOFF_MS) {
+    return stored.accessToken;
+  }
   try {
     const token = await requestToken({
       clientId: stored.clientId,
@@ -476,10 +486,17 @@ async function freshAccessToken(
         refreshToken: token.refresh_token ?? refreshToken,
       },
     });
+    failedRefreshes.delete(refreshToken);
     return token.access_token;
   } catch (error) {
     // The old token is tried anyway; if it is dead, the listing fails with a
     // 401 and App Home shows it, which is the person's cue to sign in again.
+    for (const [key, at] of failedRefreshes) {
+      if (Date.now() - at >= REFRESH_BACKOFF_MS) {
+        failedRefreshes.delete(key);
+      }
+    }
+    failedRefreshes.set(refreshToken, Date.now());
     logger.warn(
       {
         err: error instanceof Error ? error.message : String(error),
