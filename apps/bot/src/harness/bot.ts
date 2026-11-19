@@ -89,6 +89,13 @@ const gatewayMessageSchema = z.looseObject({
 });
 // Message subtypes that still carry a real user message.
 const ALLOWED_SUBTYPES = new Set(['file_share', 'thread_broadcast']);
+// Dropped DM subtypes too routine to log.
+const DM_SUBTYPES_EXPECTED = new Set([
+  'message_changed',
+  'message_deleted',
+  'message_replied',
+  'assistant_app_thread',
+]);
 
 interface SocketEnvelope {
   ack: (response?: unknown) => Promise<void>;
@@ -495,9 +502,20 @@ export class KytoBot {
           });
         }
         return;
-      default:
+      case 'app_mention':
+      // Subscribed but unused here: logging them would bury the line below.
+      case 'link_shared':
+      case 'member_left_channel':
         // app_mention is deliberately ignored: the matching `message` event
         // carries the same content and routing off one source avoids dupes.
+        return;
+      default:
+        // An event type kyto doesn't route would otherwise vanish without a
+        // trace — how Slack's agent Tasks tab delivers a run is undocumented.
+        this.slackLogger.info(
+          { keys: Object.keys(event), type: event.type },
+          '[harness] unrouted event'
+        );
         return;
     }
   }
@@ -510,6 +528,17 @@ export class KytoBot {
     // through this way too, and must never be mistaken for someone else's.
     const isBotPost = event.subtype === 'bot_message';
     if (event.subtype && !(ALLOWED_SUBTYPES.has(event.subtype) || isBotPost)) {
+      // A DM subtype kyto drops, keys only (no content): Slack's agent Tasks
+      // tab runs land in the DM in a shape it hasn't documented.
+      if (
+        event.channel?.startsWith('D') &&
+        !DM_SUBTYPES_EXPECTED.has(event.subtype)
+      ) {
+        this.slackLogger.info(
+          { keys: Object.keys(event), subtype: event.subtype },
+          '[harness] dropped DM message subtype'
+        );
+      }
       return;
     }
     if (!(event.channel && event.ts)) {
