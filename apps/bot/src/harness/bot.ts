@@ -514,7 +514,7 @@ export class KytoBot {
         // trace — how Slack's agent Tasks tab delivers a run is undocumented.
         this.slackLogger.info(
           { keys: Object.keys(event), type: event.type },
-          '[harness] unrouted event'
+          '[harness] unhandled event type'
         );
         return;
     }
