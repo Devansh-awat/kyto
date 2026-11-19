@@ -1671,7 +1671,7 @@ async function executeTurn(
       // The card's model line; the catch adds why the attempt ended to it.
       let modelDetails = currentAttempt.model;
       // The model calls get a plain signal of their own, wired to the turn's and
-      // unwired when the attempt ends. The AI SDK hangs two listeners per step
+      // disconnected when the attempt ends. The AI SDK hangs two listeners per step
       // on the signal it is given and never removes them, and in Bun a signal
       // made by AbortSignal.any stays alive, listeners and all, for as long as
       // one of its sources can still fire. So once anything kept the turn's
