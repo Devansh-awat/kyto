@@ -839,7 +839,22 @@ export function streamAttempt({
   result.steps.then(undefined, () =>
     billSteps([], abortSignal?.aborted ? 'aborted' : 'error')
   );
+  liveRuns.set(source, (liveRuns.get(source) ?? 0) + 1);
+  runCollected.register(result, source);
   return result;
+}
+
+// Model runs not yet garbage-collected, per caller. A finished run should go
+// within a GC or two; a count that only climbs means something still holds
+// whole runs (toolset, messages, steps), the leak that OOM-killed the pod in
+// November 2026. The memory log prints it.
+const liveRuns = new Map<string, number>();
+const runCollected = new FinalizationRegistry<string>((source) => {
+  liveRuns.set(source, (liveRuns.get(source) ?? 1) - 1);
+});
+
+export function liveModelRuns(): Record<string, number> {
+  return Object.fromEntries(liveRuns);
 }
 
 /**

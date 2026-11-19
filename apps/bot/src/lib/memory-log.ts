@@ -1,4 +1,5 @@
 import { heapStats } from 'bun:jsc';
+import { liveModelRuns } from '@repo/ai';
 import type { ThreadCache } from '@/harness/thread-cache';
 import logger from '@/lib/logger';
 
@@ -18,6 +19,7 @@ export function startMemoryLog(threadCache: ThreadCache): void {
     logger.info(
       {
         heapMb: Math.round(stats.heapSize / MB),
+        liveModelRuns: liveModelRuns(),
         objects: stats.objectCount,
         rssMb: Math.round(process.memoryUsage().rss / MB),
         threadCache: threadCache.size,

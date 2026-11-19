@@ -1670,6 +1670,25 @@ async function executeTurn(
           : built.activeTools();
       // The card's model line; the catch adds why the attempt ended to it.
       let modelDetails = currentAttempt.model;
+      // The model calls get a plain signal of their own, wired to the turn's and
+      // unwired when the attempt ends. The AI SDK hangs two listeners per step
+      // on the signal it is given and never removes them, and in Bun a signal
+      // made by AbortSignal.any stays alive, listeners and all, for as long as
+      // one of its sources can still fire. So once anything kept the turn's
+      // controller reachable, every attempt's whole run (toolset, messages,
+      // steps) stayed in memory: 3.4M Functions and a 1.1 GB heap after one
+      // busy morning on 2026-11-18.
+      const turnSignal = AbortSignal.any([
+        controller.signal,
+        attemptAbort.signal,
+      ]);
+      const sdkAbort = new AbortController();
+      const forwardAbort = () => sdkAbort.abort(turnSignal.reason);
+      if (turnSignal.aborted) {
+        forwardAbort();
+      } else {
+        turnSignal.addEventListener('abort', forwardAbort, { once: true });
+      }
       try {
         activeAttempt = currentAttempt;
         reply ??= createReply({
@@ -1823,10 +1842,7 @@ async function executeTurn(
           };
         }
         const result = streamAttempt({
-          abortSignal: AbortSignal.any([
-            controller.signal,
-            attemptAbort.signal,
-          ]),
+          abortSignal: sdkAbort.signal,
           activeTools: attemptTools,
           attempt: currentAttempt,
           holder,
@@ -2325,7 +2341,7 @@ async function executeTurn(
             },
             results: gatheredResults,
             secret,
-            signal: AbortSignal.any([controller.signal, attemptAbort.signal]),
+            signal: sdkAbort.signal,
             history,
             system: systemPrompt({ hints }),
             task: `${messageText}\n\n${codingLine({ ownKey: onOwnKey })}`,
@@ -2384,7 +2400,7 @@ async function executeTurn(
               },
               results: gatheredResults,
               secret,
-              signal: AbortSignal.any([controller.signal, attemptAbort.signal]),
+              signal: sdkAbort.signal,
               streamedText,
               history,
               system: systemPrompt({ hints }),
@@ -2801,6 +2817,7 @@ async function executeTurn(
         attempt = retryAttempt;
       } finally {
         clearTimeout(attemptTimer);
+        turnSignal.removeEventListener('abort', forwardAbort);
       }
     }
   }
