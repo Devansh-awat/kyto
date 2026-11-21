@@ -3017,6 +3017,7 @@ async function executeTurn(
         // fallen back to.
         isChosen: answeredBy === chosenAttempt || answeredBy === experimentArm,
         isOwnAttempt: routing.own.includes(answeredBy),
+        leadError: attempts[0]?.error,
         // What was meant to lead, so a fallback note names the picked/drawn
         // model instead of the hardcoded primary (#130).
         ...((chosenAttempt ?? experimentArm)

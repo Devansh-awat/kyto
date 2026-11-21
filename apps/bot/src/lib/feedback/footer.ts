@@ -51,14 +51,14 @@ export function formatDuration(ms: number): string {
  */
 function fallbackNote({
   model,
-  outage,
   primaryLabel,
+  reason,
 }: {
   model: string;
-  outage?: string;
   primaryLabel: string;
+  reason?: string;
 }): string {
-  const why = outage ? ` (${outage.toLowerCase()})` : '';
+  const why = reason ? ` (${reason.toLowerCase()})` : '';
   return `${primaryLabel} couldn't answer this one${why}, so \`${model}\` did. it's a weaker model, so this reply may be worse than usual.`;
 }
 
@@ -96,7 +96,7 @@ export function buildReplyFooter({
 }: {
   durationMs: number;
   /** Set when the answer came from a fallback model. */
-  fallback?: { model: string; outage?: string; primaryLabel: string };
+  fallback?: { model: string; primaryLabel: string; reason?: string };
   /** The model that answered, carried on the buttons for the feedback row. */
   model?: string;
   showFooter: boolean;

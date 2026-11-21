@@ -62,8 +62,14 @@ block landed in a message of its own (#78).
   turn onto a stronger rung, `Thinking · fallback` for an actual failure. They
   are not the same event and must not read the same — an escalation the model
   asked for is not kyto recovering from a broken provider. A fallback's title and the footer's weaker-model note also carry Hack Club AI's
-  own outage reason when `ai.hackclub.com/up` reports one (`lib/ai/hackclub-status.ts`,
-  cached 60s, only looked up once an attempt has failed).
+  outage reason when `ai.hackclub.com/up` shows a part CHAT needs is broken: its
+  database, OpenRouter, or a spent balance (`lib/ai/hackclub-status.ts`, cached 60s,
+  only looked up once an attempt has failed). Its own `status` is ignored: "down"
+  also covers Mistral, Exa and a Replicate credit scrape, and on 2026-11-21 it read
+  503 "down" all day over Replicate alone. With no real outage the note says what
+  the lead attempt did instead (an empty reply, an HTTP status, an error). **No
+  note when luna answered** (owner's call 2026-11-21): it leads half of threads in
+  the haiku/luna experiment, so a turn it picked up is no step down.
 - **An MCP tool's card never shows its result** (`renderTask`): "Done." or
   "Something went wrong." — the plan is public and an MCP read returned a
   database password (#75).

@@ -69,16 +69,16 @@ describe('buildReplyFooter', () => {
 });
 
 describe('buildReplyFooter fallback reason', () => {
-  test('names the outage when Hack Club AI reported one', () => {
+  test('says why the usual model could not answer', () => {
     const footer = buildReplyFooter({
       durationMs: 1000,
       fallback: {
         model: 'z-ai/glm-5.3-flash',
-        outage: 'Hack Club AI reports it is down',
-        primaryLabel: 'gpt-6 luna on hack club ai',
+        primaryLabel: 'claude haiku 5.5 on hack club ai',
+        reason: 'It sent back an empty reply',
       },
       showFooter: false,
     });
-    expect(footer?.fallbackText).toContain('(hack club ai reports it is down)');
+    expect(footer?.fallbackText).toContain('(it sent back an empty reply)');
   });
 });
