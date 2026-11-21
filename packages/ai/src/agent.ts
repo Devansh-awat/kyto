@@ -9,6 +9,7 @@ import {
   type ToolCallRepairFunction,
   type ToolSet,
 } from 'ai';
+import { z } from 'zod';
 import { addCacheControl } from './cache-control';
 import {
   comparePrefix,
@@ -98,6 +99,13 @@ export interface ResolvedModelHolder {
   model?: string;
   /** The reasoning effort this attempt was sent with (Hack Club only). */
   reasoningEffort?: string;
+  /**
+   * Anthropic's reason for refusing (the stream's `delta.refusal`), e.g.
+   * "…restrictions on reverse engineering or duplicating model outputs". The
+   * SDK reports only `content-filter` and drops this text, which is the one
+   * place the safety category is named.
+   */
+  refusal?: string;
 }
 
 /**
@@ -1153,6 +1161,19 @@ function tunedFetch({
         }
       });
     }
+    if (
+      attempt.model.startsWith('anthropic/') &&
+      response.body &&
+      url.includes('/chat/completions')
+    ) {
+      captureRefusal(response.clone().body as ReadableStream<Uint8Array>).then(
+        (refusal) => {
+          if (refusal) {
+            holder.refusal = refusal;
+          }
+        }
+      );
+    }
     if (isGemini && response.body && url.includes('/chat/completions')) {
       // Capture this response's thought signatures (background tee) so the next
       // request can echo them back — see the closure comment above.
@@ -1237,7 +1258,9 @@ const CARRIED_COMPACT_STEP = 100_000;
 // Each accepted by luna (2026-10-09) and haiku (2026-10-10) through the proxy.
 // `high` joined the draw on 2026-10-16 (owner's call), to be compared on the
 // reasoning metrics the turn logs now carry.
-const EXPERIMENT_EFFORTS = ['low', 'medium', 'high'] as const;
+// No `low` in the automatic draw (owner's call 2026-11-21); `--reasoning low`,
+// a BYOK key's setting and the cap-filled retry still use it.
+const EXPERIMENT_EFFORTS = ['medium', 'high'] as const;
 
 /** What `--reasoning` accepts — all four passed the proxy on both models. */
 export const REASONING_EFFORTS = ['none', 'low', 'medium', 'high'] as const;
@@ -1569,6 +1592,53 @@ function recordSignatureLine(
         signatures.set(id, signature);
       }
     }
+  }
+}
+
+const REFUSAL_LINE = /"refusal":"/;
+const refusalChunkSchema = z.object({
+  choices: z.array(
+    z.object({
+      delta: z.object({ refusal: z.string().nullish() }).nullish(),
+    })
+  ),
+});
+
+/** The first `delta.refusal` text in a chat-completions stream, if any. */
+async function captureRefusal(
+  body: ReadableStream<Uint8Array>
+): Promise<string | undefined> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let pending = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        return;
+      }
+      pending += decoder.decode(value, { stream: true });
+      const lines = pending.split('\n');
+      pending = lines.pop() ?? '';
+      for (const line of lines) {
+        if (!(line.startsWith('data: ') && REFUSAL_LINE.test(line))) {
+          continue;
+        }
+        const chunk = refusalChunkSchema.safeParse(
+          JSON.parse(line.slice('data: '.length))
+        );
+        const refusal = chunk.success
+          ? chunk.data.choices[0]?.delta?.refusal
+          : undefined;
+        if (refusal) {
+          return refusal;
+        }
+      }
+    }
+  } catch {
+    // Diagnostic only: a parse or read failure must not touch the turn.
+  } finally {
+    await reader.cancel().catch(() => undefined);
   }
 }
 

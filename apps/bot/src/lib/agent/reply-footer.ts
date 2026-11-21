@@ -72,7 +72,11 @@ export async function replyFooter({
     failure = `it answered ${status}`;
   } else if (leadError !== undefined) {
     const message = errorMessage(leadError);
-    if (message.includes('empty response')) {
+    if (message.includes('duplicating model outputs')) {
+      failure = "anthropic's filter took it for copying the model's reasoning";
+    } else if (message.includes('safety filter')) {
+      failure = "anthropic's safety filter refused it";
+    } else if (message.includes('empty response')) {
       failure = 'it sent back an empty reply';
     } else if (message.includes('ended without a reply')) {
       failure = 'it stopped without a reply';

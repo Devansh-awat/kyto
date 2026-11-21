@@ -13,12 +13,12 @@ describe('pickReasoningEffort', () => {
     ['haiku', PRIMARY_ATTEMPT],
     ['luna', LUNA_ATTEMPT],
   ] as const) {
-    test(`${name} draws low, medium or high, never none`, () => {
+    test(`${name} draws medium or high, never low or none`, () => {
       const seen = new Set<string>();
       for (let i = 0; i < 200; i++) {
         seen.add(pickReasoningEffort({ attempt }).effort);
       }
-      expect(seen).toEqual(new Set(['low', 'medium', 'high']));
+      expect(seen).toEqual(new Set(['medium', 'high']));
     });
   }
 });

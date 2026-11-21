@@ -178,13 +178,14 @@ type GroupId = keyof typeof GROUPS;
 // Luna keeps one prompt cache PER EFFORT, so the same pick only ever RAISES a
 // thread's luna effort: a lower one is ignored (owner's call 2026-10-18,
 // replacing a random start per thread plus a separate "are you sure" raise).
-export const JEV_EFFORTS = ['low', 'medium', 'high'] as const;
+// No `low` (owner's call 2026-11-21): 19 of 20 skipped turns in the week before
+// ran at low, and a quick reply at medium costs little more.
+export const JEV_EFFORTS = ['medium', 'high'] as const;
 export type JevEffort = (typeof JEV_EFFORTS)[number];
 const EFFORT_CRITERIA: Record<JevEffort, string> = {
   high: 'Deep multi-step work where careful thinking pays off: investigating or analysing something (a file, a codebase, a security scan), debugging, research across many sources, a hard problem, or an answer that must be thorough and correct.',
-  low: 'Chat, a quick reply or factual answer, one simple action, or a follow-up whose work is already done.',
   medium:
-    'An ordinary task: a few lookups or tool calls, a short explanation, a modest edit or summary.',
+    'Chat, a quick reply or factual answer, or an ordinary task: a few lookups or tool calls, a short explanation, a modest edit or summary.',
 };
 const EFFORT_INSTRUCTIONS =
   'An AI assistant in Slack is about to handle the latest message in this conversation. How much reasoning effort does doing it WELL need?';

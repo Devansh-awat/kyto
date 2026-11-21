@@ -2503,6 +2503,13 @@ async function executeTurn(
           if (!attemptToolActivity) {
             emptyFrom = currentAttempt.model;
           }
+          // A refusal reaches the SDK as an empty `content-filter` stop; the
+          // reason (which safety category) only survives on the holder.
+          if (holder.refusal) {
+            throw new Error(
+              `Model ${currentAttempt.model} was refused by its provider's safety filter: ${holder.refusal}`
+            );
+          }
           throw new Error(
             attemptToolActivity
               ? `Model ${currentAttempt.model} ran tools but ended without a reply (truncated synthesis step).`
