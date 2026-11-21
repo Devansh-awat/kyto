@@ -1,3 +1,4 @@
+import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import {
   byokEffortFormat,
   describeImages,
@@ -231,6 +232,8 @@ const ATTEMPT_TIMEOUT_MS =
 // real upstream cause (rate limit, context length, budget) without pasting a
 // whole request body into the journal.
 const ERROR_LOG_MAX_LENGTH = 800;
+// Refused requests kept on disk for diagnosis (see the refusal branch).
+const MAX_KEPT_REFUSALS = 20;
 
 // How much already-sent reply text a continuation attempt is shown. Only the
 // TAIL matters (the model needs to know where the thought was cut off), and the
@@ -2506,6 +2509,27 @@ async function executeTurn(
           // A refusal reaches the SDK as an empty `content-filter` stop; the
           // reason (which safety category) only survives on the holder.
           if (holder.refusal) {
+            // Kept on the pod's disk (newest 20, gone on restart, never a
+            // `!secret` turn): the refusal hits only the full live request —
+            // its parts alone pass — so finding the trigger means replaying
+            // this exact body with pieces removed.
+            if (holder.refusedRequest && !secret) {
+              const dir = '/tmp/kyto-refusals';
+              await mkdir(dir, { recursive: true });
+              await writeFile(
+                `${dir}/${Date.now()}.json`,
+                JSON.stringify({
+                  body: holder.refusedRequest,
+                  model: currentAttempt.model,
+                  refusal: holder.refusal,
+                  threadId,
+                })
+              );
+              const kept = (await readdir(dir)).sort().reverse();
+              for (const old of kept.slice(MAX_KEPT_REFUSALS)) {
+                await rm(`${dir}/${old}`, { force: true });
+              }
+            }
             throw new Error(
               `Model ${currentAttempt.model} was refused by its provider's safety filter: ${holder.refusal}`
             );

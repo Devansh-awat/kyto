@@ -106,6 +106,8 @@ export interface ResolvedModelHolder {
    * place the safety category is named.
    */
   refusal?: string;
+  /** The body of the request that was refused, for finding what tripped it. */
+  refusedRequest?: string;
 }
 
 /**
@@ -1166,10 +1168,12 @@ function tunedFetch({
       response.body &&
       url.includes('/chat/completions')
     ) {
+      const sent = callInit?.body;
       captureRefusal(response.clone().body as ReadableStream<Uint8Array>).then(
         (refusal) => {
           if (refusal) {
             holder.refusal = refusal;
+            holder.refusedRequest = typeof sent === 'string' ? sent : undefined;
           }
         }
       );
