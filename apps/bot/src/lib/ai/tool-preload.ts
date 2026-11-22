@@ -22,27 +22,30 @@ const PRELOAD_THRESHOLD = 0.5;
 // and took 100k in 0.6s (measured 2026-10-17).
 const MAX_STATE_CHARS = 100_000;
 
-// Each group is ONE yes/no question and the deferred tools it unlocks. Keep the
-// questions about what the TURN needs, not what the tools are called.
+// Each group is ONE yes/no question and the deferred tools it unlocks. A
+// question names the ACTION the latest message must call for. Worded as "is
+// this about X" or "would a helper help", they said yes to a topic merely
+// present in the thread: in the week before 2026-11-22 subagents were preloaded
+// 18 times and used 0, context7 11 and 0, slackBrowser picked on 85 of 427 turns.
 const GROUPS = {
   background: {
     question:
-      'Will the assistant need to start a long-running command in the background and check on it later?',
+      'Does it ask to start something that keeps running (a server, a long download or build) and check on it later?',
     tools: ['runBackgroundProcess', 'getProcessOutput', 'killProcess'],
   },
   browser: {
     question:
-      'Will the assistant need to INTERACT with a website OUTSIDE Slack in a real browser — clicking, filling forms, logging in, screenshots, or a page that needs JavaScript? (No, if it only needs to READ a static page or docs — fetchUrl/curl do that.)',
+      'Does doing it mean operating a website outside Slack: clicking, filling in a form, logging in, or taking a screenshot? Reading, summarizing or checking a page, or a page that merely has a link in the message, is NO.',
     tools: ['browser'],
   },
   canvases: {
     question:
-      'Will the assistant need to read, create, edit or list a Slack canvas?',
+      'Does it ask to read, create, edit or list a Slack canvas? A link to a canvas the message wants opened counts.',
     tools: ['canvasRead', 'canvasWrite', 'canvasList'],
   },
   channelAdmin: {
     question:
-      'Will the assistant need to create or join a Slack channel, invite someone into one, set a channel topic, add a bookmark, or pin or unpin a message?',
+      'Does it ask the assistant to create or join a channel, invite someone to one, set a channel topic, add a bookmark, or pin or unpin a message?',
     tools: [
       'createChannel',
       'joinChannel',
@@ -55,7 +58,7 @@ const GROUPS = {
   },
   codeChannels: {
     question:
-      'Does this ask to create, turn on, turn off, list, rename or archive a code channel, or to change its tabs, context bar or commands?',
+      'Does it ask to create, turn on, turn off, list, rename or archive a code channel, or to change its tabs, context bar or commands?',
     tools: [
       'createCodeChannel',
       'enableCodeChannel',
@@ -77,36 +80,45 @@ const GROUPS = {
   },
   diagrams: {
     question:
-      'Will the assistant need to draw a diagram, flowchart or chart as an image?',
+      'Does it ask for a diagram, flowchart or chart to be drawn as a picture? An emoji, a meme or an ordinary explanation is NO.',
     tools: ['mermaid'],
   },
   email: {
     question:
-      "Does this involve email — sending one, or checking or reading the assistant's inbox?",
+      "Does it ask the assistant to send an email, or to look in the assistant's own inbox for one? Email merely being mentioned is NO.",
     tools: ['sendEmail', 'checkInbox', 'readEmail', 'replyEmail'],
   },
   embeds: {
     question:
-      'Will the assistant need to post a live interactive web page or a shared whiteboard inside Slack?',
+      'Does it ask for a live interactive page or a shared whiteboard posted inside Slack?',
     tools: ['embed', 'removeEmbed'],
   },
-  emoji: {
+  emojiEdit: {
     question:
-      'Is this about a custom Slack emoji — what one depicts, or adding or removing one?',
-    tools: ['lookupEmoji', 'submitEmoji', 'removeEmoji'],
+      'Does it ask to add a custom emoji to the workspace, or to remove one?',
+    tools: ['submitEmoji', 'removeEmoji'],
+  },
+  emojiLookup: {
+    question:
+      'Does answering it mean knowing what a particular custom emoji looks like? An emoji just used in the message is NO.',
+    tools: ['lookupEmoji'],
   },
   github: {
     question:
-      'Will the assistant need to use GitHub — look at repositories, issues or pull requests, or change who may write to a repo?',
+      'Does it ask to look at or change something on GitHub: a repository, issue, pull request or user? Code or a link mentioned without that ask is NO.',
+    tools: ['gh'],
+  },
+  githubClaims: {
+    question:
+      'Does it ask who may change a GitHub repository through the assistant, or to change or drop that?',
     tools: [
-      'gh',
       'listGithubRepoClaims',
       'releaseGithubRepo',
       'setGithubRepoEditors',
     ],
   },
   images: {
-    question: 'Does this ask to generate or create an AI image or picture?',
+    question: 'Does it ask for an AI image or picture to be generated?',
     tools: ['generateImage'],
   },
   imageHunt: {
@@ -116,20 +128,32 @@ const GROUPS = {
   },
   libraryDocs: {
     question:
-      'Is this about how to use a specific programming library, framework, SDK or API, where current documentation would help?',
+      'Does it ask how to use a named programming library, framework, SDK or API, in a way its official documentation would answer? Running a command, installing a package, or code in general is NO.',
     tools: ['mcp_context7_resolve-library-id', 'mcp_context7_query-docs'],
+  },
+  memoryFiles: {
+    question:
+      'Does it ask the assistant to delete or bring back a saved memory, or to keep, restore or remove a folder of files with one?',
+    tools: [
+      'attachMemoryFiles',
+      'deleteMemory',
+      'detachMemoryFiles',
+      'restoreMemory',
+      'restoreMemoryFiles',
+    ],
   },
   polls: {
     question:
-      'Will the assistant need to run a poll or an NPS survey, read survey results, or ask specific people a multiple-choice question and wait for their answer?',
+      'Does it ask for a poll or an NPS survey, for survey results, or to ask specific people a multiple-choice question and wait for the answer?',
     tools: ['poll', 'askQuestion', 'npsSurvey', 'npsResults', 'closeNpsSurvey'],
   },
   reminders: {
     question:
-      'Is this about a reminder or a scheduled or repeating task \u2014 setting one, or listing, changing, pausing, resuming or cancelling one?',
+      'Does it ask the assistant to set a reminder or a scheduled, repeating or triggered task, or to list, change, pause, resume or cancel one?',
     tools: [
       'scheduleReminder',
       'scheduleRecurringReminder',
+      'scheduleEventReminder',
       'listReminders',
       'editReminder',
       'cancelReminder',
@@ -139,7 +163,7 @@ const GROUPS = {
   },
   sites: {
     question:
-      'Will the assistant need to publish a website at a public URL, or list or take down one it published?',
+      'Does it ask for a website to be published at a public URL, or a published one listed or taken down?',
     tools: ['deploySite', 'listSites', 'removeSite'],
   },
   // Owner-only, so it preloads nothing for anyone else (`preload` keeps only
@@ -147,29 +171,34 @@ const GROUPS = {
   // `browser`, which isn't logged in, and the model landed on Slack's sign-in.
   slackBrowser: {
     question:
-      "Will the assistant need to click or fill something inside Slack's own app as a person would — another app's button or form on a Slack message, a workflow, an App Home or a Slack settings page — or was it asked to use the Slack browser?",
+      "Does it name the Slack browser, or ask to click or fill in something in Slack's own app: another app's button or form, a workflow, an App Home or a Slack settings page? Reading, searching or checking messages, channels or people is NO.",
     tools: ['slackBrowser'],
   },
   slackReference: {
     question:
-      "Will the assistant need Slack's own formatting reference — Block Kit blocks, canvas markdown or search modifiers?",
+      "Does it ask to build or fix something in Slack's own formats: a Block Kit message, canvas markdown, or a search using modifiers? Ordinary writing or searching is NO.",
     tools: ['slackDocs'],
   },
   slackScript: {
     question:
-      'Does this need a large aggregate query over Slack data — counting, ranking or scanning many channels, users or messages at once?',
+      'Does it ask for a count, ranking or scan over a lot of Slack data at once: many channels, users or messages?',
     tools: ['slackScript'],
   },
   speech: {
-    question: 'Does this ask for spoken audio (text to speech)?',
+    question: 'Does it ask for spoken audio (text to speech)?',
     tools: ['textToSpeech'],
   },
   subagent: {
     question:
-      'Does this have two or more independent parts that each take several lookups or steps (researching several things, comparing options, checking several repos, channels or sources), which helper agents could do side by side, or one long separate investigation?',
+      'Does it ask for helper agents, or plainly ask for several separate large jobs at once (reports on different subjects, audits of different repositories)? One question, even a hard one that takes many lookups, is NO.',
     tools: ['runSubagent', 'checkSubagent'],
   },
 } as const satisfies Record<string, { question: string; tools: string[] }>;
+
+// Said once per question: the state is the whole thread, and Jev read topics
+// from anywhere in it.
+const PRELOAD_INSTRUCTIONS =
+  'An AI assistant in Slack is about to handle the LATEST message in this conversation. Judge that message only: the earlier ones are there to say what "it" or "that" refers to, and something the thread was about before does not count. Say yes only when the answer is plain; if unsure, say no, since the assistant can still get the tool itself.';
 
 type GroupId = keyof typeof GROUPS;
 
@@ -237,7 +266,7 @@ export async function pickPreloadTools({
     Object.entries(GROUPS).map(([id, group]) => [
       id,
       {
-        instructions: `An AI assistant in Slack is about to handle the latest message in this conversation. ${group.question}`,
+        instructions: `${PRELOAD_INSTRUCTIONS} ${group.question}`,
         type: 'noul',
       },
     ])

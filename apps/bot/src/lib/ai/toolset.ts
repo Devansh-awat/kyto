@@ -259,32 +259,6 @@ const RETIRED_FAMILIES: Record<string, string[]> = {
   wake: ['cancelWake', 'listWakes', 'wake'],
 };
 const PROCESS_TOOLS = ['getProcessOutput', 'killProcess'];
-const SKILL_VERBS: Record<string, string> = {
-  installSkill: 'install a skill from a public GitHub link',
-  listSkills: 'list the skill catalog',
-  removeSkill: 'remove a skill',
-  showSkill: "a skill's full text",
-  writeSkill: 'write or edit a skill from its SKILL.md',
-};
-const CODE_CHANNEL_SUMMARIES: Record<string, string> = {
-  archiveCodeChannel: 'archive the code channel you are in, with a summary',
-  createCodeChannel: 'create a Slack code channel for a task (only when asked)',
-  disableCodeChannel: 'turn a code channel back into a normal one',
-  enableCodeChannel: 'turn a channel into a code channel you answer in',
-  listCodeChannelViews: "list the code channel's tabs",
-  listCodeChannels: 'list the code channels',
-  readCodeChannelCanvas: "read a canvas tab's text and comments",
-  removeCodeChannelView: 'remove a tab from the code channel',
-  renameCodeChannel: 'rename the code channel',
-  setCodeChannelBlockKitTab: 'add or update a Block Kit tab',
-  setCodeChannelCanvasTab: 'add or update a canvas tab people comment on',
-  setCodeChannelCommands: "set the code channel's slash commands",
-  setCodeChannelContextBar:
-    "set the code channel's context bar (repo, branch, PR, CI)",
-  setCodeChannelDiffTab: 'set the diff tab',
-  setCodeChannelHtmlTab: 'add or update an HTML tab',
-  setCodeChannelPullRequestTab: 'add or update a pull request tab',
-};
 
 // Tools that each make one or more Slack Web API calls. A turn looping over
 // them (every channel's history, one user at a time) spends the app's rate
@@ -776,17 +750,6 @@ export async function buildTools({
     ...(onOutputOnly
       ? { outputOnly: outputOnlyTool({ onOutputOnly, threadId: thread.id }) }
       : {}),
-    // CORE, not deferred: a model deciding "this is beyond me" cannot be asked
-    // to first spend a round trip loading the tool that says so.
-    ...(escalation
-      ? {
-          [UPGRADE_TOOL_NAME]: upgradeModelTool({
-            escalation,
-            threadId: thread.id,
-            userId: authorUserId,
-          }),
-        }
-      : {}),
     // `--NO-MEMORY` hides every memory, so it can't be one `fetch` away.
     ...(memoriesOff
       ? {}
@@ -794,17 +757,6 @@ export async function buildTools({
           saveMemory: saveMemoryTool(memoryActor),
           fetchMemory: fetchMemoryTool(memoryActor),
           editMemory: editMemoryTool(memoryActor),
-          deleteMemory: deleteMemoryTool(memoryActor),
-          restoreMemory: restoreMemoryTool(memoryActor),
-          attachMemoryFiles: attachMemoryFilesTool({
-            ...memoryActor,
-            getSandboxContext,
-          }),
-          restoreMemoryFiles: restoreMemoryFilesTool({
-            ...memoryActor,
-            getSandboxContext,
-          }),
-          detachMemoryFiles: detachMemoryFilesTool(memoryActor),
         }),
     listThreads: listThreadsTool({
       askerUserId: authorUserId,
@@ -848,320 +800,156 @@ export async function buildTools({
       : undefined;
 
   // Deferred: registered but hidden until loadTools names them.
-  const deferred: Record<string, { summary: string; tool: Tool }> = {
+  const deferred: Record<string, Tool> = {
+    // Deferred 2026-11-22: not one call in the month before (1,249 turns).
+    ...(memoriesOff
+      ? {}
+      : {
+          attachMemoryFiles: attachMemoryFilesTool({
+            ...memoryActor,
+            getSandboxContext,
+          }),
+          deleteMemory: deleteMemoryTool(memoryActor),
+          detachMemoryFiles: detachMemoryFilesTool(memoryActor),
+          restoreMemory: restoreMemoryTool(memoryActor),
+          restoreMemoryFiles: restoreMemoryFilesTool({
+            ...memoryActor,
+            getSandboxContext,
+          }),
+        }),
+    ...(escalation
+      ? {
+          [UPGRADE_TOOL_NAME]: upgradeModelTool({
+            escalation,
+            threadId: thread.id,
+            userId: authorUserId,
+          }),
+        }
+      : {}),
     // Deferred 2026-10-08: none of the three was called once in 436 turns.
-    deleteFile: {
-      summary: 'delete a file in the sandbox',
-      tool: deleteFileTool({ getSandboxContext }),
-    },
-    fileStat: {
-      summary: 'size / type / mtime of a sandbox file',
-      tool: fileStatTool({ getSandboxContext }),
-    },
-    analyzeData: {
-      summary:
-        'SQL (DuckDB) over a CSV/Excel/Parquet/JSON file in the sandbox, or its column stats',
-      tool: analyzeDataTool({ getSandboxContext }),
-    },
+    deleteFile: deleteFileTool({ getSandboxContext }),
+    fileStat: fileStatTool({ getSandboxContext }),
+    analyzeData: analyzeDataTool({ getSandboxContext }),
     ...(unattended
       ? {}
       : {
-          submitFeedback: {
-            summary:
-              'record feedback about kyto itself given in conversation (bug, praise, suggestion) and tell the owner',
-            tool: submitFeedbackTool({
-              bot,
-              threadId: thread.id,
-              userId: authorUserId,
-            }),
-          },
+          submitFeedback: submitFeedbackTool({
+            bot,
+            threadId: thread.id,
+            userId: authorUserId,
+          }),
         }),
     // Nobody to wake for an unattended run (a subagent, a reminder job), and a
     // `!secret` turn's wake would answer in public what was asked in private.
     ...(unattended || secret
       ? {}
       : {
-          wake: {
-            summary:
-              'come back to this thread later in a new turn (so "I\'ll do it once X is back" really happens); listWakes / cancelWake manage them',
-            tool: wakeTool({
-              asUserAccount,
-              authorUserId,
-              messageId: message.id,
-              thread,
-            }),
-          },
-          listWakes: {
-            summary: "list this thread's pending wakes",
-            tool: listWakesTool({ thread }),
-          },
-          cancelWake: {
-            summary: 'cancel a pending wake of this thread by id',
-            tool: cancelWakeTool({ authorUserId, isOwner, thread }),
-          },
+          wake: wakeTool({
+            asUserAccount,
+            authorUserId,
+            messageId: message.id,
+            thread,
+          }),
+          listWakes: listWakesTool({ thread }),
+          cancelWake: cancelWakeTool({ authorUserId, isOwner, thread }),
         }),
-    summarizeThread: {
-      summary: 'summarize a long Slack thread',
-      tool: summarizeThreadTool({
-        askerUserId: authorUserId,
-        bot,
-        threadId: thread.id,
-      }),
-    },
+    summarizeThread: summarizeThreadTool({
+      askerUserId: authorUserId,
+      bot,
+      threadId: thread.id,
+    }),
     // Deferred 2026-10-06 (issue #36): each was called in ≤1% of 390 turns but
     // its schema rode along in every prompt — with the rest of these, ~15k of
     // the ~50k characters of always-on tool schema. Jev preloads them when a
     // turn is about them (lib/ai/tool-preload).
-    focusMode: {
-      summary:
-        'restrict who you answer in this thread to chosen users (or clear it)',
-      tool: focusModeTool({ thread }),
-    },
-    canvasRead: {
-      summary: 'read a Slack canvas',
-      tool: canvasReadTool(),
-    },
-    canvasWrite: {
-      summary: 'create or edit a Slack canvas',
-      tool: canvasWriteTool({ thread }),
-    },
-    canvasList: {
-      summary: 'list the canvases in this channel',
-      tool: canvasListTool({ thread }),
-    },
-    deploySite: {
-      summary: 'publish a static website (from the sandbox) at a public URL',
-      tool: deploySiteTool({
-        getSandboxContext,
-        isOwner,
-        userId: authorUserId,
-      }),
-    },
-    listSites: {
-      summary: 'list published websites',
-      tool: listSitesTool(),
-    },
-    removeSite: {
-      summary: 'take down a published website',
-      tool: removeSiteTool({ isOwner, userId: authorUserId }),
-    },
-    siteStats: {
-      summary: 'view counts for a published website',
-      tool: siteStatsTool({ isOwner, userId: authorUserId }),
-    },
-    scheduleReminder: {
-      summary: 'one-time DM reminder after N seconds',
-      tool: scheduleReminderTool({ message }),
-    },
-    scheduleRecurringReminder: {
-      summary:
-        'repeating reminder/task (interval, daily, weekly): a message, url fetch, bash command or headless agent',
-      tool: scheduleRecurringReminderTool({ message }),
-    },
-    scheduleEventReminder: {
-      summary:
-        'reminder/task that fires on an event: a Slack message or reaction in a channel, a webhook call, or a GitHub webhook',
-      tool: scheduleEventReminderTool({ message }),
-    },
-    listReminders: {
-      summary: 'list the reminders this user may act on',
-      tool: listRemindersTool({ message }),
-    },
-    editReminder: {
-      summary: 'change a reminder',
-      tool: editReminderTool({ message }),
-    },
-    cancelReminder: {
-      summary: 'cancel a reminder',
-      tool: cancelReminderTool({ message }),
-    },
-    pauseReminder: {
-      summary: 'pause a reminder',
-      tool: pauseReminderTool({ message }),
-    },
-    resumeReminder: {
-      summary: 'resume a paused reminder',
-      tool: resumeReminderTool({ message }),
-    },
-    generateImage: {
-      summary: 'generate AI image(s) from a prompt and post them to the thread',
-      tool: generateImageTool({
-        getSandboxContext,
-        upload: async ({ bytes, mediaType, index, total }) => {
-          const filename = `kyto-image-${index + 1}.${mediaType.split('/').at(1) ?? 'png'}`;
-          await thread.post({
-            files: [{ data: bytes, filename }],
-            markdown:
-              total > 1 ? `Generated image ${index + 1}` : 'Generated image',
-          });
-        },
-      }),
-    },
-    findChannels: {
-      summary: 'find channels by name, private ones included (names only)',
-      tool: findChannelsTool(),
-    },
-    getChannelsInfo: {
-      summary:
-        'metadata (name, visibility, purpose, topic, archived) for up to 50 channels in one call, for channel audits',
-      tool: getChannelsInfoTool({
-        askerUserId: authorUserId,
-        currentThreadId: thread.id,
-      }),
-    },
-    findImages: {
-      summary:
-        'list the images posted in a channel by author and date (to find a meme/screenshot)',
-      tool: findImagesTool({ askerUserId: authorUserId, thread }),
-    },
-    browser: {
-      summary: 'drive a real Chromium browser (screenshots, clicks, scraping)',
-      tool: browserTool({
-        asUserAccount,
-        getSandboxContext,
-        ...(secret ? {} : { thread }),
-      }),
-    },
-    runBackgroundProcess: {
-      summary: 'start a long-running shell command in the background',
-      tool: background.runBackgroundProcess,
-    },
-    getProcessOutput: {
-      summary: 'read output / status of a background process',
-      tool: background.getProcessOutput,
-    },
-    killProcess: {
-      summary: 'kill a background process',
-      tool: background.killProcess,
-    },
-    canvasDelete: {
-      summary: 'delete a Slack canvas',
-      tool: canvasDeleteTool(),
-    },
-    lookupEmoji: {
-      summary: 'see what a workspace custom emoji actually depicts',
-      tool: lookupEmojiTool(),
-    },
-    embed: {
-      summary:
-        'post a LIVE interactive page (custom HTML, or a whiteboard) inside a Slack message',
-      tool: embedTool({ requestedBy: authorUserId, thread }),
-    },
-    removeEmbed: {
-      summary: 'delete an embed page kyto published',
-      tool: removeEmbedTool(),
-    },
-    slackDocs: {
-      summary:
-        'reference notes: Block Kit blocks/limits, canvas markdown (checkboxes), search modifiers',
-      tool: slackDocsTool(),
-    },
-    createChannel: {
-      summary: 'create a Slack channel',
-      tool: createChannelTool(),
-    },
-    joinChannel: {
-      summary:
-        'join a public Slack channel when asked to (channel membership, not a thread)',
-      tool: joinChannelTool({ authorUserId }),
-    },
-    inviteToChannel: {
-      summary:
-        'invite people into a public channel the asker is in (says who asked)',
-      tool: inviteToChannelTool({ authorUserId, isOwner }),
-    },
+    focusMode: focusModeTool({ thread }),
+    canvasRead: canvasReadTool(),
+    canvasWrite: canvasWriteTool({ thread }),
+    canvasList: canvasListTool({ thread }),
+    deploySite: deploySiteTool({
+      getSandboxContext,
+      isOwner,
+      userId: authorUserId,
+    }),
+    listSites: listSitesTool(),
+    removeSite: removeSiteTool({ isOwner, userId: authorUserId }),
+    siteStats: siteStatsTool({ isOwner, userId: authorUserId }),
+    scheduleReminder: scheduleReminderTool({ message }),
+    scheduleRecurringReminder: scheduleRecurringReminderTool({ message }),
+    scheduleEventReminder: scheduleEventReminderTool({ message }),
+    listReminders: listRemindersTool({ message }),
+    editReminder: editReminderTool({ message }),
+    cancelReminder: cancelReminderTool({ message }),
+    pauseReminder: pauseReminderTool({ message }),
+    resumeReminder: resumeReminderTool({ message }),
+    generateImage: generateImageTool({
+      getSandboxContext,
+      upload: async ({ bytes, mediaType, index, total }) => {
+        const filename = `kyto-image-${index + 1}.${mediaType.split('/').at(1) ?? 'png'}`;
+        await thread.post({
+          files: [{ data: bytes, filename }],
+          markdown:
+            total > 1 ? `Generated image ${index + 1}` : 'Generated image',
+        });
+      },
+    }),
+    findChannels: findChannelsTool(),
+    getChannelsInfo: getChannelsInfoTool({
+      askerUserId: authorUserId,
+      currentThreadId: thread.id,
+    }),
+    findImages: findImagesTool({ askerUserId: authorUserId, thread }),
+    browser: browserTool({
+      asUserAccount,
+      getSandboxContext,
+      ...(secret ? {} : { thread }),
+    }),
+    runBackgroundProcess: background.runBackgroundProcess,
+    getProcessOutput: background.getProcessOutput,
+    killProcess: background.killProcess,
+    canvasDelete: canvasDeleteTool(),
+    lookupEmoji: lookupEmojiTool(),
+    embed: embedTool({ requestedBy: authorUserId, thread }),
+    removeEmbed: removeEmbedTool(),
+    slackDocs: slackDocsTool(),
+    createChannel: createChannelTool(),
+    joinChannel: joinChannelTool({ authorUserId }),
+    inviteToChannel: inviteToChannelTool({ authorUserId, isOwner }),
     ...Object.fromEntries(
       Object.entries(codeChannelTools({ isOwner, message, thread })).map(
-        ([name, codeTool]) => [
-          name,
-          {
-            summary: CODE_CHANNEL_SUMMARIES[name] ?? 'Slack code channel tool',
-            tool: codeTool,
-          },
-        ]
+        ([name, codeTool]) => [name, codeTool]
       )
     ),
-    setChannelTopic: {
-      summary: 'set a channel topic',
-      tool: setChannelTopicTool({ authorUserId, isOwner, thread }),
-    },
-    bookmarkLink: {
-      summary: 'add a bookmark to a channel',
-      tool: bookmarkLinkTool({ thread }),
-    },
-    withdrawApproval: {
-      summary: "withdraw the person's own pending approval request",
-      tool: withdrawApprovalTool({ authorUserId }),
-    },
-    pinMessage: {
-      summary: 'pin a message',
-      tool: pinMessageTool({ asUserAccount, authorUserId, thread }),
-    },
-    unpinMessage: {
-      summary: 'unpin a message',
-      tool: unpinMessageTool({ asUserAccount, authorUserId, thread }),
-    },
-    poll: {
-      summary: 'post an interactive poll',
-      tool: pollTool({ authorUserId, isOwner, thread }),
-    },
-    npsSurvey: {
-      summary: 'post an NPS (0-10 recommend) survey card',
-      tool: npsSurveyTool({ authorUserId, isOwner, thread }),
-    },
-    npsResults: {
-      summary: "list this channel's NPS surveys or read one's results",
-      tool: npsResultsTool({ authorUserId, isOwner, thread }),
-    },
-    closeNpsSurvey: {
-      summary: 'close an NPS survey early',
-      tool: closeNpsSurveyTool({ authorUserId, isOwner, thread }),
-    },
-    askQuestion: {
-      summary:
-        'ask named people a multiple-choice question in this thread and wait for their answer',
-      tool: askQuestionTool({ extendAttemptDeadline, thread }),
-    },
-    mermaid: {
-      summary: 'render a mermaid diagram as an image',
-      tool: mermaidTool({ thread }),
-    },
+    setChannelTopic: setChannelTopicTool({ authorUserId, isOwner, thread }),
+    bookmarkLink: bookmarkLinkTool({ thread }),
+    withdrawApproval: withdrawApprovalTool({ authorUserId }),
+    pinMessage: pinMessageTool({ asUserAccount, authorUserId, thread }),
+    unpinMessage: unpinMessageTool({ asUserAccount, authorUserId, thread }),
+    poll: pollTool({ authorUserId, isOwner, thread }),
+    npsSurvey: npsSurveyTool({ authorUserId, isOwner, thread }),
+    npsResults: npsResultsTool({ authorUserId, isOwner, thread }),
+    closeNpsSurvey: closeNpsSurveyTool({ authorUserId, isOwner, thread }),
+    askQuestion: askQuestionTool({ extendAttemptDeadline, thread }),
+    mermaid: mermaidTool({ thread }),
     ...(env.GH_TOKEN
       ? {
-          gh: {
-            summary: 'run a GitHub CLI (`gh`) command in the sandbox',
-            tool: ghTool({
-              getSandboxContext,
-              isOwner,
-              threadId: thread.id,
-              userId: authorUserId,
-            }),
-          },
-          listGithubRepoClaims: {
-            summary: 'see which GitHub repos are claimed and by whom',
-            tool: githubAccess.listGithubRepoClaims,
-          },
-          releaseGithubRepo: {
-            summary: "drop a repo's claim so anyone can have you write to it",
-            tool: githubAccess.releaseGithubRepo,
-          },
-          setGithubRepoEditors: {
-            summary:
-              'set who may change a claimed GitHub repo besides its owner',
-            tool: githubAccess.setGithubRepoEditors,
-          },
+          gh: ghTool({
+            getSandboxContext,
+            isOwner,
+            threadId: thread.id,
+            userId: authorUserId,
+          }),
+          listGithubRepoClaims: githubAccess.listGithubRepoClaims,
+          releaseGithubRepo: githubAccess.releaseGithubRepo,
+          setGithubRepoEditors: githubAccess.setGithubRepoEditors,
         }
       : {}),
     ...(env.SITES_ENABLED
       ? {
-          slackScript: {
-            summary:
-              'run a read-only bash script against the Slack API (aggregate queries)',
-            tool: slackScriptTool({
-              getSandboxContext,
-              github: { isOwner, threadId: thread.id, userId: authorUserId },
-            }),
-          },
+          slackScript: slackScriptTool({
+            getSandboxContext,
+            github: { isOwner, threadId: thread.id, userId: authorUserId },
+          }),
         }
       : {}),
     ...(subagentAttempt
@@ -1175,52 +963,35 @@ export async function buildTools({
             thread,
           });
           return {
-            runSubagent: {
-              summary:
-                'delegate a task to a headless subagent that returns a report',
-              tool: subagent.runSubagent,
-            },
-            checkSubagent: {
-              summary:
-                'check / collect a background subagent started with runSubagent',
-              tool: subagent.checkSubagent,
-            },
+            runSubagent: subagent.runSubagent,
+            checkSubagent: subagent.checkSubagent,
           };
         })()
       : {}),
     ...(ttsAvailable
       ? {
-          textToSpeech: {
-            summary: 'convert text to spoken audio and upload it to the thread',
-            tool: textToSpeechTool({
-              upload: async ({ data, filename }) => {
-                await thread.post({
-                  files: [{ data: new Uint8Array(data), filename }],
-                  markdown: 'Generated audio',
-                });
-              },
-            }),
-          },
+          textToSpeech: textToSpeechTool({
+            upload: async ({ data, filename }) => {
+              await thread.post({
+                files: [{ data: new Uint8Array(data), filename }],
+                markdown: 'Generated audio',
+              });
+            },
+          }),
         }
       : {}),
     ...(agentMailKey
       ? {
-          sendEmail: {
-            summary: 'send an email from kyto’s inbox',
-            tool: sendEmailTool({ apiKey: agentMailKey }),
-          },
-          checkInbox: {
-            summary: 'check kyto’s email inbox',
-            tool: checkInboxTool({ apiKey: agentMailKey, redact: redactEmail }),
-          },
-          readEmail: {
-            summary: 'read one email in full',
-            tool: readEmailTool({ apiKey: agentMailKey, redact: redactEmail }),
-          },
-          replyEmail: {
-            summary: 'reply to an email thread',
-            tool: replyEmailTool({ apiKey: agentMailKey }),
-          },
+          sendEmail: sendEmailTool({ apiKey: agentMailKey }),
+          checkInbox: checkInboxTool({
+            apiKey: agentMailKey,
+            redact: redactEmail,
+          }),
+          readEmail: readEmailTool({
+            apiKey: agentMailKey,
+            redact: redactEmail,
+          }),
+          replyEmail: replyEmailTool({ apiKey: agentMailKey }),
         }
       : {}),
     // Open to EVERYONE (owner's call, 2026-08-06: "no, should work for
@@ -1233,17 +1004,13 @@ export async function buildTools({
     // "kyto", so that log line is the whole audit trail.
     ...(env.EMOJI_REQUEST_CHANNEL || emojiUploadConfigured()
       ? {
-          submitEmoji: {
-            summary:
-              'upload an image or gif as a new custom emoji in the workspace',
-            tool: submitEmojiTool({
-              getSandboxContext,
-              requestedBy: authorUserId,
-              ...(env.EMOJI_REQUEST_CHANNEL
-                ? { channelId: env.EMOJI_REQUEST_CHANNEL }
-                : {}),
-            }),
-          },
+          submitEmoji: submitEmojiTool({
+            getSandboxContext,
+            requestedBy: authorUserId,
+            ...(env.EMOJI_REQUEST_CHANNEL
+              ? { channelId: env.EMOJI_REQUEST_CHANNEL }
+              : {}),
+          }),
         }
       : {}),
     // Registration is the owner's alone: a skill is prompt text every turn
@@ -1252,24 +1019,14 @@ export async function buildTools({
       ? {
           ...Object.fromEntries(
             Object.entries(manageSkillsTools({ userId: authorUserId })).map(
-              ([name, skillTool]) => [
-                name,
-                {
-                  summary: `${SKILL_VERBS[name] ?? name} (owner only)`,
-                  tool: skillTool,
-                },
-              ]
+              ([name, skillTool]) => [name, skillTool]
             )
           ),
         }
       : {}),
     ...(slackBrowser
       ? {
-          slackBrowser: {
-            summary:
-              "a browser logged in to Slack as kyto's user account: workflows, other apps' buttons (owner only): last resort, never for what another tool here does (custom emoji: submitEmoji)",
-            tool: slackBrowser.tool,
-          },
+          slackBrowser: slackBrowser.tool,
         }
       : {}),
     // Open to everyone, but the tool only lets a non-owner remove an emoji they
@@ -1279,49 +1036,35 @@ export async function buildTools({
     // your own" from becoming "anyone deletes anything" (owner's call 2026-10-23).
     ...(emojiUploadConfigured()
       ? {
-          removeEmoji: {
-            summary:
-              'remove a custom emoji kyto added (your own, or any if owner)',
-            tool: removeEmojiTool({ isOwner, requestedBy: authorUserId }),
-          },
+          removeEmoji: removeEmojiTool({ isOwner, requestedBy: authorUserId }),
         }
       : {}),
     ...(canActAsSelf
       ? {
-          sendAsUser: {
-            summary:
-              'send a Slack message or DM AS the person asking, from their own account',
-            tool: sendAsUserTool({
-              asUserRun,
-              authorUserId,
-              extendAttemptDeadline,
-              isOwner,
-              stageFile: stageSandboxFile,
-              thread,
-              unattended,
-            }),
-          },
-          editAsUser: {
-            summary: 'edit one of the asking person’s own Slack messages',
-            tool: editAsUserTool({
-              asUserRun,
-              authorUserId,
-              extendAttemptDeadline,
-              isOwner,
-              thread,
-              unattended,
-            }),
-          },
-          deleteAsUser: {
-            summary: 'delete one of the asking person’s own Slack messages',
-            tool: deleteAsUserTool({
-              asUserRun,
-              authorUserId,
-              extendAttemptDeadline,
-              thread,
-              unattended,
-            }),
-          },
+          sendAsUser: sendAsUserTool({
+            asUserRun,
+            authorUserId,
+            extendAttemptDeadline,
+            isOwner,
+            stageFile: stageSandboxFile,
+            thread,
+            unattended,
+          }),
+          editAsUser: editAsUserTool({
+            asUserRun,
+            authorUserId,
+            extendAttemptDeadline,
+            isOwner,
+            thread,
+            unattended,
+          }),
+          deleteAsUser: deleteAsUserTool({
+            asUserRun,
+            authorUserId,
+            extendAttemptDeadline,
+            thread,
+            unattended,
+          }),
         }
       : {}),
   };
@@ -1378,17 +1121,7 @@ export async function buildTools({
     servers,
   });
   for (const [name, mcpTool] of Object.entries(mcp.tools)) {
-    const gate = mcp.gates[name];
-    deferred[name] = {
-      summary: gate
-        ? `MCP tool (${name}): ${gate.category}${
-            gate.rule === 'ask'
-              ? ', needs the user to approve each call (they get a button)'
-              : ''
-          }`
-        : `MCP tool (${name})`,
-      tool: mcpTool,
-    };
+    deferred[name] = mcpTool;
   }
 
   // Anything this thread already loaded stays loaded (see lib/ai/loaded-tools).
@@ -1535,7 +1268,7 @@ export async function buildTools({
     core[name] = trackUse(name, entry);
   }
   for (const [name, entry] of Object.entries(deferred)) {
-    deferred[name] = { ...entry, tool: trackUse(name, entry.tool) };
+    deferred[name] = trackUse(name, entry);
   }
   const coreNames = new Set(Object.keys(core));
   noteToolNames([...coreNames, ...Object.keys(deferred)]);
@@ -1556,9 +1289,7 @@ export async function buildTools({
   // array, the front of the cached prompt: a catalog that dropped whatever the
   // thread had loaded changed on every load and invalidated the whole cached
   // thread on the next turn. A redundant load of an active tool is harmless.
-  const catalog = Object.entries(deferred)
-    .map(([name, entry]) => `- ${name}: ${entry.summary}`)
-    .join('\n');
+  const catalog = Object.keys(deferred).join(', ');
   const active = new Set(Object.keys(core));
   active.add('loadTools');
   for (const name of remembered) {
@@ -1577,7 +1308,7 @@ export async function buildTools({
     .join('');
 
   const loadTools = tool({
-    description: `Load additional tools by name before using them (their schemas stay out of the prompt until needed). A tool you can already call needs no loading. Available:\n${catalog || '- (none)'}${hiddenNote}`,
+    description: `Load additional tools by name before using them (their schemas stay out of the prompt until needed). A tool you can already call needs no loading. Available: ${catalog || '(none)'}${hiddenNote}`,
     inputSchema: z.object({
       tools: z
         .array(z.string())
@@ -1611,9 +1342,7 @@ export async function buildTools({
   const tools: ToolSet = {
     ...core,
     loadTools,
-    ...Object.fromEntries(
-      Object.entries(deferred).map(([name, entry]) => [name, entry.tool])
-    ),
+    ...Object.fromEntries(Object.entries(deferred)),
   };
   const used = (name: string) => usage.has(name);
 
