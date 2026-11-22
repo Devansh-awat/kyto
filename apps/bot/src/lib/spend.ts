@@ -1,13 +1,19 @@
 import { LUNA_MODEL, MERCURY_MODEL, PRIMARY_MODEL } from '@repo/ai';
-import { type SpendRecord, setSpendSink } from '@repo/ai/spend';
+import {
+  type SpendGate,
+  type SpendRecord,
+  setSpendGate,
+  setSpendSink,
+} from '@repo/ai/spend';
 import {
   callStats,
   recordModelSpend,
   type SpendGroup,
   summarizeModelSpend,
+  sumUserSharedSpendSince,
 } from '@repo/db/queries';
 import { z } from 'zod';
-import { timeUntilUtcMidnight } from '@/lib/errors';
+import { SharedCapError, timeUntilUtcMidnight } from '@/lib/errors';
 import logger, { threadLogContext } from '@/lib/logger';
 import { errorMessage } from '@/lib/utils/error';
 
@@ -23,8 +29,98 @@ const HACKCLUB_DAILY_USD = 3;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_SPEND_DAYS = 90;
 
+// Shared-budget money spent but not in `model_spend` yet: the finished steps of
+// calls still running, and rows being written.
+interface Unbooked {
+  day: number;
+  usd: number;
+  userId: string;
+}
+const unbooked = new Set<Unbooked>();
+
+function utcDayStart(): number {
+  return new Date().setUTCHours(0, 0, 0, 0);
+}
+
+/** What one person has spent of the shared Hack Club budget this UTC day. */
+export async function sharedSpendToday(userId: string): Promise<number> {
+  const day = utcDayStart();
+  // Fails OPEN: a DB hiccup must not lock anyone out.
+  const booked = await sumUserSharedSpendSince(userId, new Date(day)).catch(
+    (error: unknown) => {
+      logger.warn(
+        { err: errorMessage(error), userId },
+        '[spend] could not read the daily shared-key spend; counting none'
+      );
+      return 0;
+    }
+  );
+  let total = booked;
+  for (const entry of unbooked) {
+    if (entry.userId === userId && entry.day === day) {
+      total += entry.usd;
+    }
+  }
+  return total;
+}
+
+type SpendContext = ReturnType<typeof threadLogContext.getStore>;
+
+/** Throws once the person this work is for has spent their daily share. */
+export async function assertSharedCap(
+  context: SpendContext = threadLogContext.getStore()
+): Promise<void> {
+  if (!(context?.userId && context.sharedCap)) {
+    return;
+  }
+  const spent = await sharedSpendToday(context.userId);
+  if (spent < DAILY_SHARED_CAP_USD) {
+    return;
+  }
+  if (context.sharedCap !== 'reached') {
+    logger.info(
+      { spent, threadId: context.threadId, userId: context.userId },
+      '[spend] user hit the daily shared-key cap mid-turn'
+    );
+  }
+  context.sharedCap = 'reached';
+  throw new SharedCapError(DAILY_SHARED_CAP_USD);
+}
+
+// Steps are counted for everyone a call is attributed to, not only the capped:
+// a turn of theirs that starts meanwhile has to see them.
+function openGate(): SpendGate | undefined {
+  const context = threadLogContext.getStore();
+  if (!context?.userId) {
+    return;
+  }
+  const entry: Unbooked = { day: 0, usd: 0, userId: context.userId };
+  return {
+    beforeRequest: () => assertSharedCap(context),
+    onStep: (costUsd) => {
+      entry.day = utcDayStart();
+      entry.usd += costUsd;
+      unbooked.add(entry);
+    },
+    settle: () => {
+      unbooked.delete(entry);
+    },
+  };
+}
+
 function save(record: SpendRecord): void {
   const context = threadLogContext.getStore();
+  const entry: Unbooked | undefined =
+    context?.userId && record.provider === 'hackclub'
+      ? {
+          day: utcDayStart(),
+          usd: record.costUsd ?? 0,
+          userId: context.userId,
+        }
+      : undefined;
+  if (entry) {
+    unbooked.add(entry);
+  }
   recordModelSpend({
     ...record,
     // Every turn (and what it starts, subagents included) runs inside the
@@ -32,17 +128,24 @@ function save(record: SpendRecord): void {
     threadId: context?.threadId ?? null,
     // Attributed to the turn's user so the per-user daily cap can sum it.
     userId: context?.userId ?? null,
-  }).catch((error: unknown) => {
-    logger.warn(
-      { err: errorMessage(error), source: record.source },
-      '[spend] could not record a model call'
-    );
-  });
+  })
+    .catch((error: unknown) => {
+      logger.warn(
+        { err: errorMessage(error), source: record.source },
+        '[spend] could not record a model call'
+      );
+    })
+    .finally(() => {
+      if (entry) {
+        unbooked.delete(entry);
+      }
+    });
 }
 
-/** Every model call from here on lands in `model_spend`. */
+/** Every model call from here on lands in `model_spend`, held to the cap. */
 export function startSpendLedger(): void {
   setSpendSink(save);
+  setSpendGate(openGate);
 }
 
 const jevUsageSchema = z.object({

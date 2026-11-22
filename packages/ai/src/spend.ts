@@ -29,6 +29,32 @@ export function setSpendSink(next: (record: SpendRecord) => void): void {
   sink = next;
 }
 
+/**
+ * Stops a call spending past its owner's cap. One per call, opened in the
+ * caller's own async context; the bot decides whose call it is and what it may
+ * spend. A call's row is only written when the WHOLE call ends, so a cap read
+ * from the ledger alone cannot see a running call: one ran 14 requests and 15
+ * compactions, $2 past a $1 cap (2026-11-22).
+ */
+export interface SpendGate {
+  /** Rejects when no further request may be sent. */
+  beforeRequest: () => Promise<void>;
+  /** A finished step's cost, not in any row yet. */
+  onStep: (costUsd: number) => void;
+  /** The call's row has been reported: its steps count there from here on. */
+  settle: () => void;
+}
+
+let gateOpener: (() => SpendGate | undefined) | undefined;
+
+export function setSpendGate(next: () => SpendGate | undefined): void {
+  gateOpener = next;
+}
+
+export function openSpendGate(): SpendGate | undefined {
+  return gateOpener?.();
+}
+
 export function reportSpend({
   effort,
   model,

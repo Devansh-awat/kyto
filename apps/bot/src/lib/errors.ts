@@ -67,6 +67,20 @@ export class ByokExhaustedError extends Error {
   }
 }
 
+/**
+ * The person's own daily share of the Hack Club budget is spent. The message IS
+ * the notice they get; it must not match the provider spend-limit patterns,
+ * which write Hack Club off for everyone.
+ */
+export class SharedCapError extends Error {
+  constructor(capUsd: number) {
+    super(
+      `_you've hit today's limit on my shared ai budget (about $${capUsd.toFixed(2)} of usage). it resets at midnight utc. to keep going now, connect your own model key in my app home under models, and the shared limit stops applying to you_`
+    );
+    this.name = 'SharedCapError';
+  }
+}
+
 const SPEND_AMOUNT_PATTERN = /\$\d+(?:\.\d+)?/;
 
 const MINUTES_PER_HOUR = 60;
@@ -116,6 +130,9 @@ export function agentErrorMessage({
   // in their App Home tab, where only they can see it.
   if (error instanceof ByokExhaustedError) {
     return "_your own model failed on this one, and i didn't use my shared models because you chose not to. if you'd rather i did, switch to shared models in my app home (the model keys section has a shared-model fallback toggle). the model keys section also shows what the provider said_";
+  }
+  if (error instanceof SharedCapError) {
+    return error.message;
   }
   if (error instanceof BudgetExhaustedError) {
     const amount = message.match(SPEND_AMOUNT_PATTERN)?.[0] ?? '$3';

@@ -11,6 +11,9 @@ export const threadLogContext = new AsyncLocalStorage<{
   // Who the turn is for, so each model_spend row can be attributed to a user
   // for the per-user daily shared-key cap. Absent for thread-less background.
   userId?: string;
+  // Set by a turn whose user is held to that cap ('reached' once a request was
+  // refused over it). Absent: the owner, or someone on their own key.
+  sharedCap?: 'enforced' | 'reached';
 }>();
 
 const LEVELS: Record<number, string> = {

@@ -28,7 +28,6 @@ import {
   type InflightEffect,
   saveThreadLunaEffort,
   saveThreadPromptSize,
-  sumUserSharedSpendSince,
 } from '@repo/db/queries';
 import { LazySandbox } from '@repo/sandbox';
 import { z } from 'zod';
@@ -148,6 +147,7 @@ import {
   ByokExhaustedError,
   DegenerateOutputError,
   isProviderFailure,
+  SharedCapError,
   StreamInterruptedError,
 } from '@/lib/errors';
 import { parseFlags } from '@/lib/flags';
@@ -159,7 +159,7 @@ import { openSandboxProxies } from '@/lib/sandbox/proxies';
 import { acquireThreadSandbox, threadSandboxStore } from '@/lib/sandbox/store';
 import { ensureChannelIndex } from '@/lib/slack/channel-links';
 import { setSessionStatus } from '@/lib/slack/code-channel-api';
-import { DAILY_SHARED_CAP_USD } from '@/lib/spend';
+import { DAILY_SHARED_CAP_USD, sharedSpendToday } from '@/lib/spend';
 import { endTodoTurn, leftoverTodos, moveTodosDown } from '@/lib/todo-list';
 import { saveTurnTiming } from '@/lib/turn-timings';
 import {
@@ -596,34 +596,23 @@ async function executeTurn(
   // Per-user daily shared-key cap. Checked after routing so a BYOK user (who
   // runs on their OWN key, `routing.own.length > 0`) is never blocked — only a
   // user about to spend the SHARED budget is. Owner exempt; `!secret` left
-  // alone (its flow allows no ordinary post). Fails OPEN: a DB hiccup must not
-  // lock anyone out.
-  if (!(isOwner || secret) && routing.own.length === 0) {
-    const now = new Date();
-    const since = new Date(
-      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-    );
-    const spent = await sumUserSharedSpendSince(
-      message.author.userId,
-      since
-    ).catch((error: unknown) => {
-      logger.warn(
-        { err: errorMessage(error), threadId },
-        '[spend] could not read the daily shared-key spend; allowing the turn'
-      );
-      return 0;
-    });
+  // alone (its flow allows no ordinary post). The flag holds every later
+  // request of this turn, its subagents included, to the same cap.
+  const spendContext = threadLogContext.getStore();
+  if (spendContext && !(isOwner || secret) && routing.own.length === 0) {
+    const spent = await sharedSpendToday(message.author.userId);
     if (spent >= DAILY_SHARED_CAP_USD) {
       logger.info(
         { spent, threadId, userId: message.author.userId },
         '[spend] user hit the daily shared-key cap'
       );
-      const notice = `_you've hit today's limit on my shared ai budget (about $${DAILY_SHARED_CAP_USD.toFixed(2)} of usage). it resets at midnight utc. to keep going now, connect your own model key in my app home under models, and the shared limit stops applying to you_`;
+      const notice = new SharedCapError(DAILY_SHARED_CAP_USD).message;
       await thread.postEphemeral(message.author, notice).catch(async () => {
         await thread.post({ markdown: notice }).catch(() => undefined);
       });
       return;
     }
+    spendContext.sharedCap = 'enforced';
   }
   // Ends whichever attempt is running (set per attempt below).
   let abortCurrentAttempt: ((reason: Error) => void) | undefined;
@@ -1027,6 +1016,19 @@ async function executeTurn(
             logger.warn(
               { err: postError, threadId },
               '[agent] could not post the BYOK failure notice'
+            );
+          });
+        return;
+      }
+      // Theirs alone too, and the same words a turn refused at its start gets.
+      if (error instanceof SharedCapError) {
+        await thread
+          .postEphemeral(message.author, error.message)
+          .catch(() => thread.post({ markdown: error.message }))
+          .catch((postError: unknown) => {
+            logger.warn(
+              { err: postError, threadId },
+              '[agent] could not post the shared-cap notice'
             );
           });
         return;
@@ -2681,6 +2683,15 @@ async function executeTurn(
           }
         }
         attempts.push({ attempt: currentAttempt, error });
+        // Not the model's failure: no rung is marked dead, and none is tried.
+        // Falling back would carry a capped turn on to the free Gemini floor,
+        // which the same turn is refused outright at its start.
+        if (
+          spendContext?.sharedCap === 'reached' &&
+          !controller.signal.aborted
+        ) {
+          throw new SharedCapError(DAILY_SHARED_CAP_USD);
+        }
         router.markFailed(currentAttempt);
         // The prompt kyto BUILT is malformed — the SDK refused it before any
         // request went out, so every remaining rung would fail identically and

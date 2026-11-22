@@ -19,7 +19,7 @@ import { renderStream } from '@/lib/ai/stream';
 import { stripToolComplaints } from '@/lib/ai/stream/tool-complaints';
 import { slack } from '@/lib/chat';
 import { isProviderFailure } from '@/lib/errors';
-import logger from '@/lib/logger';
+import logger, { threadLogContext } from '@/lib/logger';
 import { errorMessage } from '@/lib/utils/error';
 
 // A subagent is a headless copy of kyto: it shares the PARENT THREAD's sandbox
@@ -472,7 +472,11 @@ export function runSubagentTool({
                 if (report.trim()) {
                   break;
                 }
-                if (abortSignal?.aborted) {
+                // At the shared cap no other rung may carry it on either.
+                if (
+                  abortSignal?.aborted ||
+                  threadLogContext.getStore()?.sharedCap === 'reached'
+                ) {
                   break;
                 }
               }

@@ -56,8 +56,9 @@ import {
 } from './providers/byok';
 import { CHATGPT_PROVIDER } from './providers/chatgpt';
 import { replayableContext, type SentContext } from './sent-context';
-import { reportSpend } from './spend';
+import { openSpendGate, reportSpend } from './spend';
 import { stabilizeToolOrder } from './tool-order';
+import { stepsCostUsd } from './usage-cost';
 
 // Ceiling on agentic steps within one attempt (model → tools → model …).
 // Effectively "no limit" for real work: a hard 60 used to strand long jobs
@@ -419,6 +420,10 @@ export function streamAttempt({
   // `store:false` (Codex rejects the request otherwise). Every other provider is
   // an ordinary openai-compatible chat endpoint.
   const isChatgpt = attempt.provider === CHATGPT_PROVIDER;
+  const spendGate =
+    attempt.provider === HACKCLUB_PROVIDER && attempt.byokProvider === undefined
+      ? openSpendGate()
+      : undefined;
   const model = isChatgpt
     ? createOpenAI({
         apiKey: attempt.apiKey,
@@ -436,6 +441,7 @@ export function streamAttempt({
         baseURL: attempt.baseURL,
         fetch: tunedFetch({
           attempt,
+          beforeRequest: spendGate?.beforeRequest,
           // A resumed context whose history was compacted away has no
           // replayed thread to put a breakpoint after.
           historyMessages:
@@ -535,6 +541,7 @@ export function streamAttempt({
       stats: meter.summary(),
       steps,
     });
+    spendGate?.settle();
   };
   const priceStep = LONG_CONTEXT_PRICE_STEP[attempt.model];
   // How many messages the previous step's request carried: what follows them
@@ -833,6 +840,7 @@ export function streamAttempt({
     onLanguageModelCallEnd: (event) => meter.onEnd(event),
     onLanguageModelCallStart: () => meter.onStart(),
     onStepEnd: ({ usage }) => {
+      spendGate?.onStep(stepsCostUsd([{ usage }]) ?? 0);
       if (pendingMeasure && usage.inputTokens !== undefined) {
         onCompaction?.({
           after: usage.inputTokens,
@@ -1015,6 +1023,7 @@ const PROMPT_CACHE_KEY = 'kyto';
 
 function tunedFetch({
   attempt,
+  beforeRequest,
   historyMessages,
   holder,
   onCachePrefix,
@@ -1025,6 +1034,7 @@ function tunedFetch({
   toolOrder = { names: [] },
 }: {
   attempt: ModelAttempt;
+  beforeRequest?: () => Promise<void>;
   historyMessages: number;
   reasoningEffort?: string;
   holder: ResolvedModelHolder;
@@ -1069,6 +1079,7 @@ function tunedFetch({
     let callInput = input;
     let callInit = init;
     if (url.includes('/chat/completions')) {
+      await beforeRequest?.();
       holder.calls = (holder.calls ?? 0) + 1;
       const tuned = tuneBody(
         await readRequestBody(input, init),

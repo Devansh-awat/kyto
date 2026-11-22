@@ -3,7 +3,7 @@ import type { SandboxContext } from '@repo/ai';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { env } from '@/env';
-import { recordCompletionSpend } from '@/lib/spend';
+import { assertSharedCap, recordCompletionSpend } from '@/lib/spend';
 import { errorMessage } from '@/lib/utils/error';
 import type { GeneratedImage } from '@/types/tools/generate-image';
 
@@ -88,6 +88,7 @@ async function requestImages({
   images: { bytes: Uint8Array; mediaType: string }[];
   prompt: string;
 }): Promise<{ bytes: Uint8Array[]; error?: string }> {
+  await assertSharedCap();
   const response = await fetch(CHAT_URL, {
     signal: AbortSignal.timeout(120_000),
     body: JSON.stringify({
