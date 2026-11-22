@@ -1228,15 +1228,21 @@ async function executeTurn(
       threadId,
     }).catch(() => undefined);
     const promptStart = Date.now();
-    const { firstReplayedId, history, jevConversation, tail, thinkingChars } =
-      await buildPrompt(turnMessage, {
-        codeChannel,
-        asUserAccount,
-        channelInstructions: hints.channelInstructions,
-        customizationPrompt: hints.customization?.prompt,
-        memoriesOff: hints.memoryMode === 'off',
-        thread: turnThread,
-      });
+    const {
+      compactedTail,
+      firstReplayedId,
+      history,
+      jevConversation,
+      tail,
+      thinkingChars,
+    } = await buildPrompt(turnMessage, {
+      codeChannel,
+      asUserAccount,
+      channelInstructions: hints.channelInstructions,
+      customizationPrompt: hints.customization?.prompt,
+      memoriesOff: hints.memoryMode === 'off',
+      thread: turnThread,
+    });
     // The per-turn tail; the replayed thread stays in `history` so it can go
     // out as its own cacheable messages (see buildPrompt).
     let messageText = tail;
@@ -1514,17 +1520,23 @@ async function executeTurn(
     // the tool results already gathered, plus (when the turn was cut off after
     // it had started talking) what the user has already been shown.
     const attemptPrompt = ({
+      afterCompaction = false,
       isFallback,
       model,
       ownKey,
     }: {
+      /** Without what a compaction's summary covers (see compactedTail). */
+      afterCompaction?: boolean;
       isFallback: boolean;
       model: string;
       ownKey: boolean;
     }): string => {
       // Asked "what model are you?", kyto answered from its training instead.
       const blocks = [
-        messageText,
+        // Everything after the tail was appended to it.
+        afterCompaction
+          ? `${compactedTail}${messageText.slice(tail.length)}`
+          : messageText,
         `This reply is being written by the model \`${model}\`; asked which model you are, that's the answer.`,
         codingLine({ ownKey }),
       ];
@@ -1978,6 +1990,12 @@ async function executeTurn(
               '[agent] gateway failure, retrying the same request'
             );
           },
+          compactedPrompt: attemptPrompt({
+            afterCompaction: true,
+            isFallback,
+            model: currentAttempt.model,
+            ownKey: onOwnKey,
+          }),
           prompt: attemptPrompt({
             isFallback,
             model: currentAttempt.model,

@@ -80,45 +80,14 @@ describe('planTrim / applyTrim', () => {
 
 describe('compactedMessages', () => {
   const request: ModelMessage = { content: 'do the thing', role: 'user' };
-  const call: ModelMessage = {
-    content: [
-      { input: {}, toolCallId: 'c', toolName: 'bash', type: 'tool-call' },
-    ],
-    role: 'assistant',
-  };
 
   test('keeps only the summary and the request, in that order', () => {
-    const messages = [
-      history,
-      request,
-      result('a', 9000),
-      call,
-      result('c', 9000),
-    ];
     const out = compactedMessages({
-      messages,
       request,
       summary: 'SUMMARY',
     });
     expect(out).toHaveLength(2);
     expect(out[0]?.content).toContain('SUMMARY');
     expect(out[1]).toBe(request);
-  });
-
-  test('a second compaction keeps the request again', () => {
-    const first = compactedMessages({
-      messages: [history, request, result('a', 9000), call, result('c', 9000)],
-      request,
-      summary: 'ONE',
-    });
-    const grown = [...first, call, result('d', 9000)];
-    const second = compactedMessages({
-      messages: grown,
-      request,
-      summary: 'TWO',
-    });
-    expect(second[1]).toBe(request);
-    expect(second[0]?.content).toContain('TWO');
-    expect(second).toHaveLength(2);
   });
 });

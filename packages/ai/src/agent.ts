@@ -21,6 +21,7 @@ import { createCallMeter } from './call-stats';
 import {
   applyTrim,
   COMPACT_AT,
+  COMPACT_HELPED_AT,
   COMPACT_INSTRUCTION,
   type CompactionEvent,
   compactedMessages,
@@ -293,6 +294,7 @@ export function streamAttempt({
   continueFrom = [],
   priorInputTokens,
   priorMessages = [],
+  compactedPrompt,
   prompt,
   reasoningEffort,
   resumeFrom,
@@ -383,6 +385,12 @@ export function streamAttempt({
    * way a later step would be, instead of going out whole.
    */
   priorInputTokens?: number;
+  /**
+   * `prompt` as it stands once the context was compacted: without the parts
+   * the summary covers (earlier turns' reasoning and results). Omitted → the
+   * prompt is kept whole.
+   */
+  compactedPrompt?: string;
   prompt: string;
   /**
    * A failed attempt's last request (see onSentContext): sent as this
@@ -467,20 +475,23 @@ export function streamAttempt({
   const initialImages = usableImages(images ?? [], onDroppedImages);
   const textOnly = !modelSupportsVision(attempt.model);
   const descriptions = new Map<unknown, string>();
-  const request: ModelMessage = {
+  const requestMessage = (text: string): ModelMessage => ({
     content:
       initialImages.length > 0
-        ? [
-            ...initialImages.map(imagePart),
-            { text: prompt, type: 'text' as const },
-          ]
-        : prompt,
+        ? [...initialImages.map(imagePart), { text, type: 'text' as const }]
+        : text,
     role: 'user',
-  };
+  });
+  const request = requestMessage(prompt);
+  const compactedRequest = requestMessage(compactedPrompt ?? prompt);
+  // Whether the context going out is a compacted one: from here on its request
+  // is `compactedRequest`. A fallback inherits it, or it would bring back what
+  // the failed attempt had summarized away.
+  let compacted = resumeFrom?.compacted ?? false;
   const replayed = resumeFrom
     ? replayableContext({
         context: resumeFrom,
-        request,
+        request: compacted ? compactedRequest : request,
         toolNames: new Set(Object.keys(tools)),
       })
     : undefined;
@@ -548,7 +559,10 @@ export function streamAttempt({
   // is the last step's own output, not yet in any measured usage.
   let sentLength = 0;
   // A compaction whose real effect the next request's usage will show.
-  let pendingMeasure: { before: number; step: number } | undefined;
+  let pendingMeasure:
+    | { before: number; helpedBelow: number; step: number }
+    | undefined;
+  let compactionStopped = false;
   const systemInput =
     typeof system === 'string'
       ? system
@@ -711,6 +725,7 @@ export function streamAttempt({
             const unmeasuredFrom = first ? carriedUnmeasuredFrom : sentLength;
             if (
               ceiling &&
+              !compactionStopped &&
               lastInput !== undefined &&
               lastInput > ceiling * COMPACT_AT
             ) {
@@ -744,10 +759,10 @@ export function streamAttempt({
               });
               if (summary) {
                 stepMessages = compactedMessages({
-                  messages,
-                  request: initialMessages[promptIndex],
+                  request: compactedRequest,
                   summary,
                 });
+                compacted = true;
               } else {
                 const plan = planTrim({
                   fromIndex: first ? 0 : initialMessages.length,
@@ -768,7 +783,11 @@ export function streamAttempt({
                 step: stepNumber,
                 summarized: summary !== undefined,
               });
-              pendingMeasure = { before: lastInput, step: stepNumber };
+              pendingMeasure = {
+                before: lastInput,
+                helpedBelow: ceiling * COMPACT_HELPED_AT,
+                step: stepNumber,
+              };
               summarized = summary !== undefined;
             }
             if (fresh.length > 0) {
@@ -801,14 +820,17 @@ export function streamAttempt({
               result.messages = capped;
             }
             if (onSentContext) {
-              const sentRequest = initialMessages[promptIndex];
+              const sentRequest = compacted
+                ? compactedRequest
+                : initialMessages[promptIndex];
               let requestIndex = sentRequest ? capped.indexOf(sentRequest) : -1;
               if (requestIndex === -1) {
                 // Rebuilt (an image described for a text-only model): where a
                 // compaction or the original layout put it.
-                requestIndex = summarized ? 1 : promptIndex;
+                requestIndex = compacted ? 1 : promptIndex;
               }
               onSentContext({
+                ...(compacted ? { compacted } : {}),
                 // A rewritten context has no measured size until it is sent.
                 ...(summarized === undefined && lastInput !== undefined
                   ? { inputTokens: lastInput }
@@ -842,10 +864,14 @@ export function streamAttempt({
     onStepEnd: ({ usage }) => {
       spendGate?.onStep(stepsCostUsd([{ usage }]) ?? 0);
       if (pendingMeasure && usage.inputTokens !== undefined) {
+        const { before, helpedBelow, step } = pendingMeasure;
+        compactionStopped = usage.inputTokens > helpedBelow;
         onCompaction?.({
           after: usage.inputTokens,
-          ...pendingMeasure,
+          before,
           phase: 'measured',
+          step,
+          stopped: compactionStopped,
         });
         pendingMeasure = undefined;
       }

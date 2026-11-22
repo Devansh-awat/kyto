@@ -267,6 +267,9 @@ export async function buildPrompt(
    */
   jevConversation: string;
   tail: string;
+  /** `tail` once the context was compacted: the message, without the earlier
+   * turns' reasoning and the canvases, which the summary covers. */
+  compactedTail: string;
 }> {
   // Everything below is independent, so it is read at once: the Slack thread
   // read is the slow part (~0.5s), and awaiting the rest in front of it put
@@ -656,6 +659,7 @@ export async function buildPrompt(
   // Do NOT move a volatile block above the tail, and never render a history
   // entry differently from one turn to the next.
   return {
+    compactedTail: [nowLine, latest].filter(Boolean).join('\n\n'),
     firstReplayedId,
     history: [
       channelInstructions

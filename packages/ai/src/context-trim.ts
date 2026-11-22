@@ -19,6 +19,10 @@ export const LONG_CONTEXT_PRICE_STEP: Record<string, number> = {
 // request plus one instruction, so its whole prefix is a cache READ; after it
 // the prompt is rewritten once from the summary on, then read again.
 export const COMPACT_AT = 0.92;
+// A compaction that leaves the next request above this share of the step bought
+// too little room to be worth repeating, and the call compacts no more: one
+// summarized 106k to 106k before each of 14 steps (2026-11-22).
+export const COMPACT_HELPED_AT = 0.8;
 // The fallback when the summary fails: fold old tool results down to this.
 export const TRIM_TARGET = 0.55;
 
@@ -36,21 +40,28 @@ export type CompactionEvent =
       /** False → the summary failed and old tool results were cut instead. */
       summarized: boolean;
     }
-  | { after: number; before: number; phase: 'measured'; step: number };
+  | {
+      after: number;
+      before: number;
+      phase: 'measured';
+      step: number;
+      /** It did not help enough, so this call will not compact again. */
+      stopped: boolean;
+    };
 
 /**
  * The messages after compaction: the summary, then the request that started
- * this task verbatim. Nothing else survives, not even the last step: kept
- * verbatim it could be arbitrarily large (a fallback's carried tool rounds),
- * and the summary already covers it.
+ * this task. Nothing else survives, not even the last step: kept verbatim it
+ * could be arbitrarily large (a fallback's carried tool rounds), and the
+ * summary already covers it. `request` is the caller's short form of it (see
+ * streamAttempt's `compactedPrompt`): the full one carries what earlier turns
+ * thought and found, which kept 42k tokens through every compaction.
  */
 export function compactedMessages({
-  messages,
   request,
   summary,
 }: {
-  messages: ModelMessage[];
-  request: ModelMessage | undefined;
+  request: ModelMessage;
   summary: string;
 }): ModelMessage[] {
   return [
@@ -58,7 +69,7 @@ export function compactedMessages({
       content: `<compacted_context>\nEverything before this point (the thread and the work so far, including your latest tool results) was compacted into this summary to save tokens. Run a tool again if you need exact output.\n\n${summary}\n</compacted_context>`,
       role: 'user',
     },
-    ...(request && messages.includes(request) ? [request] : []),
+    request,
   ];
 }
 

@@ -2,12 +2,15 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { type ModelMessage, tool } from 'ai';
 import { z } from 'zod';
 import { streamAttempt } from './agent';
-import { COMPACT_INSTRUCTION } from './context-trim';
+import { COMPACT_INSTRUCTION, type CompactionEvent } from './context-trim';
 import type { SentContext } from './sent-context';
 
 // A local OpenAI-compatible endpoint that records each request and answers:
 // a plain JSON completion for the summary call, a short SSE stream otherwise.
 const requests: { messages: { content: unknown; role: string }[] }[] = [];
+// How many streamed answers are a tool call instead, and the size reported.
+let toolSteps = 0;
+let promptTokens = 10;
 const server = Bun.serve({
   async fetch(request) {
     const body = (await request.json()) as {
@@ -32,12 +35,39 @@ const server = Bun.serve({
         usage: { completion_tokens: 5, prompt_tokens: 10, total_tokens: 15 },
       });
     }
+    const callsTool = toolSteps > 0;
+    toolSteps -= 1;
+    const delta = callsTool
+      ? {
+          role: 'assistant',
+          tool_calls: [
+            {
+              function: { arguments: '{"command":"ls"}', name: 'bash' },
+              id: `call_${requests.length}`,
+              index: 0,
+              type: 'function',
+            },
+          ],
+        }
+      : { content: text, role: 'assistant' };
     const chunks = [
-      { choices: [{ delta: { content: text, role: 'assistant' }, index: 0 }] },
-      { choices: [{ delta: {}, finish_reason: 'stop', index: 0 }] },
+      { choices: [{ delta, index: 0 }] },
+      {
+        choices: [
+          {
+            delta: {},
+            finish_reason: callsTool ? 'tool_calls' : 'stop',
+            index: 0,
+          },
+        ],
+      },
       {
         choices: [],
-        usage: { completion_tokens: 1, prompt_tokens: 10, total_tokens: 11 },
+        usage: {
+          completion_tokens: 1,
+          prompt_tokens: promptTokens,
+          total_tokens: promptTokens + 1,
+        },
       },
     ];
     const sse = `${chunks
@@ -231,5 +261,94 @@ describe('a fallback resumed from the last sent request', () => {
     expect(body).not.toContain('a rebuilt message');
     expect(body).not.toContain('thinking about it');
     expect(body).toContain('carried-c1');
+  });
+});
+
+describe('a compacted request', () => {
+  const tools = {
+    bash: tool({
+      execute: () => 'ok',
+      inputSchema: z.object({ command: z.string() }),
+    }),
+  };
+  const attempt = {
+    apiKey: 'k',
+    baseURL: `http://localhost:${server.port}`,
+    model: 'openai/gpt-6-luna',
+    provider: 'test',
+  };
+  const isSummary = (request: (typeof requests)[number]) =>
+    JSON.stringify(request.messages.at(-1)).includes(
+      COMPACT_INSTRUCTION.slice(0, 40)
+    );
+
+  async function runSteps({
+    steps,
+    tokens,
+  }: {
+    steps: number;
+    tokens: number;
+  }) {
+    requests.length = 0;
+    toolSteps = steps;
+    promptTokens = tokens;
+    const events: CompactionEvent[] = [];
+    let sent: SentContext | undefined;
+    const result = streamAttempt({
+      attempt,
+      compactedPrompt: 'THE MESSAGE',
+      history: ['an older message'],
+      holder: { model: 'test-model' },
+      onCompaction: (event) => events.push(event),
+      onSentContext: (context) => {
+        sent = context;
+      },
+      prompt: 'EARLIER REASONING\n\nTHE MESSAGE',
+      system: 'system',
+      tools,
+    });
+    await result.text;
+    toolSteps = 0;
+    promptTokens = 10;
+    return { events, sent };
+  }
+
+  test('drops the earlier reasoning from the request', async () => {
+    const { sent } = await runSteps({ steps: 1, tokens: 260_000 });
+    expect(JSON.stringify(requests[0])).toContain('EARLIER REASONING');
+    const after = JSON.stringify(requests.at(-1));
+    expect(after).toContain('SUMMARY OF THE EARLIER RUN');
+    expect(after).toContain('THE MESSAGE');
+    expect(after).not.toContain('EARLIER REASONING');
+    expect(after).not.toContain('an older message');
+    expect(sent?.compacted).toBe(true);
+    expect(sent?.requestIndex).toBe(1);
+  });
+
+  test('stops compacting once it did not help', async () => {
+    const { events, sent } = await runSteps({ steps: 5, tokens: 260_000 });
+    expect(requests.filter(isSummary)).toHaveLength(1);
+    expect(events.at(-1)).toMatchObject({ phase: 'measured', stopped: true });
+    // Later steps still know where the short request sits.
+    expect(sent?.requestIndex).toBe(1);
+  });
+
+  test('is not brought back whole by a fallback', async () => {
+    const { sent } = await runSteps({ steps: 1, tokens: 260_000 });
+    requests.length = 0;
+    const result = streamAttempt({
+      attempt,
+      compactedPrompt: 'THE FALLBACK MESSAGE',
+      holder: { model: 'test-model' },
+      prompt: 'EARLIER REASONING\n\nTHE FALLBACK MESSAGE',
+      resumeFrom: sent,
+      system: 'system',
+      tools,
+    });
+    await result.text;
+    const body = JSON.stringify(requests[0]);
+    expect(body).toContain('THE FALLBACK MESSAGE');
+    expect(body).toContain('SUMMARY OF THE EARLIER RUN');
+    expect(body).not.toContain('EARLIER REASONING');
   });
 });

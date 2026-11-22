@@ -8,6 +8,8 @@ import type { ModelMessage } from 'ai';
  * 901k request on the fallback (2026-10-27).
  */
 export interface SentContext {
+  /** It was compacted, so its request is the short form (`compactedPrompt`). */
+  compacted?: boolean;
   /**
    * The provider-measured input of the request before this one, when this one
    * is that request plus what its step appended; absent after a compaction

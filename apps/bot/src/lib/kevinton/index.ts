@@ -330,6 +330,7 @@ async function review({
           attempt,
           history: prompt.history,
           holder: {},
+          compactedPrompt: prompt.compactedTail,
           prompt: prompt.tail,
           // Nobody waits on a review: half price, slower is fine.
           serviceTier: 'flex',
