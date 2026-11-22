@@ -1,9 +1,9 @@
 ---
 name: media-clips
-description: 'Getting a GIF, clip, meme or video for someone: make it yourself from the source with yt-dlp + ffmpeg and upload it, how to get past YouTube''s "not a bot" wall with the browser''s cookies, and which hosts not to retry. Load before hunting for a GIF or downloading a video.'
+description: 'Editing an image (recolour, tint, resize, crop), and getting a GIF, clip, meme or video for someone: make it yourself from the source with yt-dlp + ffmpeg and upload it, how to get past YouTube''s "not a bot" wall with the browser''s cookies, and which hosts not to retry. Load before hunting for a GIF or downloading a video.'
 ---
 
-# GIFs, clips and video
+# GIFs, clips, video and images
 
 Someone asking for "the GIF" or "a clip of that" wants a FILE in the thread, not a list of GIF sites you couldn't open.
 
@@ -19,3 +19,7 @@ Someone asking for "the GIF" or "a clip of that" wants a FILE in the thread, not
    These are the sandbox browser's own visitor cookies (it is signed in to nothing), so they help with the bot check, not with private or members-only videos. Still blocked after that: say so, with the source link.
 3. **A host that failed once is done for this turn.** A DNS failure ("Could not resolve"), a Cloudflare 403 ("Attention Required!") or a block page from `fetchUrl` will be the same from the browser a minute later. Don't re-probe it with another tool; go to step 1 with the source instead. GIF aggregators (gifsea, yarn/getyarn, clipzag) are the usual ones that block.
 4. **If every route fails**, say plainly what you have and what you couldn't verify. Never present a GIF or link you couldn't open as if you had checked it.
+
+## Editing an image
+
+ImageMagick 6 (`convert`, not `magick`) and PIL are already installed, never install them. Do it in ONE pass that keeps transparency, e.g. `convert in.webp -channel RGB -fill '#FFD400' -colorize 70% +channel out.png`, look at it once with viewImage, and change the recipe only for a clear visual failure you can name (one request once took ten rewrites of the same script).

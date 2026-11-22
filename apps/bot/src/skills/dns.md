@@ -1,6 +1,6 @@
 ---
 name: dns
-description: 'Domain nameservers and DNS basics: what a registrar''s nameservers are, which ones a domain uses now, why there are two or more, setting records. Load before naming any domain''s nameservers or explaining NS records.'
+description: 'Domain nameservers and DNS basics: what a registrar''s nameservers are, which ones a domain uses now, why there are two or more, setting records, and RDAP (WHOIS-style) lookups. Load before naming any domain''s nameservers, explaining NS records or looking a domain up with RDAP.'
 ---
 
 # DNS and nameservers
@@ -23,3 +23,7 @@ Spaceship's default nameservers are `launch1.spaceship.net` and `launch2.spacesh
 - The reason is availability: if one is unreachable the other still answers; they should be on different networks or locations (RFC 2182 §3).
 - Don't promise load balancing. Resolvers may measure response times and prefer the faster server, which spreads load only loosely.
 - When changing nameservers, enter ALL the host's servers, not one.
+
+## RDAP
+
+`curl -sL` (the redirect is the point; without `-L` you get an HTML 302 page). Prefer the registry's own endpoint (`https://rdap.verisign.com/com/v1/domain/<d>` for .com), with `https://rdap.org/domain/<d>` as a fallback.
