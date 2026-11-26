@@ -315,7 +315,7 @@ describe('a compacted request', () => {
   }
 
   test('drops the earlier reasoning from the request', async () => {
-    const { sent } = await runSteps({ steps: 1, tokens: 260_000 });
+    const { sent } = await runSteps({ steps: 1, tokens: 310_000 });
     expect(JSON.stringify(requests[0])).toContain('EARLIER REASONING');
     const after = JSON.stringify(requests.at(-1));
     expect(after).toContain('SUMMARY OF THE EARLIER RUN');
@@ -327,7 +327,7 @@ describe('a compacted request', () => {
   });
 
   test('stops compacting once it did not help', async () => {
-    const { events, sent } = await runSteps({ steps: 5, tokens: 260_000 });
+    const { events, sent } = await runSteps({ steps: 5, tokens: 310_000 });
     expect(requests.filter(isSummary)).toHaveLength(1);
     expect(events.at(-1)).toMatchObject({ phase: 'measured', stopped: true });
     // Later steps still know where the short request sits.
@@ -335,7 +335,7 @@ describe('a compacted request', () => {
   });
 
   test('is not brought back whole by a fallback', async () => {
-    const { sent } = await runSteps({ steps: 1, tokens: 260_000 });
+    const { sent } = await runSteps({ steps: 1, tokens: 310_000 });
     requests.length = 0;
     const result = streamAttempt({
       attempt,

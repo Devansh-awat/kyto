@@ -1,21 +1,20 @@
 import type { ModelMessage } from 'ai';
 import { PRIMARY_MODEL } from './providers/attempts';
 
-// The input size at which a model's request is compacted mid-turn, for models
-// with a step: Haiku 5.5 was billed ~5x per token past 100k and Luna 2x/1.5x
-// past 272k. DeepSeek V4.1 Flash has no price step (one flat rate over 1M), so
-// 272k is a size ceiling: past it a turn is slow, dear in absolute terms, and
-// the model less reliable. Luna's old ceiling, kept on the swap 2026-11-26.
-export const LONG_CONTEXT_PRICE_STEP: Record<string, number> = {
-  [PRIMARY_MODEL]: 272_000,
-};
-
 // Compact once a step's ACTUAL input (the provider's count, not an estimate)
 // passes 92% of the step (owner's call 2026-10-12): the model itself summarizes
 // everything but the system prompt and tools. The summary request is the last
 // request plus one instruction, so its whole prefix is a cache READ; after it
 // the prompt is rewritten once from the summary on, then read again.
 export const COMPACT_AT = 0.92;
+
+// DeepSeek V4.1 Flash has no price step (one flat rate over 1M), so its entry
+// is a size ceiling instead: compaction fires once a step's input passes
+// 300k tokens (owner's call 2026-11-26), i.e. COMPACT_AT of this number.
+// Haiku 5.5 (100k) and Luna (272k) once had real price steps here.
+export const LONG_CONTEXT_PRICE_STEP: Record<string, number> = {
+  [PRIMARY_MODEL]: Math.ceil(300_000 / COMPACT_AT),
+};
 // A compaction that leaves the next request above this share of the step bought
 // too little room to be worth repeating, and the call compacts no more: one
 // summarized 106k to 106k before each of 14 steps (2026-11-22).
