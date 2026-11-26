@@ -12,9 +12,13 @@ describe('parseFlags', () => {
 
   test('model and reasoning together, the question kept', () => {
     expect(
-      parseFlags('--model luna --reasoning high why is the sky blue')
+      parseFlags('--model deepseek --reasoning high why is the sky blue')
     ).toEqual({
-      flags: { model: 'luna', reasoning: 'high', rest: 'why is the sky blue' },
+      flags: {
+        model: 'deepseek',
+        reasoning: 'high',
+        rest: 'why is the sky blue',
+      },
       ok: true,
     });
   });
@@ -31,8 +35,8 @@ describe('parseFlags', () => {
       flags: { focus: ['U0123ABCD', 'U04567890'], rest: 'hi' },
       ok: true,
     });
-    expect(parseFlags('--focusmode --model haiku')).toEqual({
-      flags: { focus: [], model: 'haiku', rest: '' },
+    expect(parseFlags('--focusmode --model deepseek')).toEqual({
+      flags: { focus: [], model: 'deepseek', rest: '' },
       ok: true,
     });
     expect(parseFlags('--focus off')).toEqual({
@@ -46,8 +50,8 @@ describe('parseFlags', () => {
       flags: { memory: 'stale', rest: 'what is x' },
       ok: true,
     });
-    expect(parseFlags('--NO-MEMORY --model luna hi')).toEqual({
-      flags: { memory: 'off', model: 'luna', rest: 'hi' },
+    expect(parseFlags('--NO-MEMORY --model deepseek hi')).toEqual({
+      flags: { memory: 'off', model: 'deepseek', rest: 'hi' },
       ok: true,
     });
     expect(parseFlags('--No-Memory')).toEqual({
@@ -70,7 +74,7 @@ describe('parseFlags', () => {
 describe('withoutFlags', () => {
   test('takes the flags off and keeps the leading mention', () => {
     expect(
-      withoutFlags('<@U0BD3555UCQ> --model luna --reasoning high hi')
+      withoutFlags('<@U0BD3555UCQ> --model deepseek --reasoning high hi')
     ).toBe('<@U0BD3555UCQ> hi');
     expect(withoutFlags('--NO-MEMORY what is x')).toBe('what is x');
   });
@@ -99,8 +103,14 @@ describe('flags ending a line', () => {
   });
 
   test('several at the end of the message', () => {
-    expect(parseFlags('why is the sky blue --model luna --no-memory')).toEqual({
-      flags: { memory: 'stale', model: 'luna', rest: 'why is the sky blue' },
+    expect(
+      parseFlags('why is the sky blue --model deepseek --no-memory')
+    ).toEqual({
+      flags: {
+        memory: 'stale',
+        model: 'deepseek',
+        rest: 'why is the sky blue',
+      },
       ok: true,
     });
   });

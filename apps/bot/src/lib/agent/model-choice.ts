@@ -1,8 +1,6 @@
-import { createHash } from 'node:crypto';
 import {
   catalogAttempt,
   GLM_FLASH_MODEL,
-  LUNA_MODEL,
   type ModelAttempt,
   PRIMARY_ATTEMPT,
   REASONING_EFFORTS,
@@ -19,7 +17,7 @@ import { toLogError } from '@/lib/utils/error';
 
 // `--model <name>` and `--reasoning <effort>` (owner's asks 2026-10-10): a
 // thread's own model and effort, sticky until cleared, open to anyone in the
-// thread. `luna`/`haiku` run on kyto's chain; any other slug is accepted only
+// thread. `deepseek`/`glm` run on kyto's chain; any other slug is accepted only
 // from someone with their own key or ChatGPT account, and runs on THAT
 // person's turns only — the next speaker never pays for someone else's pick.
 //
@@ -31,29 +29,9 @@ import { toLogError } from '@/lib/utils/error';
 // Keyed by lib/flags' names, so a flag ending a line knows them without
 // importing this module's provider chain.
 export const MODEL_CHOICES: Record<string, ModelAttempt> = {
-  haiku: PRIMARY_ATTEMPT,
+  deepseek: PRIMARY_ATTEMPT,
   glm: catalogAttempt(GLM_FLASH_MODEL),
-  luna: catalogAttempt(LUNA_MODEL),
 } satisfies Record<(typeof SHARED_MODEL_NAMES)[number], ModelAttempt>;
-
-/**
- * The model experiment (owner's calls 2026-10-11, mercury 2026-10-20): a
- * thread with no `--model` leads with haiku, luna or mercury, a third of
- * threads each, so they can be compared on the same traffic. Drawn per THREAD,
- * not per turn — each model has its own prompt cache, and switching models
- * between turns would rewrite the whole thread at 1.25x every time. Derived
- * from the thread id, so it survives a restart without being stored.
- *
- * Mercury's third (byte % 6 of 4 or 5) went back to haiku and luna by the
- * same even/odd split when Hack Club dropped mercury on 2026-11-08, so every
- * haiku and luna thread keeps the model, and the warm cache, it had.
- */
-export function experimentAttempt(threadId: string): ModelAttempt {
-  const firstByte = createHash('sha256').update(threadId).digest()[0] ?? 0;
-  return firstByte % 2 === 0
-    ? PRIMARY_ATTEMPT
-    : (MODEL_CHOICES.luna ?? PRIMARY_ATTEMPT);
-}
 
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 
@@ -105,7 +83,12 @@ function choices(): Promise<Map<string, ThreadModelChoice>> {
             row.memoryMode === 'off' || row.memoryMode === 'stale'
               ? row.memoryMode
               : undefined,
-          model: row.model ?? undefined,
+          // `haiku` and `luna` were kyto's own names before DeepSeek replaced
+          // them (2026-11-26); a thread that picked one stays on kyto's model.
+          model:
+            row.model === 'haiku' || row.model === 'luna'
+              ? 'deepseek'
+              : (row.model ?? undefined),
           modelSetBy: row.modelSetBy ?? undefined,
           showReasoning: row.showReasoning ?? undefined,
         });

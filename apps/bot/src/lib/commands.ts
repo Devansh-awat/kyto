@@ -70,7 +70,7 @@ const CLEAR_WORDS = new Set(['clear', 'off', 'none', 'stop']);
 // `none` is a real effort, so it can't clear `--reasoning`.
 const DEFAULT_WORDS = new Set(['default', 'random', 'reset', 'clear', 'off']);
 // How far a bare slug may stray from one of kyto's model names and still be
-// read as a typo of it (`haikue`, `lun`) rather than a model of its own.
+// read as a typo of it (`deepseeks`, `gl`) rather than a model of its own.
 const NEAR_MISS_CHARS = 2;
 
 function nearSharedModel(slug: string): string | undefined {
@@ -290,7 +290,7 @@ async function runStop({
  * `--model`, `--reasoning`, `--focusmode`, `--no-memory`/`--NO-MEMORY`/`--memory` (lib/flags). Everything is checked
  * before anything is saved, so one bad flag changes nothing.
  *
- * `--model luna|haiku|glm` is open to anyone (all are on kyto's cheap Hack Club
+ * `--model deepseek|glm` is open to anyone (all are on kyto's cheap Hack Club
  * key); any other slug only for someone with their own key or ChatGPT account,
  * and it then runs on their turns only (lib/agent/model-choice).
  *
@@ -345,7 +345,7 @@ async function runFlags({
     } else if (!MODEL_SLUG.test(flags.model)) {
       return await reply(`\`${flags.model}\` doesn't look like a model slug.`);
     } else if (nearSharedModel(lower)) {
-      // `--model haikue` went through as an own-key slug, the owner's parked
+      // `--model deepseeks` went through as an own-key slug, the owner's parked
       // ChatGPT account couldn't run it, and the turn fell back to kyto's
       // chain without a word (#66).
       return await reply(
@@ -364,14 +364,10 @@ async function runFlags({
     const lower = flags.reasoning.toLowerCase();
     if (DEFAULT_WORDS.has(lower)) {
       change.effort = null;
-      said.push('default reasoning (random for haiku and luna)');
+      said.push('default reasoning (Jev picks, random without)');
     } else if (isReasoningEffort(lower)) {
       change.effort = lower;
-      said.push(
-        lower === 'high'
-          ? 'high reasoning (haiku runs at medium — high cut its replies off)'
-          : `${lower} reasoning`
-      );
+      said.push(`${lower} reasoning`);
     } else {
       return await reply(
         '`--reasoning none|low|medium|high`, or `--reasoning default`.'

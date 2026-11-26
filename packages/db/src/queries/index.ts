@@ -35,7 +35,6 @@ export * from './skills';
 export * from './slack-grants';
 export * from './thread-loaded-tools';
 export * from './thread-logs';
-export * from './thread-luna-efforts';
 export * from './thread-model-choices';
 export * from './thread-sandboxes';
 export * from './thread-summaries';

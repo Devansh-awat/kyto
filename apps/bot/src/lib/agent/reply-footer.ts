@@ -1,9 +1,4 @@
-import {
-  LUNA_MODEL,
-  type ModelAttempt,
-  PRIMARY_ATTEMPT,
-  UPGRADE_ATTEMPTS,
-} from '@repo/ai';
+import { type ModelAttempt, PRIMARY_ATTEMPT, UPGRADE_ATTEMPTS } from '@repo/ai';
 import { attemptKey } from '@/lib/agent/routing';
 import { hackclubOutage } from '@/lib/ai/hackclub-status';
 import { buildReplyFooter } from '@/lib/feedback/footer';
@@ -11,7 +6,7 @@ import { errorMessage, errorStatus } from '@/lib/utils/error';
 
 // What the fallback note calls the usual model. Named in words rather than by
 // slug because the note is for people, not for the journal.
-const PRIMARY_LABEL = 'claude haiku 5.5 on hack club ai';
+const PRIMARY_LABEL = 'deepseek v4.1 flash on hack club ai';
 
 /**
  * The footer under a reply (lib/feedback/footer): the blocks the turn's last
@@ -57,7 +52,6 @@ export async function replyFooter({
   const steppedDown =
     !(isOwnAttempt || isChosen) &&
     key !== attemptKey(PRIMARY_ATTEMPT) &&
-    answeredBy.model !== LUNA_MODEL &&
     !UPGRADE_ATTEMPTS.some((candidate) => attemptKey(candidate) === key);
   if (!steppedDown) {
     return buildReplyFooter({

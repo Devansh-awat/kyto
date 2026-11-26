@@ -1,16 +1,13 @@
 import type { ModelMessage } from 'ai';
+import { PRIMARY_MODEL } from './providers/attempts';
 
-// Models whose whole request is billed at a higher rate once its input passes a
-// size: Haiku 5.5 costs ~5x per token past 100k input tokens (owner, 2026-10-12).
-// Measured 2026-10-11: 44 Haiku requests went past it, every one a LATER step of
-// a tool-heavy turn — the replayed thread (step 0) peaked at 81k — so thread
-// compaction could not have prevented any of them; tool results piling up
-// inside one turn did it. Luna bills the whole request 2x in / 1.5x out past
-// 272k (OpenAI's long-context rate); a 39-step research turn reached 185k on
-// 2026-10-18, and compacting below the step would only rewrite a cached prompt.
+// The input size at which a model's request is compacted mid-turn, for models
+// with a step: Haiku 5.5 was billed ~5x per token past 100k and Luna 2x/1.5x
+// past 272k. DeepSeek V4.1 Flash has no price step (one flat rate over 1M), so
+// 272k is a size ceiling: past it a turn is slow, dear in absolute terms, and
+// the model less reliable. Luna's old ceiling, kept on the swap 2026-11-26.
 export const LONG_CONTEXT_PRICE_STEP: Record<string, number> = {
-  'anthropic/claude-haiku-5.5': 100_000,
-  'openai/gpt-6-luna': 272_000,
+  [PRIMARY_MODEL]: 272_000,
 };
 
 // Compact once a step's ACTUAL input (the provider's count, not an estimate)

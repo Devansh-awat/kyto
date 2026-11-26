@@ -5,7 +5,6 @@ import {
   GEMINI_PROVIDER,
   HACKCLUB_PROVIDER,
   LEADERBOARD_FALLBACK,
-  LUNA_MODEL,
   MAX_STEPS,
   MERCURY_MODEL,
   type ModelAttempt,
@@ -23,14 +22,11 @@ import { comparePrefix, type PrefixUnit } from '@repo/ai/cache-probe';
 import type { SentContext } from '@repo/ai/sent-context';
 import { stepsCacheWrites, stepsCostUsd } from '@repo/ai/usage-cost';
 import {
-  getThreadLunaEffort,
   type InflightCheckpoint,
   type InflightEffect,
-  saveThreadLunaEffort,
   saveThreadPromptSize,
 } from '@repo/db/queries';
 import { LazySandbox } from '@repo/sandbox';
-import { z } from 'zod';
 import { env } from '@/env';
 import {
   hasBroadcastToken,
@@ -69,7 +65,6 @@ import {
 } from '@/lib/agent/inflight';
 import { nameField } from '@/lib/agent/mentions';
 import {
-  experimentAttempt,
   isSharedModel,
   MODEL_CHOICES,
   threadModelChoice,
@@ -119,11 +114,7 @@ import {
   emptyReasoningCounts,
   type ReasoningCounts,
 } from '@/lib/ai/stream/timing';
-import {
-  type EffortPicks,
-  JEV_EFFORTS,
-  pickPreloadTools,
-} from '@/lib/ai/tool-preload';
+import { type EffortPicks, pickPreloadTools } from '@/lib/ai/tool-preload';
 import { WAKE_ID } from '@/lib/ai/tools/background';
 import {
   claimStickyUpgrade,
@@ -245,11 +236,6 @@ const STREAMED_TEXT_MAX = 4000;
 // 2-3 minutes before the low-effort retry answered in one (#95). Keyed by
 // thread and attempt; in memory, so a restart only costs one more cutoff.
 const THINKING_CAPPED_TTL_MS = 30 * 60 * 1000;
-// How long a luna prompt cache lives; a thread's raised luna effort is kept
-// only that long after luna last ran there. Measured from `model_spend`
-// (2026-10-20): a thread's next luna turn read its cache up to ~9 minutes
-// later and nothing at 10 minutes or more.
-const LUNA_CACHE_MS = 10 * 60 * 1000;
 // A model thinking for minutes before its first word left the Thinking card
 // unchanged the whole time, which reads as stuck (#74): it is refreshed this
 // often with how long and how much it has thought.
@@ -702,8 +688,6 @@ async function executeTurn(
   let answeredBy: ModelAttempt | undefined;
   // The thread's `--model`, when it is one of kyto's own (lib/agent/model-choice).
   let chosenAttempt: ModelAttempt | undefined;
-  // This thread's side of the haiku/luna experiment (model-choice.ts).
-  let experimentArm: ModelAttempt | undefined;
   // The turn ended on a deliberate skip, and the plan messages it streamed:
   // a skip that never said anything takes its plan back (below).
   let turnSkipped = false;
@@ -927,9 +911,6 @@ async function executeTurn(
         reasoningBy: handledEffortBy,
         reasoningEffort: handledEffort,
         reasoningRandom: handledEffortBy === 'random',
-        // Which model the experiment drew for this thread; undefined when a
-        // `--model` or an upgrade decided it — leave those out of the numbers.
-        experimentModel: experimentArm?.model,
         steps: handledSteps,
         threadId,
         timing: timingLog(),
@@ -945,7 +926,6 @@ async function executeTurn(
           ...timingLog(),
           answeredBy: answeredBy?.model,
           costUsd: turnUsage?.costUsd,
-          experimentModel: experimentArm?.model,
           reasoningBy: handledEffortBy,
           reasoningEffort: handledEffort,
           // Kept for !timings; !effort reads model_spend (lib/spend).
@@ -1219,14 +1199,6 @@ async function executeTurn(
     const earlierThread = jevContexts.get(threadId) ?? '';
     codingMonitor.setConversation(earlierThread);
     const codingVerdict = codingMonitor.checkTurn();
-    // Luna's effort only goes up within a thread (lib/ai/tool-preload).
-    // Only while luna's cache for the thread can still be warm: past that the
-    // raise protects nothing, and a thread once at `high` ran every later
-    // "thanks" at high (30 of 32 luna turns, 2026-10-19).
-    const lunaEffortRead = getThreadLunaEffort({
-      since: new Date(Date.now() - LUNA_CACHE_MS),
-      threadId,
-    }).catch(() => undefined);
     const promptStart = Date.now();
     const {
       compactedTail,
@@ -1277,12 +1249,7 @@ async function executeTurn(
     // are built.
     const pendingPreload: ReturnType<typeof pickPreloadTools> = secret
       ? Promise.resolve({ tools: [] })
-      : lunaEffortRead.then((stored) =>
-          pickPreloadTools({
-            conversation: jevConversation,
-            effort: { lunaStored: z.enum(JEV_EFFORTS).safeParse(stored).data },
-          })
-        );
+      : pickPreloadTools({ conversation: jevConversation, effort: true });
     const conversation = [...history, messageText].join('\n\n');
     const promptMs = Date.now() - promptStart;
     codingMonitor.setConversation(conversation);
@@ -1408,8 +1375,6 @@ async function executeTurn(
     if (stickyUpgrade) {
       escalation.used = true;
     }
-    experimentArm =
-      chosenAttempt || stickyUpgrade ? undefined : experimentAttempt(threadId);
     // Why the NEXT attempt is starting, for its Thinking card. An escalation the
     // model asked for is not kyto recovering from a broken provider, and reading
     // "fallback" for one made a deliberate upgrade look like a failure.
@@ -1424,8 +1389,6 @@ async function executeTurn(
     const toolsWaitMs = Date.now() - toolsStart;
     const preloadStart = Date.now();
     const preload = await pendingPreload;
-    // What luna falls back to when Jev gives no pick: never lower than before.
-    const lunaStored = z.enum(JEV_EFFORTS).safeParse(await lunaEffortRead).data;
     // What the turn waited on Jev past the prompt build and the tools.
     const preloadWaitMs = Date.now() - preloadStart;
     // From the Jev calls' start, so it overlaps promptMs.
@@ -1485,7 +1448,7 @@ async function executeTurn(
     // cache): a spent Hack Club cap or a vanished model fails every turn the
     // same way, and re-discovering it cost each message a doomed request.
     const cached = cachedDeadness();
-    const lead = stickyUpgrade ?? chosenAttempt ?? experimentArm;
+    const lead = stickyUpgrade ?? chosenAttempt;
     const router = createAttemptRouter({
       cached,
       fallback: LEADERBOARD_FALLBACK,
@@ -1509,7 +1472,6 @@ async function executeTurn(
           cached.rungs.length > 0 || cached.providers.length > 0
             ? cached
             : undefined,
-        experimentModel: experimentArm?.model,
         model: attempt?.model,
         provider: attempt?.provider,
         threadId,
@@ -1754,7 +1716,7 @@ async function executeTurn(
           // turn (owner's call 2026-11-11, #73) instead of a flat medium. A
           // `--reasoning` flag wins; the request tuner only sends it to
           // endpoints that take one.
-          const byokEffort = choice.effort ?? preload.effort?.haiku;
+          const byokEffort = choice.effort ?? preload.effort?.effort;
           if (byokEffort) {
             effort = {
               by: choice.effort ? 'flag' : 'jev',
@@ -1765,22 +1727,17 @@ async function executeTurn(
           // `high` once ran at medium on haiku: its thinking filled the 8000
           // output tokens. A `high` attempt now gets a bigger cap
           // (HIGH_EFFORT_MAX_OUTPUT_TOKENS), so the choice stands.
-          // Jev's pick on haiku and luna (owner's call 2026-10-17); the draw
-          // only when Jev gave none, and every other model's medium. Mercury
-          // takes haiku's pick: one cache across efforts (measured
-          // 2026-10-20: a `none` request read a `low` one's prefix).
-          const jevEffort = {
-            [LUNA_MODEL]: preload.effort?.luna,
-            [MERCURY_MODEL]: preload.effort?.haiku,
-            [PRIMARY_MODEL]: preload.effort?.haiku,
-          }[currentAttempt.model];
+          // Jev's pick (owner's call 2026-10-17); the draw only when Jev
+          // gave none, and every other model's medium.
+          const jevEffort =
+            currentAttempt.model === PRIMARY_MODEL ||
+            currentAttempt.model === MERCURY_MODEL
+              ? preload.effort?.effort
+              : undefined;
           if (choice.effort) {
             effort = { by: 'flag', effort: choice.effort };
           } else if (jevEffort) {
             effort = { by: 'jev', effort: jevEffort };
-          } else if (currentAttempt.model === LUNA_MODEL) {
-            // Jev only, no random draw for luna (owner's call 2026-10-18).
-            effort = { by: 'default', effort: lunaStored ?? 'medium' };
           } else {
             const drawn = pickReasoningEffort({ attempt: currentAttempt });
             effort = {
@@ -1798,23 +1755,6 @@ async function executeTurn(
           !byokEffortFormat(currentAttempt)
         ) {
           effort = undefined;
-        }
-        // Saved on EVERY luna turn, raised or not: its time is what says the
-        // thread's luna cache is still warm. A flag's effort is that turn's own.
-        if (
-          currentAttempt.model === LUNA_MODEL &&
-          effort &&
-          effort.by !== 'flag' &&
-          effort.by !== 'retry'
-        ) {
-          saveThreadLunaEffort({ effort: effort.effort, threadId }).catch(
-            (error: unknown) => {
-              logger.warn(
-                { ...toLogError(error), threadId },
-                "[agent] could not save the thread's luna effort"
-              );
-            }
-          );
         }
         // Who picked the effort (Jev, the draw) stays in the logs, off the card
         // (owner's call 2026-10-20).
@@ -3073,16 +3013,12 @@ async function executeTurn(
       const footer = await replyFooter({
         answeredBy,
         durationMs: Date.now() - turnStart,
-        // The experiment's luna is no step down either: it was drawn, not
-        // fallen back to.
-        isChosen: answeredBy === chosenAttempt || answeredBy === experimentArm,
+        isChosen: answeredBy === chosenAttempt,
         isOwnAttempt: routing.own.includes(answeredBy),
         leadError: attempts[0]?.error,
         // What was meant to lead, so a fallback note names the picked/drawn
         // model instead of the hardcoded primary (#130).
-        ...((chosenAttempt ?? experimentArm)
-          ? { leadAttempt: chosenAttempt ?? experimentArm }
-          : {}),
+        ...(chosenAttempt ? { leadAttempt: chosenAttempt } : {}),
         // Only a weaker model's note survives `outputOnly`: it is about the
         // answer's quality, not decoration.
         showFooter:

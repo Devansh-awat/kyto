@@ -177,7 +177,7 @@ In `apps/bot/src/lib/ai/tools/`, registered in `lib/ai/toolset.ts`; `TOOLS.md` i
 
 ## Models / fallback — full detail in [`MODELS.md`](./MODELS.md)
 
-- Primary haiku 5.5 on Hack Club AI (Anthropic-pinned), Jev picks the effort; routing, caching, BYOK, resumed turns and spend: `rules/models.md` + `MODELS.md`.
+- Primary DeepSeek V4.1 Flash 1017 on Hack Club AI (replaced haiku and luna 2026-11-26), Jev picks the effort; routing, caching, BYOK, resumed turns and spend: `rules/models.md` + `MODELS.md`.
 - **`LEADERBOARD_FALLBACK` is CHEAP ON PURPOSE** — one $3/day cap. Price any new rung first. Fallback walks by TIER, best-first (`buildFallbackQueue`, an ALLOWLIST of tiers). **No provider whose terms allow training on inputs may be a tier** (Hack Club forbids training on Slack).
 
 ## Sandbox, memory, compaction

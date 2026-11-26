@@ -1,4 +1,4 @@
-import { LUNA_MODEL, MERCURY_MODEL, PRIMARY_MODEL } from '@repo/ai';
+import { MERCURY_MODEL, PRIMARY_MODEL } from '@repo/ai';
 import {
   type SpendGate,
   type SpendRecord,
@@ -22,7 +22,7 @@ import { errorMessage } from '@/lib/utils/error';
 const JEV_INPUT_USD_PER_TOKEN = 0.042 / 1_000_000;
 // Hack Club takes 30% off a Claude request only when Anthropic served it
 // (hackclub/ai `src/billing/discounts.ts`); every anthropic/* request kyto sends
-// is pinned there (`ANTHROPIC_ONLY_MODELS`), and `costUsd` is list price.
+// was pinned there until 2026-11-26 (the old rows stay), and `costUsd` is list price.
 const HACKCLUB_CLAUDE_DISCOUNT = 0.3;
 // Hack Club's default daily allowance, counted over the UTC day.
 const HACKCLUB_DAILY_USD = 3;
@@ -411,7 +411,13 @@ export async function describeOwnSpend({
 }
 
 const DEFAULT_EFFORT_DAYS = 7;
-const EFFORT_MODELS = [PRIMARY_MODEL, LUNA_MODEL, MERCURY_MODEL];
+// The old haiku and luna rows stay in the table for the history.
+const EFFORT_MODELS = [
+  PRIMARY_MODEL,
+  'anthropic/claude-haiku-5.5',
+  'openai/gpt-6-luna',
+  MERCURY_MODEL,
+];
 const EFFORTS = ['low', 'medium', 'high'];
 const MS_PER_SECOND = 1000;
 const PERCENT = 100;
@@ -441,7 +447,7 @@ export async function describeEffortStats(
   });
   const scope = `last ${days} day${days === 1 ? '' : 's'}${source ? `, ${source} only` : ', every source'}`;
   if (cells.length === 0) {
-    const text = `No measured haiku, luna or mercury calls in the ${scope} (calls are measured from 2026-10-17).`;
+    const text = `No measured calls in the ${scope} (calls are measured from 2026-10-17).`;
     return { markdown: text, text };
   }
   const f = (value: number | null, digits = 0) =>
@@ -458,12 +464,14 @@ export async function describeEffortStats(
         return `| ${name} | 0 | – | – | – | – | – | – | – | – |`;
       }
       const discount =
-        model === PRIMARY_MODEL ? 1 - HACKCLUB_CLAUDE_DISCOUNT : 1;
+        model === 'anthropic/claude-haiku-5.5'
+          ? 1 - HACKCLUB_CLAUDE_DISCOUNT
+          : 1;
       const failed = cell.erroredCalls + cell.abortedCalls;
       return `| ${name} | ${cell.calls}${failed > 0 ? ` (${failed} failed)` : ''} | $${f(cell.costPerCall === null ? null : cell.costPerCall * discount, 4)} | ${f(cell.cacheReadShare === null ? null : cell.cacheReadShare * PERCENT)}% | ${s(cell.medianCallMs)} (p90 ${s(cell.p90CallMs)}) | ${f(cell.stepsPerCall, 1)} | ${f(cell.perThinkingStep.reasoningTokens)} | ${s(cell.firstRequest.ttftMs)} / ${s(cell.laterRequests.ttftMs)} | ${s(cell.firstRequest.thinkMs)} / ${s(cell.laterRequests.thinkMs)} | ${f(cell.answerTokensPerSecond)} |`;
     })
   );
-  const title = `*Haiku vs luna vs mercury by effort, ${scope}* (Hack Club prices, haiku's 30% off applied)`;
+  const title = `*Models by effort, ${scope}* (Hack Club prices, haiku's 30% off applied)`;
   return {
     markdown: [
       title,

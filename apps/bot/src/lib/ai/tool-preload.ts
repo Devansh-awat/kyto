@@ -203,14 +203,12 @@ const PRELOAD_INSTRUCTIONS =
 type GroupId = keyof typeof GROUPS;
 
 // The turn's reasoning effort, in the same call (owner's ask 2026-10-17: the
-// random draw ran a malware scan at `low`). Haiku takes Jev's pick every turn.
-// Luna keeps one prompt cache PER EFFORT, so the same pick only ever RAISES a
-// thread's luna effort: a lower one is ignored (owner's call 2026-10-18,
-// replacing a random start per thread plus a separate "are you sure" raise).
+// random draw ran a malware scan at `low`). The primary takes Jev's pick every
+// turn.
 // No `low` (owner's call 2026-11-21): 19 of 20 skipped turns in the week before
 // ran at low, and a quick reply at medium costs little more.
-export const JEV_EFFORTS = ['medium', 'high'] as const;
-export type JevEffort = (typeof JEV_EFFORTS)[number];
+const JEV_EFFORTS = ['medium', 'high'] as const;
+type JevEffort = (typeof JEV_EFFORTS)[number];
 const EFFORT_CRITERIA: Record<JevEffort, string> = {
   high: 'Deep multi-step work where careful thinking pays off: investigating or analysing something (a file, a codebase, a security scan), debugging, research across many sources, a hard problem, or an answer that must be thorough and correct.',
   medium:
@@ -232,10 +230,8 @@ const responseSchema = z.object({
 });
 
 export interface EffortPicks {
-  /** What haiku runs at, and mercury (one cache across efforts). */
-  haiku: JevEffort;
-  /** What luna runs at: the thread's stored effort, or Jev's pick if higher. */
-  luna: JevEffort;
+  /** What the turn runs at. */
+  effort: JevEffort;
   /** Jev's own numbers, logged so its calls can be judged later. */
   probabilities: Record<string, number>;
 }
@@ -251,8 +247,8 @@ export async function pickPreloadTools({
   effort: askEffort,
 }: {
   conversation: string;
-  /** Ask for the effort too; `lunaStored` is the thread's luna effort so far. */
-  effort?: { lunaStored: JevEffort | undefined };
+  /** Ask for the effort too. */
+  effort?: boolean;
 }): Promise<{
   effort?: EffortPicks;
   tools: string[];
@@ -310,17 +306,7 @@ export async function pickPreloadTools({
     let effort: EffortPicks | undefined;
     const pick = choiceSchema.safeParse(answers.effort).data;
     if (askEffort && pick && isEffort(pick.choice)) {
-      const stored = askEffort.lunaStored;
-      const luna =
-        stored &&
-        JEV_EFFORTS.indexOf(stored) >= JEV_EFFORTS.indexOf(pick.choice)
-          ? stored
-          : pick.choice;
-      effort = {
-        haiku: pick.choice,
-        luna,
-        probabilities: pick.probabilities,
-      };
+      effort = { effort: pick.choice, probabilities: pick.probabilities };
     }
     logger.info({ effort, picked }, '[tool-preload] jev picked tool groups');
     return {

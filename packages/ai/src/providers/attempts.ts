@@ -42,29 +42,14 @@ export interface ModelAttempt {
 }
 
 /**
- * The primary model for main queries: Claude Haiku 5.5 via the Hack Club
- * gateway, pinned to Anthropic's own API (`ANTHROPIC_ONLY_MODELS`). Owner's
- * call, 2026-10-10: Hack Club takes 30% off a Claude request ONLY when
- * OpenRouter's upstream that served it was Anthropic (its billing `discounts`,
- * matched on the upstream that ran) — Vertex, Bedrock, Azure and AWS host the
- * same model at the same list price ($0.10/M in, $0.50/M out, same as luna)
- * and get nothing off.
+ * The primary model for main queries: DeepSeek V4.1 Flash (the 2026-10-17
+ * build) via the Hack Club gateway. Owner's call, 2026-11-26: it replaces both
+ * Claude Haiku 5.5 (primary, pinned to Anthropic for Hack Club's 30% discount)
+ * and GPT-6 Luna (the other arm of the per-thread experiment and first
+ * fallback rung). No host pin, no discount: the usual quantization filter
+ * applies (`tuneBody`).
  */
-export const PRIMARY_MODEL = 'anthropic/claude-haiku-5.5';
-
-/**
- * GPT-6 Luna, the primary 2026-10-05 → 2026-10-10, now the first fallback: ~2x
- * GLM's output rate and served by OpenAI directly, so an Anthropic outage on
- * the pinned primary lands on a different vendor.
- */
-export const LUNA_MODEL = 'openai/gpt-6-luna';
-
-/**
- * Models that may be served ONLY by Anthropic's own API, never another host —
- * the 30% Hack Club discount needs Anthropic to be the upstream that ran. No
- * fallback host: if Anthropic refuses, the turn walks to the next RUNG instead.
- */
-export const ANTHROPIC_ONLY_MODELS = new Set<string>([PRIMARY_MODEL]);
+export const PRIMARY_MODEL = 'deepseek/deepseek-v4.1-flash-1017';
 
 /**
  * Inception's Mercury 3 (owner's call 2026-10-20), the third arm of the random
@@ -236,22 +221,13 @@ export const subagentAttempts: ModelAttempt[] = [
 ];
 
 /**
- * Haiku, luna and mercury in a random order, then Gemini as the floor: what
- * every model call that isn't a live turn runs on (owner's calls 2026-10-17,
- * mercury 2026-10-20, so subagents, Kevinton, reminders, reviews, curation,
- * the thread digest and summaries all feed the model comparison, each effort
- * drawn by streamAttempt). Drawn per RUN; a live turn keeps its per-THREAD arm
- * (experimentAttempt), because each model has its own prompt cache.
+ * The primary, then Gemini as the floor: what every model call that isn't a
+ * live turn runs on (subagents, Kevinton, reminders, reviews, curation, the
+ * thread digest and summaries; streamAttempt draws the effort). It was a
+ * random haiku/luna order for the model experiment, which ended 2026-11-26.
  */
 export function drawnAttempts(): ModelAttempt[] {
-  // A random sort key each: every order equally likely, so each model leads
-  // a third of the runs.
-  // Mercury left Hack Club AI on 2026-11-08, so it's haiku and luna halves.
-  const drawn = [PRIMARY_ATTEMPT, catalogAttempt(LUNA_MODEL)]
-    .map((attempt) => ({ attempt, key: Math.random() }))
-    .sort((a, b) => a.key - b.key)
-    .map(({ attempt }) => attempt);
-  return [...drawn, ...geminiAttempts];
+  return [PRIMARY_ATTEMPT, ...geminiAttempts];
 }
 
 /** The subagent's primary model; undefined = no subagent model configured. */
@@ -288,13 +264,12 @@ export const subagentAttempt: ModelAttempt | undefined = subagentAttempts[0];
 // provider keys rate-limited or in cooldown"). Re-add rungs here only after
 // verifying a real completion succeeds.
 export const LEADERBOARD_FALLBACK: ModelAttempt[] = [
-  catalogAttempt(LUNA_MODEL),
   // GLM 5.3 Flash, the primary 2026-08-26 → 2026-10-05: smarter than Luna but
   // half its speed, and the same price class. Served through OpenRouter, so it
   // shares a failure mode Luna doesn't (the top-up-wait 429).
   catalogAttempt(GLM_FLASH_MODEL),
-  // DeepSeek V4 Flash, the primary 2026-08-01 → 2026-08-21. It is proven
-  // tools-capable and remains inexpensive.
+  // DeepSeek V4 Flash, the primary 2026-08-01 → 2026-08-21 (the V4.1 build
+  // is the primary now). It is proven tools-capable and remains inexpensive.
   catalogAttempt(FORMER_PRIMARY_MODEL),
   // Qwen3.7 Plus ($0.32/M in, $1.28/M out, 1M ctx) — primary until deepseek
   // v4-flash was promoted over it (2026-08-01), demoted one place again by the

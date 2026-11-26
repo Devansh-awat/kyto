@@ -38,12 +38,10 @@ import {
   nullableToolSchemas,
 } from './nullable-optionals';
 import {
-  ANTHROPIC_ONLY_MODELS,
   GEMINI_PROVIDER,
   GLM_FLASH_MODEL,
   HACKCLUB_PROVIDER,
   HIGH_EFFORT_MAX_OUTPUT_TOKENS,
-  LUNA_MODEL,
   MAX_OUTPUT_TOKENS,
   MERCURY_MODEL,
   type ModelAttempt,
@@ -1319,7 +1317,7 @@ export const REASONING_EFFORTS = ['none', 'low', 'medium', 'high'] as const;
  * effort is Jev's alone (apps/bot tool-preload), never drawn here: luna keeps
  * one cache per effort, so a thread only ever goes up.
  */
-const EFFORT_DRAW_MODELS = new Set([LUNA_MODEL, MERCURY_MODEL, PRIMARY_MODEL]);
+const EFFORT_DRAW_MODELS = new Set([MERCURY_MODEL, PRIMARY_MODEL]);
 
 export function pickReasoningEffort({ attempt }: { attempt: ModelAttempt }): {
   effort: string;
@@ -1429,9 +1427,7 @@ export function tuneBody(
       attempt.provider === HACKCLUB_PROVIDER &&
       payload.provider === undefined
     ) {
-      if (ANTHROPIC_ONLY_MODELS.has(attempt.model)) {
-        payload.provider = { allow_fallbacks: false, only: ['anthropic'] };
-      } else if (attempt.model === GLM_FLASH_MODEL) {
+      if (attempt.model === GLM_FLASH_MODEL) {
         payload.provider = GLM_FLASH_ROUTING;
       } else {
         payload.provider = { quantizations: ALLOWED_QUANTIZATIONS };

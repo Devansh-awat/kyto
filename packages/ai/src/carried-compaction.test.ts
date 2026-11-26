@@ -3,6 +3,7 @@ import { type ModelMessage, tool } from 'ai';
 import { z } from 'zod';
 import { streamAttempt } from './agent';
 import { COMPACT_INSTRUCTION, type CompactionEvent } from './context-trim';
+import { PRIMARY_MODEL } from './providers/attempts';
 import type { SentContext } from './sent-context';
 
 // A local OpenAI-compatible endpoint that records each request and answers:
@@ -274,7 +275,7 @@ describe('a compacted request', () => {
   const attempt = {
     apiKey: 'k',
     baseURL: `http://localhost:${server.port}`,
-    model: 'openai/gpt-6-luna',
+    model: PRIMARY_MODEL,
     provider: 'test',
   };
   const isSummary = (request: (typeof requests)[number]) =>

@@ -68,8 +68,8 @@ block landed in a message of its own (#78).
   also covers Mistral, Exa and a Replicate credit scrape, and on 2026-11-21 it read
   503 "down" all day over Replicate alone. With no real outage the note says what
   the lead attempt did instead (an empty reply, an HTTP status, an error). **No
-  note when luna answered** (owner's call 2026-11-21): it leads half of threads in
-  the haiku/luna experiment, so a turn it picked up is no step down.
+  note when luna answered** (owner's call 2026-11-21; luna is gone since
+  2026-11-26, the experiment ended).
 - **An MCP tool's card never shows its result** (`renderTask`): "Done." or
   "Something went wrong." — the plan is public and an MCP read returned a
   database password (#75).
